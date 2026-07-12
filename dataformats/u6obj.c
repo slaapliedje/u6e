@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6obj.c — object placement decode. See u6obj.h / docs/formats/objblk.md. */
 #include "u6obj.h"
 

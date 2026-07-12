@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* convtest.c — M6 golden-transcript test harness for the conversation VM.
  *
  * Iterates EVERY conversation in CONVERSE.A and CONVERSE.B: decompresses (incl.

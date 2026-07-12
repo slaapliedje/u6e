@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6shape.h — U6 SHAPE (*.shp) decoder (docs/formats/shapes.md).
  *
  * Portable C (host + m68k): operates on the DECOMPRESSED shape file — LZW-

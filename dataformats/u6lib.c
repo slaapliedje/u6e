@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6lib.c — Ultima VI library container reader. See /docs/formats/library.md. */
 #include "u6lib.h"
 

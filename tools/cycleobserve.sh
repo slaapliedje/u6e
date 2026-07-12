@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # cycleobserve.sh — swap a given save into ScummVM slot 0, capture several gameplay
 # frames over time, restore the original. Used to OBSERVE colour cycling in a chosen
 # scene (e.g. open water) by diffing frames. Always restores the user's save (trap).

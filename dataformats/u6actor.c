@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6actor.c — NPC actor table (OBJLIST) + daily schedules (SCHEDULE).
  * See u6actor.h and /docs/formats/schedule.md, /docs/formats/objlist.md. */
 #include "u6actor.h"

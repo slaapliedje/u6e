@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # animobserve.sh — capture several frames of ScummVM U6 gameplay over time and diff
 # consecutive frames to find which tiles ANIMATE (clean-room ground truth for our
 # tile-animation work). Loads the user's current save (throne room has fire braziers).

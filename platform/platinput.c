@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platinput.c — keyboard polling via BIOS console.
  *
  * TOS calls (named for verification):

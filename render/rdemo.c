@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* rdemo.c — M3 "first frame" demo: render a U6 map region on the TT.
  *
  * Flow: detect -> plat_mem_init -> rdr_init (TT-low 256c) -> load the asset

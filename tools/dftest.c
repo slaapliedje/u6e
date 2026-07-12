@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* dftest.c — host-side validation harness for /dataformats decoders (M2).
  *
  * Runs on the dev PC (NOT the ST). Proves decode-correctness against the user's

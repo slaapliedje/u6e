@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6lzw.c — Ultima VI LZW decoder. See /docs/formats/lzw.md.
  *
  * Variable-width LZW (9..12 bits), codes packed LSB-first. Code 256 = clear

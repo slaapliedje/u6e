@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6shape.c — U6 SHAPE decoder. See u6shape.h + docs/formats/shapes.md.
  * Clean-room: implemented from our shapes.md spec (container [u32 size][N u32
  * offsets], shape hdr rightX/leftX/upperY/lowerY, plain/RLE pixel blocks). */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6pal.c — U6PAL palette decode. See /docs/formats/palette.md. */
 #include "u6pal.h"
 

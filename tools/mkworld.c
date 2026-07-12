@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* mkworld.c — host: build the world pack the engine loads at runtime (M5/M6).
  *
  * Pack "U6W3" (big-endian header; bulk arrays are byte data):

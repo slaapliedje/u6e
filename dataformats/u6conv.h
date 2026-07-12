@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6conv.h — Ultima VI conversation parser + minimal VM (M4 SPIKE).
  *
  * SPIKE-LEVEL: de-risks the usecode "wall". It parses the readable layer of a

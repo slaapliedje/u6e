@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6map.h — Ultima VI world geography (MAP + CHUNKS), portable, M2.
  * See /docs/formats/map_chunks.md.
  *

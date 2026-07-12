@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* plattime.h — timing services (M1).
  *
  * The engine keeps simulation on a monotonic millisecond-ish clock and presents

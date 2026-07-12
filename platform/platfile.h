@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platfile.h — GEMDOS file I/O wrappers (M1).
  *
  * Thin, endianness-agnostic byte I/O. Multi-byte field decoding (LE->host) is

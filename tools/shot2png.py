@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """shot2png.py — convert the engine's SHOT.DAT backbuffer dump to a 1:1 PNG.
 
 The game (render/gamedemo.c dump_shot) writes SHOT.DAT when SHOT.REQ is staged:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* tflagprobe.c — HOST diagnostic (not shipped). Reads the user's TILEFLAG +
  * LOOK.LZD to (a) find the throne's tiles and their tileflags2, and (b) decode
  * the bits6-7 "size" (double width/height) encoding empirically by listing which

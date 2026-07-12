@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* convspike.c — M4 DECISION-GATE spike: run a real U6 NPC conversation.
  *
  * Pipeline proven here: CONVERSE.A (library) -> per-NPC entry (LZW) -> decode

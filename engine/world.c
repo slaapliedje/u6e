@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* world.c — world model + movement + turn clock. See world.h. */
 #include "world.h"
 #include <stddef.h>   /* NULL */

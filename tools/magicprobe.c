@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* magicprobe.c — host diagnostic for the MAGIC milestone (clean-room: derive
  * facts from the user's own data, not from anyone's source).
  *

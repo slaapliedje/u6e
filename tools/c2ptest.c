@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* c2ptest.c — host unit test: verify the fast (bit-transpose) chunky->planar c2p
  * produces BYTE-IDENTICAL output to the reference (8-accumulator) c2p, for a 16-pixel
  * group -> 8 plane words. The fast version (8x8 bit transpose, Hacker's Delight)

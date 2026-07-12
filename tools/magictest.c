@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* magictest.c — host unit tests for the magic rules (docs/rules/magic_skills.md §9).
  * Verifies: reagent bit->obj_n mapping, mana_cost==circle, the full spell table
  * is well-formed, gate-check ordering + messages, and consume-exactly-once via

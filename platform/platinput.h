@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platinput.h — normalized input events for /engine (M5).
  *
  * The engine never reads the keyboard directly; it polls this. M5 needs only

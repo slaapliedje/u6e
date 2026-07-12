@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* mapdump.c — host-side M2 visual proof: decode the U6 world and render PNGs.
  *
  * Renders (a) the full surface as a 1024x1024 overview (one representative pixel

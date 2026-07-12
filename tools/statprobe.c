@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* statprobe.c — host diagnostic: dump the U6 objlist's per-actor arrays so we can
  * identify the stat offsets empirically (clean-room: derive from the user's own
  * data, not from anyone's source). Prints, for the first few actor slots, the

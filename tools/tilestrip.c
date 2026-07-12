@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* tilestrip.c — host diagnostic: render a list of tile indices from a built world
  * pack (build/u6.world) as a horizontal PNG strip, to eyeball animation frames.
  * Reuses the pack's already-decoded 2048-tile set + palette (no VGA re-decode).

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # drive.sh — headless harness for the u6e Atari engine.
 #
 # The "app" is a 68000 Atari program that only runs under an emulator. This

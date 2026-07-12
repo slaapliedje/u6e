@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # refshot.sh — capture Ultima VI REFERENCE screenshots from ScummVM (its Ultima
 # engine is Nuvie-based) for visually debugging our remake. Clean-room-OK: we are
 # OBSERVING the reference running on the user's own data, not copying it.

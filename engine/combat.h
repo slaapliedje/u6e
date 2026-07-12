@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* combat.h — U6 combat math (docs/rules/combat.md). Pure, deterministic via rng_t,
  * so it unit-tests and is reused by both the player attack and enemy AI. */
 #ifndef U6E_COMBAT_H

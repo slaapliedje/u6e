@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* spellprobe.c — host diagnostic for save-backed spellbook/mana (clean-room).
  * Dumps the actor-inventory chunk records for the spellbook (57), spell objects
  * (58) and reagents (65-72), decoding owner/frame/qty/quality per objlist.md §3b,

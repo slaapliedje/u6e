@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* raw2png.c — host: convert a dumped chunky-8bpp backbuffer (OUT.RAW) + U6PAL
  * into a PNG, to verify the ST's composite against the golden image.
  * Usage: raw2png <out.raw> <U6PAL> <width> <height> <out.png> */

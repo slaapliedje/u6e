@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* objects.h — world object store + player inventory (M6, portable engine).
  *
  * Shared, headless game logic for the look/get/use verbs: a mutable array of

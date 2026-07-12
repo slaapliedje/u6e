@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* combat.c — U6 combat math (docs/rules/combat.md §2-3), transcribed from the spec
  * (derived from Nuvie data/scripts/u6/actor.lua: actor_combat_hit_check / actor_take_hit). */
 #include "combat.h"

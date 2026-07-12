@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* converse_vm.c — Ultima VI conversation/usecode VM. See converse_vm.h.
  *
  * Two-phase interpreter (mirrors the original design, understood via Nuvie,

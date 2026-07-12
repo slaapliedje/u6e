@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* introcomp.c — HOST: composite a list of U6 intro SHAPE indices onto a shared
  * 320x200 canvas at each shape's ABSOLUTE coordinates (hotspot leftX/upperY +
  * per-block x/y), index 0 transparent. Tests the hypothesis that intro overlay

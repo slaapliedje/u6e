@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6tile.h — Ultima VI tile bitmaps (portable, M2). See /docs/formats/tiles.md.
  *
  * Tiles are 16x16, 8 bits/pixel (palette indices). TILEINDX.VGA gives each

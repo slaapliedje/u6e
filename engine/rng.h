@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* rng.h — deterministic PRNG seam (M5).
  * A single seedable generator so logic tests are reproducible (fixed seed →
  * fixed sequence). All engine randomness goes through this, never rand(). */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* uipreview.c — HOST: render the U6 windowed UI to PNGs so the layout + the
  * real U6.CH font can be iterated against reference screenshots WITHOUT the
  * slow emulator round-trip. Loads the U6W3 world pack (build/u6.world).

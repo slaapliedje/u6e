@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platmem.c — pool grab + bump sub-allocators.
  *
  * TOS calls used (named for verification):

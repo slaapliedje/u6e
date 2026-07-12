@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* convvm.c — HOST: drive a real NPC conversation through the full usecode VM
  * (engine/converse_vm). Decompresses NPC N's script from CONVERSE.A and runs it,
  * feeding a list of keywords (default: name, job, bye) and printing each

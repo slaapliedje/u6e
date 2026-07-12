@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* cycleprobe.c — host diagnostic: decode ANIMMASK (LZW -> 2048-byte per-tile map)
  * and, for each distinct value (candidate colour-cycle GROUP), find which palette
  * indices the tiles of that group actually use. If a group maps to a tight palette-

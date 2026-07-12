@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* rdr_tt.c — TT-low 256-color backend (M3 first backend).
  *
  * TT-low is 320x480, 256 colors, stored as 8 INTERLEAVED bitplanes: each group

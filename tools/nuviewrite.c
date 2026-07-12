@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* nuviewrite.c — host: WRITE a ScummVM/Nuvie U6 save (see docs/formats/nuvie_save.md).
  *
  * Proves our save-WRITE path. We now RE-SERIALIZE the two regions we model from

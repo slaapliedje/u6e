@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platfile.c — GEMDOS file I/O.
  *
  * TOS calls used (named for verification):

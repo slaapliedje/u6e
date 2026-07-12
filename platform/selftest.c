@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* selftest.c — M0/M1 "hello, hardware" + platform-foundation self-verify.
  *
  * Prints detected hardware (M0) and then exercises the M1 services — memory

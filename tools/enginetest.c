@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* enginetest.c — M5 headless logic test (the milestone's acceptance gate).
  *
  * Drives the portable engine with scripted moves against the real U6 surface

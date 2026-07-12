@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* png.c — minimal RGB PNG writer. Host-only. */
 #include "png.h"
 #include <stdio.h>

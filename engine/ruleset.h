@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* ruleset.h — GameDef + RuleSet scaffolding (M5, C interface-struct pattern).
  *
  * Per engine/CLAUDE.md: shared systems call RuleSet hooks; the default impl is

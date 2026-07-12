@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* converse_vm.h — Ultima VI conversation/usecode VM (M6, portable engine).
  *
  * Executes an NPC's decompressed conversation script: prints text, evaluates

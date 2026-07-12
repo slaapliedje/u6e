@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* objprobe.c — host diagnostic: analyse the 64 surface super-chunks of a ScummVM
  * U6 save to discover (a) the super-chunk partitioning formula (which chunk holds
  * an object at x,y) and (b) how contained objects (status != on-map) are grouped.

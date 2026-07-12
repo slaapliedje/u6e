@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* objects.c — world object store + inventory (M6). See objects.h. */
 #include "objects.h"
 

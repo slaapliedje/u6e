@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6actor.h — Ultima VI NPC actors + daily schedules (portable, M6).
  *
  * Two original data sources (decoded clean-room from our /docs specs; format

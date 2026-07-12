@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* npcsheet.c — HOST: prove the NPC# -> portrait + name mapping end to end with
  * real data. For each NPC number it pulls the NAME from that NPC's conversation
  * (CONVERSE.A index == actor number) and the PORTRAIT from PORTRAIT.A at index

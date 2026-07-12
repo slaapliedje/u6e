@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* rdr_falcon.c — Falcon030 VIDEL 320x240 256-color backend.
  *
  * Why this backend exists alongside rdr_tt.c: the TT's only practical 256-color

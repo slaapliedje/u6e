@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* gamedemo.c — M6 authentic U6 UI on the TT.
  *
  * Renders U6's real screen using ORIGINAL assets (loaded from the U6W4 world

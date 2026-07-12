@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* save.h — write a ScummVM/Nuvie-compatible save from live engine state.
  *
  * We adopt ScummVM's Nuvie save format as our own (see docs/formats/nuvie_save.md).

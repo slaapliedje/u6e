@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* mkpack.c — host: build an indexed-256 asset pack for the M3 render demo.
  *
  * Decodes a region of the U6 surface + the tileset + palette and writes a

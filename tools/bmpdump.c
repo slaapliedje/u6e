@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* bmpdump.c — HOST: decode a U6 "U6Bmp" image (e.g. PAPER.BMP, the game-screen
  * papyrus border + scroll background) to a PNG, to validate the format decode.
  *

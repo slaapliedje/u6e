@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* animprobe.c — host diagnostic: decode U6 ANIMDATA into its parallel arrays so we
  * can work out the tile-animation mechanism (clean-room, from our own bytes).
  * Layout hypothesis (194 bytes): u16 count, then 32-entry arrays

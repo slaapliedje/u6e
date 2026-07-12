@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* nuviesave.c — host: decode a ScummVM/Nuvie U6 save (see docs/formats/nuvie_save.md).
  * Verifies the layout and extracts the 64 surface super-chunks (== an OBJBLK
  * stream) + the objlist, so mkworld can build the world from a ScummVM save state.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* palhist.c — throwaway: decode a SHAPE and print a palette-index histogram,
  * optionally restricted to a y-band. Used to find the gold menu-text indices so
  * the front-end can color-cycle the selected option. Build: see Makefile palhist. */

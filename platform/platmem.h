@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platmem.h — memory pools with alloc-by-INTENT (M1).
  *
  * The engine never calls a TOS allocator; it asks for memory by what the

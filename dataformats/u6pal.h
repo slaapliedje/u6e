@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6pal.h — Ultima VI palette decoder (portable, M2). See /docs/formats/palette.md.
  *
  * U6PAL holds 256 colors as RGB triples with 6-bit VGA components (0..63). We

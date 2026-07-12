@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* npcsched.c — HOST: decode NPC actors (OBJLIST) + daily schedules (SCHEDULE),
  * place every NPC at its scheduled location for a given game hour, report a few
  * named NPCs' routines (names cross-referenced from CONVERSE.A), and render a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* objrender.c — host validation: decode objects + render a region with objects
  * drawn over terrain (M6). Proves OBJBLK decode + BASETILE + combined tileset.
  * Usage: objrender <refdata/dos/u6> <out.png> [ox oy]  (auto-densest if omitted)

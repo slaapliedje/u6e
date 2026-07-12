@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6conv.c — conversation parser + minimal VM (M4 spike). See u6conv.h. */
 #include "u6conv.h"
 

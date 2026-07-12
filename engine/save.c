@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* save.c — on-target ScummVM/Nuvie save writer (see save.h + docs/formats/
  * nuvie_save.md). Patches a template save with live engine state and writes it.
  * All multi-byte save fields are little-endian; we read/write them byte-wise so

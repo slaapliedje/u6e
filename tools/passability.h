@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* passability.h — host-side derivation of a per-tile passability table (M5).
  *
  * PLACEHOLDER heuristic: a tile is impassable if its average colour is

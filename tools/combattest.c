@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* combattest.c — host unit test for engine/combat.c (docs/rules/combat.md §2-3).
  * Verifies the hit-chance distribution + damage roll/armour behave per spec. */
 #include <stdio.h>

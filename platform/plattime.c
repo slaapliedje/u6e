@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* plattime.c — 200Hz / VBL timing.
  *
  * TOS calls + sysvars used (named for verification):

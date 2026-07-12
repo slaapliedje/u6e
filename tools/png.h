@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* png.h — minimal RGB PNG writer (HOST-ONLY, for /tools validation dumps).
  * Not engine code. Writes 8-bit truecolor (RGB) PNGs using stored (uncompressed)
  * DEFLATE blocks, so there's no zlib dependency. */

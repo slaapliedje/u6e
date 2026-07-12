@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6tile.c — tile bitmap access. See /docs/formats/tiles.md. */
 #include "u6tile.h"
 

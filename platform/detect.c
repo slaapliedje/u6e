@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* detect.c — hardware detection via the cookie jar + GEMDOS version.
  *
  * TOS/library calls used (named for verification, per project rules):

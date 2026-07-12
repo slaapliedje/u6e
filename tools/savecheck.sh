@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
 # savecheck.sh — prove a save we WROTE (tools/nuviewrite) is ScummVM-loadable.
 # Temporarily swaps our written save into ScummVM's slot 0, loads it headless,
 # screenshots, and ALWAYS restores the user's original save (trap on exit).

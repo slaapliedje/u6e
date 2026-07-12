@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* platform.h — hardware-agnostic services exposed to /engine.
  *
  * M0 scope: hardware DETECTION only (the platform_caps struct + platform_detect).

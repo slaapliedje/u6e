@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6obj.h — Ultima VI object placement (OBJBLK / LZOBJBLK), portable, M6.
  * See /docs/formats/objblk.md.
  *

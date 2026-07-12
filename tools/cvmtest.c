@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* cvmtest.c — HOST unit test for the conversation VM's data-block lookup
  * (INDEXOF / db_find). Includes the engine TU directly to reach its statics,
  * builds a known data block, and checks name->index resolution.

@@ -1,3 +1,4 @@
+| SPDX-License-Identifier: GPL-2.0-or-later
 | c2p_asm.s — hand-written chunky->planar for TT-low (8 interleaved bitplanes).
 | The sole sanctioned asm hot path (docs/design/performance.md): the present is
 | compute-bound, and this is the inner conversion. 68000-class instructions only,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* portdump.c — HOST: decode U6 character portraits and render a contact sheet
  * PNG, to validate the format decode against real data.
  *

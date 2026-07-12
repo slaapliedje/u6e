@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* magic.h — U6 spellcasting rules (docs/rules/magic_skills.md).
  *
  * Portable engine logic: the spell TABLE (circle, reagents, name, words) and the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* magic.c — U6 spell table + cast gate-check. See magic.h + docs/rules/magic_skills.md.
  * Clean-room: table built from public U6 magic references (understood, restructured
  * here); reagent obj_n confirmed from the user's own LOOK.LZD data (tools/magicprobe). */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* render.h — platform-agnostic renderer interface (M3).
  *
  * The engine talks ONLY to this interface; all video-hardware divergence lives

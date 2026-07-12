@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* quantize.c — M7 host-side 256->16 palette quantiser (HEADLINE: base ST/STE looks BETTER
  * than the original lazy port). Reduces the 256-colour VGA art to an OPTIMISED 16-colour
  * palette chosen from the REAL ST gamut (512 = 3 bits/ch) or STE gamut (4096 = 4 bits/ch),

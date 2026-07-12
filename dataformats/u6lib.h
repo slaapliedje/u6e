@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6lib.h — Ultima VI "library" container reader (portable, M2).
  *
  * Implemented FROM /docs/formats/library.md (clean-room). A library is an index

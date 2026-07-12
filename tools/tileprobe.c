@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* tileprobe.c — host diagnostic: load the world pack and, for the 11x11 map view
  * around a coordinate, print each cell's NUMBER (1..121, left->right top->bottom),
  * world coords, terrain tile index, and any object there. Helps map a user's

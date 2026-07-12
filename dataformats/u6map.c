@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6map.c — MAP + CHUNKS decode. See /docs/formats/map_chunks.md. */
 #include "u6map.h"
 

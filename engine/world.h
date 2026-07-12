@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* world.h — shared world model + player movement + turn clock (M5).
  *
  * Portable engine logic (no TOS, no render). Operates on the decoded surface

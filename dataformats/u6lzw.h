@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* u6lzw.h — Ultima VI LZW container decoder (portable, M2).
  *
  * Implemented FROM /docs/formats/lzw.md (clean-room). Portable C: works on

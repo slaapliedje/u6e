@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* shapedump.c — HOST: decode a U6 SHAPE file (*.shp: MAINMENU/TITLES/INTRO/GYPSY)
  * to PNG(s), to validate the format decode (docs/formats/shapes.md).
  *
