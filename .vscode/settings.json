@@ -1,0 +1,36 @@
+{
+  // ── clangd for the m68k-atari-mint cross-toolchain ──────────────────────
+  // clangd is the C IntelliSense engine for this project (see ../.clangd).
+  //
+  // --query-driver authorizes clangd to RUN the cross-gcc to discover its
+  // system include paths (osbind.h, mint/*.h, libc) and builtin macros. For
+  // security, clangd only accepts this as a launch argument, never from the
+  // checked-in .clangd — so it must live here.
+  // Use the system clangd (22.1.6) instead of letting the extension download
+  // its own — keeps editor and CLI (`clangd --check`) on the same version.
+  "clangd.path": "/usr/bin/clangd",
+  "clangd.arguments": [
+    "--query-driver=/usr/bin/m68k-atari-mint-*",
+    "--background-index",
+    "--clang-tidy",
+    "--completion-style=detailed",
+    "--header-insertion=iwyu",
+    "--pch-storage=memory",
+    "--limit-results=200"
+  ],
+
+  // Stop the Microsoft C/C++ extension's engine from fighting clangd over
+  // diagnostics/hover. (If you don't have ms-vscode.cpptools installed this
+  // line is harmless.)
+  "C_Cpp.intelliSenseEngine": "disabled",
+
+  // Use clangd as the formatter for C sources.
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+  },
+
+  // Cross-built sources are C, not C++ — keep .h files treated as C.
+  "files.associations": {
+    "*.h": "c"
+  }
+}

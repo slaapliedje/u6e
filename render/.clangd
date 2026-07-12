@@ -1,0 +1,8 @@
+# /render includes platform + dataformats headers. clangd resolves relative -I
+# against the file's own directory, so these parent-relative paths resolve from
+# render/. (Build-time -I is set by the Makefile.)
+CompileFlags:
+  Add:
+    - -I../platform
+    - -I../dataformats
+    - -I../engine

@@ -1,0 +1,1325 @@
+/* mkworld.c — host: build the world pack the engine loads at runtime (M5/M6).
+ *
+ * Pack "U6W3" (big-endian header; bulk arrays are byte data):
+ *   0   "U6W3"
+ *   4   u32 map_len            (raw MAP)
+ *   8   u32 chunks_len         (raw CHUNKS)
+ *   12  u32 ntiles             (2048: full combined tileset, 256 bytes each)
+ *   16  u32 nobjs              (world objects, 14 bytes each: u16 x,y,tile,obj_n,qty16,quality,parent)
+ *   20  u16 startX
+ *   22  u16 startY
+ *   24  MAP | CHUNKS | tileset(ntiles*256) | palette(768) | passable(256)
+ *       | objects(nobjs * {u16 x, y, tile, obj_n, qty16, parent})  (all big-endian;
+ *         parent = index of the containing object or 0xFFFF; contained x/y = 0)
+ *       | font(2048: U6.CH, 256 glyphs x 8 bytes, 8x8 MSB-left, index=ASCII)
+ *       | paper(64000: PAPER.BMP decoded, 320x200 8-bit indices)
+ *       | u16 nport | portraits(nport * 56*64 8-bit indices)
+ *       | u16 demo_npc | u16 script_len | script[script_len]
+ *       | u16 nact | nact x u16 actor-tile | nact x {u16 x,u16 y,u8 z}
+ *       | u16 sched_len | SCHEDULE[sched_len]
+ *       | u32 look_len | look[look_len] | gettable[1024]
+ *       | u8 cur_w | u8 cur_h | u8 cur_hotx | u8 cur_hoty | cursor[cur_w*cur_h]
+ *       | basetile[2048]  (1024 x u16 LE: obj_n -> base tile)
+ * Pack "U6WA" (=W10) adds BASETILE so the engine can recover an object's frame
+ * (tile - base) for frame-aware USE (doors open/close) + future animation
+ * (docs/rules/usecode_use.md). (U6W9 added the mouse cursor; U6W8 object identity
+ * + LOOK names + gettable; U6W7 the NPC actor table + SCHEDULE.)
+ * The font/paper/portraits are original U6 assets (loaded at runtime — never
+ * committed). English glyphs 0-127, runic/gargoyle 128-255.
+ * The ST runs u6map on MAP+CHUNKS, blits terrain from tileset[tile*256], and
+ * draws each surface object's pre-resolved tile (transparent index 255).
+ * Usage: mkworld <refdata/dos/u6> <out.world> [startX startY]
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "u6lzw.h"
+#include "u6lib.h"
+#include "u6pal.h"
+#include "u6tile.h"
+#include "u6obj.h"
+#include "u6shape.h"
+#include "u6map.h"
+#include "combat.h"
+#include "passability.h"
+
+#define NPORT 16            /* sample portraits shipped for the on-target demo */
+#define DEMO_NPC 2          /* NPC whose conversation the on-target VM runs (Dupre) */
+
+#define NTILES 2048
+#define MAXOBJ 16384
+
+static uint8_t *slurp(const char *d, const char *name, long *n)
+{
+    char p[1024]; snprintf(p, sizeof p, "%s/%s", d, name);
+    FILE *f = fopen(p, "rb"); if (!f) { printf("cannot read %s\n", p); exit(2); }
+    fseek(f, 0, SEEK_END); *n = ftell(f); fseek(f, 0, SEEK_SET);
+    uint8_t *b = malloc((size_t)*n); fread(b, 1, (size_t)*n, f); fclose(f); return b;
+}
+static void be16(FILE *f, unsigned v){ fputc((v>>8)&0xFF,f); fputc(v&0xFF,f); }
+static void be32(FILE *f, unsigned long v){ fputc((v>>24)&0xFF,f); fputc((v>>16)&0xFF,f); fputc((v>>8)&0xFF,f); fputc(v&0xFF,f); }
+
+/* Decode one U6 shape FRAME (a U6MCGA.PTR library item / .shp frame) into a flat
+ * width*height 8-bit bitmap (255 = transparent). See docs/formats/cursor.md.
+ * Returns malloc'd pixels + size/hotspot; NULL on a malformed frame. */
+static uint8_t *decode_shape(const uint8_t *b, int32_t blen,
+                             int *ow, int *oh, int *ohx, int *ohy)
+{
+    if (blen < 8) return NULL;
+    #define RD16(p) ((p)[0]|((p)[1]<<8))
+    const uint8_t *d=b, *end=b+blen;
+    int x1=RD16(d); d+=2; int hotx=RD16(d); d+=2; int width=x1+hotx+1;
+    int hoty=RD16(d); d+=2; int y2=RD16(d); d+=2; int height=hoty+y2+1;
+    if (width<=0||height<=0||width>1024||height>1024) return NULL;
+    uint8_t *raw=malloc((size_t)width*height); memset(raw,255,(size_t)width*height);
+    while (d+6<=end){
+        int num=RD16(d); if(num==0) break; d+=2;
+        int xpos=(int16_t)RD16(d); d+=2; int ypos=(int16_t)RD16(d); d+=2;
+        if((hotx+xpos)>=width||(hoty+ypos)>=height||(hotx+xpos)<0||(hoty+ypos)<0) break;
+        int n=num>>1; uint8_t *dst=raw+(hotx+xpos)+(hoty+ypos)*width;
+        if(!(num&1)){ if(d+n>end) break; memcpy(dst,d,(size_t)n); d+=n; }   /* raw run */
+        else { int j=0; while(j<n && d<end){                                /* encoded */
+            unsigned s=*d++; int m=s>>1;
+            if(s&1){ if(d>=end)break; memset(dst+j,*d++,(size_t)m); }
+            else { if(d+m>end)break; memcpy(dst+j,d,(size_t)m); d+=m; }
+            j+=m; } }
+    }
+    #undef RD16
+    *ow=width; *oh=height; *ohx=hotx; *ohy=hoty; return raw;
+}
+
+/* decompress NPC `npc`'s full conversation script from CONVERSE.A (4-byte
+ * offset lib, each entry LZW). Returns malloc'd bytes + *len, or NULL. */
+static uint8_t *conv_script(const uint8_t *f, long flen, int npc, int32_t *len)
+{
+    int i=0; while(i*4+4<=flen && (f[i*4]|f[i*4+1]<<8|f[i*4+2]<<16|((uint32_t)f[i*4+3]<<24))==0) i++;
+    long count=(f[i*4]|f[i*4+1]<<8|f[i*4+2]<<16|((uint32_t)f[i*4+3]<<24))/4;
+    if(npc<0||npc>=count) return NULL;
+    #define OFF(j) (long)(f[(j)*4]|f[(j)*4+1]<<8|f[(j)*4+2]<<16|((uint32_t)f[(j)*4+3]<<24))
+    long s=OFF(npc); if(!s) return NULL;
+    long e=flen; for(long j=npc+1;j<count;j++){ long o=OFF(j); if(o){e=o;break;} }
+    #undef OFF
+    int32_t usz=u6lzw_unpacked_size(f+s,(int32_t)(e-s));
+    int32_t cap=(usz>0)?usz:(int32_t)(e-s);
+    uint8_t *d=malloc((size_t)cap+4);
+    int32_t got=u6lzw_decompress(f+s,(int32_t)(e-s),d,cap+4);
+    if(got<=0){ free(d); return NULL; } *len=got; return d;
+}
+
+/* slurp a full path (with an optional fallback path); NULL on failure */
+static uint8_t *slurp_path(const char *path, const char *fallback, long *n)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f && fallback) f = fopen(fallback, "rb");
+    if (!f) return NULL;
+    fseek(f,0,SEEK_END); *n=ftell(f); fseek(f,0,SEEK_SET);
+    uint8_t *b=malloc((size_t)*n); if(fread(b,1,(size_t)*n,f)!=(size_t)*n){fclose(f);free(b);return NULL;}
+    fclose(f); return b;
+}
+
+/* Decode Nuvie's roof_map_00.dat (sparse RLE of u16-per-tile, little-endian) into a
+ * per-tile indoor flag (roof tile != 0 => indoor). Format (Map::loadRoofData): a
+ * stream of records [u16 skip][u8 run][run x u16 tile]; ptr advances `skip` tiles
+ * then writes `run` tile values. See docs/rules/lighting.md §4. Returns roofed-tile
+ * count, or -1 if the file is absent/unreadable (caller falls back to floor-tiles). */
+#define WORLDW 1024
+static long load_roof_indoor(const char *dir, uint8_t *indoor /* WORLDW*WORLDW */)
+{
+    long rn; uint8_t *rd = NULL;
+    const char *envp = getenv("ROOF_MAP");
+    char relp[1200]; snprintf(relp, sizeof relp, "%s/roof_map_00.dat", dir);
+    if (envp)  rd = slurp_path(envp, NULL, &rn);
+    if (!rd)   rd = slurp_path(relp, "build/roof_map_00.dat", &rn);
+    if (!rd || rn < 3) { free(rd); return -1; }
+    memset(indoor, 0, (size_t)WORLDW * WORLDW);
+    long p = 0, idx = 0, nroof = 0;
+    while (p + 3 <= rn){
+        int skip = rd[p] | (rd[p+1] << 8); p += 2;
+        int run  = rd[p++];
+        idx += skip;
+        for (int i = 0; i < run && p + 2 <= rn; i++){
+            int val = rd[p] | (rd[p+1] << 8); p += 2;
+            if (idx >= 0 && idx < WORLDW*WORLDW && val){ indoor[idx] = 1; nroof++; }
+            idx++;
+        }
+    }
+    free(rd);
+    return nroof;
+}
+
+/* Build the per-tile INDOOR bitmap (U6WI). See docs/rules/lighting.md §4. PRIMARY
+ * source = Nuvie's roof_map_00.dat (exact ScummVM match: only the ~2433 roofed tiles
+ * — Lord British's castle + one other structure — are indoor; town shops stay lit by
+ * day). FALLBACK (file absent) = U6's own manmade FLOOR/CARPET tiles + wall-dilate
+ * (self-contained, but over-darkens: it marks every shop interior). Output: 1 bit/
+ * tile (131072 B, idx=y*1024+x), byte-RLE'd {u16 count, u8 value} big-endian summing
+ * to 131072. Returns malloc'd RLE (*out_len) or NULL. */
+static uint8_t *build_indoor_rle(const char *dir, const uint8_t *mapb, long mn,
+                                 const uint8_t *chk, long cn, const uint8_t *tflag,
+                                 const u6_object_t *objs, int32_t nobj, const uint8_t *bt,
+                                 const uint8_t *lookd, long look_len,
+                                 int startx, int starty, long *out_len)
+{
+    *out_len = 0;
+    uint8_t *indoor = malloc((size_t)WORLDW * WORLDW);
+    if (!indoor) { printf("indoor: OOM\n"); return NULL; }
+    const char *src; int32_t nfloor = 0, nwall = 0;
+
+    long nroof = load_roof_indoor(dir, indoor);
+    if (nroof >= 0){
+        src = "roof_map_00.dat (ScummVM)"; nfloor = (int32_t)nroof;
+    } else {
+        /* fallback: floor/carpet tiles + wall-dilate */
+        src = "floor-tile FALLBACK (no roof_map_00.dat)";
+        u6map_t m;
+        if (!u6map_load(&m, mapb, (int32_t)mn, chk, (int32_t)cn)){ printf("indoor: u6map_load failed\n"); free(indoor); return NULL; }
+        static uint8_t isfloor[NTILES]; memset(isfloor, 0, sizeof isfloor);
+        { int prev = -1; long pos = 0;
+          while (pos + 2 <= look_len){
+              int ix = lookd[pos] | (lookd[pos+1] << 8); pos += 2; if (ix >= NTILES) break;
+              const char *s = (const char *)&lookd[pos]; int sl = (int)strlen(s); pos += sl + 1;
+              int fl = (strstr(s, "floor") || strstr(s, "carpet")) ? 1 : 0;
+              for (int t = prev+1; t <= ix && t < NTILES; t++) isfloor[t] = (uint8_t)fl;
+              prev = ix;
+          } }
+        #define BND(t) ((t) >= 0 && (t) < NTILES && (tflag[0x800 + (t)] & 0x04))
+        #define FLR(t) ((t) >= 0 && (t) < NTILES && isfloor[t])
+        uint8_t *barrier = malloc((size_t)WORLDW * WORLDW);
+        if (!barrier){ printf("indoor: OOM\n"); free(indoor); return NULL; }
+        for (int y = 0; y < WORLDW; y++)
+            for (int x = 0; x < WORLDW; x++){
+                int tile = u6map_surface_tile(&m, x, y);
+                barrier[y*WORLDW + x] = BND(tile) ? 1 : 0;
+                indoor [y*WORLDW + x] = FLR(tile) ? 1 : 0;
+            }
+        for (int32_t i = 0; i < nobj; i++){
+            if (objs[i].z != 0) continue;
+            int x = objs[i].x, y = objs[i].y;
+            if (x < 0 || x >= WORLDW || y < 0 || y >= WORLDW) continue;
+            int base = u6_basetile(bt, objs[i].obj_n);
+            if (FLR(base)) indoor[y*WORLDW + x] = 1;
+        }
+        for (int i = 0; i < WORLDW*WORLDW; i++) nfloor += indoor[i];
+        for (int y = 0; y < WORLDW; y++)
+            for (int x = 0; x < WORLDW; x++){
+                int i = y*WORLDW + x; if (!barrier[i] || indoor[i]) continue;
+                int up = ((y-1)&(WORLDW-1))*WORLDW + x, dn = ((y+1)&(WORLDW-1))*WORLDW + x;
+                int lf = y*WORLDW + ((x-1)&(WORLDW-1)), rt = y*WORLDW + ((x+1)&(WORLDW-1));
+                if ((!barrier[up]&&indoor[up]) || (!barrier[dn]&&indoor[dn]) ||
+                    (!barrier[lf]&&indoor[lf]) || (!barrier[rt]&&indoor[rt])){ indoor[i] = 1; nwall++; }
+            }
+        #undef BND
+        #undef FLR
+        free(barrier);
+    }
+
+    /* pack to bits (idx = y*1024+x) then byte-RLE */
+    static uint8_t bits[WORLDW*WORLDW/8];
+    memset(bits, 0, sizeof bits);
+    for (int i = 0; i < WORLDW*WORLDW; i++) if (indoor[i]) bits[i>>3] |= (uint8_t)(1u << (i&7));
+    int N = WORLDW*WORLDW/8;
+    uint8_t *rle = malloc((size_t)N * 3 + 16); long rl = 0;
+    for (int i = 0; i < N; ){
+        int v = bits[i], run = 1;
+        while (i+run < N && bits[i+run] == v && run < 65535) run++;
+        rle[rl++] = (uint8_t)((run>>8)&0xFF); rle[rl++] = (uint8_t)(run&0xFF); rle[rl++] = (uint8_t)v;
+        i += run;
+    }
+    { int o = 0, ok = 1;                                  /* RLE round-trip self-check */
+      for (long r = 0; r+3 <= rl && o < N; r += 3){ int cnt = (rle[r]<<8)|rle[r+1], vv = rle[r+2];
+          while (cnt-- > 0 && o < N){ if (bits[o] != vv) ok = 0; o++; } }
+      if (!ok || o != N) printf("indoor: RLE self-check FAILED (o=%d/%d)\n", o, N); }
+
+    printf("indoor: source=%s; %d tiles%s (%.2f%%); RLE %d->%ld bytes\n",
+           src, nfloor+nwall, nwall?" (incl dilated walls)":"", 100.0*(nfloor+nwall)/(WORLDW*WORLDW), N, rl);
+    { struct { int x,y; const char *l; } ck[] = {
+          {startx,starty,"start"},{316,367,"throne"},{313,350,"kitchen"},{303,355,"courtyard?"},
+          {0,0,"open"},{500,500,"open"},{800,200,"open"} };
+      for (unsigned k = 0; k < sizeof ck/sizeof*ck; k++){
+          int i = ck[k].y*WORLDW + ck[k].x;
+          printf("   (%d,%d) %-11s : %s\n", ck[k].x, ck[k].y, ck[k].l, indoor[i] ? "INDOOR" : "outdoor"); }
+    }
+    free(indoor);
+    *out_len = rl; return rle;
+}
+
+/* Darkening LUTs (U6WJ) for the lighting overlay (docs/rules/lighting.md §3). NLEV
+ * brightness levels; lut[lev][i] = the palette index nearest to colour i scaled toward
+ * black by lev/(NLEV-1) (lev 0 = black, NLEV-1 = identity). The engine applies
+ * darklut[light>>5] to each map cell. Computed HOST-SIDE because a 256-entry nearest-
+ * colour search per LUT entry (~4e5 searches) is too slow to build on the 68000.
+ * NLEV must match the engine's (render/gamedemo.c). Palette is RGB6 (u6pal, 0..63). */
+#define NLEV 16
+static void build_darklut(const uint8_t *pal, uint8_t lut[NLEV][256])
+{
+    for (int lev = 0; lev < NLEV; lev++)
+        for (int i = 0; i < 256; i++){
+            int tr = pal[i*3]*lev/(NLEV-1), tg = pal[i*3+1]*lev/(NLEV-1), tb = pal[i*3+2]*lev/(NLEV-1);
+            int best = 0, bd = 0x7fffffff;
+            for (int j = 0; j < 256; j++){
+                int dr = pal[j*3]-tr, dg = pal[j*3+1]-tg, db = pal[j*3+2]-tb;
+                int d = dr*dr + dg*dg + db*db;
+                if (d < bd){ bd = d; best = j; }
+            }
+            lut[lev][i] = (uint8_t)best;
+        }
+}
+
+/* Load an 8-bit BMP (roof_tiles.bmp) into a top-down W*H index buffer (palette ignored;
+ * it matches U6's). Tries $ROOF_TILES, build/, then <dir>/. Returns malloc'd pixels. */
+static uint8_t *load_bmp8(const char *dir, int *ow, int *oh)
+{
+    const char *tp = getenv("ROOF_TILES"); if(!tp) tp = "build/roof_tiles.bmp";
+    long bn; uint8_t *b = slurp_path(tp, NULL, &bn);
+    if(!b){ char p[1200]; snprintf(p,sizeof p,"%s/roof_tiles.bmp",dir); b = slurp_path(p,NULL,&bn); }
+    if(!b || bn<54 || b[0]!='B' || b[1]!='M'){ free(b); return NULL; }
+    #define LE16(o) ((b)[o]|((b)[(o)+1]<<8))
+    #define LE32(o) ((uint32_t)(b)[o]|((uint32_t)(b)[(o)+1]<<8)|((uint32_t)(b)[(o)+2]<<16)|((uint32_t)(b)[(o)+3]<<24))
+    uint32_t doff=LE32(10); int W=(int)LE32(18), H=(int)LE32(22), bpp=LE16(28);
+    if(W<=0||H<=0||bpp!=8){ printf("roof bmp %dx%d %dbpp unsupported\n",W,H,bpp); free(b); return NULL; }
+    int stride=(W+3)&~3;
+    uint8_t *pix=malloc((size_t)W*H);
+    for(int y=0;y<H;y++) memcpy(pix+(size_t)y*W, b+doff+(size_t)(H-1-y)*stride, (size_t)W); /* flip bottom-up */
+    #undef LE16
+    #undef LE32
+    free(b); *ow=W; *oh=H; return pix;
+}
+
+/* Decode shape `idx` of a U6 .SHP (whole-file LZW) -> malloc'd W*H 8-bit indexed
+ * pixels + dims, or NULL (docs/formats/shapes.md; front-end title/menu/intro art). */
+static uint8_t *load_shape(const char *dir, const char *name, int idx, int *ow, int *oh)
+{
+    long n; uint8_t *raw = slurp(dir, name, &n);
+    if(!raw) return NULL;
+    int32_t un = u6lzw_unpacked_size(raw,(int32_t)n);
+    uint8_t *d = raw; int32_t dn = (int32_t)n; int freed=0;
+    if(un>0){ d=malloc((size_t)un); dn=u6lzw_decompress(raw,(int32_t)n,d,un); freed=1; }
+    static uint8_t cv[512*512];
+    int w=0,h=0; uint8_t *out=NULL;
+    if(u6shape_decode(d,dn,idx,&w,&h,cv,(int32_t)sizeof cv)){
+        out=malloc((size_t)w*h); memcpy(out,cv,(size_t)w*h); *ow=w; *oh=h; }
+    if(freed) free(d); free(raw);
+    return out;
+}
+
+/* Load PALETTES.INT sub-palette `idx` as 256 x 6-bit RGB (768B, values 0..63) — the
+ * intro/cutscene palettes. Format (per nuvie ScriptCutscene::set_palette): 0x240 bytes
+ * per palette, 256 colours x 3 channels x 6 bits BIT-PACKED (LSB-first), value is the
+ * DAC 6-bit level (our pack palette is 6-bit). Returns 1 on success. (shapes.md /
+ * palette_cycling.md.) Also forces idx 254=black, 255=white for the caption strip. */
+static int load_intpal(const char *dir, int idx, uint8_t out[768])
+{
+    long n; uint8_t *raw = slurp(dir, "PALETTES.INT", &n);
+    if(!raw) return 0;
+    long base = (long)idx*0x240;
+    if(base+0x240 > n){ free(raw); return 0; }
+    const uint8_t *buf = raw + base;
+    for(int i=0;i<256;i++) for(int j=0;j<3;j++){
+        int bit=i*18+j*6, bp=bit/8, sh=bit%8;
+        int c = ((buf[bp] + (buf[bp+1]<<8)) >> sh) & 0x3F;
+        out[i*3+j] = (uint8_t)c;                       /* keep 6-bit for the pack */
+    }
+    out[254*3]=out[254*3+1]=out[254*3+2]=0;            /* caption strip: black */
+    out[255*3]=out[255*3+1]=out[255*3+2]=63;           /* caption text : white */
+    free(raw);
+    return 1;
+}
+
+/* One intro-scene layer: shape index + screen offset (nuvie sprite x,y). Most shapes
+ * self-position (hotspot 0,0), but overlay sprites are placed by the intro at a fixed
+ * (dx,dy) — e.g. the lounge avatar at (0,63), the remote at (143,91). */
+typedef struct { int idx, dx, dy; } ishape_t;
+
+/* Composite a list of shapes from a U6 .SHP onto a cw x ch canvas: each block at
+ * (dx+leftX+blockx, dy+upperY+blocky), index 0 transparent. Rebuilds whole intro
+ * scenes (base + overlays, or a wide pan panorama) at build time. (shapes.md; nuvie.) */
+static void compose_shapes(const char *dir, const char *file, const ishape_t *shp, int nsh,
+                           uint8_t *canvas, int cw, int ch)
+{
+    long n; uint8_t *raw = slurp(dir, file, &n);
+    if(!raw) return;
+    int32_t un = u6lzw_unpacked_size(raw,(int32_t)n);
+    uint8_t *d = raw; int32_t dn = (int32_t)n; int freed=0;
+    if(un>0){ d=malloc((size_t)un); dn=u6lzw_decompress(raw,(int32_t)n,d,un); freed=1; }
+    uint32_t off0 = (uint32_t)(d[4]|(d[5]<<8)|(d[6]<<16)|((uint32_t)d[7]<<24));
+    int nshapes = (int)((off0-4)/4);
+    const uint8_t *end = d+dn;
+    for(int k=0;k<nsh;k++){
+        int idx=shp[k].idx, ox=shp[k].dx, oy=shp[k].dy;
+        if(idx<0||idx>=nshapes) continue;
+        uint32_t off = (uint32_t)(d[4+idx*4]|(d[5+idx*4]<<8)|(d[6+idx*4]<<16)|((uint32_t)d[7+idx*4]<<24));
+        if(off+8>(uint32_t)dn) continue;
+        const uint8_t *sh=d+off;
+        int lX=sh[2]|(sh[3]<<8), uY=sh[4]|(sh[5]<<8);
+        const uint8_t *p=sh+8;
+        while(p+6<=end){
+            int dl=p[0]|(p[1]<<8); p+=2; if(dl==0) break;
+            int blen=dl>>1, flag=dl&1;
+            int px=ox+lX+(int16_t)(p[0]|(p[1]<<8)); p+=2;
+            int py=oy+uY+(int16_t)(p[0]|(p[1]<<8)); p+=2;
+            int wrote=0;
+            while(wrote<blen && p<end){
+                if(flag){ int b=*p++, cnt=b>>1;
+                    if(b&1){ uint8_t v=(p<end)?*p++:0;
+                        for(int i=0;i<cnt;i++){ if(v&&(unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
+                    else   { for(int i=0;i<cnt&&p<end;i++){ uint8_t v=*p++;
+                        if(v&&(unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
+                    wrote+=cnt;
+                } else { uint8_t v=*p++; if(v&&(unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; wrote++; }
+            }
+        }
+    }
+    if(freed) free(d); free(raw);
+}
+
+/* Extract the gypsy's 28 virtue questions from the user's U.EXE at build time. CLEAN-ROOM:
+ * these strings are NOT in a data file and are NOT shipped or committed — they live only in
+ * the user's own executable and go straight into the (never-committed) build-artifact pack.
+ * Located STRUCTURALLY, not by any hardcoded copyrighted anchor: partition the file into
+ * "pages" (contiguous NUL-terminated word-wrap fragments joined until a '%c' terminator) and
+ * take the unique run of 28 consecutive pages that each contain " A) " and " B) " and end in
+ * "?". They come out in canonical U6 order (Q1 Honesty|Compassion .. Q28 Spirituality|Humility);
+ * in every question the A) option is the lower-indexed virtue, B) the higher. Fills qbuf[q]
+ * (NUL-terminated, quote/%c stripped). Returns the number extracted (0 = U.EXE absent/unknown). */
+#define GQ_MAX 28
+#define GQ_LEN 320
+static int extract_questions(const char *dir, char qbuf[GQ_MAX][GQ_LEN])
+{
+    char path[1024]; snprintf(path,sizeof path,"%s/U.EXE",dir);
+    long n; uint8_t *d=slurp_path(path,NULL,&n);
+    if(!d){ printf("chargen questions: U.EXE not found -> generic prompts\n"); return 0; }
+    typedef struct { long off; int qflag; char text[GQ_LEN]; } page_t;
+    static page_t pg[2048]; int npg=0;
+    long i=0;
+    while(i<n && npg<2048){
+        long j=i; while(j<n && d[j]!=0) j++;               /* first NUL-terminated string */
+        int flen=(int)(j-i), ok=flen>0;
+        for(int k=0;k<flen && ok;k++){ uint8_t c=d[i+k]; if(c<32||c>=127) ok=0; }
+        if(!ok){ i=j+1; continue; }
+        char acc[GQ_LEN]; int al=0; long k=i; int done=0;   /* join fragments until "%c" */
+        while(!done){
+            long m=k; while(m<n && d[m]!=0) m++;
+            int fl=(int)(m-k), fok=fl>0;
+            for(int t=0;t<fl && fok;t++){ uint8_t c=d[k+t]; if(c<32||c>=127) fok=0; }
+            if(!fok) break;
+            for(int t=0;t<fl && al<GQ_LEN-1;t++) acc[al++]=(char)d[k+t];
+            k=m+1;
+            if(al>=2 && acc[al-2]=='%' && acc[al-1]=='c') done=1;
+            if(al>=GQ_LEN-1) break;
+        }
+        if(done && al>=2){
+            acc[al-2]=0; al-=2;                              /* strip the "%c" terminator */
+            int qf = (al>4 && strstr(acc," A) ") && strstr(acc," B) ") && acc[al-1]=='?');
+            pg[npg].off=i; pg[npg].qflag=qf;
+            memcpy(pg[npg].text,acc,(size_t)al+1); npg++;
+            i=k;
+        } else i=j+1;
+    }
+    int best=-1;
+    for(int s=0;s+GQ_MAX<=npg;s++){
+        int run=1; for(int t=0;t<GQ_MAX;t++) if(!pg[s+t].qflag){ run=0; break; }
+        if(run){ best=s; break; }
+    }
+    if(best<0){ printf("chargen questions: no 28-run found in U.EXE -> generic prompts\n"); free(d); return 0; }
+    for(int q=0;q<GQ_MAX;q++){
+        const char*t=pg[best+q].text; if(t[0]=='"') t++;    /* drop the dangling open-quote */
+        snprintf(qbuf[q],GQ_LEN,"%s",t);
+    }
+    printf("chargen questions: extracted %d from U.EXE @%#lx\n", GQ_MAX, pg[best].off);
+    free(d); return GQ_MAX;
+}
+
+/* Extract the intro cutscene NARRATION (15 pages) from the user's U.EXE at build time. CLEAN-ROOM:
+ * these strings live only in the user's own executable and go straight into the (never-committed)
+ * build-artifact pack — never shipped or hardcoded. Located STRUCTURALLY, not by any copyrighted
+ * anchor: the narration is the contiguous run of prose fragments immediately after the intro asset-
+ * filename block (a run of >=5 "introN.ext" fragments), grouped into PAGES by the rule "join
+ * NUL-terminated word-wrap fragments until one whose last byte is sentence punctuation (.!?)".
+ * Internal '\n' line-breaks -> spaces (the engine re-wraps to 320px). Stops at the gypsy region
+ * (first fragment containing "%c") or IP_MAX pages. Fills pages[] (NUL-terminated). Returns count. */
+#define IP_MAX 16
+#define IP_LEN 256
+static int extract_intro(const char *dir, char pages[IP_MAX][IP_LEN])
+{
+    char path[1024]; snprintf(path,sizeof path,"%s/U.EXE",dir);
+    long n; uint8_t *d=slurp_path(path,NULL,&n);
+    if(!d){ printf("intro narration: U.EXE not found -> engine paraphrase\n"); return 0; }
+    /* find the intro asset-filename block: a run of >=5 consecutive "intro...<.ext>" fragments
+     * (printable, no spaces, contains '.'). The narration begins at the first prose fragment after. */
+    long i=0, start=-1; int run=0;
+    while(i<n){
+        long j=i; while(j<n && d[j]) j++;
+        int L=(int)(j-i);
+        int isfn=(L>=8 && L<=12 && !memcmp(d+i,"intro",5));
+        if(isfn){ int sp=0,dot=0; for(int k=0;k<L;k++){ if(d[i+k]==' ')sp=1; if(d[i+k]=='.')dot=1; }
+                  if(sp||!dot) isfn=0; }
+        if(isfn) run++;
+        else { if(run>=5){ start=i; break; } run=0; }
+        i=j+1;
+    }
+    if(start<0){ printf("intro narration: filename block not found -> engine paraphrase\n"); free(d); return 0; }
+    int np=0; long p=start;
+    while(p<n && np<IP_MAX){
+        long j=p; while(j<n && d[j]) j++;                  /* peek first fragment of this page */
+        int L=(int)(j-p), ok=(L>0);
+        for(int k=0;k<L && ok;k++){ uint8_t c=d[p+k]; if(!((c>=32&&c<127)||c==10)) ok=0; }
+        if(!ok) break;                                     /* non-text fragment -> region ends */
+        int haspc=0; for(int k=0;k+1<L;k++) if(d[p+k]=='%'&&d[p+k+1]=='c') haspc=1;
+        if(haspc) break;                                   /* gypsy/question region -> stop */
+        char acc[IP_LEN]; int al=0; long k=p;              /* join fragments until one ends in .!? */
+        for(;;){
+            long m=k; while(m<n && d[m]) m++;
+            int fl=(int)(m-k), fok=(fl>0);
+            for(int t=0;t<fl && fok;t++){ uint8_t c=d[k+t]; if(!((c>=32&&c<127)||c==10)) fok=0; }
+            if(!fok) break;
+            for(int t=0;t<fl && al<IP_LEN-1;t++){ char c=(char)d[k+t]; acc[al++]=(c=='\n')?' ':c; }
+            char last=(char)d[m-1]; k=m+1;
+            if(last=='.'||last=='!'||last=='?') break;      /* sentence end -> page complete */
+            if(al>=IP_LEN-1) break;
+        }
+        acc[al]=0;
+        while(al>0 && acc[al-1]==' ') acc[--al]=0;          /* trim trailing spaces */
+        char*t=acc; while(*t==' ') t++;                     /* trim leading spaces */
+        snprintf(pages[np],IP_LEN,"%s",t); np++;
+        p=k;
+    }
+    printf("intro narration: extracted %d pages from U.EXE @%#lx\n", np, (unsigned long)start);
+    free(d); return np;
+}
+
+/* Extract BOOK.DAT's readable-text entries (signs / plaques / tombstones / books / scrolls).
+ * BOOK.DAT is a library (docs/formats/strings.md): a 2-byte-LE offset index — offset[0] = the
+ * index size, so entry count = offset[0]/2 — followed by NUL-terminated ASCII entries (\n = line
+ * break). COPYRIGHTED game text: extracted at BUILD time, NEVER committed. Fills books[i] (NUL-
+ * terminated, \n preserved). Returns the entry count. The engine indexes by (object quality - 1). */
+#define BOOK_MAX 256
+#define BOOK_LEN 2048
+static int extract_books(const char *dir, char books[BOOK_MAX][BOOK_LEN])
+{
+    long n; uint8_t *d = slurp(dir, "BOOK.DAT", &n);
+    if(!d || n < 4){ free(d); return 0; }
+    int idxsz = d[0] | (d[1]<<8);                    /* offset[0] = index size in bytes */
+    int cnt = idxsz/2;
+    if(cnt<1 || cnt>BOOK_MAX || idxsz>n){ free(d); printf("BOOK.DAT: bad index (%d)\n", idxsz); return 0; }
+    for(int i=0;i<cnt;i++){
+        int off = d[i*2] | (d[i*2+1]<<8);
+        books[i][0]=0;
+        if(off<idxsz || off>=(int)n) continue;
+        int t=0;                                     /* copy up to the entry's NUL (\n preserved) */
+        for(int k=off; k<(int)n && d[k] && t<BOOK_LEN-1; k++) books[i][t++]=(char)d[k];
+        books[i][t]=0;
+    }
+    free(d);
+    return cnt;
+}
+
+/* Build roof DRAWING data (U6WK) from Nuvie's roof_tiles.bmp + roof_map_00.dat.
+ * roof_map values index roof_tiles.bmp (5 cols x N rows of 16x16; palette == U6's,
+ * transparent index 255). Ship only DISTINCT used roof tiles (dense-indexed) + a sorted
+ * [u32 pos, u16 idx] map. Engine overdraws these over roofed cells when the avatar is
+ * OUTSIDE (Nuvie drawRoofs). Returns malloc'd tileset (*out_ntiles x 256) + *out_map
+ * (nroof x 6 bytes), or NULL if no roof data. See docs/rules/lighting.md §Stage E. */
+static uint8_t *build_roof(const char *dir, int *out_ntiles, uint8_t **out_map, long *out_maplen)
+{
+    *out_ntiles=0; *out_map=NULL; *out_maplen=0;
+    int W,H; uint8_t *bmp=load_bmp8(dir,&W,&H);
+    if(!bmp){ printf("roof: no roof_tiles.bmp -> roofs disabled\n"); return NULL; }
+    int cols=W/16;
+    const char *mp=getenv("ROOF_MAP"); if(!mp) mp="build/roof_map_00.dat";
+    long rn; uint8_t *rd=slurp_path(mp,NULL,&rn);
+    if(!rd){ char p[1200]; snprintf(p,sizeof p,"%s/roof_map_00.dat",dir); rd=slurp_path(p,NULL,&rn); }
+    if(!rd){ free(bmp); printf("roof: no roof_map_00.dat -> roofs disabled\n"); return NULL; }
+    static int32_t rpos[8192]; static int rval[8192]; int nroof=0;
+    { long p=0,idx=0; while(p+3<=rn && nroof<8192){ int sk=rd[p]|(rd[p+1]<<8); p+=2; int run=rd[p++]; idx+=sk;
+        for(int i=0;i<run && p+2<=rn && nroof<8192;i++){ int val=rd[p]|(rd[p+1]<<8); p+=2;
+            if(val){ rpos[nroof]=(int32_t)idx; rval[nroof]=val; nroof++; } idx++; } } }
+    free(rd);
+    static int remap[4096]; for(int i=0;i<4096;i++) remap[i]=-1;
+    int ntiles=0;
+    for(int i=0;i<nroof;i++){ int v=rval[i]; if(v>=0 && v<4096 && remap[v]<0) remap[v]=ntiles++; }
+    uint8_t *tiles=malloc((size_t)ntiles*256);
+    for(int v=0;v<4096;v++){ int di=remap[v]; if(di<0) continue;
+        int col=v%cols, row=v/cols;
+        for(int ty=0;ty<16;ty++)for(int tx=0;tx<16;tx++)
+            tiles[di*256+ty*16+tx] = bmp[(size_t)(row*16+ty)*W + (col*16+tx)];
+    }
+    free(bmp);
+    uint8_t *map=malloc((size_t)nroof*6); long ml=0;
+    for(int i=0;i<nroof;i++){ uint32_t pp=(uint32_t)rpos[i]; int di=remap[rval[i]];
+        map[ml++]=(uint8_t)((pp>>24)&0xFF); map[ml++]=(uint8_t)((pp>>16)&0xFF);
+        map[ml++]=(uint8_t)((pp>>8)&0xFF);  map[ml++]=(uint8_t)(pp&0xFF);
+        map[ml++]=(uint8_t)((di>>8)&0xFF);  map[ml++]=(uint8_t)(di&0xFF); }
+    printf("roof: %d roofed tiles, %d distinct roof-tiles; map %ld B, tileset %d B\n",
+           nroof, ntiles, ml, ntiles*256);
+    *out_ntiles=ntiles; *out_map=map; *out_maplen=ml; return tiles;
+}
+
+/* Parse the actor-inventory chunk (path: [u16 count][count*8] object records) for each
+ * actor's READIED gear (docs/formats/objlist.md §3b): a record is readied when
+ * (status & 0x18) == 0x18; its owner actor = the x field (b[1]|((b[2]&3)<<8)). Fills
+ * weapon[256] (readied weapon obj_n, 0=none) + ac[256] (Σ armour_ac). (combat.md CB3b) */
+static void build_actor_gear(const char *path, uint16_t weapon[256], uint8_t ac[256])
+{
+    for (int i = 0; i < 256; i++){ weapon[i] = 0; ac[i] = 0; }
+    if (!path) return;
+    long n; uint8_t *d = slurp_path(path, NULL, &n);
+    if (!d || n < 2){ free(d); return; }
+    int count = d[0] | (d[1] << 8); long p = 2; int nready = 0;
+    for (int o = 0; o < count && p + 8 <= n; o++, p += 8){
+        const uint8_t *b = d + p;
+        if ((b[0] & 0x18) != 0x18) continue;                 /* readied (equipped) only */
+        int owner = b[1] | ((b[2] & 0x03) << 8); if (owner < 0 || owner >= 256) continue;
+        int obj_n = b[4] | ((b[5] & 0x03) << 8);
+        if (weapon_dmg(obj_n) > 0 && weapon[owner] == 0) weapon[owner] = (uint16_t)obj_n;
+        if (armour_ac(obj_n) > 0){ int t = ac[owner] + armour_ac(obj_n); ac[owner] = (uint8_t)(t > 255 ? 255 : t); }
+        nready++;
+    }
+    free(d);
+    printf("gear: %d readied items; readied party gear:", nready);
+    for (int i = 1; i <= 8; i++) if (weapon[i] || ac[i]) printf(" a%d(weapon=%d,ac=%d)", i, weapon[i], ac[i]);
+    printf("\n");
+}
+
+/* sum the party's spendable GOLD from the inventory chunk: coins are obj_n 88 (OBJ_U6_GOLD),
+ * carried in actors' inventories (objlist.md). Party gold = Σ qty of obj_n-88 records owned by
+ * a party member (owner actor in the `party` set), including coins nested in a bag. inv chunk =
+ * [u16 count][count*8 records]; obj_n=b4|((b5&3)<<8), owner=b1|((b2&3)<<8), qty16=(b7<<8)|b6. */
+static int party_gold(const char *path, const uint8_t *objl, long oln){
+    if(!path || !objl) return 0;
+    long n; uint8_t *d=slurp_path(path, NULL, &n);
+    if(!d || n<2){ free(d); return 0; }
+    int cnt=d[0]|(d[1]<<8), gold=0;
+    if(2+(long)cnt*8>n) cnt=(int)((n-2)/8);
+    for(int k=0;k<cnt;k++){ const uint8_t *r=d+2+(long)k*8;
+        int objn=r[4]|((r[5]&3)<<8); if(objn!=88) continue;                 /* OBJ_U6_GOLD */
+        /* resolve the OWNER: an in-CONTAINER record's x/y bits are a PARENT record index
+         * (((y&0x3f)<<10)|x, objblk.md §2) — walk up to the in-inventory holder, whose x
+         * IS the owner actor number. (e.g. gold inside a carried bag.) */
+        int rec=k, depth=0, owner=-1;
+        while(depth++<8){ const uint8_t *b=d+2+(long)rec*8;
+            int x=b[1]|((b[2]&3)<<8), loc=b[0]&0x18;
+            if(loc==0x08){ int pl=(((((b[2]>>2)|((b[3]&0xf)<<6)))&0x3f)<<10)|x;
+                if(pl<0||pl>=cnt||pl==rec) break; rec=pl; continue; }
+            if(loc==0x10||loc==0x18) owner=x;
+            break; }
+        if(owner<1 || owner>=256 || 0x800+owner>=oln || !(objl[0x800+owner]&0x80)) continue; /* party only */
+        gold += (r[7]<<8)|r[6];
+    }
+    free(d);
+    return gold;
+}
+
+/* Scan the inventory chunk for the Avatar's spellbook (obj 57, in-inventory, owner=1) and collect
+ * the known spell numbers from its spell children (obj 58, in-container, quality = U6 spell_num;
+ * quality 255 = MAGIC_ALL_SPELLS = every spell). Fills a 128-bit set `known` (spell_num 0..127);
+ * sets *all=1 for the all-spells marker. Returns 1 if the Avatar HAS a spellbook. (Nuvie
+ * Magic::spellbook_has_spell scans the book by OBJ_MATCH_QUALITY — magic_skills.md §4.) */
+static int scan_spellbook(const char *path, uint8_t known[16], int *all){
+    *all=0; for(int i=0;i<16;i++) known[i]=0;
+    if(!path) return 0;
+    long n; uint8_t *d=slurp_path(path,NULL,&n);
+    if(!d||n<2){ free(d); return 0; }
+    int cnt=d[0]|(d[1]<<8); if(2+(long)cnt*8>n) cnt=(int)((n-2)/8);
+    int book=-1;
+    for(int k=0;k<cnt;k++){ const uint8_t *r=d+2+(long)k*8;
+        int objn=r[4]|((r[5]&3)<<8), loc=r[0]&0x18, owner=r[1]|((r[2]&3)<<8);
+        if(objn==57 && (loc==0x10||loc==0x18) && owner==1){ book=k; break; } }   /* OBJ_U6_SPELLBOOK */
+    if(book<0){ free(d); return 0; }
+    for(int k=0;k<cnt;k++){ const uint8_t *r=d+2+(long)k*8;
+        int objn=r[4]|((r[5]&3)<<8), loc=r[0]&0x18;
+        if(objn!=58 || loc!=0x08) continue;                                       /* OBJ_U6_SPELL, in-container */
+        int x=r[1]|((r[2]&3)<<8), pl=((((r[2]>>2)|((r[3]&0xf)<<6))&0x3f)<<10)|x;   /* parent link (objblk.md §2) */
+        if(pl!=book) continue;
+        int sn=r[7];                                                              /* quality = spell number */
+        if(sn==255) *all=1;                                                        /* MAGIC_ALL_SPELLS */
+        else if(sn<128) known[sn>>3]|=(uint8_t)(1<<(sn&7));
+    }
+    free(d);
+    return 1;
+}
+
+/* Sum the Avatar's REAGENTS (obj 65..72 = SulfAsh..Mandrake) from the inventory chunk into
+ * counts[8] (index obj_n-65). Reagents live in a carried bag, so resolve each record's owner up
+ * the parent chain (like party_gold) and keep only actor 1 (the Avatar). qty16 = (b7<<8)|b6 (a
+ * reagent's quality is 0, so this is just the byte count). Returns 1 if the Avatar carries any. */
+static int scan_reagents(const char *path, uint8_t counts[8]){
+    for(int i=0;i<8;i++) counts[i]=0;
+    if(!path) return 0;
+    long n; uint8_t *d=slurp_path(path,NULL,&n);
+    if(!d||n<2){ free(d); return 0; }
+    int cnt=d[0]|(d[1]<<8); if(2+(long)cnt*8>n) cnt=(int)((n-2)/8);
+    int any=0;
+    for(int k=0;k<cnt;k++){ const uint8_t *r=d+2+(long)k*8;
+        int objn=r[4]|((r[5]&3)<<8); if(objn<65||objn>72) continue;
+        int rec=k, depth=0, owner=-1;                              /* resolve owner up the container chain */
+        while(depth++<8){ const uint8_t *b=d+2+(long)rec*8;
+            int x=b[1]|((b[2]&3)<<8), loc=b[0]&0x18;
+            if(loc==0x08){ int pl=((((b[2]>>2)|((b[3]&0xf)<<6))&0x3f)<<10)|x; if(pl<0||pl>=cnt||pl==rec) break; rec=pl; continue; }
+            if(loc==0x10||loc==0x18) owner=x; break; }
+        if(owner!=1) continue;                                     /* Avatar only */
+        int q=(r[7]<<8)|r[6]; if(q>255) q=255;
+        int c=counts[objn-65]+q; counts[objn-65]=(uint8_t)(c>255?255:c); any=1;
+    }
+    free(d);
+    return any;
+}
+
+int main(int argc, char **argv)
+{
+    const char *dir = argc > 1 ? argv[1] : "refdata/dos/u6";
+    const char *out = argc > 2 ? argv[2] : "build/u6.world";
+    int startx = argc > 3 ? atoi(argv[3]) : 336;
+    int starty = argc > 4 ? atoi(argv[4]) : 336;
+    /* optional ScummVM-save mode: argv[5]=objblk stream, argv[6]=objlist (both
+     * extracted by tools/nuviesave from a save). LITTLE-endian (DOS lineage); the
+     * world is then built from that exact save state. (docs/formats/nuvie_save.md) */
+    const char *svm_objblk  = argc > 5 ? argv[5] : NULL;
+    const char *svm_objlist = argc > 6 ? argv[6] : NULL;
+    const char *svm_inv     = argc > 7 ? argv[7] : NULL;   /* actor-inventory chunk (readied gear, CB3b) */
+    int svm = (svm_objblk && svm_objlist) ? 1 : 0;
+
+    long mn,cn,pn,tn,on,bn,in,zn,fn;
+    uint8_t *mapb=slurp(dir,"MAP",&mn), *chk=slurp(dir,"CHUNKS",&cn);
+    uint8_t *palb=slurp(dir,"U6PAL",&pn), *mtc=slurp(dir,"MAPTILES.VGA",&tn);
+    uint8_t *ot=slurp(dir,"OBJTILES.VGA",&on), *ti=slurp(dir,"TILEINDX.VGA",&in);
+    uint8_t *bt=slurp(dir,"BASETILE",&bn), *lz=slurp(dir,"LZOBJBLK",&zn);
+    uint8_t *font=slurp(dir,"U6.CH",&fn);          /* 2048-byte authentic font */
+    long adn; uint8_t *adat=slurp(dir,"ANIMDATA",&adn);   /* tile-animation table */
+    if (fn != 2048) { printf("U6.CH is %ld bytes, expected 2048\n", fn); return 2; }
+
+    u6pal_t pal; u6pal_parse(&pal, palb, (int32_t)pn);
+
+    /* combined tileset blob + per-tile index */
+    int32_t musz = u6lzw_unpacked_size(mtc, (int32_t)tn);
+    int32_t comb_len = musz + (int32_t)on;
+    uint8_t *comb = malloc(comb_len);
+    u6lzw_decompress(mtc, (int32_t)tn, comb, musz);
+    memcpy(comb + musz, ot, (size_t)on);
+    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
+
+    /* MASKTYPE.VGA (LZW): per-tile encoding so transparent / pixel-block tiles
+     * (e.g. the map-window border tiles 432-439) decode correctly, not as raw
+     * 256-byte garbage. */
+    long mskn; uint8_t *mskc = slurp(dir,"MASKTYPE.VGA",&mskn);
+    int32_t msksz = u6lzw_unpacked_size(mskc,(int32_t)mskn);
+    uint8_t *msk = malloc((size_t)(msksz>0?msksz:1));
+    if (msksz < NTILES || u6lzw_decompress(mskc,(int32_t)mskn,msk,msksz)!=msksz){
+        printf("MASKTYPE.VGA decode failed (got %d, need >=%d)\n",msksz,NTILES); return 2; }
+    u6tile_set_masktype(&ts, msk);
+
+    static uint8_t passable[256];   /* filled from TILEFLAG below (after it loads) */
+
+    /* objects: decode on-map, keep surface (z==0), pre-resolve tile. Default =
+     * DOS LZOBJBLK (decompress). ScummVM-save mode = the extracted surface
+     * super-chunk stream (already an OBJBLK stream, uncompressed). */
+    uint8_t *od; int32_t uz;
+    if (svm){ long sz; od = slurp_path(svm_objblk, NULL, &sz); uz=(int32_t)sz;
+        if(!od){ printf("cannot read svm objblk %s\n",svm_objblk); return 2; } }
+    else { uz = u6lzw_unpacked_size(lz, (int32_t)zn); od = malloc(uz); u6lzw_decompress(lz, (int32_t)zn, od, uz); }
+    u6_object_t *objs = malloc(sizeof(u6_object_t)*MAXOBJ);
+    int32_t nobj = u6obj_decode_world(od, uz, objs, MAXOBJ);   /* on-map + in-container chains */
+    /* REPACK to the shipped world set: on-map surface (z==0) roots + the contained chains
+     * rooted in them, remapping each parent link to the packed index (parents always precede
+     * children in decode order, so one forward pass suffices). objblk.md §2 Containment. */
+    int nsurf = 0, ncontained = 0;
+    { static int32_t shipidx[MAXOBJ];
+      for (int32_t i=0;i<nobj;i++){
+          int keep; uint16_t newpar=U6OBJ_PARENT_NONE;
+          if (objs[i].parent==U6OBJ_PARENT_NONE) keep = (objs[i].z==0);
+          else { int32_t r=shipidx[objs[i].parent]; keep=(r>=0); if(keep){ newpar=(uint16_t)r; ncontained++; } }
+          shipidx[i] = keep ? nsurf : -1;
+          if (keep){ objs[nsurf]=objs[i]; objs[nsurf].parent=newpar;
+              if (newpar!=U6OBJ_PARENT_NONE){       /* contained: raw x/y/z bits are link garbage — */
+                  objs[nsurf].x=0; objs[nsurf].y=0; objs[nsurf].z=0xF; }  /* neutralize (off-surface) */
+              nsurf++; }
+      }
+      nobj = nsurf; }
+
+    /* object look-names (LOOK.LZD, whole-file LZW; tile-indexed run-fill table)
+     * + a precomputed gettable[obj_n] from TILEFLAG (see docs/formats/look.md,
+     * tileflag.md). gettable = weight in (0,255) AND base tile not a toptile. */
+    long lkn, tfn;
+    uint8_t *lkc = slurp(dir,"LOOK.LZD",&lkn);
+    int32_t look_len = u6lzw_unpacked_size(lkc,(int32_t)lkn);
+    uint8_t *lookd = malloc((size_t)(look_len>0?look_len:1));
+    if (look_len<=0 || u6lzw_decompress(lkc,(int32_t)lkn,lookd,look_len)!=look_len){
+        printf("LOOK.LZD decode failed (got %d)\n", look_len); return 2; }
+    uint8_t *tflag = slurp(dir,"TILEFLAG",&tfn);
+    if (tfn < 0x1C00){ printf("TILEFLAG too small (%ld, need 7168)\n",tfn); return 2; }
+    compute_passable_tflag(tflag, passable);   /* real terrain passability (Impassable|Wall) */
+    static uint8_t gettable[1024]; int ngettable=0;
+    for (int o=0;o<1024;o++){
+        uint8_t w = tflag[0x1000+o];                 /* weights block, by obj_n   */
+        uint16_t base = u6_basetile(bt,(uint16_t)o);
+        int toptile = (base<NTILES) && (tflag[0x800+base]&0x10); /* flags2 bit4   */
+        gettable[o] = (w!=0 && w!=255 && !toptile) ? 1 : 0;
+        ngettable += gettable[o];
+    }
+    /* STACKABLE object types (objblk.md §2): the LOOK string of the object's base tile
+     * carries a plural form (a '\' splits singular\plural) => quantity is 16-bit
+     * qty16=(quality<<8)|qty. Build per-tile plural flags from the run-fill table,
+     * then map by base tile. */
+    static uint8_t tile_plural[NTILES]; static uint8_t stackable[1024]; int nstack=0;
+    { int prev=-1; long pos=0;
+      while (pos+2<=look_len){
+          int ix = lookd[pos] | (lookd[pos+1]<<8); pos+=2; if (ix>=NTILES) break;
+          const char *s=(const char*)&lookd[pos]; int sl=(int)strlen(s); pos+=sl+1;
+          int pl = (strchr(s,'\\')!=NULL);
+          for (int t=prev+1;t<=ix && t<NTILES;t++) tile_plural[t]=(uint8_t)pl;
+          prev=ix; }
+      for (int o=0;o<1024;o++){ uint16_t base=u6_basetile(bt,(uint16_t)o);
+          stackable[o] = (base<NTILES) ? tile_plural[base] : 0; nstack+=stackable[o]; } }
+
+    /* Object frame-animation table (objanim[obj_n] = frame count, 0 = static).
+     * CAUTION: in U6 an object's frame_n usually encodes STATE or ORIENTATION, NOT an
+     * animation sequence — a fireplace's 4 frames face 4 walls, a campfire/torch has
+     * lit/unlit frames, etc. So we CANNOT just cycle every fire-named object's frames
+     * (that made fireplaces "rotate"). Only objects U6 actually animates belong here,
+     * and only over their animation frames. This set is GAME LOGIC (no data flag),
+     * confirmed by OBSERVING ScummVM cycle the tile. Currently just the magical
+     * brazier (obj_n 206: 4 colour frames, gray/orange/blue/purple — the throne-room
+     * braziers visibly cycle in ScummVM). Extend per-object only after verifying the
+     * frames are an animation, not state/orientation. (docs/rules/object_anim.md) */
+    static const struct { int obj_n, nframes; } ANIM_OBJ[] = {
+        { 0, 0 },     /* (none) — frame_n is state/orientation, not animation. Fire/brazier
+                       * glow is handled by COLOUR CYCLING (CLUT), not frame swaps. */
+    };
+    static uint8_t objanim[1024]; int nobjanim=0;
+    for (unsigned i=0;i<sizeof ANIM_OBJ/sizeof*ANIM_OBJ;i++){
+        int o=ANIM_OBJ[i].obj_n, nf=ANIM_OBJ[i].nframes;
+        if(o>0 && o<1024 && nf>=2 && nf<=8){ objanim[o]=(uint8_t)nf; nobjanim++; }
+    }
+
+    /* mouse cursor: U6MCGA.PTR (whole-file LZW) -> 4-byte library; item 0 = the
+     * arrow pointer (a shape frame). Decode to a flat bitmap + hot spot here so
+     * the runtime just blits it. See docs/formats/cursor.md. */
+    long curn; uint8_t *curc = slurp(dir,"U6MCGA.PTR",&curn);
+    int32_t cursz = u6lzw_unpacked_size(curc,(int32_t)curn);
+    uint8_t *curd = malloc((size_t)(cursz>0?cursz:1));
+    int cw=0,ch=0,chx=0,chy=0; uint8_t *cpix=NULL;
+    /* decompressed PTR = [u32 filesize][u32 offsets...][shapes]; offsets are
+     * absolute from file start. num = (offset[0]-4)/4. Item 0 = the arrow. */
+    if (cursz>=12 && u6lzw_decompress(curc,(int32_t)curn,curd,cursz)==cursz){
+        #define LE32(p) ((uint32_t)(p)[0]|((uint32_t)(p)[1]<<8)|((uint32_t)(p)[2]<<16)|((uint32_t)(p)[3]<<24))
+        uint32_t off0=LE32(curd+4);
+        if (off0>=8 && (int32_t)off0<cursz){
+            int num=(int)((off0-4)/4);
+            uint32_t i0=LE32(curd+4), i1=(num>1)?LE32(curd+8):(uint32_t)cursz;
+            if ((int32_t)i1>(int32_t)i0 && (int32_t)i1<=cursz)
+                cpix=decode_shape(curd+i0,(int32_t)(i1-i0),&cw,&ch,&chx,&chy);
+        }
+        #undef LE32
+    }
+    if (!cpix||cw<=0||ch<=0||cw>64||ch>64){ printf("U6MCGA.PTR cursor decode failed\n"); return 2; }
+
+    /* authentic background: PAPER.BMP (whole-file LZW U6Bmp -> 320x200 indices) */
+    long ppn; uint8_t *paperc = slurp(dir,"PAPER.BMP",&ppn);
+    int32_t pun = u6lzw_unpacked_size(paperc,(int32_t)ppn);
+    uint8_t *paperd = malloc((size_t)pun);
+    u6lzw_decompress(paperc,(int32_t)ppn,paperd,pun);
+    int pw=paperd[0]|(paperd[1]<<8), ph=paperd[2]|(paperd[3]<<8);
+    if (pw!=320||ph!=200){ printf("PAPER.BMP %dx%d unexpected\n",pw,ph); return 2; }
+    uint8_t *paper = paperd+4;                      /* 64000 pixels */
+
+    /* sample portraits (PORTRAIT.A items 0..NPORT-1: 4-byte lib of LZW 56x64) */
+    long prn; uint8_t *pra = slurp(dir,"PORTRAIT.A",&prn);
+    u6lib_t plib;
+    if (!u6lib_open(&plib,pra,(int32_t)prn,4,false)){ printf("PORTRAIT.A open failed\n"); return 2; }
+    static uint8_t portbuf[NPORT][56*64];
+    for (int i=0;i<NPORT;i++){ int32_t sz; const uint8_t *blob=u6lib_entry(&plib,i,&sz);
+        if (!blob||u6lzw_unpacked_size(blob,sz)!=56*64){ printf("portrait %d bad\n",i); return 2; }
+        u6lzw_decompress(blob,sz,portbuf[i],56*64); }
+
+    /* NPC actors: appearance from OBJLIST (savegame), schedules from SCHEDULE.
+     * We pre-resolve each actor's tile (basetile(obj_n)+frame) and ship that +
+     * the raw SCHEDULE so the engine places NPCs by game time on-target. */
+    #define NACT 256
+    long oln; uint8_t *objl;
+    if (svm){ long sz; objl=slurp_path(svm_objlist,NULL,&sz); oln=sz; }
+    else { char olp[1100]; snprintf(olp,sizeof olp,"%s/SAVEGAME/OBJLIST",dir);
+        objl=slurp_path(olp, "refdata/st/u6/SAVEGAME/OBJLIST", &oln); }
+    long scn; uint8_t *schd = slurp(dir,"SCHEDULE",&scn);
+    static uint16_t actile[NACT], actx[NACT], acty[NACT]; static uint8_t actz[NACT];
+    /* per-actor stats (1 byte each => endianness-agnostic; same on ST & DOS):
+     * HP @0xE00, strength @0x900, dex @0xA00, int @0xB00; in-party flag @0x800
+     * (bit 0x80). See docs/formats/objlist.md. */
+    static uint8_t achp[NACT], astr[NACT], adex[NACT], aint[NACT];
+    static uint8_t amana[NACT];   /* current magic points @objlist 0x13f1 (Nuvie ActorManager); 0xFF = unknown */
+    static uint8_t ahostile[NACT];   /* 1 = monster type hostile to the party by alignment (CB4) */
+    static uint8_t acoward[NACT];    /* 1 = coward: worktype COMBAT_RETREAT, flees until struck (CB4 follow-on) */
+    static uint16_t aexp[NACT];      /* experience (objlist 0xc00) for exp-based leveling (combat.md §3) */
+    static uint8_t atrainer[NACT];   /* 1 = level-advancing trainer (Lord British, obj_n 409) */
+    static uint8_t party[NACT]; int nparty=0;
+    int nact_ok=0;
+    for (int i=0;i<NACT;i++){
+        uint16_t t=0xFFFF; actx[i]=0; acty[i]=0; actz[i]=0xFF;   /* 0xFF = no live position */
+        achp[i]=astr[i]=adex[i]=aint[i]=0; amana[i]=0xFF; ahostile[i]=0; acoward[i]=0; aexp[i]=0; atrainer[i]=0;
+        if (objl && oln>=0xF00){   /* stat arrays present (1 byte each, both byte orders) */
+            achp[i]=objl[0xE00+i]; astr[i]=objl[0x900+i];
+            adex[i]=objl[0xA00+i]; aint[i]=objl[0xB00+i];
+            if (oln>0x13f1+i) amana[i]=objl[0x13f1+i];    /* current mana @0x13f1 (Nuvie ActorManager) */
+            /* experience @objlist+0xc00 (2 bytes): LE on DOS/ScummVM, BE on ST. (combat.md §3) */
+            { const uint8_t *e=objl+0xc00+i*2;
+              aexp[i]=(uint16_t)(svm ? (e[0]|(e[1]<<8)) : (e[1]|(e[0]<<8))); }
+            /* worktype @objlist+0x11f1 (Nuvie actor_manager). 0x07 = COMBAT_RETREAT -> coward. */
+            if (oln>0x11f1+i) acoward[i]=(uint8_t)(objl[0x11f1+i]==0x07);
+            if (svm && i>0 && (objl[0x800+i]&0x80) && nparty<NACT) party[nparty++]=(uint8_t)i;
+        }
+        if (objl && oln>=0x600){
+            const uint8_t *q=objl+0x400+i*2;                     /* appearance word */
+            uint16_t obj_n, fr;
+            if (svm){ obj_n=(uint16_t)(q[0]|((q[1]&3)<<8)); fr=(uint8_t)((q[1]&0xfc)>>2); }   /* DOS LE */
+            else    { obj_n=(uint16_t)(q[1]|((q[0]&3)<<8)); fr=(uint8_t)((q[0]&0xfc)>>2); }   /* ST  BE */
+            if (obj_n){ int tt=u6_basetile(bt,obj_n)+fr; if (tt>=0 && tt<NTILES){ t=(uint16_t)tt; nact_ok++; }
+                /* hostility = the AUTHENTIC U6 per-actor ALIGNMENT (objlist.md): status byte
+                 * (0x800) bit 0x20 set ⇒ EVIL(0x20)/CHAOTIC(0x60) ⇒ enemy. Party=GOOD(0x40),
+                 * townsfolk/citizen-gargoyles=NEUTRAL(0x00) are not hostile — so the gargoyle
+                 * "peace" is handled per-actor (post-treaty gargoyles are NEUTRAL in the save).
+                 * (Supersedes the old obj_n+worktype heuristic and the separate peace flag.) */
+                ahostile[i]=(uint8_t)( oln>0x800+i && (objl[0x800+i]&0x20) );
+                atrainer[i]=(uint8_t)(obj_n==409); }             /* Lord British: level-advancing trainer */
+            if (svm){   /* live actor position (LE 3-byte packing) -> place NPCs exactly */
+                const uint8_t *p=objl+0x100+i*3;
+                actx[i]=(uint16_t)(p[0]|((p[1]&3)<<8));
+                acty[i]=(uint16_t)(((p[1]&0xfc)>>2)|((p[2]&0xf)<<6));
+                actz[i]=(uint8_t)((p[2]&0xf0)>>4);
+            }
+        }
+        actile[i]=t;
+    }
+    if (!objl) printf("warning: OBJLIST not found (NPCs will be absent)\n");
+    if (!schd) printf("warning: SCHEDULE not found (NPCs will be absent)\n");
+    if (svm){ startx=actx[1]; starty=acty[1];     /* start where the Avatar (actor 1) stands */
+        printf("ScummVM-save mode: start at avatar (%d,%d)\n", startx, starty); }
+
+    /* game-time of day: from the save's OBJLIST clock (U6 stores it at objlist+0x1bf3
+     * = minute, +0x1bf4 = hour). Starting at the save's real time keeps NPCs at their
+     * schedule-correct spots (e.g. Lord British on his throne at 08:00 instead of
+     * walking to his noon destination). Default noon for the non-save demo world. */
+    int start_min = 12*60;
+    if (svm && objl && oln > 0x1bf5){
+        int mm=objl[0x1bf3], hh=objl[0x1bf4];
+        if (mm<60 && hh<24){ start_min = hh*60 + mm;
+            printf("save clock: %02d:%02d (start_min=%d)\n", hh, mm, start_min); }
+    }
+
+    /* test hook: $START_MIN (minutes 0..1439) overrides the game time-of-day, for
+     * validating night lighting without a night save. (docs/rules/lighting.md Stage D) */
+    { const char *sm = getenv("START_MIN");
+      if (sm){ int vv = atoi(sm); if (vv>=0 && vv<24*60){ start_min = vv;
+          printf("START_MIN override: %02d:%02d\n", vv/60, vv%60); } } }
+
+    /* indoor bitmap (U6WI): per-tile "under a roof" via building-enclosure flood.
+     * Gates daylight to outdoors so castle interiors are dark away from torches. */
+    long indoor_rle_len = 0;
+    uint8_t *indoor_rle = build_indoor_rle(dir, mapb, mn, chk, cn, tflag, objs, nobj, bt,
+                                           lookd, look_len, startx, starty, &indoor_rle_len);
+
+    FILE *f = fopen(out, "wb"); if (!f) { printf("cannot write %s\n", out); return 2; }
+    fwrite("U6WT", 1, 4, f);   /* U6WT: 14B object records {x,y,tile,obj_n,qty16,quality,parent} (quality = key id on locks/keys); U6WS 12B; U6WR gold; U6WP trainer; U6WO exp */
+    be32(f,(unsigned long)mn); be32(f,(unsigned long)cn);
+    be32(f, NTILES); be32(f,(unsigned long)nsurf);
+    be16(f,(unsigned)startx); be16(f,(unsigned)starty);
+    be16(f,(unsigned)start_min);
+    fwrite(mapb,1,(size_t)mn,f); fwrite(chk,1,(size_t)cn,f);
+    for (int t=0;t<NTILES;t++){ uint8_t tile[256];          /* full combined tileset */
+        u6tile_decode(&ts,t,tile);                          /* MASKTYPE-aware decode */
+        fwrite(tile,1,256,f); }
+    fwrite(palb,1,768,f);
+    fwrite(passable,1,256,f);
+    for (int32_t i=0;i<nobj;i++){                 /* repacked world objects (surface roots + contained chains) */
+        int tile = u6_basetile(bt, objs[i].obj_n) + objs[i].frame;
+        int contained = (objs[i].parent != U6OBJ_PARENT_NONE);
+        unsigned q16 = objs[i].quantity;          /* stackables: quality is the high byte (objblk.md §2) */
+        if (stackable[objs[i].obj_n]) q16 |= (unsigned)objs[i].quality << 8;
+        be16(f, contained ? 0 : objs[i].x);       /* {u16 x, y, render tile, obj_n, qty16, quality, parent} */
+        be16(f, contained ? 0 : objs[i].y);       /* contained: x/y meaningless until spilled */
+        be16(f, (unsigned)tile); be16(f, objs[i].obj_n);
+        be16(f, q16);
+        be16(f, stackable[objs[i].obj_n] ? 0 : objs[i].quality);   /* KEY ID on locks/keys (consumed by qty16 on stackables) */
+        be16(f, objs[i].parent); }
+    printf("objects: %d shipped (%d contained in containers; %d stackable types)\n",
+           (int)nobj, ncontained, nstack);
+    fwrite(font,1,2048,f);                         /* authentic U6.CH font */
+    fwrite(paper,1,64000,f);                        /* PAPER.BMP 320x200 background */
+    be16(f,NPORT);                                  /* portrait count, then 56x64 each */
+    for (int i=0;i<NPORT;i++) fwrite(portbuf[i],1,56*64,f);
+
+    /* demo NPC: ship the FULL decompressed conversation script so the engine's
+     * usecode VM runs it on-target. [u16 npc][u16 script_len][script bytes].
+     * (Portrait = NPC-1, already in the shipped portrait set.) */
+    long ccn; uint8_t *ccb = slurp(dir,"CONVERSE.A",&ccn);
+    int32_t scr_len=0; uint8_t *scr=conv_script(ccb,ccn,DEMO_NPC,&scr_len);
+    if (!scr) printf("warning: demo NPC %d script not decompressed\n", DEMO_NPC);
+    be16(f,DEMO_NPC); be16(f,(unsigned)(scr?scr_len:0));
+    if (scr&&scr_len>0) fwrite(scr,1,(size_t)scr_len,f);
+
+    /* actor block: [u16 nact][nact x u16 appearance-tile]
+     *              [nact x {u16 x, u16 y, u8 z}]          (live positions; z=0xFF none)
+     *              [nact x {u8 hp, u8 str, u8 dex, u8 int}] (stats; U6WC)
+     *              [u8 nparty][nparty x u8 actor-id]       (saved party; 0 if none)
+     *              [u16 sched_len][SCHEDULE] */
+    be16(f,NACT);
+    for (int i=0;i<NACT;i++) be16(f,actile[i]);
+    for (int i=0;i<NACT;i++){ be16(f,actx[i]); be16(f,acty[i]); fputc(actz[i],f); }
+    for (int i=0;i<NACT;i++){ fputc(achp[i],f); fputc(astr[i],f); fputc(adex[i],f); fputc(aint[i],f); fputc(amana[i],f); }  /* U6WC now 5B/actor: +current mana */
+    fputc(nparty,f); for (int i=0;i<nparty;i++) fputc(party[i],f);
+    be16(f,(unsigned)((schd&&scn>0)?scn:0));
+    if (schd&&scn>0) fwrite(schd,1,(size_t)scn,f);
+
+    /* object verbs: [u32 look_len][LOOK payload][gettable 1024 by obj_n] */
+    be32(f,(unsigned long)look_len);
+    fwrite(lookd,1,(size_t)look_len,f);
+    fwrite(gettable,1,1024,f);
+
+    /* mouse cursor: [u8 w][u8 h][u8 hotx][u8 hoty][w*h pixels] (255=transparent) */
+    fputc(cw,f); fputc(ch,f); fputc(chx,f); fputc(chy,f);
+    fwrite(cpix,1,(size_t)cw*ch,f);
+
+    /* BASETILE (2048 bytes = 1024 obj_n x u16 LE): obj_n -> base tile, so the
+     * engine can recover an object's frame (tile - base) for frame-aware use
+     * (doors) and future animation. Shipped verbatim (little-endian). */
+    fwrite(bt,1,(size_t)(bn<2048?bn:2048),f);
+    if(bn<2048){ for(long k=bn;k<2048;k++) fputc(0,f); }
+
+    /* ANIMDATA tile-animation table (U6WD): [u16 nanim] then nanim x
+     * {u16 dest_tile, u16 src_base, u8 nframes, u8 speed}. The engine fills the
+     * (blank) dest slot from src..src+nframes-1, cycling on its anim timer.
+     * Source is little-endian: count u16, then tile[32] u16, src[32] u16, frames[32]
+     * u8, speed[32] u8. (docs/formats/animdata.md) */
+    int nanim=0;
+    if (adat && adn>=194){
+        nanim=adat[0]|(adat[1]<<8); if(nanim>32) nanim=32;
+        const uint8_t *at=adat+2, *as=adat+2+32*2, *af=adat+2+32*4, *asp=adat+2+32*5;
+        be16(f,(unsigned)nanim);
+        for (int i=0;i<nanim;i++){
+            be16(f, at[i*2]|(at[i*2+1]<<8));        /* dest tile  */
+            be16(f, as[i*2]|(as[i*2+1]<<8));        /* src base   */
+            fputc(af[i],f); fputc(asp[i],f);        /* nframes, speed */
+        }
+    } else { be16(f,0); }
+
+    /* object frame-animation table (U6WE): objanim[1024] = per-obj_n frame count
+     * (0 = static). The engine cycles frame_n for fire/flame objects. */
+    fwrite(objanim,1,1024,f);
+
+    /* tileflags2[2048] (U6WF): per-TILE render flags (bit4 Foreground/toptile,
+     * bits6-7 multi-tile size). The renderer uses these for the foreground pass
+     * and double-width/height objects. Shipped verbatim. (docs/formats/tileflag.md) */
+    fwrite(tflag+0x800,1,2048,f);
+
+    /* tileflags1[2048] (U6WG): per-TILE movement flags (bit1 Impassable, bit2 Wall).
+     * The engine builds an object-blocking map so NPCs/player can't walk through
+     * impassable OBJECTS (walls/furniture/closed doors). (docs/formats/tileflag.md) */
+    fwrite(tflag+0x000,1,2048,f);
+
+    /* indoor bitmap (U6WI): [u32 rle_len][RLE pairs {u16 count, u8 value}].
+     * 1 bit/tile (idx=y*1024+x); decodes to 131072 bytes. See docs/rules/lighting.md. */
+    be32(f,(unsigned long)indoor_rle_len);
+    if (indoor_rle && indoor_rle_len>0) fwrite(indoor_rle,1,(size_t)indoor_rle_len,f);
+
+    /* darkening LUTs (U6WJ): NLEV x 256 bytes for the lighting overlay (lighting.md §3) */
+    { static uint8_t darklut[NLEV][256]; build_darklut(palb, darklut);
+      fwrite(darklut, 1, NLEV*256, f); }
+
+    /* roof drawing data (U6WK): [u16 n_rtiles][n_rtiles*256 roof tiles (255=transparent)]
+     * [u16 nroof][nroof x {u32 pos=y*1024+x, u16 dense roof-tile idx}]. The engine overdraws
+     * roofs over roofed cells when the avatar is OUTSIDE. (docs/rules/lighting.md Stage E) */
+    { int n_rtiles=0; uint8_t *roof_map=NULL; long roof_map_len=0;
+      uint8_t *roof_tiles=build_roof(dir,&n_rtiles,&roof_map,&roof_map_len);
+      be16(f,(unsigned)n_rtiles);
+      if (roof_tiles && n_rtiles>0) fwrite(roof_tiles,1,(size_t)n_rtiles*256,f);
+      be16(f,(unsigned)(roof_map_len/6));
+      if (roof_map && roof_map_len>0) fwrite(roof_map,1,(size_t)roof_map_len,f);
+      free(roof_tiles); free(roof_map); }
+
+    /* per-actor readied combat gear (U6WL): 256 x {u16 weapon obj_n, u8 armour class}
+     * parsed from the save's actor-inventory chunk. (docs/rules/combat.md CB3b) */
+    { static uint16_t gw[256]; static uint8_t gac[256];
+      build_actor_gear(svm_inv, gw, gac);
+      for (int i=0;i<256;i++){ be16(f,gw[i]); fputc(gac[i],f); } }
+
+    /* per-actor hostile-by-alignment flag (U6WM): 256 x u8 (combat.md §7 / CB4) */
+    { int nh=0; for (int i=0;i<NACT;i++){ fputc(ahostile[i],f); nh+=ahostile[i]; }
+      printf("alignment: %d/%d actors EVIL/CHAOTIC (status 0x800 bit 0x20 = enemy)\n", nh, NACT); }
+    /* per-actor coward flag (U6WN): 256 x u8 — worktype COMBAT_RETREAT (combat.md §7 / CB4) */
+    { int nc=0; for (int i=0;i<NACT;i++){ fputc(acoward[i],f); nc+=acoward[i]; }
+      printf("cowards: %d/%d actors (worktype COMBAT_RETREAT)\n", nc, NACT); }
+    /* per-actor experience (U6WO): 256 x u16 BE — for exp-based leveling (combat.md §3) */
+    for (int i=0;i<NACT;i++) be16(f, aexp[i]);
+    printf("exp: avatar=%u party=[%u,%u,%u]\n", aexp[1], aexp[2], aexp[3], aexp[4]);
+    /* per-actor trainer flag (U6WP): 256 x u8 — Lord British advances thy level (combat.md §3) */
+    { int nt=0; for (int i=0;i<NACT;i++){ fputc(atrainer[i],f); nt+=atrainer[i]; }
+      printf("trainers: %d/%d actors (Lord British)\n", nt, NACT); }
+    /* party GOLD (U6WR): u16 BE — Σ obj_n-88 coins over party members (objlist.md; combat.md §3) */
+    { int gold = svm ? party_gold(svm_inv, objl, oln) : 0;
+      be16(f, (uint16_t)(gold>65535?65535:gold));
+      printf("gold: party=%d (obj_n 88 coins)\n", gold); }
+    /* avatar KARMA (U6WR cont.): u8 — objlist 0x1bf9 (objlist.md §Player fields). The ztats
+     * screen shows it; conversation ADDKARMA/SUBKARMA then move it. 0 when no save (demo world). */
+    { int karma = (svm && objl && oln>0x1bf9) ? objl[0x1bf9] : 0;
+      fputc((uint8_t)karma, f);
+      printf("karma: avatar=%d (objlist 0x1bf9)\n", karma); }
+    /* avatar SPELLBOOK (U6WR cont.): [u8 present][u8 all][16B known-spell bitset by U6 spell_num].
+     * Loaded from the save's spellbook (obj 57 -> spell 58 by quality); present=0 => engine keeps its
+     * demo/implemented set. (magic_skills.md §4; Nuvie Magic::spellbook_has_spell.) */
+    { uint8_t known[16]; int all=0;
+      int has = svm ? scan_spellbook(svm_inv, known, &all) : 0;
+      fputc((uint8_t)has, f); fputc((uint8_t)all, f);
+      if(!has){ for(int i=0;i<16;i++) fputc(0,f); }
+      else { for(int i=0;i<16;i++) fputc(known[i],f); }
+      { int nsp=0; for(int i=0;i<16;i++){ uint8_t b=has?known[i]:0; while(b){ nsp+=b&1; b>>=1; } }
+        printf("spellbook: present=%d all-spells=%d known=%d (obj 57->58 by quality)\n", has, all, nsp); } }
+    /* avatar REAGENTS (U6WR cont.): [u8 present][8 x u8 counts] — obj 65..72 carried by the Avatar.
+     * present=0 => engine keeps its seeded starter stock (magic_skills.md §2). */
+    { uint8_t rc[8]={0}; int has = svm ? scan_reagents(svm_inv, rc) : 0;
+      fputc((uint8_t)has, f); for(int i=0;i<8;i++) fputc(has?rc[i]:0, f);
+      printf("reagents: present=%d [%d,%d,%d,%d,%d,%d,%d,%d] (obj 65-72 carried by Avatar)\n",
+             has, rc[0],rc[1],rc[2],rc[3],rc[4],rc[5],rc[6],rc[7]); }
+    /* FRONT-END art (U6WU): MAINMENU.SHP shape 0 + TITLES.SHP shape 0 (shapes.md).
+     * [u16 mw][u16 mh][mw*mh indices][u16 tw][u16 th][tw*th indices]. 0x0 if absent. */
+    { int mw=0,mh=0,tw=0,th=0;
+      uint8_t *menu =load_shape(dir,"MAINMENU.SHP",0,&mw,&mh);
+      uint8_t *title=load_shape(dir,"TITLES.SHP",  0,&tw,&th);
+      be16(f,(unsigned)mw); be16(f,(unsigned)mh); if(menu &&mw>0&&mh>0) fwrite(menu, 1,(size_t)mw*mh,f);
+      be16(f,(unsigned)tw); be16(f,(unsigned)th); if(title&&tw>0&&th>0) fwrite(title,1,(size_t)tw*th,f);
+      printf("front-end: menu %dx%d, title %dx%d\n", mw,mh,tw,th);
+      free(menu); free(title); }
+    /* INTRO SCENES (U6WV): [u8 n] then per scene [u8 type][768B pal(6-bit)] + layers.
+     *   type 0 (static hold): [u16 w=320][u16 h=200][320*200 idx]
+     *   type 1 (horizontal pan): [u16 pw=640][u16 h=200][640*200 panorama]
+     *                            [u16 fw=320][320*200 foreground (idx0 transparent)]
+     * Each scene ships its own PALETTES.INT palette (living room=1, stones/moongate=3).
+     * The living room PANS (nuvie scroll_lounge): the room panorama scrolls 1x, the
+     * avatar/remote foreground 2x (parallax). Others are static. (shapes.md; intro.lua.) */
+    { static const struct { const char *file; ishape_t bg[6]; int nbg;
+                            ishape_t fg[4]; int nfg; int pal; int type; } SC[] = {  /* type 0=static 1=pan 2=gate-rise */
+        /* living room: panorama = room bg(0) + bg1(1@320, has a transparent window) with
+         * the twilight field(15) placed BEHIND bg1's window (panorama 450,20 — nuvie floats
+         * it in as a slow parallax layer; we bake it behind the window so it's not black).
+         * Foreground = avatar/chair(13@0,63) + remote(14@143,91), pans at 2x. */
+        {"INTRO_1.SHP", {{15,450,20},{0,0,0},{1,320,0}}, 3, {{13,0,63},{14,143,91}}, 2, 1, 1},
+        {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 0},   /* ring of standing stones */
+        {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 2},   /* gate RISES from the stones (shape2 + cover4) */
+      };
+      int nsc = (int)(sizeof SC/sizeof SC[0]);
+      fputc(nsc, f);
+      for(int i=0;i<nsc;i++){
+        uint8_t pal[768]; if(!load_intpal(dir, SC[i].pal, pal)) memset(pal,0,sizeof pal);
+        fputc(SC[i].type, f);
+        fwrite(pal,1,768,f);
+        if(SC[i].type != 1){                                  /* type 0 (static) or 2 (gate-rise): bg only */
+          static uint8_t canvas[320*200]; memset(canvas,0,sizeof canvas);
+          compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, canvas, 320, 200);
+          be16(f,320); be16(f,200); fwrite(canvas,1,sizeof canvas,f);
+          printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
+        } else {
+          static uint8_t pano[640*200], fg[320*200];
+          memset(pano,0,sizeof pano); memset(fg,0,sizeof fg);
+          compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, pano, 640, 200);
+          compose_shapes(dir, SC[i].file, SC[i].fg, SC[i].nfg, fg,   320, 200);
+          /* blank the 4 LED digit cells (over the baked "88:88") so the engine can draw
+           * a live ticking clock over black; leave the colon (gap between cells). */
+          { static const int CX[]={0xdd,0xdd+4,0xdd+0xa,0xdd+0xe};
+            for(int c=0;c<4;c++) for(int yy=0x14;yy<0x14+5;yy++)
+              for(int xx=CX[c];xx<CX[c]+3;xx++) pano[yy*640+xx]=0; }
+          be16(f,640); be16(f,200); fwrite(pano,1,sizeof pano,f);
+          be16(f,320);              fwrite(fg,1,sizeof fg,f);
+          printf("intro scene %d: PAN %s pal %d (640 panorama + 320 fg)\n", i, SC[i].file, SC[i].pal);
+        } }
+      /* shared narration parchment scroll (BLOCKS.SHP shape 2, 320x48) drawn at the
+       * bottom over the scene, index 0 = torn/transparent edges. [u16 w][u16 h][w*h]. */
+      { int sw=0,sh=0; uint8_t *scr=load_shape(dir,"BLOCKS.SHP",2,&sw,&sh);
+        be16(f,(unsigned)sw); be16(f,(unsigned)sh);
+        if(scr&&sw>0&&sh>0) fwrite(scr,1,(size_t)sw*sh,f);
+        printf("intro scroll: BLOCKS.SHP[2] %dx%d\n", sw, sh); free(scr); }
+      /* living-room TV anchor (nuvie tv-anchor program): base 57x37 @ (0xe5,0x32) +
+       * talking-mouth frames 17x19 @ (+9,+7) = INTRO_1.SHP 31 / 32,33,34. The engine
+       * draws these over the scrolling panorama and cycles the mouth. [u16 aw][u16 ah]
+       * [u16 ax][u16 ay][aw*ah] then [u16 mw][u16 mh][u16 mx][u16 my][u8 nf][nf*mw*mh]. */
+      { int aw=0,ah=0; uint8_t *anc=load_shape(dir,"INTRO_1.SHP",31,&aw,&ah);
+        be16(f,(unsigned)aw); be16(f,(unsigned)ah); be16(f,0xe5); be16(f,0x32);
+        if(anc&&aw>0) fwrite(anc,1,(size_t)aw*ah,f); free(anc);
+        static const int MF[]={32,33,34}; int nmf=(int)(sizeof MF/sizeof MF[0]);
+        int mw=0,mh=0; uint8_t *m0=load_shape(dir,"INTRO_1.SHP",MF[0],&mw,&mh); free(m0);
+        be16(f,(unsigned)mw); be16(f,(unsigned)mh); be16(f,0xe5+9); be16(f,0x32+7); fputc(nmf,f);
+        for(int k=0;k<nmf;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"INTRO_1.SHP",MF[k],&w,&h);
+          if(mp&&w>0) fwrite(mp,1,(size_t)w*h,f); free(mp); }
+        printf("intro TV: anchor %dx%d @229,50 + %d mouth %dx%d\n", aw,ah, nmf, mw,mh); }
+      /* TV alt-channels (nuvie tv-program cycler): each a full 57x37 TV-screen image; the engine
+       * flips between the news anchor (channel 0 = base+mouth above), these channels, and
+       * generated static ("switching channels"). Two 2-frame programs: a talk-show (16/18) and
+       * a drama (24/25). [u8 nchan][u8 fpc][u16 cw][u16 ch] + nchan*fpc x [cw*ch idx]. */
+      { static const int CH[2][2]={{16,18},{24,25}}; int nchan=2, fpc=2;
+        int cw=0,ch=0; uint8_t*c0=load_shape(dir,"INTRO_1.SHP",CH[0][0],&cw,&ch); free(c0);
+        fputc(nchan,f); fputc(fpc,f); be16(f,(unsigned)cw); be16(f,(unsigned)ch);
+        for(int c=0;c<nchan;c++) for(int fr=0;fr<fpc;fr++){
+          int w=0,h=0; uint8_t*cp=load_shape(dir,"INTRO_1.SHP",CH[c][fr],&w,&h);
+          if(cp&&w==cw&&h==ch) fwrite(cp,1,(size_t)w*h,f);
+          else { static uint8_t z[57*37]; memset(z,0,sizeof z); fwrite(z,1,(size_t)cw*ch,f); }
+          free(cp); }
+        printf("intro TV channels: %d x %d-frame programs %dx%d\n", nchan, fpc, cw, ch); }
+      /* clock digits: INTRO_1.SHP 2..12 = LED glyphs 0..9 + blank (3x5), drawn over the
+       * blanked cells at (0xdd,0x14) with x-steps 0,4,10,14. [u16 cx][u16 cy][u8 nd] +
+       * nd x [u16 w][u16 h][w*h]. */
+      { be16(f,0xdd); be16(f,0x14); int nd=11; fputc(nd,f);
+        for(int k=0;k<nd;k++){ int w=0,h=0; uint8_t*dg=load_shape(dir,"INTRO_1.SHP",2+k,&w,&h);
+          be16(f,(unsigned)w); be16(f,(unsigned)h); if(dg&&w>0) fwrite(dg,1,(size_t)w*h,f); free(dg); }
+        printf("intro clock: 11 LED digits @ 0xdd,0x14\n"); }
+      /* moongate rise (type-2 scene): the gate (INTRO_3.SHP shape 2) rises at x=0x7c; the
+       * ground cover (shape 4 @ 0x5e,0x66) is drawn OVER it so it emerges from the earth.
+       * [u16 gw][u16 gh][u16 gx][gate] [u16 cw][u16 ch][u16 cx][u16 cy][cover]. (nuvie stones.) */
+      { int gw=0,gh=0; uint8_t*g=load_shape(dir,"INTRO_3.SHP",2,&gw,&gh);
+        be16(f,(unsigned)gw); be16(f,(unsigned)gh); be16(f,0x7c);
+        if(g&&gw>0) fwrite(g,1,(size_t)gw*gh,f); free(g);
+        int cvw=0,cvh=0; uint8_t*cv=load_shape(dir,"INTRO_3.SHP",4,&cvw,&cvh);
+        be16(f,(unsigned)cvw); be16(f,(unsigned)cvh); be16(f,0x5e); be16(f,0x66);
+        if(cv&&cvw>0) fwrite(cv,1,(size_t)cvw*cvh,f); free(cv);
+        printf("intro moongate: gate %dx%d @124 + cover %dx%d @94,102\n", gw,gh, cvw,cvh); }
+      /* CHARACTER-CREATION portraits (MONTAGE.SHP 0..11 = 6 female @0..5, 6 male @6..11,
+       * each 56x64; montage index = gender*6 + portrait_num — nuvie create_character). The
+       * new-game portrait picker renders these OPAQUELY under the boot palette (portrait skin
+       * tones match; PALETTES.INT 0). [u8 n][u16 pw][u16 ph] + n x [pw*ph idx]. */
+      { int nmp=12, pw0=0,ph0=0; uint8_t *p0=load_shape(dir,"MONTAGE.SHP",0,&pw0,&ph0);
+        fputc(nmp,f); be16(f,(unsigned)pw0); be16(f,(unsigned)ph0); free(p0);
+        for(int k=0;k<nmp;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"MONTAGE.SHP",k,&w,&h);
+          if(mp&&w==pw0&&h==ph0) fwrite(mp,1,(size_t)w*h,f);
+          else { static uint8_t z[56*64]; memset(z,0,sizeof z); fwrite(z,1,(size_t)pw0*ph0,f); }
+          free(mp); }
+        printf("chargen portraits: %d montage %dx%d\n", nmp, pw0, ph0); }
+      /* gypsy virtue questions (extracted from U.EXE at build time; NEVER shipped/committed):
+       * [u8 nq] + nq x [u16 len][len bytes] (quote/%c stripped). 0 => engine uses generic prompts. */
+      { static char qb[GQ_MAX][GQ_LEN]; int nq=extract_questions(dir, qb);
+        fputc(nq,f);
+        for(int q=0;q<nq;q++){ int L=(int)strlen(qb[q]); be16(f,(unsigned)L); fwrite(qb[q],1,(size_t)L,f); } }
+      /* intro NARRATION pages (extracted from U.EXE at build time; NEVER shipped/committed):
+       * [u8 np] + np x [u16 len][len bytes]. 0 => engine uses its own paraphrase. Engine re-wraps
+       * each page to 320px. Page order = living(3) storm(4) forest(1) stones(2) moongate(5). */
+      { static char ib[IP_MAX][IP_LEN]; int nip=extract_intro(dir, ib);
+        fputc(nip,f);
+        for(int q=0;q<nip;q++){ int L=(int)strlen(ib[q]); be16(f,(unsigned)L); fwrite(ib[q],1,(size_t)L,f);
+          if(getenv("INTRO_DUMP")) printf("  intro[%2d] (%d) %s\n", q, L, ib[q]); } }
+      /* BOOK.DAT readable text — signs/plaques/tombstones/books/scrolls (docs/formats/strings.md).
+       * COPYRIGHTED game text: extracted at build time, NEVER committed. [u16 nbook] + nbook x
+       * [u16 len][bytes] (\n preserved). Engine indexes by (object quality - 1). 0 => none. */
+      { static char bb[BOOK_MAX][BOOK_LEN]; int nb=extract_books(dir, bb);
+        be16(f,(unsigned)nb);
+        for(int i=0;i<nb;i++){ int L=(int)strlen(bb[i]); be16(f,(unsigned)L); fwrite(bb[i],1,(size_t)L,f); }
+        printf("books: %d BOOK.DAT entries\n", nb); }
+      /* GYPSY SCENE (character-creation "casting", PALETTES.INT 5). To run nuvie's EXACT pour
+       * animation (create_character gypsy_vial_anim), we ship the RAW GYPSY.SHP shape table so
+       * the engine can address arm/hand/vial/vial_liquid/pour/jar sprites by shape number, just
+       * as nuvie's image_load_all("gypsy.shp") does. The bg is shape 0 @ (0,-20) ALONE — the
+       * vials + jar are separate sprites drawn (and animated) by the engine. Ships pal5 + the
+       * tall question parchment (BLOCKS.SHP 3). All GYPSY.SHP hotspots are 0 so nuvie's sprite
+       * x,y are absolute. Layout:
+       * [768 pal5][u16 gw][u16 gh][bg][u16 sw][u16 sh][scroll][u16 nsh] + nsh x [u16 w][u16 h][w*h]. */
+      { static const ishape_t GYP[] = { {0,0,-20} };    /* bg only: gypsy + empty table (no vials/jar) */
+        uint8_t p5[768]; if(!load_intpal(dir,5,p5)) memset(p5,0,sizeof p5);
+        fwrite(p5,1,768,f);
+        static uint8_t gsc[320*200]; memset(gsc,0,sizeof gsc);
+        compose_shapes(dir,"GYPSY.SHP",GYP,(int)(sizeof GYP/sizeof GYP[0]),gsc,320,200);
+        be16(f,320); be16(f,200); fwrite(gsc,1,sizeof gsc,f);
+        int sw=0,sh=0; uint8_t*sc=load_shape(dir,"BLOCKS.SHP",3,&sw,&sh);
+        be16(f,(unsigned)sw); be16(f,(unsigned)sh);
+        if(sc&&sw>0&&sh>0) fwrite(sc,1,(size_t)sw*sh,f); free(sc);
+        /* RAW GYPSY.SHP shape table 0..GYP_NSH-1: [u16 nsh] + per shape [u16 w][u16 h][w*h idx0-
+         * transparent]. The engine composites the casting scene + the pour animation from these
+         * (jar 16, jar_liquid 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour). */
+        { enum { GYP_NSH = 200 }; be16(f, GYP_NSH); int nshipped=0;
+          for(int i=0;i<GYP_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"GYPSY.SHP",i,&w,&h);
+            if(sp&&w>0&&h>0){ be16(f,(unsigned)w); be16(f,(unsigned)h); fwrite(sp,1,(size_t)w*h,f); nshipped++; }
+            else { be16(f,0); be16(f,0); }
+            free(sp); }
+          printf("gypsy scene: bg 320x200 pal5 + scroll BLOCKS.SHP[3] %dx%d + %d/%d raw shapes (nuvie pour animation)\n", sw,sh,nshipped,GYP_NSH); } }
+      /* WOODS forest-path lead-in (PALETTES.INT 4): the approach to the gypsy's wagon. Panorama
+       * = WOODS.SHP[0] (320 wide) + WOODS.SHP[1] (191) @x=320 = 511 wide; the engine pans it
+       * left (nuvie scroll_lounge-style). [768 pal4][u16 ww][u16 wh][ww*wh]. */
+      { uint8_t p4[768]; if(!load_intpal(dir,4,p4)) memset(p4,0,sizeof p4);
+        fwrite(p4,1,768,f);
+        static uint8_t wpano[511*200]; memset(wpano,0,sizeof wpano);
+        static const ishape_t WD[]={{0,0,0},{1,320,0}};
+        compose_shapes(dir,"WOODS.SHP",WD,2,wpano,511,200);
+        be16(f,511); be16(f,200); fwrite(wpano,1,sizeof wpano,f);
+        printf("gypsy woods: WOODS.SHP panorama 511x200 pal4\n"); }
+      /* STORM WINDOW scene (INTRO_2.SHP, PALETTES.INT 2 — nuvie window_sequence): a curtained,
+       * mullioned window onto a stormy pine forest. The static scene (sky 1 + trees 8 + ground
+       * 10@76 + glass 26@57 + frame 28) is baked once; the engine animates lightning FLASHES
+       * (11-18, random position) + a big STRIKE (19-23) over it with a palette flash. Layout:
+       * [768 pal2][u16 bw][u16 bh][bw*bh base] [u8 nbolt] + nbolt x [u16 w][u16 h][w*h]
+       * [u8 nstrike][u16 sx][u16 sy] + nstrike x [u16 w][u16 h][w*h]. */
+      { uint8_t p2[768]; if(!load_intpal(dir,2,p2)) memset(p2,0,sizeof p2);
+        fwrite(p2,1,768,f);
+        static uint8_t sbase[320*200]; memset(sbase,0,sizeof sbase);
+        static const ishape_t WIN[]={{1,0,0},{8,0,0},{10,0,76},{26,57,0},{28,0,0}};
+        compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
+        be16(f,320); be16(f,200); fwrite(sbase,1,sizeof sbase,f);
+        static const int BOLT[]={11,12,13,14,15,16,17,18}; int nbolt=(int)(sizeof BOLT/sizeof BOLT[0]);
+        fputc(nbolt,f);
+        for(int k=0;k<nbolt;k++){ int w=0,h=0; uint8_t*bp=load_shape(dir,"INTRO_2.SHP",BOLT[k],&w,&h);
+          be16(f,(unsigned)w); be16(f,(unsigned)h); if(bp&&w>0) fwrite(bp,1,(size_t)w*h,f); free(bp); }
+        static const int STK[]={19,20,21,22,23}; int nstk=(int)(sizeof STK/sizeof STK[0]);
+        fputc(nstk,f); be16(f,140); be16(f,6);       /* strike top-left (tunable) */
+        for(int k=0;k<nstk;k++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"INTRO_2.SHP",STK[k],&w,&h);
+          be16(f,(unsigned)w); be16(f,(unsigned)h); if(sp&&w>0) fwrite(sp,1,(size_t)w*h,f); free(sp); }
+        /* FOREST REVEAL (nuvie window_sequence tail @685): after the 4 storm pages the window
+         * frame slides off to reveal the FRAMELESS storm forest (same sky/trees/ground, no glass/
+         * frame — the "into the forest, down the path, to the stones" bg). Ship the forest base
+         * (opaque) + the window overlay (glass 26@57 + frame 28, index 0 transparent) so the engine
+         * can slide the frame off a static forest. [u16 fw][u16 fh][fw*fh][u16 ow][u16 oh][ow*oh]. */
+        static uint8_t fbase[320*200]; memset(fbase,0,sizeof fbase);
+        static const ishape_t FOR[]={{1,0,0},{8,0,0},{10,0,76}};
+        compose_shapes(dir,"INTRO_2.SHP",FOR,(int)(sizeof FOR/sizeof FOR[0]),fbase,320,200);
+        be16(f,320); be16(f,200); fwrite(fbase,1,sizeof fbase,f);
+        static uint8_t wov[320*200]; memset(wov,0,sizeof wov);
+        static const ishape_t WOV[]={{26,57,0},{28,0,0}};
+        compose_shapes(dir,"INTRO_2.SHP",WOV,(int)(sizeof WOV/sizeof WOV[0]),wov,320,200);
+        be16(f,320); be16(f,200); fwrite(wov,1,sizeof wov,f);
+        printf("storm window: base 320x200 pal2 + %d bolts + %d strikes + forest reveal (bg+frame overlay)\n", nbolt, nstk); }
+      /* STONES obsidian-pickup assets (INTRO_3.SHP, palette 3 — nuvie stones_sequence): the hand
+       * (img 1) rises into the circle to grab the obsidian stone (img 3); afterwards the stone is
+       * gone (bg img 5). The engine animates the hand rising over the stones bg. Layout:
+       * [u16 hw][u16 hh][hand][u16 ow][u16 oh][obs][u16 bw][u16 bh][bg5]. */
+      { int hw=0,hh=0; uint8_t*hand=load_shape(dir,"INTRO_3.SHP",1,&hw,&hh);
+        be16(f,(unsigned)hw); be16(f,(unsigned)hh); if(hand&&hw>0) fwrite(hand,1,(size_t)hw*hh,f); free(hand);
+        int ow=0,oh=0; uint8_t*obs=load_shape(dir,"INTRO_3.SHP",3,&ow,&oh);
+        be16(f,(unsigned)ow); be16(f,(unsigned)oh); if(obs&&ow>0) fwrite(obs,1,(size_t)ow*oh,f); free(obs);
+        int bw=0,bh=0; uint8_t*bg5=load_shape(dir,"INTRO_3.SHP",5,&bw,&bh);
+        be16(f,(unsigned)bw); be16(f,(unsigned)bh); if(bg5&&bw>0) fwrite(bg5,1,(size_t)bw*bh,f); free(bg5);
+        printf("stones pickup: hand %dx%d + obsidian %dx%d + bg5 %dx%d\n", hw,hh, ow,oh, bw,bh); }
+      /* AVATAR-into-gate climax (INTRO_3.SHP frames 7..26 — nuvie stones_sequence tail): the Avatar
+       * walks up into the risen moongate and dissolves. The source shapes are full 320x200 canvases
+       * that are ~empty (index 0 = transparent) except for the small figure, so each is CROPPED to
+       * its non-zero bounding box + a per-frame (ox,oy) offset — else 20x64000B blows the fast pool.
+       * Engine draws each at (ox-2, oy + 0x12 - 3*i). [u8 nav] + nav x [u16 ox][u16 oy][u16 w][u16 h][w*h]. */
+      { int nav=20; long apre=ftell(f);
+        fputc(nav,f);
+        long tot=0;
+        for(int k=0;k<nav;k++){ int w=0,h=0; uint8_t*ap=load_shape(dir,"INTRO_3.SHP",7+k,&w,&h);
+          int x0=w,y0=h,x1=-1,y1=-1;
+          if(ap) for(int y=0;y<h;y++) for(int x=0;x<w;x++) if(ap[y*w+x]){
+            if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+          if(x1<0){ x0=y0=0; x1=y1=0; }                       /* empty frame -> 1x1 at (0,0) */
+          int cw=x1-x0+1, ch=y1-y0+1;
+          be16(f,(unsigned)x0); be16(f,(unsigned)y0); be16(f,(unsigned)cw); be16(f,(unsigned)ch);
+          for(int y=0;y<ch;y++) if(ap) fwrite(ap+(size_t)(y0+y)*w+x0,1,(size_t)cw,f);
+                                else { uint8_t z=0; fwrite(&z,1,1,f); }
+          tot+=(long)cw*ch; free(ap); }
+        printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(f)-apre); } }
+    fclose(f);
+    printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
+           "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",
+           DEMO_NPC, scr?scr_len:0, nact_ok, (schd?scn:0), look_len, ngettable,
+           cw, ch, chx, chy);
+    printf("stats: party=%d [", nparty);
+    for (int i=0;i<nparty;i++) printf("%s%d(hp%d)", i?",":"", party[i], achp[party[i]]);
+    printf("]  avatar hp/str/dex/int=%d/%d/%d/%d mana=%d\n", achp[1],astr[1],adex[1],aint[1],amana[1]);
+    printf("animdata: %d animated tiles%s; %d frame-animated objects\n",
+           nanim, (adat&&adn>=194)?"":" (ANIMDATA missing!)", nobjanim);
+
+    int npass=0; for(int i=0;i<256;i++) npass+=passable[i];
+    printf("wrote %s: start(%d,%d) %d tiles, %d surface objects, %d/256 passable, "
+           "+paper(320x200) +%d portraits\n",
+           out, startx, starty, NTILES, nsurf, npass, NPORT);
+    return 0;
+}

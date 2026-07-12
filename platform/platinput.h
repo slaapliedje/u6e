@@ -1,0 +1,35 @@
+/* platinput.h — normalized input events for /engine (M5).
+ *
+ * The engine never reads the keyboard directly; it polls this. M5 needs only
+ * the movement directions + quit; richer events (mouse, action keys) get added
+ * as the UI grows. Non-blocking: returns IN_NONE when no key is waiting.
+ */
+#ifndef U6E_PLATINPUT_H
+#define U6E_PLATINPUT_H
+
+typedef enum {
+    IN_NONE = 0,
+    IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT,
+    IN_TALK,          /* 'T': talk to an adjacent NPC */
+    IN_QUIT
+} plat_input_t;
+
+/* One-time input setup: fast keyboard auto-repeat (Kbrate) for smooth held-key
+ * movement. Call once at startup. */
+void         plat_input_init(void);
+
+plat_input_t plat_input_poll(void);
+
+/* Raw non-blocking key read for text entry (conversation keyword/number typing):
+ * returns 0 if no key is waiting, else (scancode << 8) | ascii. The caller picks
+ * interpretation by mode — map it to a movement event with plat_input_map(), or
+ * read the low byte as the typed character. */
+int          plat_input_raw(void);
+plat_input_t plat_input_map(int key);   /* classify a raw key as a movement event */
+
+/* Mouse state from the line-A globals (the system tracks the IKBD position even
+ * with the sprite hidden). *x,*y are in physical screen pixels; *buttons bit0 =
+ * left, bit1 = right. Requires line-A init (done by the renderer). */
+void         plat_mouse(int *x, int *y, int *buttons);
+
+#endif

@@ -1,0 +1,8 @@
+# /engine includes dataformats (u6map, ...) and platform/render headers.
+# clangd resolves relative -I from the file's own dir, so use parent-relative
+# paths here. (Build-time -I is set by the Makefile.)
+CompileFlags:
+  Add:
+    - -I../dataformats
+    - -I../platform
+    - -I../render

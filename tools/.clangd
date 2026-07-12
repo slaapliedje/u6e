@@ -1,0 +1,9 @@
+# Host-side tools live in tools/ but include the portable /dataformats headers
+# ("u6lzw.h", "u6lib.h"). clangd resolves relative -I against the file's own
+# directory, so the project-root -Idataformats (in ../.clangd) misses here.
+# These parent-relative paths resolve correctly from tools/.
+CompileFlags:
+  Add:
+    - -I../dataformats
+    - -I../platform
+    - -I../engine

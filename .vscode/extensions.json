@@ -1,0 +1,11 @@
+{
+  // Recommended: clangd-based C IntelliSense (matches ../.clangd + settings.json).
+  "recommendations": [
+    "llvm-vs-code-extensions.vscode-clangd"
+  ],
+  // The Microsoft C/C++ extension's IntelliSense conflicts with clangd; we
+  // disable its engine in settings.json. Don't recommend installing it.
+  "unwantedRecommendations": [
+    "ms-vscode.cpptools"
+  ]
+}

@@ -1,0 +1,96 @@
+# ===========================================================================
+# clangd configuration — Ultima VI ST engine (m68k-atari-mint cross-build)
+# ===========================================================================
+# Toolchain: m68k-atari-mint-gcc 15.2.0   (triple from -dumpmachine: m68k-atari-mint)
+# Default arch: 68000 (our base-ST floor). Big-endian; int = 32-bit, ptr = 32-bit.
+# Full rationale + the probe results behind every line here: docs/design/toolchain.md
+#
+# WHY THIS WORKS WITH STOCK clang (no m68k LLVM backend needed):
+#   This host's clang has NO m68k *codegen* backend (`clang -c` for m68k fails
+#   with "No available targets are compatible"), BUT clangd only PARSES
+#   (frontend), and clang 22's frontend DOES ship the m68k TargetInfo. So the
+#   frontend analyses m68k cleanly (correct endianness/type sizes,
+#   __mc68000__/__MINT__ defined) even though it can't generate code.
+#
+# HOW THE TARGET + HEADERS ARE SET (verified with `clangd --check`):
+#   clangd runs the cross-gcc named in `Compiler:` below via --query-driver and
+#   from that single query gets BOTH (a) the triple — it drives the frontend
+#   with `-triple m68k-atari-mint -target-cpu M68000` automatically — and
+#   (b) the system include paths (osbind.h, mint/*.h, libc). So we must NOT add
+#   --target ourselves (clangd would forward it to gcc as `-target`, a
+#   clang-only flag gcc rejects, breaking the header query — see the Add block).
+#
+#   --query-driver CANNOT live in this file (a checked-in config may not
+#   authorize executing binaries); it is set in .vscode/settings.json. Without
+#   it, your own headers still parse but <osbind.h>/<stdio.h> won't resolve and
+#   the triple falls back to the host (wrong endianness/sizes).
+# ===========================================================================
+
+CompileFlags:
+  # Driver clangd queries (and uses to infer GCC-compatible flag handling) when
+  # there is no compile_commands.json entry for the file being edited.
+  Compiler: m68k-atari-mint-gcc
+  Add:
+    # Force the C language. A standalone header (.h) opened with no including
+    # .c TU otherwise gets parsed as Objective-C++, which then rejects
+    # -std=gnu11. This is a C project, so pin it.
+    - -xc
+    # NOTE: do NOT add --target OR -m68000/-march here. The driver above IS an
+    # m68k compiler, so clangd infers the triple (m68k-atari-mint, big-endian,
+    # 32-bit int/ptr, default cpu 68000) by querying it via --query-driver.
+    #  - --target would be forwarded to gcc as `-target` (a clang-only flag gcc
+    #    rejects), breaking system-include extraction.
+    #  - -m68000 errors against the HOST target if query-driver is momentarily
+    #    inactive (e.g. editor not yet reloaded) — and is redundant when it is.
+    # (Both verified with `clangd --check`.)
+    - -std=gnu11                   # engine is C11, GNU dialect
+    - -ffreestanding               # don't assume a hosted runtime environment
+    - -Wall
+    # module include dirs so clangd resolves cross-module headers ("u6lzw.h",
+    # "platform.h", …). The Makefile sets the real per-target -I; these just
+    # help the editor. Add new module dirs here as they appear.
+    - -Iplatform
+    - -Idataformats
+  Remove:
+    # gcc m68k/Atari flags the stock clang frontend REJECTS. Strip them so a real
+    # compile_commands.json (e.g. from `bear -- make`) doesn't break clangd.
+    # Every entry below was confirmed to error under
+    #   clang --target=m68k-atari-mint -fsyntax-only
+    - -m68020-60                   # TT/Falcon multilib tuning flag (clangd analyses as -m68000; same data layout)
+    - -m5475                       # ColdFire multilib
+    - -mshort                      # 16-bit-int ABI — see toolchain.md caveat (clangd stays 32-bit int)
+    - -mfastcall                   # m68k register-argument ABI
+    - -mpcrel                      # PC-relative code model
+    - -mbaserel                    # base-relative code model
+    - -fleading-underscore         # symbol decoration; no effect on analysis
+    - -fno-leading-underscore
+
+Diagnostics:
+  UnusedIncludes: Strict
+  # MissingIncludes left off: this project's .c files get stdint/etc. via their
+  # module .h (which includes them), so strict IWYU "missing include" hints are
+  # just noise here.
+  MissingIncludes: None
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - portability-*
+      - readability-non-const-parameter
+    Remove:
+      - readability-magic-numbers            # too noisy for hardware-register / opcode code
+      - bugprone-easily-swappable-parameters
+      # On the real target int/ptrdiff_t/pointer are all 32-bit, so int index
+      # math is NOT widened — this check only fires because the HOST clangd has
+      # 64-bit ptrdiff_t. A target-irrelevant false positive.
+      - bugprone-implicit-widening-of-multiplication-result
+
+Index:
+  Background: Build
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+
+Hover:
+  ShowAKA: Yes

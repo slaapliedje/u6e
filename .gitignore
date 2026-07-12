@@ -1,0 +1,83 @@
+# ============================================================
+# CLEAN-ROOM FIREWALL — copyrighted / derived data
+# These MUST NEVER be committed. (legal + clean-room discipline)
+# ============================================================
+
+# Original game data (user-provided; ST + DOS, all games)
+/refdata/
+!/refdata/README.md          # keep the layout doc, exclude the data
+
+# Reference screenshots of the ORIGINAL game (copyrighted art — comparison only, never ship)
+/refshots/
+
+# Generated asset packs derived from original data
+/build/
+/dist/
+*.assetpack                  # if you use a packed extension
+/build/assets/
+
+# Loose extracted/converted media (in case anything lands outside /build)
+*.u6pal
+extracted/
+converted/
+
+# Game save files (may embed copyrighted content; and they're user data)
+*.sav
+saves/
+
+# ============================================================
+# BUILD ARTIFACTS — m68k cross-compile output
+# ============================================================
+*.o
+*.a
+*.elf
+*.prg
+*.tos
+*.ttp
+*.app
+*.sym                        # debug symbol files (unless you commit one on purpose)
+*.map                        # linker map (collides w/ game MAP? see note below)
+*.lst                        # assembler listings
+*.bin
+*.img                        # built disk images
+*.st                         # ST disk images
+*.msa
+
+# Host-side tool build output (if /tools compiles to native binaries)
+/tools/build/
+/tools/bin/
+
+# ============================================================
+# DEV ENVIRONMENT — emulator, editor, OS noise
+# ============================================================
+# Hatari runtime state / config that's machine-specific
+hatari.cfg
+*.wav                        # Hatari audio capture
+*.avi                        # Hatari video capture
+*.nvram
+debugger.ini                 # if per-developer; keep a debugger.ini.example instead
+
+# Editors / IDE
+# Keep the SHARED clangd/editor config; ignore per-developer .vscode noise.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+
+# clangd index cache + generated compile database (machine-specific paths)
+.cache/
+compile_commands.json
+.clangd/                     # clangd's local cache dir (NOT the .clangd config file)
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# Claude Code local settings (keep shared, ignore local)
+# ============================================================
+.claude/settings.local.json
+
