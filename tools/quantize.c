@@ -18,6 +18,7 @@
 #include "u6lzw.h"
 #include "u6pal.h"
 #include "u6map.h"
+#include "quant.h"       /* shared median-cut core (CCol, q_median_cut, q_snap_pal, q_nearest, …) */
 #include "u6tile.h"
 #include "png.h"
 
@@ -31,87 +32,10 @@ static uint8_t *slurp(const char *dir, const char *name, long *n)
     fclose(f); return b;
 }
 
-/* ---------------- median-cut quantiser (operates on RGB8 pixels) ---------------- */
-typedef struct { int r, g, b; long w; } CCol;      /* a unique colour + its pixel weight */
-static int cmpR(const void *a, const void *b){ return ((const CCol*)a)->r - ((const CCol*)b)->r; }
-static int cmpG(const void *a, const void *b){ return ((const CCol*)a)->g - ((const CCol*)b)->g; }
-static int cmpB(const void *a, const void *b){ return ((const CCol*)a)->b - ((const CCol*)b)->b; }
-
-/* collect the unique colours of an RGB8 image (source has <=256 distinct palette colours). */
-static int build_hist(const uint8_t *rgb, long npix, CCol *out, int cap)
-{
-    int n = 0;
-    for (long i = 0; i < npix; i++) {
-        int r = rgb[i*3], g = rgb[i*3+1], b = rgb[i*3+2], f = -1;
-        for (int j = 0; j < n; j++) if (out[j].r==r && out[j].g==g && out[j].b==b) { f = j; break; }
-        if (f < 0) { if (n < cap) { out[n].r=r; out[n].g=g; out[n].b=b; out[n].w=1; n++; } }
-        else out[f].w++;
-    }
-    return n;
-}
-
-typedef struct { int lo, hi; } Box;                /* a contiguous range of the sorted colour list */
-
-/* median-cut `col[0..ncol)` into K boxes; write K centroid colours to pal. Returns box count. */
-static int median_cut(CCol *col, int ncol, int K, CCol *pal)
-{
-    Box box[64]; int nb = 1; box[0].lo = 0; box[0].hi = ncol;
-    while (nb < K) {
-        int best = -1, bestaxis = 0; long bestscore = -1;
-        for (int i = 0; i < nb; i++) {
-            if (box[i].hi - box[i].lo < 2) continue;
-            int rmn=255,rmx=0,gmn=255,gmx=0,bmn=255,bmx=0; long wsum=0;
-            for (int j = box[i].lo; j < box[i].hi; j++) { CCol *c=&col[j]; wsum+=c->w;
-                if(c->r<rmn) rmn=c->r;
-                if(c->r>rmx) rmx=c->r;
-                if(c->g<gmn) gmn=c->g;
-                if(c->g>gmx) gmx=c->g;
-                if(c->b<bmn) bmn=c->b;
-                if(c->b>bmx) bmx=c->b;
-            }
-            int dr=rmx-rmn, dg=gmx-gmn, db=bmx-bmn, axis=0, rng=dr;   /* longest axis */
-            if(dg>rng){rng=dg;axis=1;} if(db>rng){rng=db;axis=2;}
-            long score = (long)rng * wsum;                            /* split the biggest weighted spread */
-            if (score > bestscore) { bestscore=score; best=i; bestaxis=axis; }
-        }
-        if (best < 0) break;                                          /* nothing left to split */
-        Box b = box[best];
-        qsort(&col[b.lo], (size_t)(b.hi-b.lo), sizeof(CCol),
-              bestaxis==0?cmpR : bestaxis==1?cmpG : cmpB);
-        long total=0; for (int j=b.lo;j<b.hi;j++) total+=col[j].w;
-        long acc=0; int mid=b.lo;
-        for (int j=b.lo;j<b.hi;j++){ acc+=col[j].w; if(acc*2>=total){ mid=j+1; break; } }
-        if (mid<=b.lo) mid=b.lo+1;
-        if (mid>=b.hi) mid=b.hi-1;                                    /* keep both halves non-empty */
-        box[best].hi=mid; box[nb].lo=mid; box[nb].hi=b.hi; nb++;
-    }
-    for (int i=0;i<nb;i++){ double rr=0,gg=0,bb=0; long w=0;
-        for (int j=box[i].lo;j<box[i].hi;j++){ CCol*c=&col[j]; rr+=(double)c->r*c->w; gg+=(double)c->g*c->w; bb+=(double)c->b*c->w; w+=c->w; }
-        if(w<1)w=1;
-        pal[i].r=(int)(rr/w+0.5); pal[i].g=(int)(gg/w+0.5); pal[i].b=(int)(bb/w+0.5); pal[i].w=w;
-    }
-    return nb;
-}
-
-/* snap 8-bit v to a `bits`-per-channel hardware value (ST=3, STE=4): quantise then expand. */
-static int hw_snap(int v, int bits){ int mx=(1<<bits)-1; int l=(v*mx+127)/255; return (l*255+mx/2)/mx; }
-static void snap_pal(CCol *pal, int n, int bits){
-    for(int i=0;i<n;i++){ pal[i].r=hw_snap(pal[i].r,bits); pal[i].g=hw_snap(pal[i].g,bits); pal[i].b=hw_snap(pal[i].b,bits); }
-}
-
-/* nearest palette entry to (r,g,b) by luma-weighted squared distance (~3:6:1 R:G:B). */
-static int nearest(const CCol *pal, int n, int r, int g, int b){
-    int best=0; long bd=1000000000L;                 /* > max luma-weighted distance (255^2*10) */
-    for(int i=0;i<n;i++){ long dr=pal[i].r-r, dg=pal[i].g-g, db=pal[i].b-b;
-        long d = dr*dr*3 + dg*dg*6 + db*db;
-        if(d<bd){ bd=d; best=i; } }
-    return best;
-}
-
 /* remap src (RGB8) through pal into dst; return RMS per-channel error vs the true colours. */
 static double remap_rms(const uint8_t *src, uint8_t *dst, long npix, const CCol *pal, int n){
     double se=0;
-    for(long i=0;i<npix;i++){ int r=src[i*3],g=src[i*3+1],b=src[i*3+2], k=nearest(pal,n,r,g,b);
+    for(long i=0;i<npix;i++){ int r=src[i*3],g=src[i*3+1],b=src[i*3+2], k=q_nearest(pal,n,r,g,b);
         dst[i*3]=(uint8_t)pal[k].r; dst[i*3+1]=(uint8_t)pal[k].g; dst[i*3+2]=(uint8_t)pal[k].b;
         double dr=pal[k].r-r, dg=pal[k].g-g, db=pal[k].b-b; se += dr*dr+dg*dg+db*db;
     }
@@ -131,9 +55,9 @@ static double do_target(const char *label, const uint8_t *src, long npix, int bi
                         uint8_t *dst, CCol *pal_out)
 {
     static CCol uniq[4096];
-    int nu = build_hist(src, npix, uniq, 4096);
-    CCol pal[16]; int np = median_cut(uniq, nu, 16, pal);
-    snap_pal(pal, np, bits);                                  /* snap BEFORE measuring error */
+    int nu = q_build_hist(src, npix, uniq, 4096);
+    CCol pal[16]; int np = q_median_cut(uniq, nu, 16, pal);
+    q_snap_pal(pal, np, bits);                                  /* snap BEFORE measuring error */
     double rms = remap_rms(src, dst, npix, pal, np);
     printf("  %-10s %2d-bit/ch gamut, %2d colours, RMS err = %6.2f\n", label, bits, np, rms);
     for(int i=0;i<16 && pal_out;i++) pal_out[i] = i<np?pal[i]:(CCol){0,0,0,0};
@@ -157,9 +81,9 @@ static void write_qa(const char *path, int w, int h, int npanels, uint8_t **pane
 static int quant16(const uint8_t *src, long npix, int bits, CCol *pal)
 {
     static CCol uniq[4096];
-    int nu = build_hist(src, npix, uniq, 4096);
-    int np = median_cut(uniq, nu, 16, pal);
-    snap_pal(pal, np, bits);
+    int nu = q_build_hist(src, npix, uniq, 4096);
+    int np = q_median_cut(uniq, nu, 16, pal);
+    q_snap_pal(pal, np, bits);
     return np;
 }
 
@@ -223,7 +147,7 @@ int main(int argc, char **argv)
         for(int yy=0;yy<th;yy++) for(int xx=0;xx<tw;xx++){ u6_rgb c=pal.color[u6tile_pixel(&ts,t,xx,yy)];
             uint8_t*p=src+((size_t)(gy+yy)*w+(gx+xx))*3; p[0]=c.r; p[1]=c.g; p[2]=c.b; } }
 
-    int nuq; { static CCol uniq[4096]; nuq=build_hist(src,npix,uniq,4096); }
+    int nuq; { static CCol uniq[4096]; nuq=q_build_hist(src,npix,uniq,4096); }
     printf("  source: %dx%d (%d map tiles), %d distinct colours\n", w,h,NT,nuq);
 
     uint8_t *st16=malloc((size_t)npix*3), *ste16=malloc((size_t)npix*3), *ega=malloc((size_t)npix*3);
