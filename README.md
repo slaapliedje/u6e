@@ -76,3 +76,15 @@ make mapdump    # decode world -> build/worldmap.png + tilesheet.png
 make convspike  # run a real NPC conversation end-to-end (M4 gate)
 make run-falcon # interactive run on an emulated Falcon
 ```
+
+## License
+
+u6e is licensed under the **GNU General Public License, version 2 or later**
+(`GPL-2.0-or-later`) — see [LICENSE](LICENSE). This matches **ScummVM** and **Nuvie**,
+the reference implementations whose data formats and behavior we studied (read to
+*understand*, never transcribed) to write our own specs — see *Clean-room discipline*
+above.
+
+The GPL covers **our** engine code and documentation only. We ship **no** original
+game data: Ultima VI and its assets remain the property of their rights holders and
+are user-provided at build time (see `refdata/README.md`).
