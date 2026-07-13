@@ -546,6 +546,23 @@ shot-st-conv: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/CONVPAL.BIN
 	@echo "wrote $(BUILD)/gamest_conv.png (conversation portrait under its U6WY palette)"
 
+# M7 PER-SCENE palette check (chargen): drive the streamed front-end to a gypsy-parlour chargen
+# sub-screen so the ST activates that scene's OWN 16-colour palette (build_scene_lc, quantized from
+# PALETTES.INT 5 weighted by the scene's pixels) instead of the terrain-16. GYPSY_REQ picks the
+# frame: 'G' clean lead-in (raw scene), 'P' held mid-pour, 'q' a virtue question. The chargen hook
+# draws once then blocks on input, so the AVI's final frame holds the scene under its palette.
+GYPSY_REQ ?= G
+shot-st-gypsy: gamedata-st $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_gypsy.png
+	printf '$(GYPSY_REQ)' > $(BUILD)/CHARGEN.REQ            # one byte selects the gypsy chargen sub-screen
+	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 6000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_gypsy.png 2>/dev/null
+	rm -f $(BUILD)/CHARGEN.REQ
+	@echo "wrote $(BUILD)/gamest_gypsy.png (gypsy chargen scene under its per-scene U6FE palette)"
+
 # headless M5 verify: auto-walk + capture a frame (avatar on the scrolled map)
 m5: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png

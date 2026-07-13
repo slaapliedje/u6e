@@ -16,7 +16,7 @@
 >                  BAND raster proven with an R↔B-swap band 1 (`make shot-st-raster`, crisp seam).
 > - Confidence   : confirmed — quantiser core + U6WW pack + rdr_st shifter backend + U6WX band
 >                  rasters all validated on the ST. Remaining work is footprint + per-scene palettes.
-> - Last updated : 2026-07-12
+> - Last updated : 2026-07-13
 
 ## Goal
 Base ST/STE looks BETTER than the original "lazy" ST port, which reused a fixed EGA-ish
@@ -219,11 +219,12 @@ ST-RAM pool.
   (1183 KB, 808 KB free, libs_ok=1); the "Ultima VI" title + main menu render in the optimised 16
   (`make`, MENU.REQ → build/gamest_menu.png); character creation runs from the streamed pack and
   survives the free (`CHARGEN.REQ=N` → "NEWGAME avatar: Milady"). TT boots unchanged.
-- **Follow-ups**: per-SCENE low-colour palettes (the intro cutscene scenes carry PALETTES.INT
-  palettes; right now they render through the single game 16 — recognisable but not tuned). BOOK.DAT
-  text lived in the front-end block → on ST it's freed with U6FE, so in-game sign/book reading is
-  nulled until BOOKS moves to the core (or streams on demand) — the next application of this same
-  streaming mechanism.
+- **Follow-ups**: per-SCENE low-colour palettes for the front-end are now DONE — each intro/chargen
+  scene ships its own ST 16 next to its PALETTES.INT palette in U6FE and swaps in on entry (see the
+  status list). Remaining: BOOK.DAT text lived in the front-end block → on ST it's freed with U6FE,
+  so in-game sign/book reading is nulled until BOOKS moves to the core (or streams on demand) — the
+  next application of this same streaming mechanism; and per-CONTEXT palettes for gameplay dungeon /
+  town scenes (a different trigger than the front-end scene entry — detect the map context at play time).
 
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
@@ -249,9 +250,15 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
       not garish EGA). C c2p for now; a hand-asm span can replace it later (performance.md).
 - [x] **Footprint** — DONE: the ST now boots + plays on a REAL 4 MB ST (below). A slim pack
       (`MKWORLD_SLIM` → U6ST.PAK) omits the ~1.35 MB front-end/intro art gameplay never uses.
-- [ ] Per-scene low-colour palettes + colour-cycling on ST: `rdr_set_palette(256)` is a no-op on
-      the shifter (16-colour hw can't take a 256 update), so cutscene palettes + CLUT cycling
-      (water/fire) don't yet show. Reserve cycling slots (below) + ship per-scene 16s in U6WW.
+- [x] Per-SCENE low-colour palettes (front-end) — DONE. Each front-end scene ships its OWN ST 16 +
+      256→16 LUT (`build_scene_lc`, quantised from that scene's PALETTES.INT palette weighted by the
+      scene's own pixels), streamed in U6FE next to the scene's 6-bit palette; the engine calls
+      `rdr_set_lowcolor` on scene entry and restores the base 16 on exit (`g_fe_base_lc`). Covers the
+      intro cutscene scenes + the gypsy/woods/storm chargen scenes. Validated on a real 4 MB ST:
+      `make shot-st-gypsy` (GYPSY_REQ=G/P) — the gypsy parlour renders skin tones, the magenta
+      headscarf, red vest, and 8 distinct virtue-vial hues the terrain-16 can't afford.
+- [ ] Colour-cycling on ST (water/fire): `rdr_set_palette(256)` is a no-op on the shifter (16-colour
+      hw can't take a 256 update), so CLUT cycling doesn't yet show. Reserve cycling slots (below).
 - [x] Band-palette rasters (Timer-B) for >16 on-screen colours — the "cheat past 16" (below). Ships
       the U6WX section (2 bands) + a Timer-B palette-swap chain in rdr_st; validated on the ST.
 - [ ] Reserve palette slots for colour-cycling ranges; flag over-budget scenes.
