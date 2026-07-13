@@ -11,8 +11,9 @@
  *
  * We grab a FEW LARGE pools up front (via Mxalloc) and sub-allocate ourselves,
  * because period TOS Malloc is unreliable with many small blocks. Allocations
- * are monotonic (bump) — individual frees aren't supported; pools are released
- * wholesale at shutdown. See platform/CLAUDE.md.
+ * are monotonic (bump); a SCOPED (LIFO) mark/reset frees a whole region wholesale
+ * (see plat_chip_mark) so transient assets can be STREAMED — loaded off the hard
+ * drive, used, and freed — instead of staying resident. See platform/CLAUDE.md.
  */
 #ifndef U6E_PLATMEM_H
 #define U6E_PLATMEM_H
@@ -43,6 +44,15 @@ void *plat_alloc_fast(uint32_t n);   /* Alt-RAM preferred, ST-RAM fallback      
 plat_mark plat_scratch_mark(void);
 void     *plat_scratch_alloc(uint32_t n);
 void      plat_scratch_reset(plat_mark mark);
+
+/* Scoped (LIFO) region free on the CHIP pool: mark a position, allocate transient assets after it,
+ * then reset back to that mark to free them all at once. This is how transient data (e.g. the
+ * front-end/intro art) is STREAMED — loaded off disk, used, then freed before the resident gameplay
+ * data loads — so it never stays in RAM. On the ST the fast pool IS the chip pool, so a reset also
+ * rewinds fast allocations made after the mark. Everything freed must have been allocated AFTER the
+ * mark (LIFO): allocate persistent buffers first, mark, then the transient region. */
+plat_mark plat_chip_mark(void);
+void      plat_chip_reset(plat_mark mark);
 
 void  plat_mem_get_info(plat_mem_info_t *out);
 bool  plat_addr_is_fastram(const void *p);   /* via phystop */

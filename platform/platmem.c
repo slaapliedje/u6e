@@ -115,6 +115,10 @@ plat_mark plat_scratch_mark(void)          { return g_scratch.off; }
 void     *plat_scratch_alloc(uint32_t n)   { return bump_alloc(&g_scratch, n, 16u); }
 void      plat_scratch_reset(plat_mark m)  { if (m <= g_scratch.size) g_scratch.off = m; }
 
+/* Scoped (LIFO) region free on the chip pool — the streaming primitive (see platmem.h). */
+plat_mark plat_chip_mark(void)             { return g_chip.off; }
+void      plat_chip_reset(plat_mark m)     { if (m <= g_chip.size) g_chip.off = m; }
+
 bool plat_addr_is_fastram(const void *p)
 {
     return (uint32_t)(uintptr_t)p >= g_phystop;
