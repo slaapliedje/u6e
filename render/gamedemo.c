@@ -197,7 +197,7 @@ static const uint8_t *g_title_pix; static int g_title_w, g_title_h;
 /* intro cutscene scenes (U6WV): point into the pak (front-end Phase 2). type 0 = static
  * 320x200 hold; type 1 = horizontal pan (w-wide panorama scrolls 1x, fg foreground 2x). */
 #define INTRO_MAX 16
-static struct { const uint8_t *pix, *fg, *pal; int w, h, type; } g_intro[INTRO_MAX];
+static struct { const uint8_t *pix, *fg, *pal, *lc; int w, h, type; } g_intro[INTRO_MAX];
 static int g_nintro;
 static const uint8_t *g_scroll; static int g_scroll_w, g_scroll_h;  /* narration parchment (BLOCKS.SHP) */
 static const uint8_t *g_tv_base, *g_tv_mouth[4];                    /* living-room TV anchor + mouth frames */
@@ -270,6 +270,9 @@ static const uint8_t *g_lcx_y0, *g_lcx_pal, *g_lcx_lut;
 /* per-portrait conversation palettes (U6WY): the ST swaps to one while a portrait is up. */
 static int            g_nconvpal;
 static const uint8_t *g_convpal;            /* nconvpal x (48 pal + 256 lut), into the pak */
+/* front-end base 16+LUT (the game palette carried in U6FE) — restored between cutscene scenes on ST.
+ * Points into the streamed U6FE, valid only during the front-end phase (freed after). */
+static const uint8_t *g_fe_base_lc;
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
@@ -797,6 +800,7 @@ static void run_intro(void)
     rdr_flip_begin();                                            /* tear-free double buffer */
     for(int s=0;s<g_nintro;s++){
         const uint8_t *pal=g_intro[s].pal;
+        if(g_intro[s].lc) rdr_set_lowcolor(g_intro[s].lc, g_intro[s].lc+48);  /* ST: this scene's own 16 (no-op on TT) */
         int panlen = (g_intro[s].type==1) ? (g_intro[s].w - LW) : 0;   /* 640-320 = 320 px (pan only) */
         if(g_intro[s].type==2) g_gate_y=0x64;                     /* gate starts hidden in the earth */
         g_intro_page=0;
@@ -902,6 +906,7 @@ static void run_intro(void)
     }
     rdr_flip_end();                                              /* back to single-buffer video */
     rdr_set_palette(g_basepal,256);                               /* restore game/menu palette */
+    if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48);  /* ST: back to the base 16 */
 }
 
 /* ---- CHARACTER CREATION (docs/rules/character_creation.md) --------------------------------
@@ -3846,6 +3851,7 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
         for(int i=0;i<g_nintro;i++){
             g_intro[i].type=*ap++;
             g_intro[i].pal=ap; ap+=768;                    /* per-scene 6-bit palette */
+            g_intro[i].lc=ap; ap+=48+256;                  /* per-scene ST 16 + 256->16 LUT (shifter) */
             g_intro[i].w=(ap[0]<<8)|ap[1]; ap+=2; g_intro[i].h=(ap[0]<<8)|ap[1]; ap+=2;
             g_intro[i].pix=ap; ap+=(int32_t)g_intro[i].w*g_intro[i].h;
             if(g_intro[i].type==1){ int fw=(ap[0]<<8)|ap[1]; ap+=2;   /* only PAN scenes have an fg layer */
@@ -3977,6 +3983,7 @@ int main(void)
             /* U6FE = [4 magic][48 pal][256 lut][2048 font][art]. Activate the game 16 so the
              * front-end renders in colour (the core's U6WW isn't loaded yet). */
             rdr_set_lowcolor(fe+4, fe+4+48);
+            g_fe_base_lc = fe+4;                        /* base 16 to restore between cutscene scenes */
             g_font = fe+4+48+256;                       /* font (2048 bytes) for text */
             parse_frontend(fe+4+48+256+2048);           /* set g_menu/g_intro/g_gyp/... into fe */
             int32_t ml=0;

@@ -755,6 +755,28 @@ static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint
     printf("lowcolor (U6WX band1): command bar 16 from icons 400-409 + parchment, %d colours, %ld px; RMS %.2f\n",
            ncol, wsum, quant_rms(freq,palb,lut,snap));
 }
+
+/* PER-SCENE low-colour palette (front-end intro/gypsy/woods/storm): quantise a scene's OWN 256-colour
+ * palette (its PALETTES.INT palette, RGB6) weighted by the scene's pixel usage to its own optimised
+ * ST 16 + 256->16 LUT, so the ST renders each cutscene scene in colour instead of the game tileset
+ * 16. Fills lc[48+256] = [16 x {r,g,b} 3-bit levels][256 lut]. (docs/design/palette_lowcolor.md) */
+static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, uint8_t lc[48+256])
+{
+    static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
+    for (int i=0;i<npix;i++) freq[pix[i]]++;
+    static CCol col[256]; int ncol=0;
+    for (int i=0;i<256;i++){ if(!freq[i]) continue;
+        col[ncol].r=RGB6TO8(pal6[i*3]); col[ncol].g=RGB6TO8(pal6[i*3+1]); col[ncol].b=RGB6TO8(pal6[i*3+2]);
+        col[ncol].w=freq[i]; ncol++; }
+    CCol pal[16]; int np = ncol ? q_median_cut(col,ncol,16,pal) : 0;
+    q_snap_pal(pal,np,3);
+    uint8_t *lvl=lc; uint8_t *lut=lc+48;
+    for (int i=0;i<16;i++){ int r=0,g=0,b=0;
+        if(i<np){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
+        lvl[i*3]=(uint8_t)r; lvl[i*3+1]=(uint8_t)g; lvl[i*3+2]=(uint8_t)b; }
+    for (int i=0;i<256;i++)
+        lut[i]=(uint8_t)(np?q_nearest(pal,np,RGB6TO8(pal6[i*3]),RGB6TO8(pal6[i*3+1]),RGB6TO8(pal6[i*3+2])):0);
+}
 #undef RGB6TO8
 
 /* U6WY per-portrait CONVERSATION palettes: when an NPC's portrait is up (talk()), the ST swaps its
@@ -1278,9 +1300,11 @@ int main(int argc, char **argv)
         uint8_t pal[768]; if(!load_intpal(dir, SC[i].pal, pal)) memset(pal,0,sizeof pal);
         fputc(SC[i].type, fe);
         fwrite(pal,1,768,fe);
+        uint8_t lc[48+256];                                   /* per-scene ST 16 + 256->16 LUT (after the pal) */
         if(SC[i].type != 1){                                  /* type 0 (static) or 2 (gate-rise): bg only */
           static uint8_t canvas[320*200]; memset(canvas,0,sizeof canvas);
           compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, canvas, 320, 200);
+          build_scene_lc(pal, canvas, 320*200, lc); fwrite(lc,1,sizeof lc,fe);
           be16(fe,320); be16(fe,200); fwrite(canvas,1,sizeof canvas,fe);
           printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
         } else {
@@ -1293,6 +1317,7 @@ int main(int argc, char **argv)
           { static const int CX[]={0xdd,0xdd+4,0xdd+0xa,0xdd+0xe};
             for(int c=0;c<4;c++) for(int yy=0x14;yy<0x14+5;yy++)
               for(int xx=CX[c];xx<CX[c]+3;xx++) pano[yy*640+xx]=0; }
+          build_scene_lc(pal, pano, 640*200, lc); fwrite(lc,1,sizeof lc,fe);   /* quantise the panorama */
           be16(fe,640); be16(fe,200); fwrite(pano,1,sizeof pano,fe);
           be16(fe,320);              fwrite(fg,1,sizeof fg,fe);
           printf("intro scene %d: PAN %s pal %d (640 panorama + 320 fg)\n", i, SC[i].file, SC[i].pal);
