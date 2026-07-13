@@ -267,6 +267,9 @@ static int            g_have_lowcolor;      /* 1 = pack carries a U6WW low-colou
 /* band rasters (U6WX): pointers into the pak — nb bands x {y0, 16-colour palette, 256-LUT}. */
 static int            g_lcx_nb;
 static const uint8_t *g_lcx_y0, *g_lcx_pal, *g_lcx_lut;
+/* per-portrait conversation palettes (U6WY): the ST swaps to one while a portrait is up. */
+static int            g_nconvpal;
+static const uint8_t *g_convpal;            /* nconvpal x (48 pal + 256 lut), into the pak */
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
@@ -2373,6 +2376,25 @@ static void sync_inv_out(void)
  * for the greeting (+ auto-answer "name"), and decode its 56x64 portrait from
  * PORTRAIT.A/.B. Builds g_transcript / g_talk_name / g_cur_portrait and sets
  * g_talking. The conversation index is the NPC number; portrait index id-1. */
+/* CONVERSATION-mode palette (U6WY, ST only): while an NPC portrait is up, swap the whole ST 16 to
+ * one tuned for the conversation screen (portrait + parchment + a terrain anchor) so the portrait
+ * renders true instead of muddy — docs/design/palette_lowcolor.md. The main loop's full present_frame
+ * re-c2p's the whole backbuffer through the new LUT. No-op on TT/Falcon (rdr_set_lowcolor is a no-op
+ * there — they show all 256). enter by portrait index pidx (=id-1); leave restores the banded game. */
+static void conv_palette_enter(int pidx)
+{
+    if(g_nconvpal>0 && pidx>=0 && pidx<g_nconvpal){
+        const uint8_t *base=g_convpal+(int32_t)pidx*(48+256);
+        rdr_set_lowcolor(base, base+48);
+    }
+}
+static void conv_palette_leave(void)
+{
+    if(!g_have_lowcolor) return;
+    rdr_set_lowcolor(g_lc_pal, g_lc_lut);
+    if(g_lcx_nb>=2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, g_lcx_pal, g_lcx_lut);
+}
+
 static void talk(int id)
 {
     const uint8_t *cf; int32_t cl; int ci;
@@ -2404,6 +2426,7 @@ static void talk(int id)
         if(pp && u6lzw_decompress(pp,pe,g_cur_portrait,(int32_t)sizeof g_cur_portrait)==PW*PH)
             g_have_pc=1;
     }
+    if(g_have_pc) conv_palette_enter(pidx);   /* ST: swap to this portrait's conversation palette */
     g_talking=1;
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);   /* wait for the player to type a keyword/number */
@@ -2411,7 +2434,7 @@ static void talk(int id)
 
 /* close the conversation panel (BYE / walk away) */
 static void end_talk(void)
-{ g_talking=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0; }
+{ g_talking=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0; conv_palette_leave(); }   /* ST: restore game palette */
 
 /* feed the typed keyword/number to the paused VM and resume it. The transcript
  * shows this exchange (echoed input + the NPC's reply); we keep the box open
@@ -4097,7 +4120,13 @@ int main(void)
                 int nb=ap[4]; const uint8_t *q=ap+5;
                 if(nb>=2 && q+(int32_t)nb*(1+48+256) <= pak+n){
                     g_lcx_nb=nb; g_lcx_y0=q; g_lcx_pal=q+nb; g_lcx_lut=q+nb+(int32_t)nb*48;
+                    ap = q + (int32_t)nb*(1+48+256);        /* advance past U6WX to U6WY */
                 }
+            }
+            /* per-portrait CONVERSATION palettes (U6WY): [4 "U6WY"][u16 nport][nport x (48+256)] */
+            if(ap+6<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='Y'){
+                int np=(ap[4]<<8)|ap[5]; const uint8_t *q=ap+6;
+                if(np>0 && q+(int32_t)np*(48+256) <= pak+n){ g_nconvpal=np; g_convpal=q; }
             }
         }
     }
@@ -4917,6 +4946,17 @@ int main(void)
                     dbg_num("REVEAL ainvis after=", g_ainvis[npc]); }     /* expect 0 (within radius 5) */
             }
         }
+    }
+
+    /* headless CONVERSATION-palette capture (M7): open a conversation before the initial draw so the
+     * first frame shows a portrait under the ST's U6WY conversation palette. CONVPAL.BIN byte = NPC
+     * id (0 => the nearest adjacent NPC). No-op without the sentinel. */
+    {   int32_t cpl=0; uint8_t *cpb=(uint8_t*)plat_load_file("CONVPAL.BIN",1,&cpl);
+        if(cpb){ int id=cpb[0];
+            if(cpl>=2 && (cpb[1]&1)) g_nconvpal=0;   /* baseline: disable the swap (portrait via terrain-16) */
+            if(id<=0){ for(int dy=-1;dy<=1&&id<=0;dy++) for(int dx=-1;dx<=1&&id<=0;dx++){ if(!dx&&!dy)continue;
+                int t=npc_at(&w,(int)w.px+dx,(int)w.py+dy); if(t>0) id=t; } }
+            if(id>0){ talk(id); dbg_num("CONVPAL talk id=", id); dbg_num("CONVPAL portrait=", g_have_pc); } }
     }
 
     blit_paper();

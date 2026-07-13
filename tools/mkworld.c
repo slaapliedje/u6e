@@ -757,6 +757,59 @@ static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint
 }
 #undef RGB6TO8
 
+/* U6WY per-portrait CONVERSATION palettes: when an NPC's portrait is up (talk()), the ST swaps its
+ * whole 16 to one tuned for the CONVERSATION screen so the portrait renders true (the skin tones /
+ * cool greys the terrain-16 lacks) instead of muddy brown — see docs/design/palette_lowcolor.md and
+ * tools/splitcheck. Each palette is quantised from the PORTRAIT (up-weighted ~50% — it's the focus)
+ * + the TERRAIN histogram (~35%, so the frozen map stays recognisable) + PARCHMENT (~15%, the text
+ * panel). Indexed EXACTLY as the engine loads portraits: idx<98 -> PORTRAIT.A[idx], else B[idx-98].
+ * [4 "U6WY"][u16 nport][nport x (48 pal 3-bit levels + 256 lut)]. */
+static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, const uint8_t *palb,
+                                const uint8_t *portA, long portAlen, const uint8_t *portB, long portBlen)
+{
+    static long terr[256], parch[256]; for (int i=0;i<256;i++){ terr[i]=0; parch[i]=0; }
+    for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
+        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) terr[c]++; } }
+    for (int i=0;i<320*200;i++){ int c=paper[i]; if(c!=255) parch[c]++; }
+    long St=0,Sc=0; for (int i=0;i<256;i++){ St+=terr[i]; Sc+=parch[i]; }
+    if(!St) St=1; if(!Sc) Sc=1;
+
+    u6lib_t A,B; int okA=u6lib_open(&A,portA,(int32_t)portAlen,4,false);
+    int okB=(portB && portBlen>0) && u6lib_open(&B,portB,(int32_t)portBlen,4,false);
+    int cA=okA?u6lib_count(&A):0, cB=okB?u6lib_count(&B):0;
+    int nport = 98 + cB;                                        /* engine split: A=0..97, B=98+ */
+
+    fwrite("U6WY",1,4,f); be16(f,(unsigned)nport);
+    int made=0;
+    for (int idx=0; idx<nport; idx++){
+        uint8_t port[56*64]; int have=0;
+        const u6lib_t *lib=(idx<98)?&A:&B; int li=(idx<98)?idx:idx-98;
+        int libok=(idx<98)?okA:okB, libc=(idx<98)?cA:cB;
+        if (libok && li<libc){ int32_t sz; const uint8_t *blob=u6lib_entry(lib,li,&sz);
+            if (blob && u6lzw_unpacked_size(blob,sz)==56*64 && u6lzw_decompress(blob,sz,port,56*64)==56*64) have=1; }
+        static uint8_t pal_lvl[48], lut[256];
+        static long comb[256];
+        if (!have){                                            /* no portrait -> ship terrain-16 (near-no-op swap) */
+            for (int i=0;i<256;i++) comb[i]=terr[i];
+        } else {
+            static long pf[256]; long Sp=0; for(int i=0;i<256;i++) pf[i]=0;
+            for (int i=0;i<56*64;i++){ int c=port[i]; if(c!=255){ pf[c]++; Sp++; } }
+            if(Sp<1) Sp=1;
+            for (int i=0;i<256;i++){                            /* portrait 50% / terrain 35% / parchment 15% */
+                double w = (double)pf[i]*50000.0/(double)Sp
+                         + (double)terr[i]*35000.0/(double)St
+                         + (double)parch[i]*15000.0/(double)Sc;
+                comb[i]=(long)(w+0.5); }
+            made++;
+        }
+        static CCol col[256]; int nc=colors_from_freq(comb,palb,col); CCol snap[16];
+        quantize_colors(col,nc,palb,pal_lvl,lut,snap);
+        fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
+    }
+    printf("conv palettes (U6WY): %d slots, %d with portraits (PORTRAIT.A=%d, PORTRAIT.B=%d)\n",
+           nport, made, cA, cB);
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "refdata/dos/u6";
@@ -916,6 +969,8 @@ int main(int argc, char **argv)
 
     /* sample portraits (PORTRAIT.A items 0..NPORT-1: 4-byte lib of LZW 56x64) */
     long prn; uint8_t *pra = slurp(dir,"PORTRAIT.A",&prn);
+    long prbn=0; uint8_t *prb = slurp_path("refdata/dos/u6/PORTRAIT.B", NULL, &prbn);   /* full set for U6WY conv palettes */
+    if(!prb){ char pbp[1100]; snprintf(pbp,sizeof pbp,"%s/PORTRAIT.B",dir); prb=slurp_path(pbp,NULL,&prbn); }
     u6lib_t plib;
     if (!u6lib_open(&plib,pra,(int32_t)prn,4,false)){ printf("PORTRAIT.A open failed\n"); return 2; }
     static uint8_t portbuf[NPORT][56*64];
@@ -1417,6 +1472,9 @@ int main(int argc, char **argv)
         memcpy(bpal, pal_lvl, 48); memcpy(blut, lut, 256);            /* band 0 = the U6WW map palette */
         build_command_band(&ts, paper, palb, bpal+48, blut+256);     /* band 1 = command bar          */
         fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); } }
+
+    /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up. */
+    build_conv_palettes(f, &ts, paper, palb, pra, prn, prb, prbn);
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",

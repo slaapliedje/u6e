@@ -158,6 +158,26 @@ rest smear into the portrait. So the split can change a couple of colours at mos
 raster, full 16). The frozen map during a conversation would share that palette — acceptable since
 the eye is on the portrait, and a map+portrait compromise 16 keeps both decent. Tracked above.
 
+## Conversation-mode palette (U6WY) — capturing the portrait headroom
+The split-check found the real low-colour headroom is the conversation PORTRAIT, and that a mid-line
+raster can't reach it — but a per-MODE palette swap can. So while an NPC's portrait is up, the ST
+swaps its whole 16 to a palette tuned for the conversation screen (no raster, full 16):
+
+- **Data** (`tools/mkworld.c` → U6WY, after U6WX): one 16 + 256-LUT per portrait, indexed exactly as
+  the engine loads portraits (idx<98 → PORTRAIT.A[idx], else PORTRAIT.B[idx-98]). Each is quantised
+  from the PORTRAIT (up-weighted ~50% — it's the focus) + the TERRAIN histogram (~35%, so the frozen
+  map stays recognisable) + PARCHMENT (~15%, the text panel). 194 slots, ~59 KB. `[4 "U6WY"][u16
+  nport][nport × (48 pal + 256 lut)]`.
+- **Engine** (`render/gamedemo.c`): `talk()` calls `conv_palette_enter(id-1)` → `rdr_set_lowcolor`
+  (the portrait's 16 + LUT); `end_talk()` calls `conv_palette_leave()` → restores the banded game
+  palette. The main loop's full `present_frame()` re-c2p's the whole backbuffer through the new LUT,
+  so map + panel both re-map. No-op on TT/Falcon (`rdr_set_lowcolor` is a no-op — they show 256).
+- **Validated** (`make shot-st-conv`): Lord British's portrait renders with smooth natural skin
+  instead of the terrain-16's red-blotched face (build/conv_compare.png: left terrain-16 | right
+  conversation palette; 93% of portrait pixels change), and the frozen map stays correct. Cool-toned
+  portraits gain more (the split-check's 101%). Baseline toggle: CONVPAL.BIN byte1 bit0 disables the
+  swap.
+
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
 confirmed). For the 16-colour path we must RESERVE slots for any cycling range that maps into
@@ -193,9 +213,8 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
 - [ ] Optional ordered dithering (per-asset, off for UI/tiles).
 - [~] MID-LINE split (map/panel, x=176) — INVESTIGATED, NOT the right tool (see below). The real
       headroom is the panel PORTRAIT, which a mid-line raster can't deliver; a per-mode palette can.
-- [ ] Per-mode / per-scene palette swap (the deliverable the split-check points to): swap the whole
-      ST 16 on a MODE change (conversation portrait, dungeon, town) — no raster, no smear, full 16.
-      Conversation is the clearest case: portraits render 101% worse through the terrain-16.
+- [x] CONVERSATION-mode palette (U6WY) — DONE (below). Per-portrait ST 16 swapped in on talk().
+- [ ] Extend per-mode palettes to dungeon / town scenes (same mechanism as the conversation swap).
 
 ## Implemented / consumed by
 - Host: `tools/quant.h` (core) + `tools/quantize.c` (`make quantize`, QA PNG) +
@@ -207,3 +226,7 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
 - Band rasters: `tools/mkworld.c` ships U6WX; `render/gamedemo.c` loads `g_lcx_*` + calls
   `rdr_set_lowcolor_bands`; `render/rdr_st.c` runs the Timer-B palette-swap chain (no-op on TT/Falcon).
   Mechanism check: `make shot-st-raster` (RASTER.BIN → R↔B-swapped command band).
+- Conversation palettes: `tools/mkworld.c` ships U6WY (per-portrait); `render/gamedemo.c`
+  `conv_palette_enter/leave` swap on `talk()`/`end_talk()`. Check: `make shot-st-conv`.
+- Split-check (why mid-line was ruled out, where the headroom is): `tools/splitcheck.c`,
+  `make splitcheck`.

@@ -524,6 +524,22 @@ shot-st-raster: gamedata $(BUILD)/gamest.prg
 	rm -f $(BUILD)/RASTER.BIN
 	@echo "wrote $(BUILD)/gamest_raster.png (band-raster mechanism check: bottom band R<->B swapped)"
 
+# M7 CONVERSATION-palette check: open a conversation (nearest NPC = Lord British at the default
+# start) so the ST swaps to that portrait's U6WY palette, and capture the frame. The portrait should
+# render with true skin/grey tones instead of the muddy brown the terrain-16 gives (splitcheck).
+# CONVPAL_ID overrides the NPC id (0 = nearest adjacent).
+CONVPAL_ID ?= 0
+shot-st-conv: gamedata $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_conv.png
+	python3 -c "open('$(BUILD)/CONVPAL.BIN','wb').write(bytes([$(CONVPAL_ID) & 255]))"   # one raw byte = NPC id (0 = nearest)
+	-$(HATARI) --machine st --memsize 8 --monitor rgb --conout 2 \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 5000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_conv.png 2>/dev/null
+	rm -f $(BUILD)/CONVPAL.BIN
+	@echo "wrote $(BUILD)/gamest_conv.png (conversation portrait under its U6WY palette)"
+
 # headless M5 verify: auto-walk + capture a frame (avatar on the scrolled map)
 m5: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png
