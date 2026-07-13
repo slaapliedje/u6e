@@ -12,9 +12,10 @@
 >                  EGA-16 baseline; the shipped U6WW section verified on-target (`make lowcol`
 >                  → LOWCOL have=1 + the 16 palette regs match mkworld's host output byte-for-byte);
 >                  the shifter backend rendered on an emulated plain ST (`make shot-st` →
->                  build/gamest_screen.png: throne room in the optimised 16 colours).
-> - Confidence   : confirmed — quantiser core + shipped U6WW pack section + the rdr_st shifter
->                  backend all validated. Remaining work is footprint + per-scene palettes (below).
+>                  build/gamest_screen.png: throne room in the optimised 16 colours); the Timer-B
+>                  BAND raster proven with an R↔B-swap band 1 (`make shot-st-raster`, crisp seam).
+> - Confidence   : confirmed — quantiser core + U6WW pack + rdr_st shifter backend + U6WX band
+>                  rasters all validated on the ST. Remaining work is footprint + per-scene palettes.
 > - Last updated : 2026-07-12
 
 ## Goal
@@ -108,6 +109,30 @@ The core is shared with the QA tool via **`tools/quant.h`** (`q_build_hist` / `q
   needs). The per-region / per-scene CLUTs (above) and band-palette rasters layer on top later;
   the section can grow more palettes without moving any existing offset.
 
+## Band rasters (U6WX) — the "cheat past 16 colours"
+The ST shifter has 16 colour registers, but they can be RELOADED mid-frame by a timed interrupt,
+so each horizontal band of the screen shows its own 16 → up to nb×16 colours per frame.
+
+- **Mechanism** (`render/rdr_st.c`): the MFP Timer-B in EVENT-COUNT mode counts DE (display-enable)
+  pulses = one per displayed scanline. The VBL routine loads band 0's palette during vblank and arms
+  Timer-B for the first boundary; each Timer-B interrupt loads the next band's 16 colours straight
+  into `$FF8240..` and re-arms (stop/reload/restart). A few interrupts/frame — negligible cost.
+  `rdr_present` also picks each row's LUT from a per-row table so the c2p remaps to the right band.
+- **Data** (`tools/mkworld.c` → U6WX, appended after U6WW): `[u8 nb][nb u8 y0][nb*48 pal][nb*256 lut]`,
+  palette as raw 3-bit levels. Loaded into `g_lcx_*` and handed over via `rdr_set_lowcolor_bands`.
+- **Layout** (2 bands, SCENE-NEUTRAL so it never hurts other maps): band 0 (rows 0..181 = map + panel
+  + status) = the global U6WW 16; band 1 (rows 182..199 = command bar) = a 16 quantised from the
+  command icon tiles (400..409) + the parchment under them. So the command bar renders in
+  icon-optimised colours and band 0 stops spending slots on icon-only hues.
+- **Validated**: `make shot-st-raster` installs a diagnostic band 1 with R↔B swapped — the command bar
+  visibly inverts at a crisp row-182 seam (proof the Timer-B split fires, no flicker). The real 2-band
+  render adds ~16 colours in the command band (frame total ~31 distinct > the 16 of one palette).
+- **Honest scope**: U6's UI is a VERTICAL split (map left, panel right, SAME scanlines), so horizontal
+  bands can't give the *map* its own palette — the big win needs the mid-line split (see status list).
+  A supervisor note: the shifter registers ($FF8240) are supervisor-only; the interrupt handlers write
+  them directly (they run supervisor), but the one user-mode load in `rdr_set_lowcolor_bands` must go
+  through XBIOS `Setpalette` — a direct write there bus-errors.
+
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
 confirmed). For the 16-colour path we must RESERVE slots for any cycling range that maps into
@@ -137,9 +162,14 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
 - [ ] Per-scene low-colour palettes + colour-cycling on ST: `rdr_set_palette(256)` is a no-op on
       the shifter (16-colour hw can't take a 256 update), so cutscene palettes + CLUT cycling
       (water/fire) don't yet show. Reserve cycling slots (below) + ship per-scene 16s in U6WW.
+- [x] Band-palette rasters (Timer-B) for >16 on-screen colours — the "cheat past 16" (below). Ships
+      the U6WX section (2 bands) + a Timer-B palette-swap chain in rdr_st; validated on the ST.
 - [ ] Reserve palette slots for colour-cycling ranges; flag over-budget scenes.
 - [ ] Optional ordered dithering (per-asset, off for UI/tiles).
-- [ ] Band-palette rasters (HBL/Timer-B) for >16 on-screen colours — after the base backend.
+- [ ] Bigger band win: a MID-LINE (horizontal-position) split at the map/panel boundary (x=176) so
+      the map gets a full terrain-16 while the panel keeps a parchment-16 on the SAME rows — beats
+      U6's vertical-UI-split limit. Costs a per-row interrupt (turn-based => CPU idle between moves,
+      so likely affordable), but is timing-critical; deferred until the vertical bands prove out.
 
 ## Implemented / consumed by
 - Host: `tools/quant.h` (core) + `tools/quantize.c` (`make quantize`, QA PNG) +
@@ -148,3 +178,6 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
   (`make lowcol` prints the load check), and hands it to the backend via `rdr_set_lowcolor`.
 - Backend: `render/rdr_st.c` (16-colour shifter) consumes it — `make game-st` / `make shot-st`.
   `rdr_tt.c` / `rdr_falcon.c` implement `rdr_set_lowcolor` as a no-op (they show all 256).
+- Band rasters: `tools/mkworld.c` ships U6WX; `render/gamedemo.c` loads `g_lcx_*` + calls
+  `rdr_set_lowcolor_bands`; `render/rdr_st.c` runs the Timer-B palette-swap chain (no-op on TT/Falcon).
+  Mechanism check: `make shot-st-raster` (RASTER.BIN → R↔B-swapped command band).

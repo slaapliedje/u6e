@@ -43,6 +43,15 @@ void     rdr_set_palette(const uint8_t *rgb6, int n);
  * which show all 256 VGA colours). Call once after loading the pack, before presenting. */
 void     rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256);
 
+/* SHIFTER band rasters (M7 "cheat past 16 colours"): install `nb` horizontal bands, each with
+ * its OWN 16-colour palette (3-bit levels) + 256->16 LUT. y0[i] = first display row of band i
+ * (ascending; y0[0] MUST be 0). pal = nb*48 bytes (16 x {r,g,b} per band), lut = nb*256 bytes.
+ * The backend LUT-maps each row with its band's LUT at present, and reloads the shifter palette
+ * at each band boundary via a Timer-B raster interrupt — so the frame shows up to nb*16 colours.
+ * nb<=1 disables the raster (falls back to the single rdr_set_lowcolor palette). No-op on the
+ * 256-colour backends. Timer-B counts DE (display-enable) events; see docs/design/palette_lowcolor.md. */
+void     rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut);
+
 /* Convert the backbuffer to the screen's native layout and display it. */
 void     rdr_present(void);
 

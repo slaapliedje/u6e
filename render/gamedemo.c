@@ -264,6 +264,9 @@ static uint8_t        g_curpal[768];        /* working palette (rotated ranges) 
  * only by the shifter backend (rdr_st). g_lc_pal = 16 x {r,g,b} as ST 3-bit levels 0..7. */
 static uint8_t        g_lc_pal[48], g_lc_lut[256];
 static int            g_have_lowcolor;      /* 1 = pack carries a U6WW low-colour section */
+/* band rasters (U6WX): pointers into the pak — nb bands x {y0, 16-colour palette, 256-LUT}. */
+static int            g_lcx_nb;
+static const uint8_t *g_lcx_y0, *g_lcx_pal, *g_lcx_lut;
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
@@ -4088,6 +4091,14 @@ int main(void)
             for(int i=0;i<48;i++)  g_lc_pal[i]=ap[i];  ap+=48;
             for(int i=0;i<256;i++) g_lc_lut[i]=ap[i];  ap+=256;
             g_have_lowcolor=1;
+            /* BAND-RASTER low-colour (U6WX): [4 "U6WX"][u8 nb][nb u8 y0][nb*48 pal][nb*256 lut] ->
+             * point into the pak (the shifter backend copies them; TT/Falcon ignore). */
+            if(ap+5<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='X'){
+                int nb=ap[4]; const uint8_t *q=ap+5;
+                if(nb>=2 && q+(int32_t)nb*(1+48+256) <= pak+n){
+                    g_lcx_nb=nb; g_lcx_y0=q; g_lcx_pal=q+nb; g_lcx_lut=q+nb+(int32_t)nb*48;
+                }
+            }
         }
     }
 
@@ -4118,6 +4129,9 @@ int main(void)
     /* Hand the shifter backend the pack's host-quantised 16-colour palette + 256->16 LUT (U6WW).
      * No-op on the 256-colour TT/Falcon backends; on the ST it activates the optimised 16. */
     if (g_have_lowcolor) rdr_set_lowcolor(g_lc_pal, g_lc_lut);
+    /* ...then the band rasters (U6WX): >16 on-screen colours via a Timer-B palette split ("cheat
+     * past 16 colours"). No-op on TT/Falcon; on the ST it installs the raster (see rdr_st.c). */
+    if (g_lcx_nb >= 2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, g_lcx_pal, g_lcx_lut);
     g_basepal=palette;                              /* base for colour cycling (CLUT rotation) */
     g_bb=rdr_backbuffer(); g_W=rdr_width();
 
@@ -4392,6 +4406,24 @@ int main(void)
             for(int i=0;i<16;i++) dbg_num("LOWCOL pal reg=",
                 (g_lc_pal[i*3]<<8)|(g_lc_pal[i*3+1]<<4)|g_lc_pal[i*3+2]);
             dbg_num("LOWCOL lut0=", g_lc_lut[0]); dbg_num("LOWCOL lut255=", g_lc_lut[255]);
+        }
+    }
+
+    /* headless RASTER test (M7 band rasters): install a 2-band split where band 1 (rows 176..199,
+     * the command bar) uses the SAME LUT as band 0 but with R and B swapped in every palette entry.
+     * If the Timer-B palette raster fires, the bottom band visibly shows swapped colours — an
+     * unmistakable proof of the mechanism, independent of the real per-band palette data. */
+    {   int32_t rl=0; void*rb=plat_load_file("RASTER.BIN",1,&rl);
+        if(rb && g_have_lowcolor){
+            static uint8_t y0[2]={0,176};
+            static uint8_t pal[2*48], lut[2*256];
+            for(int i=0;i<16;i++){
+                pal[i*3]=g_lc_pal[i*3]; pal[i*3+1]=g_lc_pal[i*3+1]; pal[i*3+2]=g_lc_pal[i*3+2];
+                pal[48+i*3]=g_lc_pal[i*3+2]; pal[48+i*3+1]=g_lc_pal[i*3+1]; pal[48+i*3+2]=g_lc_pal[i*3]; /* R<->B */
+            }
+            for(int i=0;i<256;i++){ lut[i]=g_lc_lut[i]; lut[256+i]=g_lc_lut[i]; }
+            rdr_set_lowcolor_bands(2, y0, pal, lut);
+            dbg_num("RASTER installed nb=", 2);
         }
     }
 

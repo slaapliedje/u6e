@@ -44,6 +44,19 @@ static int       g_flip;              /* double-buffer (tear-free) mode active *
 static uint16_t  g_stpal[16];         /* ST 0x0RGB hardware palette (3-bit/ch) */
 static uint8_t   g_lut[256];          /* active 256->16 remap (from U6WW)      */
 
+/* --- band rasters (U6WX): up to MAXBANDS horizontal bands, each its own palette + LUT. The
+ * Timer-B handler reloads the shifter registers at each band boundary; present() picks each
+ * row's LUT from g_row_lut. nb<=1 => single palette, no raster (g_row_lut all -> g_lut). */
+#define MAXBANDS 8
+static int              g_nb;                        /* active band count (0/1 = no raster)  */
+static uint8_t          g_band_y0[MAXBANDS];         /* first display row of each band       */
+static uint16_t         g_band_reg[MAXBANDS][16];    /* per-band ST palette (0x0RGB) words   */
+static uint8_t          g_band_lut[MAXBANDS][256];   /* per-band 256->16 remap               */
+static const uint8_t   *g_row_lut[STH];              /* row -> that row's band LUT (present)  */
+static volatile int     g_bidx;                      /* next band to load (Timer-B handler)  */
+static int              g_raster_on;                 /* raster interrupts installed          */
+static long raster_remove(void);                     /* defined below; used by rdr_shutdown  */
+
 static short     g_old_rez;
 static void     *g_old_phys, *g_old_log;
 
@@ -81,6 +94,7 @@ bool rdr_init(const platform_caps_t *caps)
      * U6WW palette/LUT (so a present before that isn't total garbage). */
     for (int i = 0; i < 256; i++) g_lut[i] = (uint8_t)(i & 0x0F);
     for (int i = 0; i < 16;  i++){ unsigned v=(unsigned)(i*7/15); g_stpal[i]=(uint16_t)((v<<8)|(v<<4)|v); }
+    for (int i = 0; i < STH; i++) g_row_lut[i] = g_lut;   /* single band until bands installed */
 
     g_old_rez  = Getrez();
     g_old_phys = Physbase();
@@ -104,6 +118,7 @@ bool rdr_init(const platform_caps_t *caps)
 
 void rdr_shutdown(void)
 {
+    if (g_raster_on) { (void)Supexec(raster_remove); g_raster_on = 0; }   /* stop the raster first */
     linea9();                             /* line-A $A009: show mouse for the desktop */
     Setscreen(g_old_log, g_old_phys, g_old_rez);
     Vsync();
@@ -133,6 +148,120 @@ void rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256)
         }
         Setpalette(g_stpal);
     }
+    g_nb = 0;                                        /* single band: every row uses g_lut */
+    for (int i = 0; i < STH; i++) g_row_lut[i] = g_lut;
+}
+
+/* ---- band rasters: Timer-B palette-swap chain (M7 "cheat past 16 colours") ------------------
+ * The MFP (MC68901) Timer-B in EVENT-COUNT mode counts DE (display-enable) pulses = one per
+ * displayed scanline. Program TBDR=N and it interrupts after N displayed lines. The VBL routine
+ * loads band 0's 16 colours during vblank + arms Timer-B for the first boundary; each Timer-B
+ * interrupt then loads the next band's colours straight into the shifter registers ($FF8240..)
+ * and re-arms (stop/reload/restart, so an uneven interval takes effect immediately). Boundaries
+ * are chosen at quiet (parchment) rows so a ±1-line timing slop is invisible. This is the classic
+ * ST raster split — a few interrupts/frame, negligible cost. MFP: TBCR $FFFA1B, TBDR $FFFA21,
+ * IERA/IMRA/ISRA bit0 = Timer-B (MFP channel 8, autovector $120). */
+#define MFP_TBCR (*(volatile uint8_t *)0xFFFFFA1BUL)
+#define MFP_TBDR (*(volatile uint8_t *)0xFFFFFA21UL)
+#define MFP_IERA (*(volatile uint8_t *)0xFFFFFA07UL)
+#define MFP_IMRA (*(volatile uint8_t *)0xFFFFFA13UL)
+#define MFP_ISRA (*(volatile uint8_t *)0xFFFFFA0FUL)
+#define MFP_IPRA (*(volatile uint8_t *)0xFFFFFA0BUL)
+#define SHIFTER  ((volatile uint16_t *)0xFFFF8240UL)
+#define TB_BIT   0x01
+
+static void (**g_vblq)(void);        /* -> the system _vblqueue array         */
+static int      g_vblslot = -1;      /* our slot in that array (-1 = none)    */
+static uint32_t g_old_tbvec;
+
+static inline void load_regs(const uint16_t *p)
+{
+    volatile uint16_t *s = SHIFTER;
+    s[0]=p[0];   s[1]=p[1];   s[2]=p[2];   s[3]=p[3];   s[4]=p[4];   s[5]=p[5];   s[6]=p[6];   s[7]=p[7];
+    s[8]=p[8];   s[9]=p[9];   s[10]=p[10]; s[11]=p[11]; s[12]=p[12]; s[13]=p[13]; s[14]=p[14]; s[15]=p[15];
+}
+
+/* Timer-B interrupt: load band g_bidx's palette, re-arm for the next boundary (or mask if last). */
+static void tb_handler(void) __attribute__((interrupt_handler));
+static void tb_handler(void)
+{
+    int i = g_bidx;
+    if (i < g_nb) {
+        load_regs(g_band_reg[i]);
+        i++; g_bidx = i;
+        if (i < g_nb) {
+            MFP_TBCR = 0;                                          /* stop */
+            MFP_TBDR = (uint8_t)(g_band_y0[i] - g_band_y0[i-1]);   /* lines to next boundary */
+            MFP_TBCR = 0x08;                                       /* event-count restart */
+        } else {
+            MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);              /* done this frame: mask TB */
+        }
+    }
+    MFP_ISRA = (uint8_t)~TB_BIT;                                   /* software EOI: clear in-service */
+}
+
+/* VBL queue routine (runs each frame during vblank): reload band 0 + arm the Timer-B chain. */
+static void vbl_routine(void)
+{
+    if (g_nb <= 1) return;
+    load_regs(g_band_reg[0]);
+    g_bidx = 1;
+    MFP_TBCR = 0;
+    MFP_TBDR = g_band_y0[1];                        /* fire after y0[1] lines -> band 1 start */
+    MFP_TBCR = 0x08;
+    MFP_IPRA = (uint8_t)~TB_BIT;                    /* clear any pending */
+    MFP_IERA = (uint8_t)(MFP_IERA | TB_BIT);
+    MFP_IMRA = (uint8_t)(MFP_IMRA | TB_BIT);
+}
+
+static long raster_install(void)                   /* supervisor (Supexec) */
+{
+    g_old_tbvec = *(volatile uint32_t *)0x120UL;
+    *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&tb_handler;
+    int nvbls = *(volatile int16_t *)0x454UL;       /* _nvbls */
+    g_vblq = *(void (***)(void))0x456UL;            /* _vblqueue */
+    g_vblslot = -1;
+    for (int i = 0; i < nvbls; i++) if (!g_vblq[i]) { g_vblq[i] = &vbl_routine; g_vblslot = i; break; }
+    return 0;
+}
+static long raster_remove(void)                    /* supervisor (Supexec) */
+{
+    MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);
+    MFP_IERA = (uint8_t)(MFP_IERA & ~TB_BIT);
+    if (g_vblslot >= 0) { g_vblq[g_vblslot] = 0; g_vblslot = -1; }
+    if (g_old_tbvec) *(volatile uint32_t *)0x120UL = g_old_tbvec;
+    return 0;
+}
+
+void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut)
+{
+    if (nb > MAXBANDS) nb = MAXBANDS;
+    if (nb < 2 || !y0 || !pal || !lut) return;      /* nothing to raster: keep the single palette */
+
+    for (int b = 0; b < nb; b++) {
+        g_band_y0[b] = y0[b];
+        for (int i = 0; i < 16; i++) {
+            unsigned r = pal[b*48+i*3+0]&7, g = pal[b*48+i*3+1]&7, bl = pal[b*48+i*3+2]&7;
+            g_band_reg[b][i] = (uint16_t)((r<<8)|(g<<4)|bl);
+        }
+        memcpy(g_band_lut[b], lut + (int32_t)b*256, 256);
+    }
+    for (int b = 0; b < nb; b++) {                  /* row -> band LUT for present-time c2p */
+        int r0 = g_band_y0[b], r1 = (b+1 < nb) ? g_band_y0[b+1] : STH;
+        if (r1 > STH) r1 = STH;
+        for (int y = r0; y < r1; y++) g_row_lut[y] = g_band_lut[b];
+    }
+    g_nb = nb;
+    for (int i = 0; i < 16; i++) g_stpal[i] = g_band_reg[0][i];
+    Setpalette(g_stpal);                            /* band 0 = resting palette (XBIOS: supervisor-safe;
+                                                     * a direct $FF8240 write here would bus-error in user mode) */
+
+    if (!g_raster_on) { (void)Supexec(raster_install); g_raster_on = 1; }
+    if (g_vblslot < 0) {                            /* no free vbl slot -> fall back to single band */
+        g_nb = 0;
+        for (int i = 0; i < STH; i++) g_row_lut[i] = g_lut;
+        rdr_set_lowcolor(NULL, NULL);               /* re-assert the single palette */
+    }
 }
 
 void rdr_debug_info(uint32_t out[6])
@@ -151,7 +280,7 @@ void rdr_present(void)
     for (int y = 0; y < STH; y++) {
         const uint8_t *px  = g_back + (int32_t)y * STW;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
-        c2p4_lut(px, g_lut, dst, ST_GROUPS);
+        c2p4_lut(px, g_row_lut[y], dst, ST_GROUPS);
     }
     Vsync();
 }
@@ -167,7 +296,7 @@ void rdr_present_rect(int x, int y, int w, int h)
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px  = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
-        c2p4_lut(px, g_lut, dst, gn);
+        c2p4_lut(px, g_row_lut[yy], dst, gn);
     }
     /* no Vsync: caller may present several rects per frame */
 }
@@ -184,7 +313,7 @@ void rdr_present_doubled(int lh)
     for (int y = 0; y < lh; y++) {
         const uint8_t *px = g_back + (int32_t)y * STW;
         uint16_t     *d   = (uint16_t *)(dst + (int32_t)y * ST_ROWBYTES);
-        c2p4_lut(px, g_lut, d, ST_GROUPS);
+        c2p4_lut(px, g_row_lut[y], d, ST_GROUPS);
     }
     if (g_flip) { Setscreen(dst, dst, -1); Vsync(); g_vis = dst; return; }
     Vsync();
@@ -221,7 +350,7 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
         uint16_t *r = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
         memmove(r, r + 4, (size_t)(ST_ROWBYTES - 8));       /* planar shift left one 4-word group */
         const uint8_t *px = chunky + (int32_t)y*cw + pan_x + lastp;
-        c2p4_lut(px, g_lut, r + lastw, 1);                  /* c2p the new rightmost group */
+        c2p4_lut(px, g_row_lut[y], r + lastw, 1);           /* c2p the new rightmost group */
     }
 }
 

@@ -679,42 +679,81 @@ static int scan_reagents(const char *path, uint8_t counts[8]){
  * Returns the weighted RMS error (0..255 per channel) for the build log. U6PAL is RGB6 (0..63).
  * The side-by-side vs-EGA quality comparison lives in the tools/quantize QA target. */
 #define RGB6TO8(v) (((v)*255+31)/63)
-static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
-                             uint8_t pal_lvl[48], uint8_t lut[256])
-{
-    static long freq[256];                                  /* 1. usage histogram (255 = transparent) */
-    for (int i=0;i<256;i++) freq[i]=0;
-    for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
-        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
 
-    static CCol col[256]; int ncol=0;                       /* 2. weighted RGB8 colour list */
+/* build a weighted RGB8 colour list from a freq[256] U6PAL-index histogram (skips empty entries). */
+static int colors_from_freq(const long freq[256], const uint8_t *palb, CCol *col)
+{
+    int ncol=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
         col[ncol].r=RGB6TO8(palb[i*3]); col[ncol].g=RGB6TO8(palb[i*3+1]); col[ncol].b=RGB6TO8(palb[i*3+2]);
         col[ncol].w=freq[i]; ncol++; }
+    return ncol;
+}
 
-    CCol pal[16]; int npal=q_median_cut(col,ncol,16,pal);   /* 3. -> 16, snap to ST 3-bit gamut */
+/* median-cut a weighted RGB8 colour list to 16 on the ST 3-bit gamut: fill pal_lvl[48] (raw 3-bit
+ * levels the ST packs straight into a colour register) + lut[256] (nearest of the 16 to each U6PAL
+ * colour). snap[16] returns the snapped RGB8 palette (for the RMS metric). Returns the box count. */
+static int quantize_colors(CCol *col, int ncol, const uint8_t *palb,
+                           uint8_t pal_lvl[48], uint8_t lut[256], CCol snap[16])
+{
+    CCol pal[16]; int npal=q_median_cut(col,ncol,16,pal);
     q_snap_pal(pal,npal,3);
-
-    for (int i=0;i<16;i++){ int r=0,g=0,b=0;                /* 4. ship raw 3-bit levels */
+    for (int i=0;i<16;i++){ int r=0,g=0,b=0;
         if(i<npal){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
         pal_lvl[i*3]=(uint8_t)r; pal_lvl[i*3+1]=(uint8_t)g; pal_lvl[i*3+2]=(uint8_t)b; }
-    for (int i=0;i<256;i++)                                 /*    256->16 nearest LUT */
+    for (int i=0;i<256;i++)
         lut[i]=(uint8_t)q_nearest(pal,npal,RGB6TO8(palb[i*3]),RGB6TO8(palb[i*3+1]),RGB6TO8(palb[i*3+2]));
+    for (int i=0;i<npal;i++) snap[i]=pal[i];
+    return npal;
+}
 
-    double se=0; long wsum=0;                               /* 5. weighted RMS over the histogram */
+/* weighted RMS (0..255/ch) of a freq[256] histogram remapped through lut into the snapped palette. */
+static double quant_rms(const long freq[256], const uint8_t *palb, const uint8_t lut[256], const CCol snap[16])
+{
+    double se=0; long wsum=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
         int r=RGB6TO8(palb[i*3]), g=RGB6TO8(palb[i*3+1]), b=RGB6TO8(palb[i*3+2]);
-        long j=lut[i], dr=pal[j].r-r, dg=pal[j].g-g, db=pal[j].b-b;
+        long j=lut[i], dr=snap[j].r-r, dg=snap[j].g-g, db=snap[j].b-b;
         se += (double)(dr*dr+dg*dg+db*db)*(double)freq[i]; wsum += freq[i]; }
-    double rms = wsum ? sqrt(se/(3.0*(double)wsum)) : 0.0;
+    return wsum ? sqrt(se/(3.0*(double)wsum)) : 0.0;
+}
 
+/* U6WW single global palette: quantise the whole 2048-tile set (usage-weighted, transparent 255
+ * excluded) to the scene-neutral optimised 16. Fills pal_lvl[48] + lut[256]; returns weighted RMS. */
+static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
+                             uint8_t pal_lvl[48], uint8_t lut[256])
+{
+    static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
+    for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
+        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
+    static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
+    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap);
+    double rms=quant_rms(freq,palb,lut,snap);
+    long wsum=0; for (int i=0;i<256;i++) wsum+=freq[i];
     printf("lowcolor (U6WW): optimised 16-colour ST palette from %d used colours, %ld px; weighted RMS %.2f\n",
            ncol, wsum, rms);
-    for (int i=0;i<npal;i++)
-        printf("   pal[%2d] rgb3(%d,%d,%d) ~rgb6(%2d,%2d,%2d) w=%ld\n", i,
-               pal_lvl[i*3],pal_lvl[i*3+1],pal_lvl[i*3+2],
-               pal_lvl[i*3]*9,pal_lvl[i*3+1]*9,pal_lvl[i*3+2]*9, pal[i].w);
+    for (int i=0;i<16;i++)
+        printf("   pal[%2d] rgb3(%d,%d,%d) ~rgb6(%2d,%2d,%2d)\n", i,
+               pal_lvl[i*3],pal_lvl[i*3+1],pal_lvl[i*3+2], pal_lvl[i*3]*9,pal_lvl[i*3+1]*9,pal_lvl[i*3+2]*9);
     return rms;
+}
+
+/* U6WX band 1 (command bar, rows 182..199): quantise the STATIC bottom-strip content — the command
+ * icon tiles (400..409) + the parchment under them (PAPER rows 182..199) — to its own 16, so the
+ * command bar renders in icon-optimised colours (and band 0 stops spending slots on icon-only hues).
+ * SCENE-NEUTRAL: this content is identical in every scene, so it never hurts other maps. */
+static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint8_t *palb,
+                               uint8_t pal_lvl[48], uint8_t lut[256])
+{
+    static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
+    for (int y=182;y<200;y++) for (int x=0;x<320;x++){ int c=paper[y*320+x]; if(c!=255) freq[c]++; }
+    for (int t=400;t<410;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
+        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
+    static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
+    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap);
+    long wsum=0; for (int i=0;i<256;i++) wsum+=freq[i];
+    printf("lowcolor (U6WX band1): command bar 16 from icons 400-409 + parchment, %d colours, %ld px; RMS %.2f\n",
+           ncol, wsum, quant_rms(freq,palb,lut,snap));
 }
 #undef RGB6TO8
 
@@ -1367,7 +1406,17 @@ int main(int argc, char **argv)
      * (rdr_st) consumes it; TT/Falcon/vcard ignore it (they show all 256 VGA colours). */
     { static uint8_t pal_lvl[48], lut[256];
       build_lowcolor(&ts, palb, pal_lvl, lut);
-      fwrite("U6WW",1,4,f); fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f); }
+      fwrite("U6WW",1,4,f); fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
+
+      /* BAND-RASTER low-colour (U6WX): >16 on-screen colours on the ST via a Timer-B palette split
+       * (docs/design/palette_lowcolor.md). 2 horizontal bands: band 0 (rows 0..181, map+panel+status)
+       * = the scene-neutral global 16 above; band 1 (rows 182..199, command bar) = a 16 tuned to the
+       * command icons + parchment. SCENE-NEUTRAL (band 1's content is identical in every scene).
+       * [4 "U6WX"][u8 nb][nb u8 y0][nb*48 pal 3-bit levels][nb*256 lut]. */
+      { static uint8_t bpal[2*48], blut[2*256]; uint8_t y0[2]={0,182};
+        memcpy(bpal, pal_lvl, 48); memcpy(blut, lut, 256);            /* band 0 = the U6WW map palette */
+        build_command_band(&ts, paper, palb, bpal+48, blut+256);     /* band 1 = command bar          */
+        fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); } }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",

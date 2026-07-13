@@ -500,6 +500,20 @@ shot-st: gamedata $(BUILD)/gamest.prg
 	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_screen.png 2>/dev/null
 	@echo "wrote $(BUILD)/gamest_screen.png (plain ST, ST-low 16-colour optimised palette)"
 
+# M7 band-raster MECHANISM check: stage RASTER.BIN so the engine installs a 2-band Timer-B split
+# whose band 1 (command bar) has R and B swapped. If the raster fires, the bottom band's colours
+# are visibly swapped vs the map above — proof the palette split works before real band data.
+shot-st-raster: gamedata $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_raster.png
+	printf 1 > $(BUILD)/RASTER.BIN
+	-$(HATARI) --machine st --memsize 8 --monitor rgb --conout 2 \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 5000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_raster.png 2>/dev/null
+	rm -f $(BUILD)/RASTER.BIN
+	@echo "wrote $(BUILD)/gamest_raster.png (band-raster mechanism check: bottom band R<->B swapped)"
+
 # headless M5 verify: auto-walk + capture a frame (avatar on the scrolled map)
 m5: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png
