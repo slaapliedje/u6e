@@ -1563,17 +1563,18 @@ int main(int argc, char **argv)
       { static uint8_t bpal[2*48], blut[2*256]; uint8_t y0[2]={0,182};
         memcpy(bpal, pal_lvl, 48); memcpy(blut, lut, 256);            /* band 0 = the U6WW map palette */
         build_command_band(&ts, paper, palb, bpal+48, blut+256);     /* band 1 = command bar          */
-        fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); }
+        fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); } }
 
-      /* COLOUR-CYCLING metadata (U6WZ): which reserved ST-16 slots the engine rotates each tick to
-       * animate a U6PAL ramp on 16-colour hardware. The slots are identical in band 0 (the map),
-       * which copies the U6WW palette above. [4 "U6WZ"][u8 ncyc][ncyc x {u8 first_slot, u8 nslots}].
-       * fire = the top ST_CYC_SLOTS slots (build_lowcolor's reserve_cycle). (palette_cycling.md.) */
-      { fwrite("U6WZ",1,4,f); fputc(1,f); fputc((uint8_t)(16-ST_CYC_SLOTS),f); fputc((uint8_t)ST_CYC_SLOTS,f);
-        printf("lowcolor (U6WZ): 1 cycle range -> ST slots %d..%d (fire 224-231)\n", 16-ST_CYC_SLOTS, 15); } }
-
-    /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up. */
+    /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up.
+     * MUST precede U6WZ — the engine parses WW, WX, WY, WZ in that order. */
     build_conv_palettes(f, &ts, paper, palb, pra, prn, prb, prbn);
+
+    /* COLOUR-CYCLING metadata (U6WZ): which reserved ST-16 slots the engine rotates each tick to
+     * animate a U6PAL ramp on 16-colour hardware. The slots are identical in band 0 (the map), which
+     * copies the U6WW palette. [4 "U6WZ"][u8 ncyc][ncyc x {u8 first_slot, u8 nslots}]. fire = the top
+     * ST_CYC_SLOTS slots (build_lowcolor's reserve_cycle). (palette_cycling.md.) */
+    { fwrite("U6WZ",1,4,f); fputc(1,f); fputc((uint8_t)(16-ST_CYC_SLOTS),f); fputc((uint8_t)ST_CYC_SLOTS,f);
+      printf("lowcolor (U6WZ): 1 cycle range -> ST slots %d..%d (fire 224-231)\n", 16-ST_CYC_SLOTS, 15); }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",
