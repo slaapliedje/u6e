@@ -8,8 +8,10 @@ Tracked in: /docs/INDEX.md · Milestone: **M10 (audio: music)**
 > - Derived from : decompressing the user's own `refdata/dos/u6/*.M` with our LZW decoder
 >   (`dataformats/u6lzw`) and inspecting the byte stream (`tools/mdump`); READING the AdPlug
 >   `u6m` player (GPL) to UNDERSTAND the command encoding — NOT transcribed.
-> - References   : AdPlug `src/u6m.cpp` (an AdLib player for exactly these files); the Codex of
->   Ultima Wisdom "Ultima VI Internal Formats" page (lists the files, no byte spec).
+> - References   : ScummVM `engines/ultima/nuvie/sound/` — the authoritative decoder: `midiparser_m`
+>   (the `.m` parser), `mididrv_m_adlib` (OPL rendering), `mididrv_m_mt32` (the MT-32/MIDI path),
+>   `song_adplug`/`u6_adplug_decoder_stream`; AdPlug `src/u6m.cpp` (AdLib player for these files);
+>   the Codex of Ultima Wisdom "Ultima VI Internal Formats" page (lists the files, no byte spec).
 > - Tools        : `tools/mdump` (our own: LZW-decompress + dump/scan).
 > - Validated by : our `u6lzw_decompress` reproduces the declared decompressed size for every `.M`,
 >   AND our own disassembler (`tools/mdump`, written from the understanding below) walks the command
@@ -99,7 +101,25 @@ melody/timing decode is correct. This same extraction is the core of the M10 MID
 
 **Timing**: the driver runs at **60 Hz**; a `0x82 <n>` halts command reading for `n` ticks
 (n/60 seconds). Portamento/vibrato/volume-slide update once per tick. So the sequencer schedules on
-a 60 Hz clock (integer, no FPU) regardless of the frame rate.
+a 60 Hz clock (integer, no FPU) regardless of the frame rate. (ScummVM `midiparser_m`: `_psecPerTick
+= 16667` µs.) ScummVM's opcode names, for cross-reference: 0x0 note-off, 0x1 note-on, 0x2 set-pitch,
+0x3 set-level, 0x4 set-modulation, 0x5 set-slide, 0x6 set-vibrato, 0x7 program-change, 0x81
+call-subroutine, 0x82 delay, 0x83 load-instrument, 0x85 fade-out, 0x86 fade-in, 0xE loop-point,
+0xF return — the exact operand counts match our disassembler on all 12 files.
+
+## On-target-relevant details (from ScummVM cross-check — FPU-free, per M10 backends)
+- **Pitch, FPU-free**: `MIDI note = NOTE_MAP[freq_byte & 0x1F] + (freq_byte >> 5) * 12`, where
+  NOTE_MAP is a 32-entry semitone table (ScummVM `MidiDriver_M_MT32::MIDI_NOTE_MAP`, first entries
+  0,12,14,16,17,19,21,23 = C D E F G A B). This equals our F-number→Hz→log2 derivation but needs no
+  float — so the on-target sequencer precomputes/ships this table instead of doing OPL math. (The OPL
+  F-number path above is still what the OPL2→DMA synth uses to program the 0xA0/0xB0 registers.)
+- **Volume → velocity** (MIDI/PSG dynamics): `vel = (0x3F − (level & 0x3F)) × 3/2` from the `0x3n`
+  set-level command; track per channel, apply on note-on. (`tools/m2mid` now does this.)
+- **MT-32 path** (`mididrv_m_mt32`): uses the MT-32's **built-in patches via program-change, NO
+  SysEx** — it needs an instrument-index → MIDI-program map (`setInstrumentAssignments`), sourced
+  outside the parser (TODO: find those values / derive from U6ROLAND.DRV for authentic timbres). The
+  `0x83` OPL patch bytes are IGNORED on the MT-32 path (they matter only for OPL2→DMA/AdLib).
+- **Channel map**: 9 data channels → MIDI channels, avoiding the drum channel; a direct 0..8 map works.
 
 ## The `.DRV` device drivers (context, not decoded)
 `U6ADLIB.DRV` (OPL2/AdLib), `U6ROLAND.DRV` (Roland MT-32), `U6TANDY/U6CMS/U6COVOX/U6INNOVA`,

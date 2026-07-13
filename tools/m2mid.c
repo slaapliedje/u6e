@@ -70,6 +70,7 @@ int main(int argc, char**argv){
     tb(0); tb(0xFF); tb(0x51); tb(3); tb(0x0F); tb(0x42); tb(0x40);
 
     int cur[9]; for(int i=0;i<9;i++) cur[i]=-1;                 /* current sounding MIDI note per channel */
+    int vel[9]; for(int i=0;i<9;i++) vel[i]=90;                 /* per-channel velocity from the 0x3n level */
     int32_t p=0; int nnote=0, minn=127, maxn=0;
     while(p<got){
         uint8_t bb=d[p]; int hi=bb>>4, lo=bb&0xF; int32_t start=p; (void)start; p++;
@@ -80,6 +81,10 @@ int main(int argc, char**argv){
         }
         if(p+need>got) break;
         if(bb==0x82){ g_dt += d[p]; }                           /* DELAY: accumulate SMF delta ticks */
+        else if(hi==0x3 && lo<9){                               /* SET LEVEL: OPL 6-bit attenuation -> velocity */
+            int v=(0x3F-(d[p]&0x3F))*3/2; if(v<1)v=1; if(v>127)v=127;   /* ScummVM: (0x3F-lvl)*1.5 */
+            vel[lo]=v;
+        }
         else if(hi<=0x2 && lo<9){                               /* note command on channel lo */
             int newn = (hi==0x0)? -1 : freq_to_midi(d[p]);      /* 0x0=off; 0x1/0x2 set a pitch */
             if(hi!=0x2){                                        /* 0x0 and 0x1 turn the old note off */
@@ -87,7 +92,7 @@ int main(int argc, char**argv){
             }
             if(hi!=0x0 && newn>=0){                             /* 0x1/0x2 turn a new note on */
                 if(cur[lo]>=0) ev3(0x80|lo, cur[lo], 0);        /* safety off (0x2 case) */
-                ev3(0x90|lo, newn, 100); cur[lo]=newn; nnote++;
+                ev3(0x90|lo, newn, vel[lo]); cur[lo]=newn; nnote++;
                 if(newn<minn) minn=newn;
                 if(newn>maxn) maxn=newn;
             }
