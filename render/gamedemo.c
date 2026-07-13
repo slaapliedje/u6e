@@ -3829,6 +3829,127 @@ static int do_save(const world_t *w)
     msgcat(0,"Save failed."); return 0;
 }
 
+/* Parse the FRONT-END art block (menu/title, intro scenes, TV, clock, moongate, montage portraits,
+ * chargen questions, narration, BOOK.DAT text, gypsy/woods/storm/stones/climax) from `ap`, setting
+ * the g_menu_/g_intro/g_gyp_/... pointers into that buffer. Used two ways: inline from the full pack
+ * (TT/Falcon), and from a streamed U6FE.PAK (ST — loaded, run, then freed). Returns the advanced ap. */
+static const uint8_t *parse_frontend(const uint8_t *ap)
+{
+        /* front-end art (U6WU): [u16 mw][u16 mh][mw*mh][u16 tw][u16 th][tw*th] — point into pak */
+        g_menu_w=(ap[0]<<8)|ap[1]; ap+=2; g_menu_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_menu_pix=ap; ap+=(int32_t)g_menu_w*g_menu_h;
+        g_title_w=(ap[0]<<8)|ap[1]; ap+=2; g_title_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_title_pix=ap; ap+=(int32_t)g_title_w*g_title_h;
+        /* intro scenes (U6WV): [u8 n] + n x [u8 type][768 pal][u16 w][u16 h][w*h pix]
+         * and, for type 1 (pan), a trailing [u16 fw][fw*h fg] — all point into the pak. */
+        g_nintro=*ap++; if(g_nintro>INTRO_MAX) g_nintro=INTRO_MAX;
+        for(int i=0;i<g_nintro;i++){
+            g_intro[i].type=*ap++;
+            g_intro[i].pal=ap; ap+=768;                    /* per-scene 6-bit palette */
+            g_intro[i].w=(ap[0]<<8)|ap[1]; ap+=2; g_intro[i].h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_intro[i].pix=ap; ap+=(int32_t)g_intro[i].w*g_intro[i].h;
+            if(g_intro[i].type==1){ int fw=(ap[0]<<8)|ap[1]; ap+=2;   /* only PAN scenes have an fg layer */
+                g_intro[i].fg=ap; ap+=(int32_t)fw*g_intro[i].h; }
+            else g_intro[i].fg=NULL; }
+        g_scroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_scroll_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_scroll=ap; ap+=(int32_t)g_scroll_w*g_scroll_h;      /* shared narration parchment */
+        /* living-room TV anchor: base + talking-mouth frames (front-end Phase 2 anim) */
+        g_tv_bw=(ap[0]<<8)|ap[1]; ap+=2; g_tv_bh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_tv_bx=(ap[0]<<8)|ap[1]; ap+=2; g_tv_by=(ap[0]<<8)|ap[1]; ap+=2;
+        g_tv_base=ap; ap+=(int32_t)g_tv_bw*g_tv_bh;
+        g_tv_mw=(ap[0]<<8)|ap[1]; ap+=2; g_tv_mh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_tv_mx=(ap[0]<<8)|ap[1]; ap+=2; g_tv_my=(ap[0]<<8)|ap[1]; ap+=2;
+        g_tv_nmouth=*ap++; if(g_tv_nmouth>4) g_tv_nmouth=4;
+        for(int k=0;k<g_tv_nmouth;k++){ g_tv_mouth[k]=ap; ap+=(int32_t)g_tv_mw*g_tv_mh; }
+        /* TV alt-channels: [u8 nchan][u8 fpc][u16 cw][u16 ch] + nchan*fpc x [cw*ch] (cw*ch==tv base) */
+        g_tv_nchan=*ap++; if(g_tv_nchan>2) g_tv_nchan=2;
+        g_tv_fpc=*ap++; if(g_tv_fpc>2) g_tv_fpc=2;
+        { int ccw=(ap[0]<<8)|ap[1]; ap+=2; int cch=(ap[0]<<8)|ap[1]; ap+=2;
+          for(int c=0;c<g_tv_nchan;c++) for(int fr=0;fr<g_tv_fpc;fr++){
+            g_tv_chan[c][fr]=ap; ap+=(int32_t)ccw*cch; } }
+        /* LED clock digits (0-9 + blank) drawn over the blanked cells */
+        g_clk_x=(ap[0]<<8)|ap[1]; ap+=2; g_clk_y=(ap[0]<<8)|ap[1]; ap+=2;
+        g_ndigit=*ap++; if(g_ndigit>11) g_ndigit=11;
+        for(int k=0;k<g_ndigit;k++){ g_dig_w[k]=(ap[0]<<8)|ap[1]; ap+=2; g_dig_h[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_digit[k]=ap; ap+=(int32_t)g_dig_w[k]*g_dig_h[k]; }
+        /* moongate rise assets (type-2 scene): gate (rises) + ground cover */
+        g_gw=(ap[0]<<8)|ap[1]; ap+=2; g_gh=(ap[0]<<8)|ap[1]; ap+=2; g_gx=(ap[0]<<8)|ap[1]; ap+=2;
+        g_gate=ap; ap+=(int32_t)g_gw*g_gh;
+        g_cvw=(ap[0]<<8)|ap[1]; ap+=2; g_cvh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_cvx=(ap[0]<<8)|ap[1]; ap+=2; g_cvy=(ap[0]<<8)|ap[1]; ap+=2;
+        g_cover=ap; ap+=(int32_t)g_cvw*g_cvh;
+        /* character-creation portraits (MONTAGE 0..11): [u8 n][u16 pw][u16 ph] + n x [pw*ph] */
+        g_cc_nport=*ap++; if(g_cc_nport>12) g_cc_nport=12;
+        g_cc_pw=(ap[0]<<8)|ap[1]; ap+=2; g_cc_ph=(ap[0]<<8)|ap[1]; ap+=2;
+        for(int k=0;k<g_cc_nport;k++){ g_cc_port[k]=ap; ap+=(int32_t)g_cc_pw*g_cc_ph; }
+        /* gypsy questions (from U.EXE): [u8 nq] + nq x [u16 len][len bytes] (not NUL-term) */
+        g_cc_nq=*ap++; if(g_cc_nq>28) g_cc_nq=28;
+        for(int q=0;q<g_cc_nq;q++){ g_cc_qlen[q]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_cc_qtext[q]=(const char*)ap; ap+=g_cc_qlen[q]; }
+        /* intro narration (from U.EXE): [u8 np] + np x [u16 len][len bytes] (not NUL-term). Use the
+         * pack text only if all 15 pages are present; else fall back to our committed paraphrase. */
+        { int np=*ap++; g_intro_have=(np>=INTRO_NPAGES);
+          for(int q=0;q<np;q++){ int L=(ap[0]<<8)|ap[1]; ap+=2;
+              if(g_intro_have && q<INTRO_NPAGES){ g_intro_text[q]=(const char*)ap; g_intro_tlen[q]=L; }
+              ap+=L; } }
+        if(!g_intro_have)
+            for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); }
+        /* BOOK.DAT readable text: [u16 nbook] + nbook x [u16 len][bytes] (strings.md). Indexed by
+         * (object quality - 1); the pointers are into the pack (NOT NUL-terminated). */
+        { int nb=(ap[0]<<8)|ap[1]; ap+=2; g_nbook = nb>BOOK_MAX?BOOK_MAX:nb;
+          for(int i=0;i<nb;i++){ int L=(ap[0]<<8)|ap[1]; ap+=2;
+              if(i<BOOK_MAX){ g_book[i]=(const char*)ap; g_booklen[i]=L; } ap+=L; } }
+        /* gypsy "casting" scene: [768 pal5][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll] */
+        g_gyp_pal=ap; ap+=768;
+        g_gyp_w=(ap[0]<<8)|ap[1]; ap+=2; g_gyp_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_gyp_scene=ap; ap+=(int32_t)g_gyp_w*g_gyp_h;
+        g_gscroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_gscroll_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_gyp_scroll=ap; ap+=(int32_t)g_gscroll_w*g_gscroll_h;
+        /* raw GYPSY.SHP shape table (nuvie image_load_all): [u16 nsh] + per shape [u16 w][u16 h][w*h].
+         * The engine composites the casting scene + pour animation from these (jar 16, jar_liquid
+         * 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour) by shape number. */
+        g_ngsh=(ap[0]<<8)|ap[1]; ap+=2; if(g_ngsh>NGSH) g_ngsh=NGSH;
+        for(int i=0;i<g_ngsh;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_gsh_w[i]=w; g_gsh_h[i]=h; g_gsh[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+        /* woods forest-path lead-in: [768 pal4][u16 ww][u16 wh][ww*wh panorama] */
+        g_woods_pal=ap; ap+=768;
+        g_woods_w=(ap[0]<<8)|ap[1]; ap+=2; g_woods_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_woods=ap; ap+=(int32_t)g_woods_w*g_woods_h;
+        /* storm window scene: [768 pal2][u16 bw][u16 bh][base][u8 nbolt]+nbolt[u16 w][u16 h][wh]
+         * [u8 nstr][u16 sx][u16 sy]+nstr[u16 w][u16 h][wh] */
+        g_storm_pal=ap; ap+=768;
+        g_storm_w=(ap[0]<<8)|ap[1]; ap+=2; g_storm_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_storm_base=ap; ap+=(int32_t)g_storm_w*g_storm_h;
+        g_storm_nbolt=*ap++; if(g_storm_nbolt>8) g_storm_nbolt=8;
+        for(int k=0;k<g_storm_nbolt;k++){ g_storm_boltw[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_storm_bolth[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_bolt[k]=ap;
+            ap+=(int32_t)g_storm_boltw[k]*g_storm_bolth[k]; }
+        g_storm_nstr=*ap++; if(g_storm_nstr>5) g_storm_nstr=5;
+        g_storm_sx=(ap[0]<<8)|ap[1]; ap+=2; g_storm_sy=(ap[0]<<8)|ap[1]; ap+=2;
+        for(int k=0;k<g_storm_nstr;k++){ g_storm_strw[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_storm_strh[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_str[k]=ap;
+            ap+=(int32_t)g_storm_strw[k]*g_storm_strh[k]; }
+        /* forest reveal: [u16 fw][u16 fh][forest base][u16 ow][u16 oh][window overlay] */
+        g_forest_w=(ap[0]<<8)|ap[1]; ap+=2; g_forest_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_forest_base=ap; ap+=(int32_t)g_forest_w*g_forest_h;
+        g_win_ow=(ap[0]<<8)|ap[1]; ap+=2; g_win_oh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_win_ov=ap; ap+=(int32_t)g_win_ow*g_win_oh;
+        /* stones pickup: [u16 hw][u16 hh][hand][u16 ow][u16 oh][obs][u16 bw][u16 bh][bg5] */
+        g_stn_hw=(ap[0]<<8)|ap[1]; ap+=2; g_stn_hh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_stn_hand=ap; ap+=(int32_t)g_stn_hw*g_stn_hh;
+        g_stn_ow=(ap[0]<<8)|ap[1]; ap+=2; g_stn_oh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_stn_obs=ap; ap+=(int32_t)g_stn_ow*g_stn_oh;
+        g_stn_b5w=(ap[0]<<8)|ap[1]; ap+=2; g_stn_b5h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_stn_bg5=ap; ap+=(int32_t)g_stn_b5w*g_stn_b5h;
+        /* Avatar-into-gate climax: [u8 nav][u16 aw][u16 ah] + nav x [aw*ah] */
+        g_av_n=*ap++; if(g_av_n>20) g_av_n=20;
+        for(int k=0;k<g_av_n;k++){
+            g_av_ox[k]=(ap[0]<<8)|ap[1]; ap+=2; g_av_oy[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_av_w[k] =(ap[0]<<8)|ap[1]; ap+=2; g_av_h[k] =(ap[0]<<8)|ap[1]; ap+=2;
+            g_av_frame[k]=ap; ap+=(int32_t)g_av_w[k]*g_av_h[k]; }
+        return ap;
+}
+
 int main(void)
 {
     platform_caps_t caps; platform_detect(&caps);
@@ -3841,6 +3962,32 @@ int main(void)
     #ifndef PACK_NAME
     #define PACK_NAME "U6.PAK"
     #endif
+
+#ifdef ST_STREAM
+    /* ST: STREAM the front-end (menu/intro/chargen) off the hard drive BEFORE the gameplay core
+     * loads — the 1.35 MB U6FE.PAK can't coexist with the core on a 4 MB ST. rdr_init first
+     * (persistent buffers), then a scoped chip region holds U6FE just for this phase; the reset
+     * frees it before the core + libs load. (platform/platmem.h; docs/design/palette_lowcolor.md) */
+    if (!rdr_init(&caps)) { Cconws("no renderer\r\n"); Crawcin(); return 1; }
+    plat_input_init();
+    g_bb=rdr_backbuffer(); g_W=rdr_width();
+    {   plat_mark fe_mark = plat_chip_mark();
+        int32_t felen=0; uint8_t *fe=(uint8_t*)plat_load_file("U6FE.PAK",1,&felen);
+        if (fe && felen>2052 && fe[0]=='U'&&fe[1]=='6'&&fe[2]=='F'&&fe[3]=='E'){
+            g_font = fe+4;                              /* font (2048 bytes) for text */
+            parse_frontend(fe+4+2048);                  /* set g_menu/g_intro/g_gyp/... into fe */
+            int32_t ml=0;
+            void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq) run_intro();
+            void*creq=plat_load_file("CHARGEN.REQ",1,&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');
+            void*mreq=plat_load_file("MENU.REQ",1,&ml);    if(mreq) run_menu();
+        }
+        {   int32_t mil=0; if(plat_load_file("MEMINFO.BIN",1,&mil)){ plat_mem_info_t mi; plat_mem_get_info(&mi);
+                dbg_num("MEM fe_loaded=", fe?1:0);
+                dbg_num("MEM with_fe_used KB=", (int)(mi.chip_used/1024)); } }
+        plat_chip_reset(fe_mark);                       /* FREE U6FE — reclaim ~1.35 MB for gameplay */
+        g_nbook=0; g_font=NULL;                          /* front-end pointers dangle; core re-sets g_font */
+    }
+#endif
     uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe) */
     if (!pak||n<26||pak[0]!='U'||pak[1]!='6'||pak[2]!='W'||pak[3]!='T'){
         Cconws("cannot load U6.PAK (need U6WT)\r\n"); Crawcin(); return 1; }
@@ -4002,120 +4149,7 @@ int main(void)
          * chargen art to fit a real 4 MB ST (gameplay never uses it) and writes a "NOFE" marker in
          * its place. Full packs (TT/Falcon) parse it as before. (docs/design/palette_lowcolor.md) */
         if(ap+4<=pak+n && ap[0]=='N'&&ap[1]=='O'&&ap[2]=='F'&&ap[3]=='E'){ ap+=4; }   /* slim: skip */
-        else {
-        /* front-end art (U6WU): [u16 mw][u16 mh][mw*mh][u16 tw][u16 th][tw*th] — point into pak */
-        g_menu_w=(ap[0]<<8)|ap[1]; ap+=2; g_menu_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_menu_pix=ap; ap+=(int32_t)g_menu_w*g_menu_h;
-        g_title_w=(ap[0]<<8)|ap[1]; ap+=2; g_title_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_title_pix=ap; ap+=(int32_t)g_title_w*g_title_h;
-        /* intro scenes (U6WV): [u8 n] + n x [u8 type][768 pal][u16 w][u16 h][w*h pix]
-         * and, for type 1 (pan), a trailing [u16 fw][fw*h fg] — all point into the pak. */
-        g_nintro=*ap++; if(g_nintro>INTRO_MAX) g_nintro=INTRO_MAX;
-        for(int i=0;i<g_nintro;i++){
-            g_intro[i].type=*ap++;
-            g_intro[i].pal=ap; ap+=768;                    /* per-scene 6-bit palette */
-            g_intro[i].w=(ap[0]<<8)|ap[1]; ap+=2; g_intro[i].h=(ap[0]<<8)|ap[1]; ap+=2;
-            g_intro[i].pix=ap; ap+=(int32_t)g_intro[i].w*g_intro[i].h;
-            if(g_intro[i].type==1){ int fw=(ap[0]<<8)|ap[1]; ap+=2;   /* only PAN scenes have an fg layer */
-                g_intro[i].fg=ap; ap+=(int32_t)fw*g_intro[i].h; }
-            else g_intro[i].fg=NULL; }
-        g_scroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_scroll_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_scroll=ap; ap+=(int32_t)g_scroll_w*g_scroll_h;      /* shared narration parchment */
-        /* living-room TV anchor: base + talking-mouth frames (front-end Phase 2 anim) */
-        g_tv_bw=(ap[0]<<8)|ap[1]; ap+=2; g_tv_bh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_bx=(ap[0]<<8)|ap[1]; ap+=2; g_tv_by=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_base=ap; ap+=(int32_t)g_tv_bw*g_tv_bh;
-        g_tv_mw=(ap[0]<<8)|ap[1]; ap+=2; g_tv_mh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_mx=(ap[0]<<8)|ap[1]; ap+=2; g_tv_my=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_nmouth=*ap++; if(g_tv_nmouth>4) g_tv_nmouth=4;
-        for(int k=0;k<g_tv_nmouth;k++){ g_tv_mouth[k]=ap; ap+=(int32_t)g_tv_mw*g_tv_mh; }
-        /* TV alt-channels: [u8 nchan][u8 fpc][u16 cw][u16 ch] + nchan*fpc x [cw*ch] (cw*ch==tv base) */
-        g_tv_nchan=*ap++; if(g_tv_nchan>2) g_tv_nchan=2;
-        g_tv_fpc=*ap++; if(g_tv_fpc>2) g_tv_fpc=2;
-        { int ccw=(ap[0]<<8)|ap[1]; ap+=2; int cch=(ap[0]<<8)|ap[1]; ap+=2;
-          for(int c=0;c<g_tv_nchan;c++) for(int fr=0;fr<g_tv_fpc;fr++){
-            g_tv_chan[c][fr]=ap; ap+=(int32_t)ccw*cch; } }
-        /* LED clock digits (0-9 + blank) drawn over the blanked cells */
-        g_clk_x=(ap[0]<<8)|ap[1]; ap+=2; g_clk_y=(ap[0]<<8)|ap[1]; ap+=2;
-        g_ndigit=*ap++; if(g_ndigit>11) g_ndigit=11;
-        for(int k=0;k<g_ndigit;k++){ g_dig_w[k]=(ap[0]<<8)|ap[1]; ap+=2; g_dig_h[k]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_digit[k]=ap; ap+=(int32_t)g_dig_w[k]*g_dig_h[k]; }
-        /* moongate rise assets (type-2 scene): gate (rises) + ground cover */
-        g_gw=(ap[0]<<8)|ap[1]; ap+=2; g_gh=(ap[0]<<8)|ap[1]; ap+=2; g_gx=(ap[0]<<8)|ap[1]; ap+=2;
-        g_gate=ap; ap+=(int32_t)g_gw*g_gh;
-        g_cvw=(ap[0]<<8)|ap[1]; ap+=2; g_cvh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_cvx=(ap[0]<<8)|ap[1]; ap+=2; g_cvy=(ap[0]<<8)|ap[1]; ap+=2;
-        g_cover=ap; ap+=(int32_t)g_cvw*g_cvh;
-        /* character-creation portraits (MONTAGE 0..11): [u8 n][u16 pw][u16 ph] + n x [pw*ph] */
-        g_cc_nport=*ap++; if(g_cc_nport>12) g_cc_nport=12;
-        g_cc_pw=(ap[0]<<8)|ap[1]; ap+=2; g_cc_ph=(ap[0]<<8)|ap[1]; ap+=2;
-        for(int k=0;k<g_cc_nport;k++){ g_cc_port[k]=ap; ap+=(int32_t)g_cc_pw*g_cc_ph; }
-        /* gypsy questions (from U.EXE): [u8 nq] + nq x [u16 len][len bytes] (not NUL-term) */
-        g_cc_nq=*ap++; if(g_cc_nq>28) g_cc_nq=28;
-        for(int q=0;q<g_cc_nq;q++){ g_cc_qlen[q]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_cc_qtext[q]=(const char*)ap; ap+=g_cc_qlen[q]; }
-        /* intro narration (from U.EXE): [u8 np] + np x [u16 len][len bytes] (not NUL-term). Use the
-         * pack text only if all 15 pages are present; else fall back to our committed paraphrase. */
-        { int np=*ap++; g_intro_have=(np>=INTRO_NPAGES);
-          for(int q=0;q<np;q++){ int L=(ap[0]<<8)|ap[1]; ap+=2;
-              if(g_intro_have && q<INTRO_NPAGES){ g_intro_text[q]=(const char*)ap; g_intro_tlen[q]=L; }
-              ap+=L; } }
-        if(!g_intro_have)
-            for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); }
-        /* BOOK.DAT readable text: [u16 nbook] + nbook x [u16 len][bytes] (strings.md). Indexed by
-         * (object quality - 1); the pointers are into the pack (NOT NUL-terminated). */
-        { int nb=(ap[0]<<8)|ap[1]; ap+=2; g_nbook = nb>BOOK_MAX?BOOK_MAX:nb;
-          for(int i=0;i<nb;i++){ int L=(ap[0]<<8)|ap[1]; ap+=2;
-              if(i<BOOK_MAX){ g_book[i]=(const char*)ap; g_booklen[i]=L; } ap+=L; } }
-        /* gypsy "casting" scene: [768 pal5][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll] */
-        g_gyp_pal=ap; ap+=768;
-        g_gyp_w=(ap[0]<<8)|ap[1]; ap+=2; g_gyp_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_gyp_scene=ap; ap+=(int32_t)g_gyp_w*g_gyp_h;
-        g_gscroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_gscroll_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_gyp_scroll=ap; ap+=(int32_t)g_gscroll_w*g_gscroll_h;
-        /* raw GYPSY.SHP shape table (nuvie image_load_all): [u16 nsh] + per shape [u16 w][u16 h][w*h].
-         * The engine composites the casting scene + pour animation from these (jar 16, jar_liquid
-         * 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour) by shape number. */
-        g_ngsh=(ap[0]<<8)|ap[1]; ap+=2; if(g_ngsh>NGSH) g_ngsh=NGSH;
-        for(int i=0;i<g_ngsh;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
-            g_gsh_w[i]=w; g_gsh_h[i]=h; g_gsh[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
-        /* woods forest-path lead-in: [768 pal4][u16 ww][u16 wh][ww*wh panorama] */
-        g_woods_pal=ap; ap+=768;
-        g_woods_w=(ap[0]<<8)|ap[1]; ap+=2; g_woods_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_woods=ap; ap+=(int32_t)g_woods_w*g_woods_h;
-        /* storm window scene: [768 pal2][u16 bw][u16 bh][base][u8 nbolt]+nbolt[u16 w][u16 h][wh]
-         * [u8 nstr][u16 sx][u16 sy]+nstr[u16 w][u16 h][wh] */
-        g_storm_pal=ap; ap+=768;
-        g_storm_w=(ap[0]<<8)|ap[1]; ap+=2; g_storm_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_storm_base=ap; ap+=(int32_t)g_storm_w*g_storm_h;
-        g_storm_nbolt=*ap++; if(g_storm_nbolt>8) g_storm_nbolt=8;
-        for(int k=0;k<g_storm_nbolt;k++){ g_storm_boltw[k]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_storm_bolth[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_bolt[k]=ap;
-            ap+=(int32_t)g_storm_boltw[k]*g_storm_bolth[k]; }
-        g_storm_nstr=*ap++; if(g_storm_nstr>5) g_storm_nstr=5;
-        g_storm_sx=(ap[0]<<8)|ap[1]; ap+=2; g_storm_sy=(ap[0]<<8)|ap[1]; ap+=2;
-        for(int k=0;k<g_storm_nstr;k++){ g_storm_strw[k]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_storm_strh[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_str[k]=ap;
-            ap+=(int32_t)g_storm_strw[k]*g_storm_strh[k]; }
-        /* forest reveal: [u16 fw][u16 fh][forest base][u16 ow][u16 oh][window overlay] */
-        g_forest_w=(ap[0]<<8)|ap[1]; ap+=2; g_forest_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_forest_base=ap; ap+=(int32_t)g_forest_w*g_forest_h;
-        g_win_ow=(ap[0]<<8)|ap[1]; ap+=2; g_win_oh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_win_ov=ap; ap+=(int32_t)g_win_ow*g_win_oh;
-        /* stones pickup: [u16 hw][u16 hh][hand][u16 ow][u16 oh][obs][u16 bw][u16 bh][bg5] */
-        g_stn_hw=(ap[0]<<8)|ap[1]; ap+=2; g_stn_hh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_stn_hand=ap; ap+=(int32_t)g_stn_hw*g_stn_hh;
-        g_stn_ow=(ap[0]<<8)|ap[1]; ap+=2; g_stn_oh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_stn_obs=ap; ap+=(int32_t)g_stn_ow*g_stn_oh;
-        g_stn_b5w=(ap[0]<<8)|ap[1]; ap+=2; g_stn_b5h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_stn_bg5=ap; ap+=(int32_t)g_stn_b5w*g_stn_b5h;
-        /* Avatar-into-gate climax: [u8 nav][u16 aw][u16 ah] + nav x [aw*ah] */
-        g_av_n=*ap++; if(g_av_n>20) g_av_n=20;
-        for(int k=0;k<g_av_n;k++){
-            g_av_ox[k]=(ap[0]<<8)|ap[1]; ap+=2; g_av_oy[k]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_av_w[k] =(ap[0]<<8)|ap[1]; ap+=2; g_av_h[k] =(ap[0]<<8)|ap[1]; ap+=2;
-            g_av_frame[k]=ap; ap+=(int32_t)g_av_w[k]*g_av_h[k]; }
-        }   /* end front-end art block (NOFE gate) */
+        else { ap = parse_frontend(ap); }   /* full pack: parse the inline front-end art block */
 
         /* LOW-COLOUR ST palette + 256->16 LUT (U6WW), appended last & self-guarded by a
          * "U6WW" magic (older packs stop at EOF here). [4 magic][16 x {r,g,b} 3-bit levels]
@@ -4176,8 +4210,10 @@ int main(void)
         dbg_num("MEM after_libs_free KB=", (int)((_mi.chip_size-_mi.chip_used)/1024));
         dbg_num("MEM libs_ok=", (g_convA&&g_convB&&g_portA&&g_portB)?1:0); }
 
+#ifndef ST_STREAM   /* ST did rdr_init early (before streaming the front-end); TT/Falcon do it here */
     if (!rdr_init(&caps)) { Cconws("no renderer\r\n"); Crawcin(); return 1; }
     plat_input_init();                              /* fast key auto-repeat for smooth movement */
+#endif
     rdr_set_palette(palette, 256);
     /* Hand the shifter backend the pack's host-quantised 16-colour palette + 256->16 LUT (U6WW).
      * No-op on the 256-colour TT/Falcon backends; on the ST it activates the optimised 16. */
@@ -4253,11 +4289,13 @@ int main(void)
      * plain headless scene captures still render the game). "Journey Onward" returns
      * here and play begins. INTRO.REQ plays the cutscene directly (headless capture of
      * Phase 2 without navigating the menu). (shapes.md; Phase 1/2.) */
+#ifndef ST_STREAM   /* ST ran the front-end EARLY (streamed from U6FE, then freed); TT/Falcon here */
     { int32_t ml=0;
       void*ireq=plat_load_file("INTRO.REQ",1,&ml); if(ireq) run_intro();
       void*creq=plat_load_file("CHARGEN.REQ",1,&ml);                          /* headless chargen capture */
       if(creq) chargen_capture(ml>0 ? ((uint8_t*)creq)[0] : '1');             /* byte selects the sub-screen */
       void*mreq=plat_load_file("MENU.REQ",1,&ml);  if(mreq) run_menu(); }
+#endif
     apply_chargen();   /* if a character was created, it becomes the Avatar (name/stats) for play */
 
     /* headless NEW-GAME verification: if NEWGAME.BIN is staged, print the assembled new-game

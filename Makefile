@@ -443,7 +443,7 @@ GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DPACK_NAME='"U6ST.PAK"' $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter, slim pack)"
 game-st: $(BUILD)/gamest.prg
