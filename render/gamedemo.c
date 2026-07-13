@@ -4210,7 +4210,12 @@ int main(void)
     g_countA=g_convA?lib_count(g_convA,g_convAlen):0;   /* guard: libs may fail on a tight ST pool */
 
     if(_meminfo){ plat_mem_get_info(&_mi);
-        dbg_num("MEM after_libs_free KB=", (int)((_mi.chip_size-_mi.chip_used)/1024));
+        dbg_num("MEM chip(ST-RAM)_used KB=", (int)(_mi.chip_used/1024));
+        dbg_num("MEM chip_free KB=", (int)((_mi.chip_size-_mi.chip_used)/1024));
+        dbg_num("MEM have_altram=", _mi.have_altram);
+        dbg_num("MEM fast(TT-RAM)_size KB=", (int)(_mi.fast_size/1024));
+        dbg_num("MEM fast_used KB=", (int)(_mi.fast_used/1024));
+        dbg_num("MEM RESIDENT total KB=", (int)((_mi.chip_used + (_mi.have_altram?_mi.fast_used:0))/1024));
         dbg_num("MEM libs_ok=", (g_convA&&g_convB&&g_portA&&g_portB)?1:0); }
 
 #ifndef ST_STREAM   /* ST did rdr_init early (before streaming the front-end); TT/Falcon do it here */

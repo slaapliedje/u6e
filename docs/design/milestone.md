@@ -1142,9 +1142,12 @@ Acceptance
 ---
 
 ## M7 — Low-color palette enhancement (HEADLINE FEATURE)
-Status: [~] STARTED 2026-07-12 — host QUANTISER core done + validated; per-scene palettes,
-        cycling-slot reservation, and the 4-plane shifter backend remain. (docs/design/
-        palette_lowcolor.md)
+Status: [~] MOSTLY DONE 2026-07-13 — quantiser + the 4-plane ST shifter backend (rdr_st.c) SHIP and
+        render on a real 4 MB ST; plus BONUS work beyond the original scope: band-palette rasters
+        (>16 on-screen colours), per-portrait conversation palettes, a slim ST pack that boots on a
+        real 4 MB ST, and a streaming memory manager (front-end loaded off HD + freed for gameplay).
+        REMAINING for acceptance: colour cycling on ST + the STE 4096 variant (see below).
+        (docs/design/palette_lowcolor.md)
 Depends on: M6 (pipeline + engine must exist)
 Goal: base ST/STE looks BETTER than the original lazy port.
 
@@ -1166,8 +1169,13 @@ Tasks
 - [x] Snap candidate colors to hardware-representable values BEFORE measuring
       error. (quantize.c snaps the 16 centroids to the ST/STE gamut, then measures.)
 - [ ] Reserve palette slots for color-cycling ranges (preserve animation);
-      flag scenes needing more cycling slots than fit.
-- [ ] Shifter renderer backend (4-plane interleaved, Blitter present).
+      flag scenes needing more cycling slots than fit. (Prerequisite for cycling-on-ST below.)
+- [x] Shifter renderer backend (4-plane interleaved) — render/rdr_st.c: 320x200x16 ST-low,
+      256->16 LUT + chunky->4-plane c2p, Setscreen mode 0. `make game-st` / `make shot-st`.
+      Renders on a plain 8 MHz 68000 ST in the optimised 16 (not garish EGA).
+- [x] BONUS: band-palette rasters (U6WX, Timer-B) for >16 on-screen colours; per-portrait
+      conversation palettes (U6WY); slim ST pack that fits a real 4 MB ST; streaming memory manager
+      (plat_chip_mark/reset + U6FE.PAK) that loads the front-end off HD and frees it for gameplay.
 - [~] QA: side-by-side PNG (original VGA vs our 16-color) per scene +
       perceptual-error metric. DONE for the tilesheet (4-panel VGA|ST16|STE16|EGA16 + RMS);
       extend to per-scene as the per-region palettes land.
@@ -1182,9 +1190,12 @@ EXTRA FEATURE (later, optional) — native EGA assets for 16-colour targets:
   the quantiser path above is the baseline.
 
 Acceptance
-- [ ] U6 runs on base ST with VISIBLY improved palette vs original port.
-- [ ] Color cycling still animates after 256→16 reduction.
-- [ ] STE variant uses the 4096 gamut for richer selection.
+- [x] U6 runs on base ST with VISIBLY improved palette vs original port. DONE — renders on a real
+      4 MB ST in the optimised 16 (build/gamest_screen.png; TT-256 vs ST-16 comparison confirms it).
+- [ ] Color cycling still animates after 256→16 reduction. TODO — water/fire CLUT rotation isn't
+      wired on the ST yet (rdr_set_palette(256) is a no-op on 16-colour hw); needs reserved slots.
+- [ ] STE variant uses the 4096 gamut for richer selection. TODO — currently ship one ST 3-bit 16;
+      the STE 4-bit (4096) palette + its bit-rotated register format are a separate variant.
 
 ---
 
