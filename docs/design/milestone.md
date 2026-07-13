@@ -1275,47 +1275,66 @@ Acceptance
 
 ---
 
-## M10 — Audio: MIDI music (HEADLINE FEATURE — "fixes" the ST port)
-Status: [ ]
+## M10 — Audio: music (HEADLINE FEATURE — "fixes" the silent ST port)
+Status: [~] IN PROGRESS 2026-07-13 — format DECODED + validated (task 1); playback backends next.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
-the DOS version's MIDI score on Atari hardware. A marketed enhancement in the
-same spirit as M7's palette fix.
+the DOS version's score on Atari hardware. A marketed enhancement in the same
+spirit as M7's palette fix.
 
 Background: U6's DOS release includes a real soundtrack; the ST port omitted it.
 We pull the music data from the user's DOS copy (we ship none) and play it. The
 DOS data carries one small sequence per area/scene — BRIT.M (towns), FOREST.M,
 DUNGEON.M, ENGAGE.M (combat), STONES.M / ULTIMA.M (theme), INTRO.M, END.M,
 BOOTUP.M, CREATE.M, GARGOYLE.M, HORNPIPE.M — plus a per-device driver:
-U6ROLAND.DRV (Roland MT-32 → real MIDI), U6ADLIB.DRV (AdLib/OPL2 FM), and
-U6TANDY/U6CMS/U6COVOX/U6INNOVA/U6TMUS. This is Miles Design's AIL ("Audio
-Interface Library"); the MT-32/Roland path is the MIDI-OUT-relevant one.
+U6ROLAND.DRV (Roland MT-32), U6ADLIB.DRV (AdLib/OPL2), U6TANDY/U6CMS/U6COVOX/
+U6INNOVA/U6TMUS. Origin/Miles AIL.
+
+**FORMAT FINDING (docs/formats/music.md, CONFIRMED):** the `.M` files are U6 LZW
+containers wrapping an **AdLib / OPL2 (YM3812) FM command stream** — NOT MIDI/XMIDI.
+The default DOS sound is OPL2; the DOS build ALSO supports Roland MT-32 (the same
+note stream re-timbred by U6ROLAND.DRV). So the original "XMIDI → MIDI-OUT" premise
+is superseded. The stream is note-level (note-on/off + packed frequency + instrument
+index + 60 Hz delays), so a note sequence is recoverable for MIDI and PSG too.
+
+**Approach (user decision 2026-07-13): several backends + RUNTIME detection**, with a
+user option to enable MIDI. Behind a small `plat_audio_*`/`plat_music_*` seam:
+  - **MIDI enabled** → extract notes, map OPL instrument → MT-32/GM program
+    (U6ROLAND.DRV timbre map or a GM approx), send note-on/off + program-change out
+    the Atari **MIDI OUT** port (Bconout(3,..) / Midiws). Any Atari; needs an external
+    MT-32/GM synth. (Reference sound: the DOS MT-32 recording the user linked.)
+  - **MIDI off, STE / TT / Falcon** → **OPL2 → DMA sound**: a software YM3812 FM
+    synth renders PCM to the 8-bit DMA sound path. The authentic AdLib soundtrack.
+  - **MIDI off, plain ST** → **OPL → YM2149 PSG**: downmix to the 3-voice PSG (no DMA
+    sound on a base ST). Lower fidelity but universal.
 
 Tasks
-- [ ] Decode the DOS music data → docs/formats/music.md. Each .M file opens with
-      a 4-byte LE header (observed: BRIT.M=0x687=1671 > 982 bytes on disk) — the
-      U6 LZW container (reuse u6lzw) wrapping the AIL sequence. Decompress, then
-      identify the AIL/XMIDI event encoding and how it maps to MT-32/GM (timbre
-      setup may live in the driver or a patch file — confirm). Validate by
-      dumping the event stream host-side. Mark confidence honestly (probable).
-- [ ] Portable sequencer in /engine (or /audio): tick XMIDI events on the game
-      clock, emit note-on/off + program-change to a platform MIDI sink. No FPU;
-      integer tempo math. Clean-room from the spec.
-- [ ] Platform MIDI output backend(s), behind a small plat_midi_* seam:
-      - [ ] ST/STE/TT/Falcon **MIDI OUT port** (68901 MFP / ACIA): the period-
-            correct path — drives an external synth/wavetable (e.g. an MT-32/GM
-            module). State the exact call (Bconout(3,..) MIDI dev, or Midiws).
-      - [ ] Optional internal synth for users without external MIDI: render GM/
-            MT-32 voices to the DMA sound path (STE/TT/Falcon) — bigger task,
-            slot as a sub-goal; MIDI-OUT is the baseline.
-- [ ] Hook into the engine loop: start/stop/loop per area, duck on combat, etc.
-      (data-driven per GameDef so SE/MD reuse it).
+- [x] Decode the DOS music data → docs/formats/music.md. DONE + validated: `.M` = U6
+      LZW (u6lzw) → OPL2 command stream; opcode+operand table confirmed by a byte-accurate
+      host disassembler (`tools/mdump`) reaching a CLEAN END on all 12 `.M` files; 60 Hz
+      timing. Remaining detail: the 24-entry F-number pitch table + 11-byte operator layout
+      (pinned when we synthesize).
+- [ ] Host-side playback validation: render the OPL stream on the dev PC (software OPL emu
+      or export) to confirm the decode BY EAR before committing to the 68000 synth.
+- [ ] Decode U6ROLAND.DRV → the MT-32 instrument/timbre map (for the MIDI-out path).
+- [ ] Portable sequencer in /engine (or /audio): tick the `.M` events on a 60 Hz clock,
+      feed the active `plat_audio` sink. Integer tempo math, no FPU. Clean-room from the spec.
+- [ ] Platform audio backends behind `plat_audio_*`:
+      - [ ] **OPL2 → DMA sound** (STE/TT/Falcon): software YM3812 FM synth → 8-bit DMA sound
+            (state the XBIOS/DMA calls). The authentic path.
+      - [ ] **OPL → YM2149 PSG** (plain ST): 3-voice downmix, Timer-driven register writes.
+      - [ ] **MIDI OUT** (all Ataris, user-enabled): MFP/ACIA MIDI dev (Bconout(3,..)/Midiws).
+- [ ] Runtime detection picks DMA vs PSG from the machine (M1 caps); a user setting enables
+      the MIDI-out path instead. Hook into the engine loop: start/stop/loop per area, duck on
+      combat, etc. (data-driven per GameDef so SE/MD reuse it).
 
 Acceptance
 - [ ] U6 on Atari plays its (DOS) score — a feature the original ST port lacked.
-- [ ] Plays through MIDI OUT on a real/emulated ST with an attached synth.
-- [ ] Sequencer timing stays correct under load (game clock, not frame rate).
+- [ ] STE/TT/Falcon play the authentic OPL2 music via DMA sound; a plain ST plays the PSG
+      downmix; the MIDI-out option drives an external MT-32/GM synth. Correct branch chosen
+      at runtime from the detected machine + the MIDI setting.
+- [ ] Sequencer timing stays correct under load (60 Hz clock, not frame rate).
 - [ ] Same path proven reusable for Savage Empire / Martian Dreams music.
 
 ---

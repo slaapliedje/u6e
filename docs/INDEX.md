@@ -34,6 +34,7 @@ Per-game:   "shared" if identical across all three; else note deltas.
 | nuvie_save.md        | ScummVM/Nuvie save = OUR save fmt (R/W) | all | verify | VERIFIED | confirmed (read + host byte-identical round-trip + ON-TARGET engine writer; ScummVM loads our writes) | /tools, /engine | M6 |
 | strings.md           | Books/signs/item/ground text tables| all     | verify   | VERIFIED (books/signs) | confirmed (BOOK.DAT container + quality→entry + on-TT paged read view; item/ground strings TODO) | /tools, /render | M6 |
 | our_savefmt.md       | OUR versioned save format (write)  | all     | shared   | SUPERSEDED | n/a | — (we adopt ScummVM's Nuvie fmt → nuvie_save.md) | M6 |
+| music.md             | Music (.M) = LZW + OPL2 FM cmd stream | all  | verify   | IN PROGRESS | confirmed (container + OPL2-not-MIDI + opcode/operand table via byte-accurate disassembler on all 12 .M); pitch table + synth semantics TODO | /tools (mdump), later /engine+/platform | M10 |
 
 ## Rules specs (/docs/rules/)
 

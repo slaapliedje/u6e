@@ -164,6 +164,16 @@ $(BUILD)/objrender: tools/objrender.c $(OBJR_SRC)
 objrender: $(BUILD)/objrender
 	$(BUILD)/objrender $(REFDATA) $(BUILD)/objrender.png
 
+# M10 music format decode: LZW-decompress a .M music file + disassemble the OPL2 command stream
+# (docs/formats/music.md). `make mdump` disassembles all 12 U6 .M files in summary mode — a CLEAN
+# END on each validates the opcode/operand table. `build/mdump FILE.M` shows the full disassembly.
+$(BUILD)/mdump: tools/mdump.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+.PHONY: mdump
+mdump: $(BUILD)/mdump
+	@for f in $(REFDATA)/*.M; do $(BUILD)/mdump -q "$$f" | grep SUMMARY; done
+
 # M4 usecode spike: run a real NPC conversation end-to-end (decision gate)
 CONVSPIKE_SRC := dataformats/u6lzw.c dataformats/u6conv.c
 $(BUILD)/convspike: tools/convspike.c $(CONVSPIKE_SRC)
