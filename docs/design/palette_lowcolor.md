@@ -133,6 +133,31 @@ so each horizontal band of the screen shows its own 16 → up to nb×16 colours 
   them directly (they run supervisor), but the one user-mode load in `rdr_set_lowcolor_bands` must go
   through XBIOS `Setpalette` — a direct write there bus-errors.
 
+## Mid-line split — investigated, ruled out (`make splitcheck`)
+A mid-line (horizontal-position) raster would reload the palette at x=176 so the map (left) keeps a
+terrain-16 while the panel (right) gets its own 16 on the SAME scanlines — the only way past U6's
+vertical UI split. We measured whether it would actually help (`tools/splitcheck.c`):
+
+| content (via ST 3-bit 16)        | through the map's terrain-16 | through its OWN 16 |
+|----------------------------------|------------------------------|--------------------|
+| MAP window                       | already optimal — band 0 IS the tileset palette | (same) |
+| PARCHMENT (PAPER.BMP)            | RMS 17.74                    | RMS 8.25           |
+| conversation PORTRAIT (item 0)   | RMS 35.09                    | RMS 17.49 (**101% worse via terrain**) |
+
+So the **map has zero headroom** (its palette is built from exactly the tiles it shows), and the
+real headroom is the **panel portrait** — the terrain-16 has no cool greys/whites, so a grey
+portrait renders muddy brown (build/splitcheck.png: VGA | via terrain-16 | via portrait-16).
+
+BUT a mid-line raster **cannot deliver** that win: a portrait needs a *full* different 16, and on an
+8 MHz 68000 writing N palette registers takes ~0.75N µs → the beam crosses ~6N pixels mid-write,
+far exceeding the ~16 px parchment gap between map and panel. Only ~2 registers swap cleanly; the
+rest smear into the portrait. So the split can change a couple of colours at most — not a portrait.
+
+**Conclusion**: the deliverable for the portrait/parchment headroom is a per-MODE palette swap
+(conversation / dungeon / town → its own ST 16 via `Setpalette` + LUT, a cheap mode change, no
+raster, full 16). The frozen map during a conversation would share that palette — acceptable since
+the eye is on the portrait, and a map+portrait compromise 16 keeps both decent. Tracked above.
+
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
 confirmed). For the 16-colour path we must RESERVE slots for any cycling range that maps into
@@ -166,10 +191,11 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
       the U6WX section (2 bands) + a Timer-B palette-swap chain in rdr_st; validated on the ST.
 - [ ] Reserve palette slots for colour-cycling ranges; flag over-budget scenes.
 - [ ] Optional ordered dithering (per-asset, off for UI/tiles).
-- [ ] Bigger band win: a MID-LINE (horizontal-position) split at the map/panel boundary (x=176) so
-      the map gets a full terrain-16 while the panel keeps a parchment-16 on the SAME rows — beats
-      U6's vertical-UI-split limit. Costs a per-row interrupt (turn-based => CPU idle between moves,
-      so likely affordable), but is timing-critical; deferred until the vertical bands prove out.
+- [~] MID-LINE split (map/panel, x=176) — INVESTIGATED, NOT the right tool (see below). The real
+      headroom is the panel PORTRAIT, which a mid-line raster can't deliver; a per-mode palette can.
+- [ ] Per-mode / per-scene palette swap (the deliverable the split-check points to): swap the whole
+      ST 16 on a MODE change (conversation portrait, dungeon, town) — no raster, no smear, full 16.
+      Conversation is the clearest case: portraits render 101% worse through the terrain-16.
 
 ## Implemented / consumed by
 - Host: `tools/quant.h` (core) + `tools/quantize.c` (`make quantize`, QA PNG) +

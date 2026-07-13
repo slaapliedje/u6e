@@ -138,6 +138,16 @@ mapdump: $(BUILD)/mapdump
 
 # M7 low-colour quantiser: 256-colour VGA art -> optimised 16-colour ST/STE palette (snapped to
 # the 512/4096 hardware gamut), with a side-by-side QA PNG + RMS error vs a naive EGA-16 baseline.
+# splitcheck: HOST experiment — does the right PANEL (parchment / conversation portrait) want a
+# different 16 than the MAP's tileset palette? (i.e. is a mid-line palette split worth it?) Prints
+# RMS + writes build/splitcheck.png (portrait: VGA | via terrain-16 | via a portrait-16).
+SPLITCHECK_SRC := dataformats/u6lzw.c dataformats/u6lib.c tools/png.c
+$(BUILD)/splitcheck: tools/splitcheck.c $(SPLITCHECK_SRC)
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Itools -o $@ $^ -lm
+splitcheck: $(BUILD)/splitcheck world
+	$(BUILD)/splitcheck $(REFDATA) $(BUILD)/U6.PAK $(BUILD)/splitcheck.png
+
 QUANTIZE_SRC := dataformats/u6lzw.c dataformats/u6pal.c dataformats/u6map.c dataformats/u6tile.c tools/png.c
 $(BUILD)/quantize: tools/quantize.c $(QUANTIZE_SRC)
 	@mkdir -p $(BUILD)
