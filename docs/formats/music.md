@@ -17,9 +17,11 @@ Tracked in: /docs/INDEX.md · Milestone: **M10 (audio: music)**
 >   each ending on the loop/return command. Correct operand counts are what keep the walk aligned,
 >   so a clean end across all files confirms the opcode+operand table. Durations (BRIT ~37 s @60 Hz,
 >   STONES ~114 s) are musically plausible.
-> - Confidence   : **container = confirmed**; **OPL/AdLib not MIDI = confirmed**; **opcode +
->   operand table = confirmed** (byte-accurate walk). Pitch table + operand *semantics* for the
->   playback backends (F-number→Hz, 11-byte operator layout) = probable, pinned when we synthesize.
+> - Confidence   : **container = confirmed**; **OPL/AdLib not MIDI = confirmed**; **opcode + operand
+>   table = confirmed** (byte-accurate walk); **pitch decode = confirmed** (24-entry F-number table →
+>   MIDI note; note extraction to SMF matches the disassembler + renders a correct melody, `make
+>   m2mid`). Remaining probable: the FM `0x83` 11-byte operator layout + volume/vibrato scaling for
+>   the OPL2→DMA synth; the instrument→MT-32/GM patch map for MIDI-out (U6ROLAND.DRV).
 > - Last updated : 2026-07-13
 
 ## THE KEY FACT (drives the whole M10 approach)
@@ -69,11 +71,31 @@ voices. A `.M` typically drives all ~8 melodic voices in parallel (polyphonic FM
 | `0x80,0x84,0x87..` | (0)             | no handler (ignored)                                    |
 | `0x9n..0xDn`       | —               | undefined (never occur in the 12 U6 `.M` files)         |
 
-The note commands' single operand is a **packed frequency byte**: bits 0..4 = index into a 24-entry
-F-number table, bits 5..7 = octave/block; the OPL "note-on" key bit (0xB0 bit 0x20) is set for the
-`0x1n`/`0x2n` (on) forms. The 24-entry table + F-number→Hz math are needed to recover pitch (MIDI
-note / YM2149 period) for the non-OPL backends — pinned when we build note extraction. The `0x83`
-11 bytes = 5 modulator operator regs (0x20/40/60/80/E0) + 5 carrier + 1 feedback/algorithm (0xC0).
+The note commands' single operand is a **packed frequency byte** (CONFIRMED — validated by note
+extraction, below):
+- bits 0..4 = index into a 24-entry OPL **F-number table** (below); bits 5..7 = octave.
+- F-number = `((table[idx].hi & 3) << 8) | table[idx].lo`; the packed octave adds to the block:
+  effective block = `((table[idx].hi >> 2) & 7) + octave` (AdLib: `hi += octave << 2`).
+- Table entries 0, 8, 16 = `{0,0}` = **rest** (no pitch). The 24 entries are 3 groups of 8.
+- Pitch: `freq_Hz = F-number * 49716 / 2^(20 - block)`; MIDI note = `round(69 + 12*log2(freq/440))`.
+
+24-entry F-number table (lo, hi):
+```
+{00,00}{58,01}{82,01}{B0,01}{CC,01}{03,02}{41,02}{86,02}   group 0: rest, then C D E F G A B (octave-relative)
+{00,00}{6A,01}{96,01}{C7,01}{E4,01}{1E,02}{5F,02}{A8,02}   group 1: rest + the between-degrees (sharps/flats)
+{00,00}{47,01}{6E,01}{9A,01}{B5,01}{E9,01}{24,02}{66,02}   group 2
+```
+Hand-check: index 1..7 at octave 4 decode to MIDI 60,62,64,65,67,69,71 = **C4 D4 E4 F4 G4 A4 B4**,
+a clean C-major scale — confirming the decode. The `0x1n`/`0x2n` forms also set the OPL key-on bit
+(0xB0 bit 0x20). The `0x83` 11 bytes = 5 modulator operator regs (0x20/40/60/80/E0) + 5 carrier + 1
+feedback/algorithm (0xC0) — pinned when we build the OPL2→DMA synth.
+
+**Note extraction validated (`tools/m2mid`, `make m2mid`)**: exporting each `.M` to a Standard MIDI
+File (note-on/off + the pitch above, per OPL channel → MIDI channel, 60 PPQ so 1 tick = 1/60 s) gives
+note counts that EXACTLY match the disassembler (BRIT 550, STONES 727, ULTIMA 797, …) and musical
+MIDI ranges (~32..98). Rendered with a Roland SC-55 soundfont via fluidsynth — playable proof the
+melody/timing decode is correct. This same extraction is the core of the M10 MIDI-OUT backend
+(instrument-index → MT-32/GM patch mapping still to come, from U6ROLAND.DRV).
 
 **Timing**: the driver runs at **60 Hz**; a `0x82 <n>` halts command reading for `n` ticks
 (n/60 seconds). Portamento/vibrato/volume-slide update once per tick. So the sequencer schedules on

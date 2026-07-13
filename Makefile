@@ -174,6 +174,23 @@ $(BUILD)/mdump: tools/mdump.c dataformats/u6lzw.c
 mdump: $(BUILD)/mdump
 	@for f in $(REFDATA)/*.M; do $(BUILD)/mdump -q "$$f" | grep SUMMARY; done
 
+# M10 note extraction: .M OPL stream -> Standard MIDI File (host validation of the pitch/timing
+# decode BY EAR + the note-extraction logic the MIDI-OUT backend reuses). Exports every .M to
+# build/mid/*.mid; if a soundfont is found, renders a few to WAV via fluidsynth so you can listen.
+# Outputs derive from the copyrighted score -> build/ (gitignored), never committed.
+$(BUILD)/m2mid: tools/m2mid.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^ -lm
+SF2 ?= /usr/share/scummvm/Roland_SC-55.sf2
+.PHONY: m2mid
+m2mid: $(BUILD)/m2mid
+	@mkdir -p $(BUILD)/mid
+	@for f in $(REFDATA)/*.M; do b=$$(basename "$$f" .M); $(BUILD)/m2mid "$$f" "$(BUILD)/mid/$$b.mid"; done
+	@if [ -f "$(SF2)" ] && command -v fluidsynth >/dev/null; then \
+	   for m in ULTIMA BRIT STONES INTRO; do fluidsynth -ni -F "$(BUILD)/mid/$$m.wav" "$(SF2)" "$(BUILD)/mid/$$m.mid" >/dev/null 2>&1; done; \
+	   echo "rendered $(BUILD)/mid/{ULTIMA,BRIT,STONES,INTRO}.wav (soundfont $(SF2))"; \
+	 else echo "no soundfont at $(SF2); play $(BUILD)/mid/*.mid with your own synth"; fi
+
 # M4 usecode spike: run a real NPC conversation end-to-end (decision gate)
 CONVSPIKE_SRC := dataformats/u6lzw.c dataformats/u6conv.c
 $(BUILD)/convspike: tools/convspike.c $(CONVSPIKE_SRC)
