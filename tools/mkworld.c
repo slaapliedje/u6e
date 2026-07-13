@@ -823,7 +823,10 @@ int main(int argc, char **argv)
     const char *svm_objlist = argc > 6 ? argv[6] : NULL;
     const char *svm_inv     = argc > 7 ? argv[7] : NULL;   /* actor-inventory chunk (readied gear, CB3b) */
     int svm = (svm_objblk && svm_objlist) ? 1 : 0;
-    int slim = getenv("MKWORLD_SLIM") != NULL;   /* ST pack: omit the ~1.35 MB front-end/intro art */
+    int slim = getenv("MKWORLD_SLIM") != NULL;   /* ST pack: front-end/intro art -> separate U6FE.PAK */
+    char fe_path[1024];                          /* the front-end pack, a sibling of the core pack */
+    { const char *s=strrchr(out,'/'); int d=s?(int)(s-out)+1:0;
+      snprintf(fe_path,sizeof fe_path,"%.*sU6FE.PAK",d,out); }
 
     long mn,cn,pn,tn,on,bn,in,zn,fn;
     uint8_t *mapb=slurp(dir,"MAP",&mn), *chk=slurp(dir,"CHUNKS",&cn);
@@ -1228,15 +1231,24 @@ int main(int argc, char **argv)
     long o_frontend = ftell(f);   /* footprint: front-end/intro art starts here (U6WU..U6WV) */
     /* The slim ST pack OMITS the whole front-end/intro art block (~1.35 MB) to fit a real 4 MB ST —
      * gameplay never uses it — and writes a "NOFE" marker the engine loader skips. */
-    if(slim){ fwrite("NOFE",1,4,f); printf("slim ST pack: front-end/intro art OMITTED (NOFE marker)\n"); }
-    else {
+    /* The front-end/intro art is written to `fe`: for the full pack (TT/Falcon) that's the core pak
+     * itself (inline, as before); for the slim ST pack it's a SEPARATE U6FE.PAK the engine STREAMS
+     * (loads, runs the menu/intro/chargen, frees) so it never stays resident during gameplay. The
+     * core slim pak gets a "NOFE" marker in its place. U6FE = [4 "U6FE"][2048 font][front-end block]. */
+    FILE *fe = f;
+    if(slim){ fwrite("NOFE",1,4,f);
+        fe = fopen(fe_path,"wb");
+        if(fe){ fwrite("U6FE",1,4,fe); fwrite(font,1,2048,fe);
+                printf("slim ST pack: front-end/intro art -> %s (+ font)\n", fe_path); }
+        else  { fe = f; printf("WARN: cannot open %s; front-end inline\n", fe_path); } }
+    {
     /* FRONT-END art (U6WU): MAINMENU.SHP shape 0 + TITLES.SHP shape 0 (shapes.md).
      * [u16 mw][u16 mh][mw*mh indices][u16 tw][u16 th][tw*th indices]. 0x0 if absent. */
     { int mw=0,mh=0,tw=0,th=0;
       uint8_t *menu =load_shape(dir,"MAINMENU.SHP",0,&mw,&mh);
       uint8_t *title=load_shape(dir,"TITLES.SHP",  0,&tw,&th);
-      be16(f,(unsigned)mw); be16(f,(unsigned)mh); if(menu &&mw>0&&mh>0) fwrite(menu, 1,(size_t)mw*mh,f);
-      be16(f,(unsigned)tw); be16(f,(unsigned)th); if(title&&tw>0&&th>0) fwrite(title,1,(size_t)tw*th,f);
+      be16(fe,(unsigned)mw); be16(fe,(unsigned)mh); if(menu &&mw>0&&mh>0) fwrite(menu, 1,(size_t)mw*mh,fe);
+      be16(fe,(unsigned)tw); be16(fe,(unsigned)th); if(title&&tw>0&&th>0) fwrite(title,1,(size_t)tw*th,fe);
       printf("front-end: menu %dx%d, title %dx%d\n", mw,mh,tw,th);
       free(menu); free(title); }
     /* INTRO SCENES (U6WV): [u8 n] then per scene [u8 type][768B pal(6-bit)] + layers.
@@ -1257,15 +1269,15 @@ int main(int argc, char **argv)
         {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 2},   /* gate RISES from the stones (shape2 + cover4) */
       };
       int nsc = (int)(sizeof SC/sizeof SC[0]);
-      fputc(nsc, f);
+      fputc(nsc, fe);
       for(int i=0;i<nsc;i++){
         uint8_t pal[768]; if(!load_intpal(dir, SC[i].pal, pal)) memset(pal,0,sizeof pal);
-        fputc(SC[i].type, f);
-        fwrite(pal,1,768,f);
+        fputc(SC[i].type, fe);
+        fwrite(pal,1,768,fe);
         if(SC[i].type != 1){                                  /* type 0 (static) or 2 (gate-rise): bg only */
           static uint8_t canvas[320*200]; memset(canvas,0,sizeof canvas);
           compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, canvas, 320, 200);
-          be16(f,320); be16(f,200); fwrite(canvas,1,sizeof canvas,f);
+          be16(fe,320); be16(fe,200); fwrite(canvas,1,sizeof canvas,fe);
           printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
         } else {
           static uint8_t pano[640*200], fg[320*200];
@@ -1277,28 +1289,28 @@ int main(int argc, char **argv)
           { static const int CX[]={0xdd,0xdd+4,0xdd+0xa,0xdd+0xe};
             for(int c=0;c<4;c++) for(int yy=0x14;yy<0x14+5;yy++)
               for(int xx=CX[c];xx<CX[c]+3;xx++) pano[yy*640+xx]=0; }
-          be16(f,640); be16(f,200); fwrite(pano,1,sizeof pano,f);
-          be16(f,320);              fwrite(fg,1,sizeof fg,f);
+          be16(fe,640); be16(fe,200); fwrite(pano,1,sizeof pano,fe);
+          be16(fe,320);              fwrite(fg,1,sizeof fg,fe);
           printf("intro scene %d: PAN %s pal %d (640 panorama + 320 fg)\n", i, SC[i].file, SC[i].pal);
         } }
       /* shared narration parchment scroll (BLOCKS.SHP shape 2, 320x48) drawn at the
        * bottom over the scene, index 0 = torn/transparent edges. [u16 w][u16 h][w*h]. */
       { int sw=0,sh=0; uint8_t *scr=load_shape(dir,"BLOCKS.SHP",2,&sw,&sh);
-        be16(f,(unsigned)sw); be16(f,(unsigned)sh);
-        if(scr&&sw>0&&sh>0) fwrite(scr,1,(size_t)sw*sh,f);
+        be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
+        if(scr&&sw>0&&sh>0) fwrite(scr,1,(size_t)sw*sh,fe);
         printf("intro scroll: BLOCKS.SHP[2] %dx%d\n", sw, sh); free(scr); }
       /* living-room TV anchor (nuvie tv-anchor program): base 57x37 @ (0xe5,0x32) +
        * talking-mouth frames 17x19 @ (+9,+7) = INTRO_1.SHP 31 / 32,33,34. The engine
        * draws these over the scrolling panorama and cycles the mouth. [u16 aw][u16 ah]
        * [u16 ax][u16 ay][aw*ah] then [u16 mw][u16 mh][u16 mx][u16 my][u8 nf][nf*mw*mh]. */
       { int aw=0,ah=0; uint8_t *anc=load_shape(dir,"INTRO_1.SHP",31,&aw,&ah);
-        be16(f,(unsigned)aw); be16(f,(unsigned)ah); be16(f,0xe5); be16(f,0x32);
-        if(anc&&aw>0) fwrite(anc,1,(size_t)aw*ah,f); free(anc);
+        be16(fe,(unsigned)aw); be16(fe,(unsigned)ah); be16(fe,0xe5); be16(fe,0x32);
+        if(anc&&aw>0) fwrite(anc,1,(size_t)aw*ah,fe); free(anc);
         static const int MF[]={32,33,34}; int nmf=(int)(sizeof MF/sizeof MF[0]);
         int mw=0,mh=0; uint8_t *m0=load_shape(dir,"INTRO_1.SHP",MF[0],&mw,&mh); free(m0);
-        be16(f,(unsigned)mw); be16(f,(unsigned)mh); be16(f,0xe5+9); be16(f,0x32+7); fputc(nmf,f);
+        be16(fe,(unsigned)mw); be16(fe,(unsigned)mh); be16(fe,0xe5+9); be16(fe,0x32+7); fputc(nmf,fe);
         for(int k=0;k<nmf;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"INTRO_1.SHP",MF[k],&w,&h);
-          if(mp&&w>0) fwrite(mp,1,(size_t)w*h,f); free(mp); }
+          if(mp&&w>0) fwrite(mp,1,(size_t)w*h,fe); free(mp); }
         printf("intro TV: anchor %dx%d @229,50 + %d mouth %dx%d\n", aw,ah, nmf, mw,mh); }
       /* TV alt-channels (nuvie tv-program cycler): each a full 57x37 TV-screen image; the engine
        * flips between the news anchor (channel 0 = base+mouth above), these channels, and
@@ -1306,59 +1318,59 @@ int main(int argc, char **argv)
        * a drama (24/25). [u8 nchan][u8 fpc][u16 cw][u16 ch] + nchan*fpc x [cw*ch idx]. */
       { static const int CH[2][2]={{16,18},{24,25}}; int nchan=2, fpc=2;
         int cw=0,ch=0; uint8_t*c0=load_shape(dir,"INTRO_1.SHP",CH[0][0],&cw,&ch); free(c0);
-        fputc(nchan,f); fputc(fpc,f); be16(f,(unsigned)cw); be16(f,(unsigned)ch);
+        fputc(nchan,fe); fputc(fpc,fe); be16(fe,(unsigned)cw); be16(fe,(unsigned)ch);
         for(int c=0;c<nchan;c++) for(int fr=0;fr<fpc;fr++){
           int w=0,h=0; uint8_t*cp=load_shape(dir,"INTRO_1.SHP",CH[c][fr],&w,&h);
-          if(cp&&w==cw&&h==ch) fwrite(cp,1,(size_t)w*h,f);
-          else { static uint8_t z[57*37]; memset(z,0,sizeof z); fwrite(z,1,(size_t)cw*ch,f); }
+          if(cp&&w==cw&&h==ch) fwrite(cp,1,(size_t)w*h,fe);
+          else { static uint8_t z[57*37]; memset(z,0,sizeof z); fwrite(z,1,(size_t)cw*ch,fe); }
           free(cp); }
         printf("intro TV channels: %d x %d-frame programs %dx%d\n", nchan, fpc, cw, ch); }
       /* clock digits: INTRO_1.SHP 2..12 = LED glyphs 0..9 + blank (3x5), drawn over the
        * blanked cells at (0xdd,0x14) with x-steps 0,4,10,14. [u16 cx][u16 cy][u8 nd] +
        * nd x [u16 w][u16 h][w*h]. */
-      { be16(f,0xdd); be16(f,0x14); int nd=11; fputc(nd,f);
+      { be16(fe,0xdd); be16(fe,0x14); int nd=11; fputc(nd,fe);
         for(int k=0;k<nd;k++){ int w=0,h=0; uint8_t*dg=load_shape(dir,"INTRO_1.SHP",2+k,&w,&h);
-          be16(f,(unsigned)w); be16(f,(unsigned)h); if(dg&&w>0) fwrite(dg,1,(size_t)w*h,f); free(dg); }
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(dg&&w>0) fwrite(dg,1,(size_t)w*h,fe); free(dg); }
         printf("intro clock: 11 LED digits @ 0xdd,0x14\n"); }
       /* moongate rise (type-2 scene): the gate (INTRO_3.SHP shape 2) rises at x=0x7c; the
        * ground cover (shape 4 @ 0x5e,0x66) is drawn OVER it so it emerges from the earth.
        * [u16 gw][u16 gh][u16 gx][gate] [u16 cw][u16 ch][u16 cx][u16 cy][cover]. (nuvie stones.) */
       { int gw=0,gh=0; uint8_t*g=load_shape(dir,"INTRO_3.SHP",2,&gw,&gh);
-        be16(f,(unsigned)gw); be16(f,(unsigned)gh); be16(f,0x7c);
-        if(g&&gw>0) fwrite(g,1,(size_t)gw*gh,f); free(g);
+        be16(fe,(unsigned)gw); be16(fe,(unsigned)gh); be16(fe,0x7c);
+        if(g&&gw>0) fwrite(g,1,(size_t)gw*gh,fe); free(g);
         int cvw=0,cvh=0; uint8_t*cv=load_shape(dir,"INTRO_3.SHP",4,&cvw,&cvh);
-        be16(f,(unsigned)cvw); be16(f,(unsigned)cvh); be16(f,0x5e); be16(f,0x66);
-        if(cv&&cvw>0) fwrite(cv,1,(size_t)cvw*cvh,f); free(cv);
+        be16(fe,(unsigned)cvw); be16(fe,(unsigned)cvh); be16(fe,0x5e); be16(fe,0x66);
+        if(cv&&cvw>0) fwrite(cv,1,(size_t)cvw*cvh,fe); free(cv);
         printf("intro moongate: gate %dx%d @124 + cover %dx%d @94,102\n", gw,gh, cvw,cvh); }
       /* CHARACTER-CREATION portraits (MONTAGE.SHP 0..11 = 6 female @0..5, 6 male @6..11,
        * each 56x64; montage index = gender*6 + portrait_num — nuvie create_character). The
        * new-game portrait picker renders these OPAQUELY under the boot palette (portrait skin
        * tones match; PALETTES.INT 0). [u8 n][u16 pw][u16 ph] + n x [pw*ph idx]. */
       { int nmp=12, pw0=0,ph0=0; uint8_t *p0=load_shape(dir,"MONTAGE.SHP",0,&pw0,&ph0);
-        fputc(nmp,f); be16(f,(unsigned)pw0); be16(f,(unsigned)ph0); free(p0);
+        fputc(nmp,fe); be16(fe,(unsigned)pw0); be16(fe,(unsigned)ph0); free(p0);
         for(int k=0;k<nmp;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"MONTAGE.SHP",k,&w,&h);
-          if(mp&&w==pw0&&h==ph0) fwrite(mp,1,(size_t)w*h,f);
-          else { static uint8_t z[56*64]; memset(z,0,sizeof z); fwrite(z,1,(size_t)pw0*ph0,f); }
+          if(mp&&w==pw0&&h==ph0) fwrite(mp,1,(size_t)w*h,fe);
+          else { static uint8_t z[56*64]; memset(z,0,sizeof z); fwrite(z,1,(size_t)pw0*ph0,fe); }
           free(mp); }
         printf("chargen portraits: %d montage %dx%d\n", nmp, pw0, ph0); }
       /* gypsy virtue questions (extracted from U.EXE at build time; NEVER shipped/committed):
        * [u8 nq] + nq x [u16 len][len bytes] (quote/%c stripped). 0 => engine uses generic prompts. */
       { static char qb[GQ_MAX][GQ_LEN]; int nq=extract_questions(dir, qb);
-        fputc(nq,f);
-        for(int q=0;q<nq;q++){ int L=(int)strlen(qb[q]); be16(f,(unsigned)L); fwrite(qb[q],1,(size_t)L,f); } }
+        fputc(nq,fe);
+        for(int q=0;q<nq;q++){ int L=(int)strlen(qb[q]); be16(fe,(unsigned)L); fwrite(qb[q],1,(size_t)L,fe); } }
       /* intro NARRATION pages (extracted from U.EXE at build time; NEVER shipped/committed):
        * [u8 np] + np x [u16 len][len bytes]. 0 => engine uses its own paraphrase. Engine re-wraps
        * each page to 320px. Page order = living(3) storm(4) forest(1) stones(2) moongate(5). */
       { static char ib[IP_MAX][IP_LEN]; int nip=extract_intro(dir, ib);
-        fputc(nip,f);
-        for(int q=0;q<nip;q++){ int L=(int)strlen(ib[q]); be16(f,(unsigned)L); fwrite(ib[q],1,(size_t)L,f);
+        fputc(nip,fe);
+        for(int q=0;q<nip;q++){ int L=(int)strlen(ib[q]); be16(fe,(unsigned)L); fwrite(ib[q],1,(size_t)L,fe);
           if(getenv("INTRO_DUMP")) printf("  intro[%2d] (%d) %s\n", q, L, ib[q]); } }
       /* BOOK.DAT readable text — signs/plaques/tombstones/books/scrolls (docs/formats/strings.md).
        * COPYRIGHTED game text: extracted at build time, NEVER committed. [u16 nbook] + nbook x
        * [u16 len][bytes] (\n preserved). Engine indexes by (object quality - 1). 0 => none. */
       { static char bb[BOOK_MAX][BOOK_LEN]; int nb=extract_books(dir, bb);
-        be16(f,(unsigned)nb);
-        for(int i=0;i<nb;i++){ int L=(int)strlen(bb[i]); be16(f,(unsigned)L); fwrite(bb[i],1,(size_t)L,f); }
+        be16(fe,(unsigned)nb);
+        for(int i=0;i<nb;i++){ int L=(int)strlen(bb[i]); be16(fe,(unsigned)L); fwrite(bb[i],1,(size_t)L,fe); }
         printf("books: %d BOOK.DAT entries\n", nb); }
       /* GYPSY SCENE (character-creation "casting", PALETTES.INT 5). To run nuvie's EXACT pour
        * animation (create_character gypsy_vial_anim), we ship the RAW GYPSY.SHP shape table so
@@ -1370,31 +1382,31 @@ int main(int argc, char **argv)
        * [768 pal5][u16 gw][u16 gh][bg][u16 sw][u16 sh][scroll][u16 nsh] + nsh x [u16 w][u16 h][w*h]. */
       { static const ishape_t GYP[] = { {0,0,-20} };    /* bg only: gypsy + empty table (no vials/jar) */
         uint8_t p5[768]; if(!load_intpal(dir,5,p5)) memset(p5,0,sizeof p5);
-        fwrite(p5,1,768,f);
+        fwrite(p5,1,768,fe);
         static uint8_t gsc[320*200]; memset(gsc,0,sizeof gsc);
         compose_shapes(dir,"GYPSY.SHP",GYP,(int)(sizeof GYP/sizeof GYP[0]),gsc,320,200);
-        be16(f,320); be16(f,200); fwrite(gsc,1,sizeof gsc,f);
+        be16(fe,320); be16(fe,200); fwrite(gsc,1,sizeof gsc,fe);
         int sw=0,sh=0; uint8_t*sc=load_shape(dir,"BLOCKS.SHP",3,&sw,&sh);
-        be16(f,(unsigned)sw); be16(f,(unsigned)sh);
-        if(sc&&sw>0&&sh>0) fwrite(sc,1,(size_t)sw*sh,f); free(sc);
+        be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
+        if(sc&&sw>0&&sh>0) fwrite(sc,1,(size_t)sw*sh,fe); free(sc);
         /* RAW GYPSY.SHP shape table 0..GYP_NSH-1: [u16 nsh] + per shape [u16 w][u16 h][w*h idx0-
          * transparent]. The engine composites the casting scene + the pour animation from these
          * (jar 16, jar_liquid 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour). */
-        { enum { GYP_NSH = 200 }; be16(f, GYP_NSH); int nshipped=0;
+        { enum { GYP_NSH = 200 }; be16(fe, GYP_NSH); int nshipped=0;
           for(int i=0;i<GYP_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"GYPSY.SHP",i,&w,&h);
-            if(sp&&w>0&&h>0){ be16(f,(unsigned)w); be16(f,(unsigned)h); fwrite(sp,1,(size_t)w*h,f); nshipped++; }
-            else { be16(f,0); be16(f,0); }
+            if(sp&&w>0&&h>0){ be16(fe,(unsigned)w); be16(fe,(unsigned)h); fwrite(sp,1,(size_t)w*h,fe); nshipped++; }
+            else { be16(fe,0); be16(fe,0); }
             free(sp); }
           printf("gypsy scene: bg 320x200 pal5 + scroll BLOCKS.SHP[3] %dx%d + %d/%d raw shapes (nuvie pour animation)\n", sw,sh,nshipped,GYP_NSH); } }
       /* WOODS forest-path lead-in (PALETTES.INT 4): the approach to the gypsy's wagon. Panorama
        * = WOODS.SHP[0] (320 wide) + WOODS.SHP[1] (191) @x=320 = 511 wide; the engine pans it
        * left (nuvie scroll_lounge-style). [768 pal4][u16 ww][u16 wh][ww*wh]. */
       { uint8_t p4[768]; if(!load_intpal(dir,4,p4)) memset(p4,0,sizeof p4);
-        fwrite(p4,1,768,f);
+        fwrite(p4,1,768,fe);
         static uint8_t wpano[511*200]; memset(wpano,0,sizeof wpano);
         static const ishape_t WD[]={{0,0,0},{1,320,0}};
         compose_shapes(dir,"WOODS.SHP",WD,2,wpano,511,200);
-        be16(f,511); be16(f,200); fwrite(wpano,1,sizeof wpano,f);
+        be16(fe,511); be16(fe,200); fwrite(wpano,1,sizeof wpano,fe);
         printf("gypsy woods: WOODS.SHP panorama 511x200 pal4\n"); }
       /* STORM WINDOW scene (INTRO_2.SHP, PALETTES.INT 2 — nuvie window_sequence): a curtained,
        * mullioned window onto a stormy pine forest. The static scene (sky 1 + trees 8 + ground
@@ -1403,19 +1415,19 @@ int main(int argc, char **argv)
        * [768 pal2][u16 bw][u16 bh][bw*bh base] [u8 nbolt] + nbolt x [u16 w][u16 h][w*h]
        * [u8 nstrike][u16 sx][u16 sy] + nstrike x [u16 w][u16 h][w*h]. */
       { uint8_t p2[768]; if(!load_intpal(dir,2,p2)) memset(p2,0,sizeof p2);
-        fwrite(p2,1,768,f);
+        fwrite(p2,1,768,fe);
         static uint8_t sbase[320*200]; memset(sbase,0,sizeof sbase);
         static const ishape_t WIN[]={{1,0,0},{8,0,0},{10,0,76},{26,57,0},{28,0,0}};
         compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
-        be16(f,320); be16(f,200); fwrite(sbase,1,sizeof sbase,f);
+        be16(fe,320); be16(fe,200); fwrite(sbase,1,sizeof sbase,fe);
         static const int BOLT[]={11,12,13,14,15,16,17,18}; int nbolt=(int)(sizeof BOLT/sizeof BOLT[0]);
-        fputc(nbolt,f);
+        fputc(nbolt,fe);
         for(int k=0;k<nbolt;k++){ int w=0,h=0; uint8_t*bp=load_shape(dir,"INTRO_2.SHP",BOLT[k],&w,&h);
-          be16(f,(unsigned)w); be16(f,(unsigned)h); if(bp&&w>0) fwrite(bp,1,(size_t)w*h,f); free(bp); }
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(bp&&w>0) fwrite(bp,1,(size_t)w*h,fe); free(bp); }
         static const int STK[]={19,20,21,22,23}; int nstk=(int)(sizeof STK/sizeof STK[0]);
-        fputc(nstk,f); be16(f,140); be16(f,6);       /* strike top-left (tunable) */
+        fputc(nstk,fe); be16(fe,140); be16(fe,6);       /* strike top-left (tunable) */
         for(int k=0;k<nstk;k++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"INTRO_2.SHP",STK[k],&w,&h);
-          be16(f,(unsigned)w); be16(f,(unsigned)h); if(sp&&w>0) fwrite(sp,1,(size_t)w*h,f); free(sp); }
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(sp&&w>0) fwrite(sp,1,(size_t)w*h,fe); free(sp); }
         /* FOREST REVEAL (nuvie window_sequence tail @685): after the 4 storm pages the window
          * frame slides off to reveal the FRAMELESS storm forest (same sky/trees/ground, no glass/
          * frame — the "into the forest, down the path, to the stones" bg). Ship the forest base
@@ -1424,30 +1436,30 @@ int main(int argc, char **argv)
         static uint8_t fbase[320*200]; memset(fbase,0,sizeof fbase);
         static const ishape_t FOR[]={{1,0,0},{8,0,0},{10,0,76}};
         compose_shapes(dir,"INTRO_2.SHP",FOR,(int)(sizeof FOR/sizeof FOR[0]),fbase,320,200);
-        be16(f,320); be16(f,200); fwrite(fbase,1,sizeof fbase,f);
+        be16(fe,320); be16(fe,200); fwrite(fbase,1,sizeof fbase,fe);
         static uint8_t wov[320*200]; memset(wov,0,sizeof wov);
         static const ishape_t WOV[]={{26,57,0},{28,0,0}};
         compose_shapes(dir,"INTRO_2.SHP",WOV,(int)(sizeof WOV/sizeof WOV[0]),wov,320,200);
-        be16(f,320); be16(f,200); fwrite(wov,1,sizeof wov,f);
+        be16(fe,320); be16(fe,200); fwrite(wov,1,sizeof wov,fe);
         printf("storm window: base 320x200 pal2 + %d bolts + %d strikes + forest reveal (bg+frame overlay)\n", nbolt, nstk); }
       /* STONES obsidian-pickup assets (INTRO_3.SHP, palette 3 — nuvie stones_sequence): the hand
        * (img 1) rises into the circle to grab the obsidian stone (img 3); afterwards the stone is
        * gone (bg img 5). The engine animates the hand rising over the stones bg. Layout:
        * [u16 hw][u16 hh][hand][u16 ow][u16 oh][obs][u16 bw][u16 bh][bg5]. */
       { int hw=0,hh=0; uint8_t*hand=load_shape(dir,"INTRO_3.SHP",1,&hw,&hh);
-        be16(f,(unsigned)hw); be16(f,(unsigned)hh); if(hand&&hw>0) fwrite(hand,1,(size_t)hw*hh,f); free(hand);
+        be16(fe,(unsigned)hw); be16(fe,(unsigned)hh); if(hand&&hw>0) fwrite(hand,1,(size_t)hw*hh,fe); free(hand);
         int ow=0,oh=0; uint8_t*obs=load_shape(dir,"INTRO_3.SHP",3,&ow,&oh);
-        be16(f,(unsigned)ow); be16(f,(unsigned)oh); if(obs&&ow>0) fwrite(obs,1,(size_t)ow*oh,f); free(obs);
+        be16(fe,(unsigned)ow); be16(fe,(unsigned)oh); if(obs&&ow>0) fwrite(obs,1,(size_t)ow*oh,fe); free(obs);
         int bw=0,bh=0; uint8_t*bg5=load_shape(dir,"INTRO_3.SHP",5,&bw,&bh);
-        be16(f,(unsigned)bw); be16(f,(unsigned)bh); if(bg5&&bw>0) fwrite(bg5,1,(size_t)bw*bh,f); free(bg5);
+        be16(fe,(unsigned)bw); be16(fe,(unsigned)bh); if(bg5&&bw>0) fwrite(bg5,1,(size_t)bw*bh,fe); free(bg5);
         printf("stones pickup: hand %dx%d + obsidian %dx%d + bg5 %dx%d\n", hw,hh, ow,oh, bw,bh); }
       /* AVATAR-into-gate climax (INTRO_3.SHP frames 7..26 — nuvie stones_sequence tail): the Avatar
        * walks up into the risen moongate and dissolves. The source shapes are full 320x200 canvases
        * that are ~empty (index 0 = transparent) except for the small figure, so each is CROPPED to
        * its non-zero bounding box + a per-frame (ox,oy) offset — else 20x64000B blows the fast pool.
        * Engine draws each at (ox-2, oy + 0x12 - 3*i). [u8 nav] + nav x [u16 ox][u16 oy][u16 w][u16 h][w*h]. */
-      { int nav=20; long apre=ftell(f);
-        fputc(nav,f);
+      { int nav=20; long apre=ftell(fe);
+        fputc(nav,fe);
         long tot=0;
         for(int k=0;k<nav;k++){ int w=0,h=0; uint8_t*ap=load_shape(dir,"INTRO_3.SHP",7+k,&w,&h);
           int x0=w,y0=h,x1=-1,y1=-1;
@@ -1455,12 +1467,13 @@ int main(int argc, char **argv)
             if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
           if(x1<0){ x0=y0=0; x1=y1=0; }                       /* empty frame -> 1x1 at (0,0) */
           int cw=x1-x0+1, ch=y1-y0+1;
-          be16(f,(unsigned)x0); be16(f,(unsigned)y0); be16(f,(unsigned)cw); be16(f,(unsigned)ch);
-          for(int y=0;y<ch;y++) if(ap) fwrite(ap+(size_t)(y0+y)*w+x0,1,(size_t)cw,f);
-                                else { uint8_t z=0; fwrite(&z,1,1,f); }
+          be16(fe,(unsigned)x0); be16(fe,(unsigned)y0); be16(fe,(unsigned)cw); be16(fe,(unsigned)ch);
+          for(int y=0;y<ch;y++) if(ap) fwrite(ap+(size_t)(y0+y)*w+x0,1,(size_t)cw,fe);
+                                else { uint8_t z=0; fwrite(&z,1,1,fe); }
           tot+=(long)cw*ch; free(ap); }
-        printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(f)-apre); } }
-    }   /* end front-end/intro art block (slim ST pack omits it) */
+        printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(fe)-apre); } }
+    }   /* end front-end/intro art block */
+    if(fe!=f) fclose(fe);   /* slim: close the separate U6FE.PAK */
 
     long o_lowcolor = ftell(f);   /* footprint: front-end/intro art ends here, low-colour starts */
     printf("footprint: core+gameplay %ld KB | front-end/intro art %ld KB (U6WU..U6WV)\n",
