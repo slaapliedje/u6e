@@ -278,6 +278,16 @@ static const uint8_t *g_convpal;            /* nconvpal x (48 pal + 256 lut), in
 #define CYC_MAX 4
 static int            g_lc_ncyc;            /* number of reserved cycle ranges (0 = none)         */
 static uint8_t        g_lc_cyc[CYC_MAX][2]; /* per range: {first_slot, nslots} in the 16          */
+/* STE 4096-colour variant (U6WS): parallel 16-colour palettes snapped to the STE's 4-bit gamut. Same
+ * centroids + LUTs as the 3-bit ST palettes above; on an STE we hand these (4-bit levels) to the
+ * backend instead. g_is_ste gates the choice at every set-palette site. (docs/design/palette_lowcolor.md) */
+static int            g_have_ste;           /* 1 = pack carries a U6WS STE palette section          */
+static int            g_is_ste;             /* 1 = STE hardware AND U6WS present -> use 4-bit path   */
+static uint8_t        g_lc_pal4[48];        /* game 16, STE 4-bit levels                             */
+static const uint8_t *g_lcx_pal4;           /* 2 bands x 48, STE 4-bit (into the pak)                */
+static const uint8_t *g_convpal4;           /* nconvpal x 48, STE 4-bit (into the pak)               */
+/* pick the palette to hand the backend for the current hardware: 4-bit STE array when g_is_ste. */
+#define LCPAL(p3,p4)  (g_is_ste ? (p4) : (p3))
 /* front-end base 16+LUT (the game palette carried in U6FE) — restored between cutscene scenes on ST.
  * Points into the streamed U6FE, valid only during the front-end phase (freed after). */
 static const uint8_t *g_fe_base_lc;
@@ -2398,15 +2408,16 @@ static void sync_inv_out(void)
 static void conv_palette_enter(int pidx)
 {
     if(g_nconvpal>0 && pidx>=0 && pidx<g_nconvpal){
-        const uint8_t *base=g_convpal+(int32_t)pidx*(48+256);
-        rdr_set_lowcolor(base, base+48);
+        const uint8_t *base=g_convpal+(int32_t)pidx*(48+256);   /* 3-bit pal + shared 256->16 LUT */
+        const uint8_t *pal = (g_is_ste && g_convpal4) ? g_convpal4+(int32_t)pidx*48 : base;   /* STE 4-bit */
+        rdr_set_lowcolor(pal, base+48);
     }
 }
 static void conv_palette_leave(void)
 {
     if(!g_have_lowcolor) return;
-    rdr_set_lowcolor(g_lc_pal, g_lc_lut);
-    if(g_lcx_nb>=2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, g_lcx_pal, g_lcx_lut);
+    rdr_set_lowcolor(LCPAL(g_lc_pal, g_lc_pal4), g_lc_lut);
+    if(g_lcx_nb>=2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, LCPAL(g_lcx_pal, g_lcx_pal4), g_lcx_lut);
 }
 
 static void talk(int id)
@@ -3015,15 +3026,16 @@ static void cycle_palette(void)
      * the 16 to the backend (it updates band 0 = the map). Guard on !g_talking: a conversation
      * palette is active then and has NO reserved slots. (docs/design/palette_lowcolor.md) */
     if(g_have_lowcolor && g_lc_ncyc && !g_talking){
-        uint8_t cur[48]; memcpy(cur, g_lc_pal, 48);
+        const uint8_t *basep = LCPAL(g_lc_pal, g_lc_pal4);   /* rotate the STE 4-bit game 16 when on STE */
+        uint8_t cur[48]; memcpy(cur, basep, 48);
         for(int r=0;r<g_lc_ncyc;r++){
             int first=g_lc_cyc[r][0], nsl=g_lc_cyc[r][1];
             if(nsl<2 || first+nsl>16) continue;
             for(int k=0;k<nsl;k++){
                 int src=first + ((k + g_cyc_phase) % nsl);
-                cur[(first+k)*3+0]=g_lc_pal[src*3+0];
-                cur[(first+k)*3+1]=g_lc_pal[src*3+1];
-                cur[(first+k)*3+2]=g_lc_pal[src*3+2];
+                cur[(first+k)*3+0]=basep[src*3+0];
+                cur[(first+k)*3+1]=basep[src*3+1];
+                cur[(first+k)*3+2]=basep[src*3+2];
             }
         }
         rdr_lowcolor_cycle(cur);
@@ -4221,6 +4233,16 @@ int main(void)
                     ap=q+(int32_t)nc*2;
                 }
             }
+            /* STE 4096-colour palettes (U6WS): [4 "U6WS"][48 game4][2*48 band4][u16 nconv][nconv*48 conv4]
+             * — 4-bit companions of the U6WW/U6WX/U6WY palettes (share their LUTs). Used only on STE. */
+            if(ap+6+48+2*48<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='S'){
+                const uint8_t *q=ap+4;
+                for(int i=0;i<48;i++) g_lc_pal4[i]=q[i];  q+=48;   /* game 16, 4-bit */
+                g_lcx_pal4=q; q+=2*48;                             /* 2 bands, 4-bit (into the pak) */
+                int nc=(q[0]<<8)|q[1]; q+=2;
+                if(nc>0 && q+(int32_t)nc*48<=pak+n){ g_convpal4=q; q+=(int32_t)nc*48; }
+                g_have_ste=1; ap=q;
+            }
         }
     }
 
@@ -4268,12 +4290,17 @@ int main(void)
     plat_input_init();                              /* fast key auto-repeat for smooth movement */
 #endif
     rdr_set_palette(palette, 256);
-    /* Hand the shifter backend the pack's host-quantised 16-colour palette + 256->16 LUT (U6WW).
-     * No-op on the 256-colour TT/Falcon backends; on the ST it activates the optimised 16. */
-    if (g_have_lowcolor) rdr_set_lowcolor(g_lc_pal, g_lc_lut);
+    /* STE 4096-colour variant: if the shifter is an STE AND the pack carries U6WS 4-bit palettes,
+     * switch the backend to the 4-bit register format and hand it the 4-bit arrays from here on (the
+     * front-end already ran in 3-bit, which an STE displays fine via backward compatibility). */
+    g_is_ste = (caps.video == VIDEO_STE) && g_have_ste;
+    rdr_set_ste_mode(g_is_ste);
+    /* Hand the shifter backend the pack's host-quantised 16-colour palette + 256->16 LUT (U6WW, or its
+     * U6WS 4-bit companion on STE). No-op on the 256-colour TT/Falcon backends. */
+    if (g_have_lowcolor) rdr_set_lowcolor(LCPAL(g_lc_pal, g_lc_pal4), g_lc_lut);
     /* ...then the band rasters (U6WX): >16 on-screen colours via a Timer-B palette split ("cheat
      * past 16 colours"). No-op on TT/Falcon; on the ST it installs the raster (see rdr_st.c). */
-    if (g_lcx_nb >= 2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, g_lcx_pal, g_lcx_lut);
+    if (g_lcx_nb >= 2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, LCPAL(g_lcx_pal, g_lcx_pal4), g_lcx_lut);
     g_basepal=palette;                              /* base for colour cycling (CLUT rotation) */
     g_bb=rdr_backbuffer(); g_W=rdr_width();
 

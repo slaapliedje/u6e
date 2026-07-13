@@ -41,8 +41,26 @@ static uint8_t  *g_screen2;           /* planar screen B (double-buffer flip)  *
 static uint8_t  *g_vis;               /* currently DISPLAYED buffer            */
 static int       g_flip;              /* double-buffer (tear-free) mode active */
 
-static uint16_t  g_stpal[16];         /* ST 0x0RGB hardware palette (3-bit/ch) */
+static uint16_t  g_stpal[16];         /* ST/STE hardware palette words (packed by st_reg)      */
 static uint8_t   g_lut[256];          /* active 256->16 remap (from U6WW)      */
+
+/* STE 4096-colour mode (M7): a plain ST has 3 bits/channel (0..7), an STE 4 (0..15). When the engine
+ * hands us STE 4-bit palettes (U6WS) on STE hardware it sets this; st_reg() then packs the 4-bit level
+ * into the STE colour-register format, where each nibble is ROTATED so bit 3 holds the intensity LSB
+ * ([2:0]=high 3 bits, [3]=LSB) — this is what keeps ST palettes forward-compatible on the STE. On a
+ * plain ST (g_is_ste=0) we pack the classic 3-bit 0x0RGB. Setpalette writes these words either way. */
+static int       g_is_ste;            /* 1 = pack 4-bit STE register format; 0 = 3-bit ST      */
+void rdr_set_ste_mode(int on){ g_is_ste = on ? 1 : 0; }
+int  rdr_is_ste(void){ return g_is_ste; }
+static inline uint16_t st_reg(unsigned r, unsigned g, unsigned b)
+{
+    if (g_is_ste){
+        #define STE_NIB(v) ((unsigned)((((v)&15u)>>1) | (((v)&1u)<<3)))   /* 4-bit level -> STE nibble */
+        return (uint16_t)((STE_NIB(r) << 8) | (STE_NIB(g) << 4) | STE_NIB(b));
+        #undef STE_NIB
+    }
+    return (uint16_t)(((r & 7u) << 8) | ((g & 7u) << 4) | (b & 7u));      /* classic ST 0x0RGB, 3-bit/ch */
+}
 
 /* --- band rasters (U6WX): up to MAXBANDS horizontal bands, each its own palette + LUT. The
  * Timer-B handler reloads the shifter registers at each band boundary; present() picks each
@@ -136,16 +154,14 @@ uint8_t *rdr_backbuffer(void) { return g_back; }
  * step — docs/design/palette_lowcolor.md.) */
 void rdr_set_palette(const uint8_t *rgb6, int n) { (void)rgb6; (void)n; }
 
-/* Load the pack's host-quantised low-colour data: pal16 = 16 x {r,g,b} ST 3-bit levels (pack
- * straight into a colour register), lut256 = the 256->16 remap used at present time. */
+/* Load the pack's host-quantised low-colour data: pal16 = 16 x {r,g,b} levels (3-bit on ST, 4-bit
+ * on STE per g_is_ste; st_reg packs the right register format), lut256 = the 256->16 remap. */
 void rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256)
 {
     if (lut256) memcpy(g_lut, lut256, 256);
     if (pal16) {
-        for (int i = 0; i < 16; i++) {
-            unsigned r = pal16[i*3+0] & 7, g = pal16[i*3+1] & 7, b = pal16[i*3+2] & 7;
-            g_stpal[i] = (uint16_t)((r << 8) | (g << 4) | b);    /* ST register 0x0RGB, 3-bit/ch */
-        }
+        for (int i = 0; i < 16; i++)
+            g_stpal[i] = st_reg(pal16[i*3+0], pal16[i*3+1], pal16[i*3+2]);
         Setpalette(g_stpal);
     }
     g_nb = 0;                                        /* single band: every row uses g_lut */
@@ -240,10 +256,8 @@ void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const
 
     for (int b = 0; b < nb; b++) {
         g_band_y0[b] = y0[b];
-        for (int i = 0; i < 16; i++) {
-            unsigned r = pal[b*48+i*3+0]&7, g = pal[b*48+i*3+1]&7, bl = pal[b*48+i*3+2]&7;
-            g_band_reg[b][i] = (uint16_t)((r<<8)|(g<<4)|bl);
-        }
+        for (int i = 0; i < 16; i++)
+            g_band_reg[b][i] = st_reg(pal[b*48+i*3+0], pal[b*48+i*3+1], pal[b*48+i*3+2]);
         memcpy(g_band_lut[b], lut + (int32_t)b*256, 256);
     }
     for (int b = 0; b < nb; b++) {                  /* row -> band LUT for present-time c2p */
@@ -274,8 +288,7 @@ void rdr_lowcolor_cycle(const uint8_t *pal16)
 {
     if (!pal16) return;
     for (int i = 0; i < 16; i++) {
-        unsigned r = pal16[i*3+0] & 7, g = pal16[i*3+1] & 7, b = pal16[i*3+2] & 7;
-        uint16_t v = (uint16_t)((r << 8) | (g << 4) | b);
+        uint16_t v = st_reg(pal16[i*3+0], pal16[i*3+1], pal16[i*3+2]);
         g_stpal[i] = v;
         if (g_nb >= 2) g_band_reg[0][i] = v;        /* band 0 = the map; the VBL reloads it next frame */
     }

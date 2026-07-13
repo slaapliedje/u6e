@@ -704,10 +704,16 @@ static int colors_from_freq(const long freq[256], const uint8_t *palb, CCol *col
  * levels the ST packs straight into a colour register) + lut[256] (nearest of the 16 to each U6PAL
  * colour). snap[16] returns the snapped RGB8 palette (for the RMS metric). Returns the box count. */
 static int quantize_colors(CCol *col, int ncol, const uint8_t *palb,
-                           uint8_t pal_lvl[48], uint8_t lut[256], CCol snap[16], int nslots)
+                           uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256], CCol snap[16], int nslots)
 {
     if (nslots > 16) nslots = 16; if (nslots < 1) nslots = 1;
     CCol pal[16]; int npal=q_median_cut(col,ncol,nslots,pal);
+    /* STE 4-bit levels (optional): snap the SAME centroids to the 4-bit gamut (0..15), BEFORE the
+     * 3-bit snap below mutates pal. The ST 3-bit and STE 4-bit palettes share centroids + LUT (the
+     * nearest box is the same at either precision); only the displayed intensity is finer on STE. */
+    if (pal_lvl4) for (int i=0;i<16;i++){ int r=0,g=0,b=0;
+        if(i<npal){ r=(pal[i].r*15+127)/255; g=(pal[i].g*15+127)/255; b=(pal[i].b*15+127)/255; }
+        pal_lvl4[i*3]=(uint8_t)r; pal_lvl4[i*3+1]=(uint8_t)g; pal_lvl4[i*3+2]=(uint8_t)b; }
     q_snap_pal(pal,npal,3);
     for (int i=0;i<16;i++){ int r=0,g=0,b=0;               /* slots >= npal stay black (a cycle-reserve pass may overwrite them) */
         if(i<npal){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
@@ -725,17 +731,17 @@ static int quantize_colors(CCol *col, int ncol, const uint8_t *palb,
  * (16-nres) boxes (call quantize_colors with nslots=16-nres) so no non-ramp pixel lands on these
  * slots. (docs/formats/palette_cycling.md; the ST counterpart of the engine's 256-colour CYCLE[].) */
 static void reserve_cycle(uint8_t pal_lvl[48], uint8_t lut[256], const uint8_t *palb,
-                          int nres, int src_lo, int src_len)
+                          int nres, int src_lo, int src_len, int maxlvl)
 {
     int base = 16 - nres;
     for (int s=0; s<nres; s++){
         int si = src_lo + (s*src_len + src_len/2)/nres;          /* centre-sample the ramp */
         if (si >= src_lo+src_len) si = src_lo+src_len-1;
-        pal_lvl[(base+s)*3+0]=(uint8_t)((RGB6TO8(palb[si*3+0])*7+127)/255);
-        pal_lvl[(base+s)*3+1]=(uint8_t)((RGB6TO8(palb[si*3+1])*7+127)/255);
-        pal_lvl[(base+s)*3+2]=(uint8_t)((RGB6TO8(palb[si*3+2])*7+127)/255);
+        pal_lvl[(base+s)*3+0]=(uint8_t)((RGB6TO8(palb[si*3+0])*maxlvl+127)/255);   /* maxlvl = 7 (ST) or 15 (STE) */
+        pal_lvl[(base+s)*3+1]=(uint8_t)((RGB6TO8(palb[si*3+1])*maxlvl+127)/255);
+        pal_lvl[(base+s)*3+2]=(uint8_t)((RGB6TO8(palb[si*3+2])*maxlvl+127)/255);
     }
-    for (int i=0; i<src_len; i++)                                /* source ramp index -> reserved slot */
+    if (lut) for (int i=0; i<src_len; i++)                       /* source ramp index -> reserved slot */
         lut[src_lo+i] = (uint8_t)(base + (i*nres)/src_len);
 }
 
@@ -753,7 +759,7 @@ static double quant_rms(const long freq[256], const uint8_t *palb, const uint8_t
 /* U6WW single global palette: quantise the whole 2048-tile set (usage-weighted, transparent 255
  * excluded) to the scene-neutral optimised 16. Fills pal_lvl[48] + lut[256]; returns weighted RMS. */
 static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
-                             uint8_t pal_lvl[48], uint8_t lut[256])
+                             uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
@@ -763,8 +769,9 @@ static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
      * pin anyway, and let non-fire pixels land on the (rotating) reserved slots. */
     for (int i=ST_CYC_LO;i<ST_CYC_LO+ST_CYC_LEN;i++) freq[i]=0;
     static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
-    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap,16-ST_CYC_SLOTS);
-    reserve_cycle(pal_lvl,lut,palb,ST_CYC_SLOTS,ST_CYC_LO,ST_CYC_LEN);   /* fire -> slots 13..15 */
+    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,pal_lvl4,lut,snap,16-ST_CYC_SLOTS);
+    reserve_cycle(pal_lvl, lut, palb,ST_CYC_SLOTS,ST_CYC_LO,ST_CYC_LEN,7);       /* fire -> slots 13..15, 3-bit + LUT */
+    if(pal_lvl4) reserve_cycle(pal_lvl4,NULL,palb,ST_CYC_SLOTS,ST_CYC_LO,ST_CYC_LEN,15); /* STE 4-bit fire slots (LUT shared) */
     double rms=quant_rms(freq,palb,lut,snap);
     long wsum=0; for (int i=0;i<256;i++) wsum+=freq[i];
     printf("lowcolor (U6WW): optimised %d-colour ST palette from %d used colours, %ld px; weighted RMS %.2f "
@@ -781,14 +788,14 @@ static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
  * command bar renders in icon-optimised colours (and band 0 stops spending slots on icon-only hues).
  * SCENE-NEUTRAL: this content is identical in every scene, so it never hurts other maps. */
 static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint8_t *palb,
-                               uint8_t pal_lvl[48], uint8_t lut[256])
+                               uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     for (int y=182;y<200;y++) for (int x=0;x<320;x++){ int c=paper[y*320+x]; if(c!=255) freq[c]++; }
     for (int t=400;t<410;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
         for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
     static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
-    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap,16);   /* command bar has no cycling ramp */
+    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,pal_lvl4,lut,snap,16);   /* command bar has no cycling ramp */
     long wsum=0; for (int i=0;i<256;i++) wsum+=freq[i];
     printf("lowcolor (U6WX band1): command bar 16 from icons 400-409 + parchment, %d colours, %ld px; RMS %.2f\n",
            ncol, wsum, quant_rms(freq,palb,lut,snap));
@@ -825,7 +832,8 @@ static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, ui
  * panel). Indexed EXACTLY as the engine loads portraits: idx<98 -> PORTRAIT.A[idx], else B[idx-98].
  * [4 "U6WY"][u16 nport][nport x (48 pal 3-bit levels + 256 lut)]. */
 static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, const uint8_t *palb,
-                                const uint8_t *portA, long portAlen, const uint8_t *portB, long portBlen)
+                                const uint8_t *portA, long portAlen, const uint8_t *portB, long portBlen,
+                                uint8_t *conv4, int *nport_out)   /* conv4 (nport*48) = STE 4-bit companions for U6WS */
 {
     static long terr[256], parch[256]; for (int i=0;i<256;i++){ terr[i]=0; parch[i]=0; }
     for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
@@ -863,9 +871,12 @@ static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, 
             made++;
         }
         static CCol col[256]; int nc=colors_from_freq(comb,palb,col); CCol snap[16];
-        quantize_colors(col,nc,palb,pal_lvl,lut,snap,16);   /* portrait palette: no cycling ramp */
+        uint8_t pal4[48];
+        quantize_colors(col,nc,palb,pal_lvl,pal4,lut,snap,16);   /* portrait palette: no cycling ramp */
         fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
+        if (conv4) memcpy(conv4+(size_t)idx*48, pal4, 48);        /* STE 4-bit companion for U6WS */
     }
+    if (nport_out) *nport_out = nport;
     printf("conv palettes (U6WY): %d slots, %d with portraits (PORTRAIT.A=%d, PORTRAIT.B=%d)\n",
            nport, made, cA, cB);
 }
@@ -1297,8 +1308,8 @@ int main(int argc, char **argv)
      * core slim pak gets a "NOFE" marker in its place. U6FE = [4 "U6FE"][48 low-colour palette]
      * [256 lut][2048 font][front-end block] — the palette/lut let the ST render the front-end in the
      * game's optimised 16 while its core (U6WW) isn't loaded yet. Computed once, reused for U6WW. */
-    static uint8_t g_lc_pal[48], g_lc_lut[256];
-    build_lowcolor(&ts, palb, g_lc_pal, g_lc_lut);   /* the game 16 + 256->16 LUT (also shipped as U6WW) */
+    static uint8_t g_lc_pal[48], g_lc_pal4[48], g_lc_lut[256];   /* g_lc_pal4 = STE 4-bit game 16 (U6WS) */
+    build_lowcolor(&ts, palb, g_lc_pal, g_lc_pal4, g_lc_lut);   /* the game 16 + 256->16 LUT (also shipped as U6WW) */
     FILE *fe = f;
     if(slim){ fwrite("NOFE",1,4,f);
         fe = fopen(fe_path,"wb");
@@ -1552,6 +1563,9 @@ int main(int argc, char **argv)
      * at EOF) are unaffected, and guarded by a "U6WW" magic so the reader detects desync.
      * [4 "U6WW"][16 x {u8 r,u8 g,u8 b} ST 3-bit levels][256 x u8 lut]. The shifter backend
      * (rdr_st) consumes it; TT/Falcon/vcard ignore it (they show all 256 VGA colours). */
+    /* STE 4-bit companion palettes (hoisted so U6WS can emit them after U6WY/U6WZ): band 0 = the game
+     * 4-bit palette; band 1 = the command bar 4-bit; conv4 = the per-portrait 4-bit palettes. */
+    static uint8_t bpal4[2*48]; static uint8_t g_conv4[256*48]; int g_nconv4=0;
     { uint8_t *pal_lvl=g_lc_pal, *lut=g_lc_lut;   /* computed once above (also shipped in U6FE) */
       fwrite("U6WW",1,4,f); fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
 
@@ -1562,12 +1576,13 @@ int main(int argc, char **argv)
        * [4 "U6WX"][u8 nb][nb u8 y0][nb*48 pal 3-bit levels][nb*256 lut]. */
       { static uint8_t bpal[2*48], blut[2*256]; uint8_t y0[2]={0,182};
         memcpy(bpal, pal_lvl, 48); memcpy(blut, lut, 256);            /* band 0 = the U6WW map palette */
-        build_command_band(&ts, paper, palb, bpal+48, blut+256);     /* band 1 = command bar          */
+        memcpy(bpal4, g_lc_pal4, 48);                                 /* band 0 4-bit = the game 4-bit  */
+        build_command_band(&ts, paper, palb, bpal+48, bpal4+48, blut+256);  /* band 1 = command bar (3+4-bit) */
         fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); } }
 
     /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up.
-     * MUST precede U6WZ — the engine parses WW, WX, WY, WZ in that order. */
-    build_conv_palettes(f, &ts, paper, palb, pra, prn, prb, prbn);
+     * MUST precede U6WZ — the engine parses WW, WX, WY, WZ, WS in that order. Also fills g_conv4. */
+    build_conv_palettes(f, &ts, paper, palb, pra, prn, prb, prbn, g_conv4, &g_nconv4);
 
     /* COLOUR-CYCLING metadata (U6WZ): which reserved ST-16 slots the engine rotates each tick to
      * animate a U6PAL ramp on 16-colour hardware. The slots are identical in band 0 (the map), which
@@ -1575,6 +1590,16 @@ int main(int argc, char **argv)
      * ST_CYC_SLOTS slots (build_lowcolor's reserve_cycle). (palette_cycling.md.) */
     { fwrite("U6WZ",1,4,f); fputc(1,f); fputc((uint8_t)(16-ST_CYC_SLOTS),f); fputc((uint8_t)ST_CYC_SLOTS,f);
       printf("lowcolor (U6WZ): 1 cycle range -> ST slots %d..%d (fire 224-231)\n", 16-ST_CYC_SLOTS, 15); }
+
+    /* STE 4096-colour variant (U6WS): the STE has 4 bits/channel (vs the ST's 3), so it ships a
+     * PARALLEL set of 16-colour palettes snapped to the finer 4-bit gamut — same centroids + LUT as
+     * the 3-bit ST palettes (they share the U6WW/U6WX/U6WY LUTs), just finer intensity. The backend
+     * uses these (STE register format) on an STE; the plain ST ignores U6WS. Levels are raw 0..15 (the
+     * rdr_st STE rotated-LSB packing is applied at set-palette time). Order mirrors U6WW/U6WX/U6WY:
+     * [4 "U6WS"][48 game4][2*48 band4][u16 nconv][nconv*48 conv4]. (docs/design/palette_lowcolor.md) */
+    { fwrite("U6WS",1,4,f); fwrite(g_lc_pal4,1,48,f); fwrite(bpal4,1,2*48,f);
+      be16(f,(unsigned)g_nconv4); fwrite(g_conv4,1,(size_t)g_nconv4*48,f);
+      printf("lowcolor (U6WS): STE 4-bit palettes — game + 2 bands + %d conv slots\n", g_nconv4); }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",

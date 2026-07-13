@@ -546,6 +546,31 @@ shot-st-conv: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/CONVPAL.BIN
 	@echo "wrote $(BUILD)/gamest_conv.png (conversation portrait under its U6WY palette)"
 
+# M7 STE 4096-colour variant: same slim pack + PURE-68000 gamest.prg, but on an emulated STE the
+# engine detects VIDEO_STE (cookie _VDO) + the pack's U6WS 4-bit palettes and switches rdr_st to the
+# STE colour-register format (4 bits/channel, rotated-LSB). Captures the default map (shot-ste) and a
+# conversation portrait (shot-ste-conv), where the finer gamut most reduces skin/gradient banding.
+# TOS 2.06 (STE). Compare gamest_ste*.png vs the plain-ST gamest_*.png.
+shot-ste: gamedata-st $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_ste.png
+	-$(HATARI) --machine ste --memsize 4 --monitor rgb --fast-boot on \
+	          --tos '$(TOS_STE)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 8000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_ste.png 2>/dev/null
+	@echo "wrote $(BUILD)/gamest_ste.png (emulated STE, 16 colours from the 4096 gamut)"
+
+shot-ste-conv: gamedata-st $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_ste_conv.png
+	python3 -c "open('$(BUILD)/CONVPAL.BIN','wb').write(bytes([$(CONVPAL_ID) & 255]))"
+	-$(HATARI) --machine ste --memsize 4 --monitor rgb --conout 2 --fast-boot on \
+	          --tos '$(TOS_STE)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 8000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_ste_conv.png 2>/dev/null
+	rm -f $(BUILD)/CONVPAL.BIN
+	@echo "wrote $(BUILD)/gamest_ste_conv.png (STE conversation portrait, 4-bit palette)"
+
 # M7 PER-SCENE palette check (chargen): drive the streamed front-end to a gypsy-parlour chargen
 # sub-screen so the ST activates that scene's OWN 16-colour palette (build_scene_lc, quantized from
 # PALETTES.INT 5 weighted by the scene's pixels) instead of the terrain-16. GYPSY_REQ picks the

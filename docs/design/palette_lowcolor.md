@@ -250,6 +250,30 @@ a small contiguous block of the 16 for each cycling ramp and rotates just those 
 
 TODO: flag scenes needing more cycling slots than fit; water (232–239 / frame-anim) once confirmed.
 
+## STE 4096-colour variant — DONE
+The STE shifter has **4 bits/channel** (16 levels) vs the ST's 3 (8), so the same 16 chosen colours
+land more precisely — most visible where the ST's coarse levels band a gradient (portrait skin, sky).
+We ship a PARALLEL 4-bit palette set rather than touching the validated 3-bit ST palettes:
+
+- **Host** (`mkworld`): `quantize_colors` snaps the SAME median-cut centroids to BOTH gamuts — 3-bit
+  (U6WW/U6WX/U6WY) and 4-bit — and they share the 256→16 LUT (the nearest box is identical at either
+  precision). The 4-bit palettes ship in a new **U6WS** section, order mirroring the 3-bit ones:
+  `[4 "U6WS"][48 game4][2×48 band4][u16 nconv][nconv×48 conv4]`. Levels are raw 0..15.
+- **Backend** (`rdr_st`): `st_reg()` packs the register format per hardware — classic `0x0RGB` (3-bit)
+  on a plain ST, or the STE's **rotated-LSB 4-bit** nibble on an STE: `nibble = (v>>1) | ((v&1)<<3)`
+  (register bits [2:0] = the high 3 bits, bit [3] = the intensity LSB — the STE's ST-compatible layout).
+  `rdr_set_ste_mode(on)` flips it; `rdr_is_ste()` lets the engine choose the array. XBIOS Setpalette
+  writes the STE words directly.
+- **Engine** (`gamedemo`): `g_is_ste = (caps.video==VIDEO_STE) && U6WS-present`, set AFTER the core
+  pack loads. Every gameplay set-site (`LCPAL(p3,p4)` — init map, bands, conv enter/leave, cycle) then
+  hands the backend the 4-bit array. The front-end runs BEFORE this (3-bit), which an STE shows fine via
+  hardware backward-compat (a 3-bit `0x0RGB` reads as an even 4-bit level), so no front-end change.
+- **Detection**: the `_VDO` cookie (`platform/detect.c`, `VIDEO_STE`); a plain ST or a pre-cookie ST
+  stays on the 3-bit path. TT/Falcon ignore U6WS (they show all 256).
+- **Validated** on an emulated 4 MB STE (TOS 2.06): `make shot-ste-conv` — the STE picks up the 4-bit
+  path and renders the conversation portrait correctly (register format proven), with finer skin tones
+  than the plain-ST 3-bit `make shot-st-conv`.
+
 ## Status / remaining
 - [x] Quantiser core: 256→16, ST/STE gamut snap (snap-before-error), remap, RMS metric, QA PNG,
       EGA-16 baseline. `make quantize`.

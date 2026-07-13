@@ -58,6 +58,13 @@ void     rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, c
  * is active. Cheap (16 register writes); call each cycle tick. No-op on 256-colour backends. */
 void     rdr_lowcolor_cycle(const uint8_t *pal16);
 
+/* STE 4096-colour mode (M7): on an STE the shifter has 4 bits/channel (vs the ST's 3). When enabled,
+ * the shifter backend interprets the pal16 arrays it is given as 4-bit levels (0..15) and packs the
+ * STE register format; the engine passes the pack's U6WS 4-bit palettes instead of the 3-bit ones.
+ * rdr_is_ste() lets the engine choose which palette array to hand over. No-op on TT/Falcon. */
+void     rdr_set_ste_mode(int on);
+int      rdr_is_ste(void);
+
 /* Convert the backbuffer to the screen's native layout and display it. */
 void     rdr_present(void);
 

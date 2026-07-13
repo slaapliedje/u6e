@@ -1142,12 +1142,14 @@ Acceptance
 ---
 
 ## M7 — Low-color palette enhancement (HEADLINE FEATURE)
-Status: [~] MOSTLY DONE 2026-07-13 — quantiser + the 4-plane ST shifter backend (rdr_st.c) SHIP and
-        render on a real 4 MB ST; plus BONUS work beyond the original scope: band-palette rasters
-        (>16 on-screen colours), per-portrait conversation palettes, a slim ST pack that boots on a
-        real 4 MB ST, and a streaming memory manager (front-end loaded off HD + freed for gameplay).
-        Colour cycling on ST (fire) is now DONE too (reserved-slot rotation, U6WZ). REMAINING for
-        acceptance: the STE 4096 variant (see below). (docs/design/palette_lowcolor.md)
+Status: [x] DONE 2026-07-13 — quantiser + the 4-plane ST shifter backend (rdr_st.c) SHIP and render on
+        a real 4 MB ST; plus BONUS work beyond the original scope: band-palette rasters (>16 on-screen
+        colours), per-portrait conversation palettes, a slim ST pack that boots on a real 4 MB ST, and a
+        streaming memory manager (front-end loaded off HD + freed for gameplay). Colour cycling on ST
+        (fire, reserved-slot rotation U6WZ) and the STE 4096-colour variant (U6WS 4-bit palettes + STE
+        register format) are both DONE + validated. Remaining low-colour follow-ups (per-context
+        dungeon/town palettes, title-screen polish, water cycling) are deferred, not acceptance-
+        blocking. (docs/design/palette_lowcolor.md)
 Depends on: M6 (pipeline + engine must exist)
 Goal: base ST/STE looks BETTER than the original lazy port.
 
@@ -1224,8 +1226,11 @@ Acceptance
       4 MB ST in the optimised 16 (build/gamest_screen.png; TT-256 vs ST-16 comparison confirms it).
 - [ ] Color cycling still animates after 256→16 reduction. TODO — water/fire CLUT rotation isn't
       wired on the ST yet (rdr_set_palette(256) is a no-op on 16-colour hw); needs reserved slots.
-- [ ] STE variant uses the 4096 gamut for richer selection. TODO — currently ship one ST 3-bit 16;
-      the STE 4-bit (4096) palette + its bit-rotated register format are a separate variant.
+- [x] STE variant uses the 4096 gamut for richer selection — DONE. mkworld ships a PARALLEL 4-bit
+      palette set (U6WS: game + 2 bands + conv, sharing the 3-bit LUTs); rdr_st's st_reg() packs the
+      STE rotated-LSB register format (nibble = (v>>1)|((v&1)<<3)) when the engine detects VIDEO_STE
+      (cookie _VDO) + U6WS and calls rdr_set_ste_mode. The 3-bit ST path is untouched. Validated on an
+      emulated 4 MB STE (TOS 2.06): make shot-ste-conv. (docs/design/palette_lowcolor.md)
 
 ---
 
