@@ -1205,12 +1205,12 @@ Tasks
       perceptual-error metric. DONE for the tilesheet (4-panel VGA|ST16|STE16|EGA16 + RMS);
       extend to per-scene as the per-region palettes land.
 
-FOLLOW-UP (later, user-requested 2026-07-13) — TITLE SCREEN polish on the ST:
-- The "Ultima VI" title/menu renders on the ST via the streamed U6FE game-16, but it can look
-  BETTER — the title art has its own vivid palette that the shared game-16 doesn't flatter. Give
-  the title (and menu) their OWN per-scene ST-16 the same way the intro/chargen scenes now do
-  (build_scene_lc on the TITLES.SHP / MAINMENU.SHP pixels + their palette), swapped in for the
-  menu phase. Low-risk, self-contained; slotted for a later pass.
+TITLE SCREEN polish on the ST (user-requested 2026-07-13) — DONE:
+- The "Ultima VI" title/menu now has its OWN per-scene ST-16 (build_scene_lc on MAINMENU.SHP +
+  TITLES.SHP via U6PAL, shipped in the U6WU front-end block, activated as g_menu_lc each menu frame).
+  The logo renders in its blue metallic gradient instead of the terrain-16's dithered grey; the gold
+  menu-highlight ramp (14 + 33..36) is up-weighted at quantise time to keep its yellow→orange spread.
+  Validated on a 4 MB ST (before/after menu capture). Same mechanism as the intro/chargen scenes.
 
 EXTRA FEATURE (later, optional) — native EGA assets for 16-colour targets:
 - The user noted U6 ships dedicated 16-colour **.EGA** art (MAPTILES.EGA,

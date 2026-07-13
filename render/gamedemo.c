@@ -194,6 +194,7 @@ static int            g_nroof;
 /* front-end art (U6WU): MAINMENU / TITLES shape-0 bitmaps, 8-bit indexed, point into the pak. */
 static const uint8_t *g_menu_pix;  static int g_menu_w, g_menu_h;
 static const uint8_t *g_title_pix; static int g_title_w, g_title_h;
+static const uint8_t *g_menu_lc;   /* per-scene ST 16 + 256->16 LUT for the title screen (into the pak) */
 /* intro cutscene scenes (U6WV): point into the pak (front-end Phase 2). type 0 = static
  * 320x200 hold; type 1 = horizontal pan (w-wide panorama scrolls 1x, fg foreground 2x). */
 #define INTRO_MAX 16
@@ -1498,6 +1499,10 @@ static int run_menu(void)
     int rowh=g_menu_h/nopt;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
     for(;;){
+        /* ST: the title screen has its OWN 16 (U6WU per-scene) — tuned to the logo's metallic gradient
+         * + the gold menu ramp instead of the terrain-16. Re-assert each frame so returning from the
+         * Introduction / Create-a-Character sub-screens (which set their own palettes) restores it. */
+        if(g_menu_lc) rdr_set_lowcolor(g_menu_lc, g_menu_lc+48);
         clear_bb(0);
         if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
         blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
@@ -1508,11 +1513,11 @@ static int run_menu(void)
         int a=key&0xFF, sc=(key>>8)&0xFF; note=0;
         if(sc==0x48) sel=(sel+nopt-1)%nopt;              /* up   */
         else if(sc==0x50) sel=(sel+1)%nopt;              /* down */
-        else if(a==0x1b) return 4;                        /* Esc -> Journey Onward */
+        else if(a==0x1b){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; }  /* Esc -> Journey Onward */
         else if(a==0x0d || a==' '){                        /* select */
-            if(sel==4) return 4;                          /* Journey Onward -> play */
+            if(sel==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; }  /* Journey Onward -> play */
             else if(sel==0) run_intro();                  /* Introduction -> cutscene, then back */
-            else if(sel==1){ run_chargen(); if(g_cc_done) return 4; }  /* Create a Character -> gypsy Q&A, then straight into the new game (authentic U6 flow) */
+            else if(sel==1){ run_chargen(); if(g_cc_done){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; } }  /* Create a Character -> new game */
             else note=1;                                  /* Transfer/Ack -> not yet */
         }
     }
@@ -3885,6 +3890,7 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
         g_menu_pix=ap; ap+=(int32_t)g_menu_w*g_menu_h;
         g_title_w=(ap[0]<<8)|ap[1]; ap+=2; g_title_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_title_pix=ap; ap+=(int32_t)g_title_w*g_title_h;
+        g_menu_lc=ap; ap+=48+256;                       /* per-scene title-screen 16 + LUT (ST; ignored on TT/Falcon) */
         /* intro scenes (U6WV): [u8 n] + n x [u8 type][768 pal][u16 w][u16 h][w*h pix]
          * and, for type 1 (pan), a trailing [u16 fw][fw*h fg] — all point into the pak. */
         g_nintro=*ap++; if(g_nintro>INTRO_MAX) g_nintro=INTRO_MAX;

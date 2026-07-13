@@ -296,9 +296,14 @@ We ship a PARALLEL 4-bit palette set rather than touching the validated 3-bit ST
       256→16 LUT (`build_scene_lc`, quantised from that scene's PALETTES.INT palette weighted by the
       scene's own pixels), streamed in U6FE next to the scene's 6-bit palette; the engine calls
       `rdr_set_lowcolor` on scene entry and restores the base 16 on exit (`g_fe_base_lc`). Covers the
-      intro cutscene scenes + the gypsy/woods/storm chargen scenes. Validated on a real 4 MB ST:
-      `make shot-st-gypsy` (GYPSY_REQ=G/P) — the gypsy parlour renders skin tones, the magenta
-      headscarf, red vest, and 8 distinct virtue-vial hues the terrain-16 can't afford.
+      intro cutscene scenes + the gypsy/woods/storm chargen scenes + the TITLE SCREEN (menu + logo).
+      Validated on a real 4 MB ST: `make shot-st-gypsy` (GYPSY_REQ=G/P) — the gypsy parlour renders
+      skin tones, the magenta headscarf, red vest, and 8 distinct virtue-vial hues the terrain-16
+      can't afford. TITLE screen (`build_scene_lc` on MAINMENU.SHP+TITLES.SHP via U6PAL, shipped in
+      U6WU; `g_menu_lc`, re-asserted each menu frame): the "Ultima VI" logo renders in its blue
+      metallic gradient instead of the terrain-16's dithered grey. The gold menu-highlight ramp
+      (U6PAL 14 + 33..36, recoloured per option by `menu_highlight`) is up-weighted at quantise time
+      so it keeps a distinct yellow→orange spread.
 - [x] Colour-cycling on ST (FIRE) — DONE. Host reserves ST-16 slots for the 224–231 ramp (U6WZ),
       the engine rotates them each tick, rdr_st re-pushes the registers (+ band 0). Validated: only
       the brazier flames animate (`make GX=228 GY=167 shot-st-fire`, 760 px / 4 dots). Section above.

@@ -1324,7 +1324,21 @@ int main(int argc, char **argv)
       uint8_t *title=load_shape(dir,"TITLES.SHP",  0,&tw,&th);
       be16(fe,(unsigned)mw); be16(fe,(unsigned)mh); if(menu &&mw>0&&mh>0) fwrite(menu, 1,(size_t)mw*mh,fe);
       be16(fe,(unsigned)tw); be16(fe,(unsigned)th); if(title&&tw>0&&th>0) fwrite(title,1,(size_t)tw*th,fe);
-      printf("front-end: menu %dx%d, title %dx%d\n", mw,mh,tw,th);
+      /* PER-SCENE ST 16 for the TITLE SCREEN: quantise the "Ultima VI" logo + menu box (U6PAL) to
+       * their own 16 so the ST renders the logo's metallic gradient instead of the terrain-16's
+       * dithered grey. The menu text-highlight ramp (U6PAL 14 + gold 33..36, recoloured per option
+       * by menu_highlight) is up-weighted so it keeps a distinct yellow->orange spread after the cut.
+       * Shipped after the title pixels: [48 ST-3bit levels][256 lut]. (docs/design/palette_lowcolor.md) */
+      { uint8_t lc[48+256];
+        static uint8_t comb[320*200*2]; int np=0;
+        if(menu &&mw>0&&mh>0) for(int i=0;i<mw*mh;i++) comb[np++]=menu[i];
+        if(title&&tw>0&&th>0) for(int i=0;i<tw*th;i++) comb[np++]=title[i];
+        static const uint8_t RAMP[]={14,33,34,35,36};   /* mirror gamedemo MENU_RAMP */
+        for(unsigned r=0;r<sizeof RAMP/sizeof*RAMP;r++)  /* up-weight the ramp so it keeps distinct slots */
+            for(int k=0;k<600 && np<(int)sizeof comb;k++) comb[np++]=RAMP[r];
+        build_scene_lc(palb, comb, np, lc);
+        fwrite(lc,1,sizeof lc,fe); }
+      printf("front-end: menu %dx%d, title %dx%d (+per-scene title 16)\n", mw,mh,tw,th);
       free(menu); free(title); }
     /* INTRO SCENES (U6WV): [u8 n] then per scene [u8 type][768B pal(6-bit)] + layers.
      *   type 0 (static hold): [u16 w=320][u16 h=200][320*200 idx]
