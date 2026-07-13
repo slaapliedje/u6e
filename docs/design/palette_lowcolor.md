@@ -6,10 +6,13 @@
 >                  st-palette-m7 memory) as the baseline to beat.
 > - References   : tools/CLAUDE.md "Quantization strategy"; Atari ST/STE hardware palette
 >                  (512 = 3 bits/ch, 4096 = 4 bits/ch). No reference SOURCE transcribed.
-> - Tools        : tools/quantize.c (host), tools/png.c QA output.
+> - Tools        : tools/quant.h (shared median-cut core), tools/quantize.c (QA + PNG),
+>                  tools/mkworld.c (ships the U6WW pack section), tools/png.c QA output.
 > - Validated by : side-by-side QA PNG (build/quant_qa.png) + RMS error metric vs a naive
->                  EGA-16 baseline — our optimised palette measurably + visibly better.
-> - Confidence   : confirmed (quantiser core); the 4-plane shifter backend is still TODO.
+>                  EGA-16 baseline; the shipped U6WW section verified on-target (`make lowcol`
+>                  → LOWCOL have=1 + the 16 palette regs match mkworld's host output byte-for-byte).
+> - Confidence   : confirmed (quantiser core + shipped U6WW pack section); the 4-plane shifter
+>                  backend (rdr_st) is still TODO.
 > - Last updated : 2026-07-12
 
 ## Goal
@@ -73,6 +76,36 @@ win is modest; the LARGER per-scene wins are between radically different palette
 (dark), town interiors, and the vivid PALETTES.INT cutscenes — which quantise to their own
 palettes for free by the same method (extending the tool to those scenes is TODO).
 
+## Shipped pack section (U6WW) — the engine-facing artifact
+`tools/mkworld.c` (`build_lowcolor`) ships a low-colour section the shifter backend consumes.
+The core is shared with the QA tool via **`tools/quant.h`** (`q_build_hist` / `q_median_cut` /
+`q_snap_pal` / `q_nearest`), so the pack palette and the QA PNG come from the SAME quantiser.
+
+- **Weighting** = the tileset PIXEL histogram: decode all 2048 combined tiles, count each
+  U6PAL index (transparent index 255 excluded). Colours covering more of the art get finer
+  median-cut boxes. (First run: 245 used colours over 318 570 opaque tile pixels.)
+- **Palette** = median-cut → 16, snapped to the ST 3-bit gamut (`q_snap_pal(...,3)`).
+- **Section layout** (appended LAST in the pack, after the front-end art, self-guarded so older
+  loaders that stop at EOF are unaffected):
+  ```
+  "U6WW"                     4-byte guard magic
+  16 x { u8 r, u8 g, u8 b }  ST palette as raw 3-bit levels 0..7
+  256 x u8                   lut[i] = the 16-colour index nearest to U6PAL colour i
+  ```
+  The palette is stored as raw 3-bit levels so `rdr_st` packs `r<<8 | g<<4 | b` straight into a
+  shifter colour register (`$FF8240…`, `Setcolor`/`Setpalette`) with NO runtime maths. The ST
+  does only: LUT lookup (256→16) per backbuffer pixel, then 4-plane c2p. TT/Falcon/vcard ignore
+  the section entirely (they show all 256 VGA colours).
+- **Quality** (build log): weighted RMS **25.19** vs the naive EGA-16's 33.5 — the tileset-usage
+  weighting (+ excluding transparent 255) edges even the QA tool's unweighted 26.1.
+- **First shipped 16** (rgb 3-bit): black · dark-red · dark-grey · tan · brown · mid-grey ·
+  grass-green · muted-rose · deep-blue · water-blue · orange-red · gold · near-white · brown ·
+  olive · purple — a genuine spread across the ST gamut, exactly what the fixed EGA-16 lacked.
+- **Determinism**: byte-identical rebuild confirmed (`cmp` of two `mkworld` runs).
+- **Scope note**: this is the single GLOBAL surface palette (the MVP the base shifter backend
+  needs). The per-region / per-scene CLUTs (above) and band-palette rasters layer on top later;
+  the section can grow more palettes without moving any existing offset.
+
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
 confirmed). For the 16-colour path we must RESERVE slots for any cycling range that maps into
@@ -86,12 +119,18 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
       error; build/quant_regions.png). TODO: extend to non-surface SCENES (dungeon / town /
       PALETTES.INT cutscenes), where the per-scene win is much larger, + decide the emit
       granularity (per-superchunk region CLUT swap vs per-scene).
+- [x] Shared quantiser core `tools/quant.h`, used by BOTH the QA tool and mkworld.
+- [x] Emit the low-colour pack section (**U6WW**: global ST-16 palette words + 256→16 LUT),
+      usage-weighted by the tileset histogram; deterministic; verified on-target (`make lowcol`).
+      TODO: the STE-16 variant + per-region CLUTs in the same section.
 - [ ] Reserve palette slots for colour-cycling ranges; flag over-budget scenes.
 - [ ] Optional ordered dithering (per-asset, off for UI/tiles).
-- [ ] Emit the 16-colour packs (ST/STE 4-plane interleaved tiles + the palette words) — feeds
-      the shifter renderer backend.
-- [ ] 4-plane shifter renderer backend (Blitter present) — the on-target consumer.
+- [ ] 4-plane shifter renderer backend `render/rdr_st.c` (LUT remap + c2p, Blitter/CPU present,
+      Setscreen mode 0) — the on-target consumer of U6WW. **NEXT.**
+- [ ] Band-palette rasters (HBL/Timer-B) for >16 on-screen colours — after the base backend.
 
 ## Implemented / consumed by
-- Host: `tools/quantize.c` (`make quantize`).
-- Engine (TODO): a `render/rdr_st.c` shifter backend; mkworld emits the lowcolor pack variant.
+- Host: `tools/quant.h` (core) + `tools/quantize.c` (`make quantize`, QA PNG) +
+  `tools/mkworld.c` `build_lowcolor` (ships the U6WW section).
+- Engine: `render/gamedemo.c` loads U6WW → `g_lc_pal[48]` / `g_lc_lut[256]` / `g_have_lowcolor`
+  (`make lowcol` prints the load check). Consumer `render/rdr_st.c` shifter backend is TODO (next).

@@ -34,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include "quant.h"
 #include "u6lzw.h"
 #include "u6lib.h"
 #include "u6pal.h"
@@ -664,6 +666,57 @@ static int scan_reagents(const char *path, uint8_t counts[8]){
     free(d);
     return any;
 }
+
+/* Low-colour ST section (U6WW): quantise the 256-colour VGA art to an OPTIMISED 16
+ * chosen from the ST's 512-colour (3-bit/channel) hardware gamut — NOT the fixed EGA 16
+ * (docs/design/palette_lowcolor.md; the "lazy EGA port" we deliberately beat). ALL work is
+ * HOST-side (median-cut, tools/quant.h); the ST does only a 256->16 LUT lookup + 4-plane c2p.
+ * The palette is USAGE-WEIGHTED by the tileset pixel histogram, so colours covering more of
+ * the art get finer boxes. Fills:
+ *   pal_lvl[48] = 16 x {u8 r,u8 g,u8 b} as raw ST 3-bit levels 0..7 (rdr_st packs r<<8|g<<4|b
+ *                 straight into a shifter colour register — no runtime maths)
+ *   lut[256]    = lut[i] = the 16-colour index nearest to U6PAL colour i (transparent 255 too)
+ * Returns the weighted RMS error (0..255 per channel) for the build log. U6PAL is RGB6 (0..63).
+ * The side-by-side vs-EGA quality comparison lives in the tools/quantize QA target. */
+#define RGB6TO8(v) (((v)*255+31)/63)
+static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
+                             uint8_t pal_lvl[48], uint8_t lut[256])
+{
+    static long freq[256];                                  /* 1. usage histogram (255 = transparent) */
+    for (int i=0;i<256;i++) freq[i]=0;
+    for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
+        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
+
+    static CCol col[256]; int ncol=0;                       /* 2. weighted RGB8 colour list */
+    for (int i=0;i<256;i++){ if(!freq[i]) continue;
+        col[ncol].r=RGB6TO8(palb[i*3]); col[ncol].g=RGB6TO8(palb[i*3+1]); col[ncol].b=RGB6TO8(palb[i*3+2]);
+        col[ncol].w=freq[i]; ncol++; }
+
+    CCol pal[16]; int npal=q_median_cut(col,ncol,16,pal);   /* 3. -> 16, snap to ST 3-bit gamut */
+    q_snap_pal(pal,npal,3);
+
+    for (int i=0;i<16;i++){ int r=0,g=0,b=0;                /* 4. ship raw 3-bit levels */
+        if(i<npal){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
+        pal_lvl[i*3]=(uint8_t)r; pal_lvl[i*3+1]=(uint8_t)g; pal_lvl[i*3+2]=(uint8_t)b; }
+    for (int i=0;i<256;i++)                                 /*    256->16 nearest LUT */
+        lut[i]=(uint8_t)q_nearest(pal,npal,RGB6TO8(palb[i*3]),RGB6TO8(palb[i*3+1]),RGB6TO8(palb[i*3+2]));
+
+    double se=0; long wsum=0;                               /* 5. weighted RMS over the histogram */
+    for (int i=0;i<256;i++){ if(!freq[i]) continue;
+        int r=RGB6TO8(palb[i*3]), g=RGB6TO8(palb[i*3+1]), b=RGB6TO8(palb[i*3+2]);
+        long j=lut[i], dr=pal[j].r-r, dg=pal[j].g-g, db=pal[j].b-b;
+        se += (double)(dr*dr+dg*dg+db*db)*(double)freq[i]; wsum += freq[i]; }
+    double rms = wsum ? sqrt(se/(3.0*(double)wsum)) : 0.0;
+
+    printf("lowcolor (U6WW): optimised 16-colour ST palette from %d used colours, %ld px; weighted RMS %.2f\n",
+           ncol, wsum, rms);
+    for (int i=0;i<npal;i++)
+        printf("   pal[%2d] rgb3(%d,%d,%d) ~rgb6(%2d,%2d,%2d) w=%ld\n", i,
+               pal_lvl[i*3],pal_lvl[i*3+1],pal_lvl[i*3+2],
+               pal_lvl[i*3]*9,pal_lvl[i*3+1]*9,pal_lvl[i*3+2]*9, pal[i].w);
+    return rms;
+}
+#undef RGB6TO8
 
 int main(int argc, char **argv)
 {
@@ -1307,6 +1360,14 @@ int main(int argc, char **argv)
                                 else { uint8_t z=0; fwrite(&z,1,1,f); }
           tot+=(long)cw*ch; free(ap); }
         printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(f)-apre); } }
+
+    /* LOW-COLOUR ST palette + 256->16 LUT (U6WW): appended LAST so older loaders (which stop
+     * at EOF) are unaffected, and guarded by a "U6WW" magic so the reader detects desync.
+     * [4 "U6WW"][16 x {u8 r,u8 g,u8 b} ST 3-bit levels][256 x u8 lut]. The shifter backend
+     * (rdr_st) consumes it; TT/Falcon/vcard ignore it (they show all 256 VGA colours). */
+    { static uint8_t pal_lvl[48], lut[256];
+      build_lowcolor(&ts, palb, pal_lvl, lut);
+      fwrite("U6WW",1,4,f); fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f); }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",

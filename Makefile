@@ -321,7 +321,7 @@ GY ?= 367
 MKWORLD_SRC := dataformats/u6lzw.c dataformats/u6lib.c dataformats/u6pal.c dataformats/u6tile.c dataformats/u6obj.c dataformats/u6shape.c dataformats/u6map.c engine/combat.c engine/rng.c
 $(BUILD)/mkworld: tools/mkworld.c $(MKWORLD_SRC)
 	@mkdir -p $(BUILD)
-	$(HOSTCC) $(HOSTCFLAGS) -Itools -Iengine -o $@ $^
+	$(HOSTCC) $(HOSTCFLAGS) -Itools -Iengine -o $@ $^ -lm
 # Nuvie/ScummVM roof data: indoor/outdoor for lighting comes from roof_map_00.dat,
 # extracted host-side from the user's ScummVM install (ultima.dat). NOT shipped — we
 # transcode it into our own indoor bitmap; mkworld falls back to floor-tiles if absent.
@@ -545,6 +545,17 @@ read: gamedata $(BUILD)/game.prg
 	-ffmpeg -y -i $(BUILD)/game.avi -update 1 $(BUILD)/read_screen.png 2>/dev/null
 	rm -f $(BUILD)/READ.BIN
 	@echo "wrote $(BUILD)/read_screen.png (paged BOOK.DAT text over the papyrus page)"
+
+# LOW-COLOUR (M7 U6WW) load check: confirm the pack's host-quantised 16-colour ST palette + 256->16
+# LUT parsed to the exact byte (LOWCOL have=1 => the whole front-end section chain was consumed), and
+# echo the palette as ST shifter registers (r<<8|g<<4|b). --conout 2 mirrors the assertions here.
+.PHONY: lowcol
+lowcol: gamedata $(BUILD)/game.prg
+	printf 1 > $(BUILD)/LOWCOL.BIN                  # non-empty sentinel (plat_load_file rejects 0-byte)
+	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
+	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
+	          --fast-boot on --fast-forward on --run-vbls 3000 2>/dev/null | grep LOWCOL
+	rm -f $(BUILD)/LOWCOL.BIN
 
 # same capture, but built from the ScummVM SAVE state (world-svm) for comparison
 m5-svm: world-svm $(BUILD)/game.prg

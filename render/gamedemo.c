@@ -260,6 +260,10 @@ static const struct { uint8_t lo, len; } CYCLE[] = {
 };
 static const uint8_t *g_basepal;           /* pack palette (RGB6 768B), cycle base   */
 static uint8_t        g_curpal[768];        /* working palette (rotated ranges)        */
+/* low-colour ST section (U6WW): host-quantised 16-colour palette + 256->16 LUT, consumed
+ * only by the shifter backend (rdr_st). g_lc_pal = 16 x {r,g,b} as ST 3-bit levels 0..7. */
+static uint8_t        g_lc_pal[48], g_lc_lut[256];
+static int            g_have_lowcolor;      /* 1 = pack carries a U6WW low-colour section */
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
@@ -4075,6 +4079,16 @@ int main(void)
             g_av_ox[k]=(ap[0]<<8)|ap[1]; ap+=2; g_av_oy[k]=(ap[0]<<8)|ap[1]; ap+=2;
             g_av_w[k] =(ap[0]<<8)|ap[1]; ap+=2; g_av_h[k] =(ap[0]<<8)|ap[1]; ap+=2;
             g_av_frame[k]=ap; ap+=(int32_t)g_av_w[k]*g_av_h[k]; }
+
+        /* LOW-COLOUR ST palette + 256->16 LUT (U6WW), appended last & self-guarded by a
+         * "U6WW" magic (older packs stop at EOF here). [4 magic][16 x {r,g,b} 3-bit levels]
+         * [256 x u8 lut]. Only the shifter backend uses it; TT/Falcon leave it untouched. */
+        if(ap+308<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='W'){
+            ap+=4;
+            for(int i=0;i<48;i++)  g_lc_pal[i]=ap[i];  ap+=48;
+            for(int i=0;i<256;i++) g_lc_lut[i]=ap[i];  ap+=256;
+            g_have_lowcolor=1;
+        }
     }
 
     GameDef def={ "u6", startx, starty, 0 };
@@ -4364,6 +4378,17 @@ int main(void)
                 g_wobj[i].obj_n=128; g_wobj[i].tile=(uint16_t)basetile(128); g_wobj[i].qty=1;
                 int f0=g_afood[1]; use_object(i); dbg_num("HUNGER food before eat=", f0);
                 dbg_num("HUNGER food after eat=", g_afood[1]); break; }
+        }
+    }
+
+    /* headless LOW-COLOUR (U6WW) load check: prove the pack's low-colour section parsed to the
+     * exact byte (g_have_lowcolor=1 => the whole front-end chain was consumed correctly), and
+     * echo the 16-colour ST palette as shifter registers (r<<8|g<<4|b) + a couple of LUT samples. */
+    {   int32_t lcl=0; void*lcb=plat_load_file("LOWCOL.BIN",1,&lcl);
+        if(lcb){ dbg_num("LOWCOL have=", g_have_lowcolor);
+            for(int i=0;i<16;i++) dbg_num("LOWCOL pal reg=",
+                (g_lc_pal[i*3]<<8)|(g_lc_pal[i*3+1]<<4)|g_lc_pal[i*3+2]);
+            dbg_num("LOWCOL lut0=", g_lc_lut[0]); dbg_num("LOWCOL lut255=", g_lc_lut[255]);
         }
     }
 
