@@ -1457,13 +1457,9 @@ int main(int argc, char **argv)
         fputc(nip,fe);
         for(int q=0;q<nip;q++){ int L=(int)strlen(ib[q]); be16(fe,(unsigned)L); fwrite(ib[q],1,(size_t)L,fe);
           if(getenv("INTRO_DUMP")) printf("  intro[%2d] (%d) %s\n", q, L, ib[q]); } }
-      /* BOOK.DAT readable text — signs/plaques/tombstones/books/scrolls (docs/formats/strings.md).
-       * COPYRIGHTED game text: extracted at build time, NEVER committed. [u16 nbook] + nbook x
-       * [u16 len][bytes] (\n preserved). Engine indexes by (object quality - 1). 0 => none. */
-      { static char bb[BOOK_MAX][BOOK_LEN]; int nb=extract_books(dir, bb);
-        be16(fe,(unsigned)nb);
-        for(int i=0;i<nb;i++){ int L=(int)strlen(bb[i]); be16(fe,(unsigned)L); fwrite(bb[i],1,(size_t)L,fe); }
-        printf("books: %d BOOK.DAT entries\n", nb); }
+      /* NOTE: BOOK.DAT readable text moved OUT of the front-end block into the RESIDENT core section
+       * U6BK (below) — on the ST the front-end (U6FE) is FREED after chargen, which nulled in-game
+       * book/sign reading. Books belong with gameplay data, not the transient front-end. */
       /* GYPSY SCENE (character-creation "casting", PALETTES.INT 5). To run nuvie's EXACT pour
        * animation (create_character gypsy_vial_anim), we ship the RAW GYPSY.SHP shape table so
        * the engine can address arm/hand/vial/vial_liquid/pour/jar sprites by shape number, just
@@ -1614,6 +1610,15 @@ int main(int argc, char **argv)
     { fwrite("U6WS",1,4,f); fwrite(g_lc_pal4,1,48,f); fwrite(bpal4,1,2*48,f);
       be16(f,(unsigned)g_nconv4); fwrite(g_conv4,1,(size_t)g_nconv4*48,f);
       printf("lowcolor (U6WS): STE 4-bit palettes — game + 2 bands + %d conv slots\n", g_nconv4); }
+
+    /* BOOK.DAT readable text (U6BK): signs / plaques / tombstones / books / scrolls. A RESIDENT core
+     * section (moved out of the front-end block, which the ST FREES with U6FE — that nulled in-game
+     * reading). COPYRIGHTED game text, extracted at build time, NEVER committed. Engine indexes by
+     * (object quality - 1). [4 "U6BK"][u16 nbook][nbook x [u16 len][bytes]] (\n preserved). */
+    { static char bb[BOOK_MAX][BOOK_LEN]; int nb=extract_books(dir, bb);
+      fwrite("U6BK",1,4,f); be16(f,(unsigned)nb);
+      for(int i=0;i<nb;i++){ int L=(int)strlen(bb[i]); be16(f,(unsigned)L); fwrite(bb[i],1,(size_t)L,f); }
+      printf("books: %d BOOK.DAT entries (U6BK, resident core section)\n", nb); }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",

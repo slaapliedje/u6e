@@ -3946,11 +3946,8 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
               ap+=L; } }
         if(!g_intro_have)
             for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); }
-        /* BOOK.DAT readable text: [u16 nbook] + nbook x [u16 len][bytes] (strings.md). Indexed by
-         * (object quality - 1); the pointers are into the pack (NOT NUL-terminated). */
-        { int nb=(ap[0]<<8)|ap[1]; ap+=2; g_nbook = nb>BOOK_MAX?BOOK_MAX:nb;
-          for(int i=0;i<nb;i++){ int L=(ap[0]<<8)|ap[1]; ap+=2;
-              if(i<BOOK_MAX){ g_book[i]=(const char*)ap; g_booklen[i]=L; } ap+=L; } }
+        /* (BOOK.DAT text moved to the RESIDENT core section U6BK — the ST frees this front-end block
+         * with U6FE, which nulled in-game reading. Parsed in the core-pack loader instead.) */
         /* gypsy "casting" scene: [768 pal5][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll] */
         g_gyp_pal=ap; ap+=768; g_gyp_lc=ap; ap+=48+256;
         g_gyp_w=(ap[0]<<8)|ap[1]; ap+=2; g_gyp_h=(ap[0]<<8)|ap[1]; ap+=2;
@@ -4041,7 +4038,9 @@ int main(void)
                 dbg_num("MEM fe_loaded=", fe?1:0);
                 dbg_num("MEM with_fe_used KB=", (int)(mi.chip_used/1024)); } }
         plat_chip_reset(fe_mark);                       /* FREE U6FE — reclaim ~1.35 MB for gameplay */
-        g_nbook=0; g_font=NULL;                          /* front-end pointers dangle; core re-sets g_font */
+        g_font=NULL;                                     /* front-end font pointer dangles; core re-sets it.
+                                                          * (BOOK text is now in the resident core U6BK, so
+                                                          * it survives this free — no g_nbook reset.) */
     }
 #endif
     uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe) */
@@ -4248,6 +4247,15 @@ int main(void)
                 int nc=(q[0]<<8)|q[1]; q+=2;
                 if(nc>0 && q+(int32_t)nc*48<=pak+n){ g_convpal4=q; q+=(int32_t)nc*48; }
                 g_have_ste=1; ap=q;
+            }
+            /* BOOK.DAT readable text (U6BK): [4 "U6BK"][u16 nbook][nbook x [u16 len][bytes]]. RESIDENT
+             * core section (was in the front-end block, which the ST frees) — pointers into the pak. */
+            if(ap+6<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='B'&&ap[3]=='K'){
+                int nb=(ap[4]<<8)|ap[5]; const uint8_t *q=ap+6;
+                g_nbook = nb>BOOK_MAX?BOOK_MAX:nb;
+                for(int i=0;i<nb && q<pak+n;i++){ int L=(q[0]<<8)|q[1]; q+=2;
+                    if(i<BOOK_MAX){ g_book[i]=(const char*)q; g_booklen[i]=L; } q+=L; }
+                ap=q;
             }
         }
     }

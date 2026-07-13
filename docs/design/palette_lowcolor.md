@@ -221,10 +221,11 @@ ST-RAM pool.
   survives the free (`CHARGEN.REQ=N` → "NEWGAME avatar: Milady"). TT boots unchanged.
 - **Follow-ups**: per-SCENE low-colour palettes for the front-end are now DONE — each intro/chargen
   scene ships its own ST 16 next to its PALETTES.INT palette in U6FE and swaps in on entry (see the
-  status list). Remaining: BOOK.DAT text lived in the front-end block → on ST it's freed with U6FE,
-  so in-game sign/book reading is nulled until BOOKS moves to the core (or streams on demand) — the
-  next application of this same streaming mechanism; and per-CONTEXT palettes for gameplay dungeon /
-  town scenes (a different trigger than the front-end scene entry — detect the map context at play time).
+  status list). BOOK.DAT text (which used to live in the front-end block the ST frees, nulling in-game
+  reading) now ships in a RESIDENT core section (U6BK, after U6WS) so sign/book/scroll reading survives
+  on the ST — validated `make read-st` ("The crypt of Romero") and `make read` on TT. Remaining:
+  per-CONTEXT palettes for gameplay dungeon / town scenes (a different trigger than the front-end scene
+  entry — detect the map context at play time; deferred, blocked on dungeon-map navigation).
 
 ## Colour cycling (must survive the reduction) — DONE for fire
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231

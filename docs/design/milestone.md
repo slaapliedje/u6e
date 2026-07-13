@@ -1147,9 +1147,10 @@ Status: [x] DONE 2026-07-13 — quantiser + the 4-plane ST shifter backend (rdr_
         colours), per-portrait conversation palettes, a slim ST pack that boots on a real 4 MB ST, and a
         streaming memory manager (front-end loaded off HD + freed for gameplay). Colour cycling on ST
         (fire, reserved-slot rotation U6WZ) and the STE 4096-colour variant (U6WS 4-bit palettes + STE
-        register format) are both DONE + validated. Remaining low-colour follow-ups (per-context
-        dungeon/town palettes, title-screen polish, water cycling) are deferred, not acceptance-
-        blocking. (docs/design/palette_lowcolor.md)
+        register format) are both DONE + validated, as is the title-screen per-scene palette (blue
+        logo, U6WU) and BOOKS-on-ST (BOOK.DAT moved to the resident U6BK core section so in-game
+        reading survives). Remaining low-colour follow-ups (per-context dungeon/town palettes, water
+        cycling) are deferred, not acceptance-blocking. (docs/design/palette_lowcolor.md)
 Depends on: M6 (pipeline + engine must exist)
 Goal: base ST/STE looks BETTER than the original lazy port.
 

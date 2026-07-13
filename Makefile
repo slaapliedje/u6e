@@ -680,6 +680,21 @@ read: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/READ.BIN
 	@echo "wrote $(BUILD)/read_screen.png (paged BOOK.DAT text over the papyrus page)"
 
+# BOOKS-on-ST validation (M7): the BOOK.DAT text is now a RESIDENT core section (U6BK) instead of the
+# front-end block the ST frees — so in-game reading survives on the ST. Stage READ.BIN and capture on
+# a 4 MB ST: the book text pages over the papyrus. READ_ENTRY>0 shows entry-1 directly. (strings.md)
+READ_ENTRY ?= 1
+read-st: gamedata-st $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/read_st.png
+	python3 -c "open('$(BUILD)/READ.BIN','wb').write(bytes([$(READ_ENTRY) & 255]))"
+	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 5000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/read_st.png 2>/dev/null
+	rm -f $(BUILD)/READ.BIN
+	@echo "wrote $(BUILD)/read_st.png (in-game BOOK.DAT text on the ST — resident U6BK)"
+
 # LOW-COLOUR (M7 U6WW) load check: confirm the pack's host-quantised 16-colour ST palette + 256->16
 # LUT parsed to the exact byte (LOWCOL have=1 => the whole front-end section chain was consumed), and
 # echo the palette as ST shifter registers (r<<8|g<<4|b). --conout 2 mirrors the assertions here.
