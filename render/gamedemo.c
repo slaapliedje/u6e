@@ -4115,6 +4115,9 @@ int main(void)
     if (!rdr_init(&caps)) { Cconws("no renderer\r\n"); Crawcin(); return 1; }
     plat_input_init();                              /* fast key auto-repeat for smooth movement */
     rdr_set_palette(palette, 256);
+    /* Hand the shifter backend the pack's host-quantised 16-colour palette + 256->16 LUT (U6WW).
+     * No-op on the 256-colour TT/Falcon backends; on the ST it activates the optimised 16. */
+    if (g_have_lowcolor) rdr_set_lowcolor(g_lc_pal, g_lc_lut);
     g_basepal=palette;                              /* base for colour cycling (CLUT rotation) */
     g_bb=rdr_backbuffer(); g_W=rdr_width();
 

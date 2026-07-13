@@ -424,6 +424,19 @@ $(BUILD)/gamef.prg: $(GAME_SRC_FALCON)
 	$(call HYBRID_BUILD,$@,$^,obj_falcon)
 game-falcon: $(BUILD)/gamef.prg
 
+# ST/STE variant (M7): the 16-colour shifter backend (rdr_st.c) + the pack's host-quantised
+# palette (U6WW). PURE 68000 (NOT the 020 hybrid) — a plain ST/STE has a 68000, so we compile
+# for -m68000 and link the stock 68000 libc. Drops c2p_asm.s (the TT's 8-plane asm); rdr_st uses
+# its own 4-plane C c2p. 8.3 name (gamest.prg) for Hatari GEMDOS --auto.
+GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c
+$(BUILD)/gamest.prg: $(GAME_SRC_ST)
+	@mkdir -p $(BUILD)/obj_st
+	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
+	@echo "built $@ (pure 68000, ST-low 16-colour shifter)"
+game-st: $(BUILD)/gamest.prg
+
 # interactive: walk the U6 world on an emulated TT
 run-game: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/COMBAT.BIN $(BUILD)/NPCWALK.BIN     # ensure no headless scenario
@@ -472,6 +485,20 @@ shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT"; exit 1; }
 	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot.png
 	@echo "wrote $(BUILD)/shot.png (pixel-perfect 320x200, 1:1)"
+
+# M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
+# shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This
+# is the headline "optimised 16 vs the lazy EGA port" shot. NOTE: 8 MB (emulated) — the pack (~2.4
+# MB) + conv/portrait libs (~0.57 MB) + buffers overrun a real 4 MB ST's single ST-RAM pool, so
+# fitting a real ST needs a slimmer ST pack (follow-up); this validates the shifter render itself.
+shot-st: gamedata $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_screen.png
+	-$(HATARI) --machine st --memsize 8 --monitor rgb \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 5000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -update 1 $(BUILD)/gamest_screen.png 2>/dev/null
+	@echo "wrote $(BUILD)/gamest_screen.png (plain ST, ST-low 16-colour optimised palette)"
 
 # headless M5 verify: auto-walk + capture a frame (avatar on the scrolled map)
 m5: gamedata $(BUILD)/game.prg

@@ -10,9 +10,11 @@
 >                  tools/mkworld.c (ships the U6WW pack section), tools/png.c QA output.
 > - Validated by : side-by-side QA PNG (build/quant_qa.png) + RMS error metric vs a naive
 >                  EGA-16 baseline; the shipped U6WW section verified on-target (`make lowcol`
->                  → LOWCOL have=1 + the 16 palette regs match mkworld's host output byte-for-byte).
-> - Confidence   : confirmed (quantiser core + shipped U6WW pack section); the 4-plane shifter
->                  backend (rdr_st) is still TODO.
+>                  → LOWCOL have=1 + the 16 palette regs match mkworld's host output byte-for-byte);
+>                  the shifter backend rendered on an emulated plain ST (`make shot-st` →
+>                  build/gamest_screen.png: throne room in the optimised 16 colours).
+> - Confidence   : confirmed — quantiser core + shipped U6WW pack section + the rdr_st shifter
+>                  backend all validated. Remaining work is footprint + per-scene palettes (below).
 > - Last updated : 2026-07-12
 
 ## Goal
@@ -123,14 +125,26 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
 - [x] Emit the low-colour pack section (**U6WW**: global ST-16 palette words + 256→16 LUT),
       usage-weighted by the tileset histogram; deterministic; verified on-target (`make lowcol`).
       TODO: the STE-16 variant + per-region CLUTs in the same section.
+- [x] 4-plane shifter renderer backend `render/rdr_st.c` (256→16 LUT remap + chunky→4-plane c2p,
+      Setscreen rez 0 = ST-low 320×200×16, Setpalette). 1:1 present (no TT doubling/letterbox).
+      Pure-68000 `gamest.prg` (`make game-st`); validated on an emulated plain ST (`make shot-st`
+      → the throne room renders in the optimised 16 — natural brick-red/stone-grey/parchment,
+      not garish EGA). C c2p for now; a hand-asm span can replace it later (performance.md).
+- [ ] **Footprint**: the current pack (~2.4 MB) + conv/portrait libs (~0.57 MB) + buffers overrun
+      a real 4 MB ST's single ST-RAM pool (`plat_alloc_fast` falls back to chip there) → rdr_init
+      fails "no renderer". Needs a slimmer ST pack (drop/shrink the front-end intro art, or a
+      separate ST asset variant). `shot-st` uses 8 MB emulated to validate the render meanwhile.
+- [ ] Per-scene low-colour palettes + colour-cycling on ST: `rdr_set_palette(256)` is a no-op on
+      the shifter (16-colour hw can't take a 256 update), so cutscene palettes + CLUT cycling
+      (water/fire) don't yet show. Reserve cycling slots (below) + ship per-scene 16s in U6WW.
 - [ ] Reserve palette slots for colour-cycling ranges; flag over-budget scenes.
 - [ ] Optional ordered dithering (per-asset, off for UI/tiles).
-- [ ] 4-plane shifter renderer backend `render/rdr_st.c` (LUT remap + c2p, Blitter/CPU present,
-      Setscreen mode 0) — the on-target consumer of U6WW. **NEXT.**
 - [ ] Band-palette rasters (HBL/Timer-B) for >16 on-screen colours — after the base backend.
 
 ## Implemented / consumed by
 - Host: `tools/quant.h` (core) + `tools/quantize.c` (`make quantize`, QA PNG) +
   `tools/mkworld.c` `build_lowcolor` (ships the U6WW section).
 - Engine: `render/gamedemo.c` loads U6WW → `g_lc_pal[48]` / `g_lc_lut[256]` / `g_have_lowcolor`
-  (`make lowcol` prints the load check). Consumer `render/rdr_st.c` shifter backend is TODO (next).
+  (`make lowcol` prints the load check), and hands it to the backend via `rdr_set_lowcolor`.
+- Backend: `render/rdr_st.c` (16-colour shifter) consumes it — `make game-st` / `make shot-st`.
+  `rdr_tt.c` / `rdr_falcon.c` implement `rdr_set_lowcolor` as a no-op (they show all 256).

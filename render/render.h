@@ -36,6 +36,13 @@ uint8_t *rdr_backbuffer(void);               /* chunky 8-bit, width*height */
 /* rgb6 = n*3 bytes, 6-bit-per-channel (U6 palette format). */
 void     rdr_set_palette(const uint8_t *rgb6, int n);
 
+/* SHIFTER (16-colour) backend only: hand it the host-quantised low-colour data from the pack
+ * (U6WW, docs/design/palette_lowcolor.md). pal16 = 16 x {r,g,b} as ST 3-bit levels (0..7);
+ * lut256 = a 256->16 index map. The backend loads pal16 into the 16 hardware colour registers
+ * and LUT-maps the 8-bit backbuffer at present. No-op on 256-colour backends (TT/Falcon/vcard,
+ * which show all 256 VGA colours). Call once after loading the pack, before presenting. */
+void     rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256);
+
 /* Convert the backbuffer to the screen's native layout and display it. */
 void     rdr_present(void);
 
