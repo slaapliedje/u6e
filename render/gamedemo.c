@@ -234,6 +234,8 @@ static const uint8_t *g_woods, *g_woods_pal;  static int g_woods_w, g_woods_h;  
 static const uint8_t *g_storm_pal, *g_storm_base; static int g_storm_w, g_storm_h;
 static const uint8_t *g_storm_bolt[8]; static int g_storm_boltw[8], g_storm_bolth[8], g_storm_nbolt;
 static const uint8_t *g_storm_str[5]; static int g_storm_strw[5], g_storm_strh[5], g_storm_nstr, g_storm_sx, g_storm_sy;
+/* per-scene ST 16 + 256->16 LUT for the chargen lead-in scenes (after each scene's 6-bit palette). */
+static const uint8_t *g_gyp_lc, *g_woods_lc, *g_storm_lc;
 static const uint8_t *g_forest_base, *g_win_ov; static int g_forest_w, g_forest_h, g_win_ow, g_win_oh;  /* forest reveal: frameless storm bg + window overlay that slides off */
 /* stones obsidian-pickup (INTRO_3.SHP): the hand rises to grab the obsidian; bg5 = stone gone */
 static const uint8_t *g_stn_hand, *g_stn_obs, *g_stn_bg5; static int g_stn_hw,g_stn_hh, g_stn_ow,g_stn_oh, g_stn_b5w,g_stn_b5h;
@@ -679,7 +681,7 @@ static void storm_scene(void)
     for(int i=0;i<768;i++){ int v=(int)g_storm_pal[i]+14; flashpal[i]=(uint8_t)(v>63?63:v); }
     storm_compose(0);                                         /* fade in on page 0 (flip mode, tear-free) */
     for(int k=0;k<=8;k++){ intro_fade(g_storm_pal,k); Vsync(); }
-    rdr_present_doubled(LH); rdr_set_palette((uint8_t*)g_storm_pal,256);
+    rdr_present_doubled(LH); rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,g_storm_lc+48);
     int key=0;
     for(int page=0; page<4 && (key&0xFF)!=0x1b; page++){
         storm_compose(page); rdr_present_doubled(LH);        /* full present of this page */
@@ -691,7 +693,7 @@ static void storm_scene(void)
                 storm_compose_ex(page,g_storm_bolt[bi],g_storm_boltw[bi],g_storm_bolth[bi],bx,by);  /* bolt BEHIND the frame */
                 rdr_set_palette(flashpal,256); rdr_present_doubled(LH);
                 int hold=2+(int)rng_range(&r,3); for(int h=0;h<hold;h++) Vsync();
-                storm_compose(page); rdr_set_palette((uint8_t*)g_storm_pal,256); rdr_present_doubled(LH);
+                storm_compose(page); rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,g_storm_lc+48); rdr_present_doubled(LH);
             }
             Vsync();
             int a=intro_advance(); if(a){ key=(a==2)?0x1b:0; break; }
@@ -1347,9 +1349,9 @@ static void run_chargen(void)
     cc_name_entry();
     cc_gender();
     cc_portrait();
-    if(g_woods){ rdr_set_palette((uint8_t*)g_woods_pal,256); cc_woods_intro(); }   /* forest approach (PALETTES.INT 4) */
+    if(g_woods){ rdr_set_palette((uint8_t*)g_woods_pal,256), rdr_set_lowcolor(g_woods_lc,g_woods_lc+48); cc_woods_intro(); }   /* forest approach (PALETTES.INT 4) */
     int use_gypsy = (g_gyp_scene!=NULL);
-    if(use_gypsy){ rdr_set_palette((uint8_t*)g_gyp_pal,256); cc_gypsy_intro(); }  /* enter the gypsy's parlour (PALETTES.INT 5) */
+    if(use_gypsy){ rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48); cc_gypsy_intro(); }  /* enter the gypsy's parlour (PALETTES.INT 5) */
     int v[8]; for(int i=0;i<8;i++) v[i]=i;                        /* shuffle the 8 virtues */
     rng_t r; rng_seed(&r, 0x6e0c0de ^ plat_ticks_200hz());
     for(int i=7;i>0;i--){ int j=(int)rng_range(&r,i+1); int t=v[i]; v[i]=v[j]; v[j]=t; }
@@ -1361,7 +1363,8 @@ static void run_chargen(void)
             st+=CC_ADJ[win][0]; dx+=CC_ADJ[win][1]; in+=CC_ADJ[win][2];
             v[i]=win;
         }
-    if(use_gypsy) rdr_set_palette(g_basepal,256);                 /* back to the menu/game palette */
+    if(use_gypsy){ rdr_set_palette(g_basepal,256);                /* back to the menu/game palette */
+        if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48); }   /* ST: base 16 */
     g_cc_str=st; g_cc_dex=dx; g_cc_int=in; g_cc_virtue=v[0];
     g_cc_done=1;                                                  /* apply g_cc_* to the Avatar at play start */
     cc_summary();
@@ -1379,15 +1382,15 @@ static void chargen_capture(int which)
         case 'n': cc_name_entry(); break;
         case 'g': cc_gender();     break;
         case 'p': cc_portrait();   break;
-        case 'W': if(g_woods_pal) rdr_set_palette((uint8_t*)g_woods_pal,256); cc_woods_intro(); break;  /* forest lead-in */
-        case 'G': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256); cc_gypsy_intro(); break;  /* gypsy scene lead-in */
-        case 'q': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256);   /* Justice vs Compassion on the gypsy scene */
+        case 'W': if(g_woods_pal) rdr_set_palette((uint8_t*)g_woods_pal,256), rdr_set_lowcolor(g_woods_lc,g_woods_lc+48); cc_woods_intro(); break;  /* forest lead-in */
+        case 'G': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48); cc_gypsy_intro(); break;  /* gypsy scene lead-in */
+        case 'q': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48);   /* Justice vs Compassion on the gypsy scene */
             { static const int demo[8]={0,1,2,3,3,2,1,0}; for(int i=0;i<8;i++) g_vial_lvl[i]=demo[i]; g_jar_lvl=4;  /* mid-casting: some vials drained */
               g_arm_sh=g_hand_sh=g_pour_sh=g_vl_sh=-1; g_pour_vial=-1;
               g_nflask=0; bubble_add_color(239); bubble_add_color(14); bubble_add_color(231); bubble_add_color(103);
               g_bubble_ctr=0; g_jarbub_lvl=-1; rng_seed(&g_bubrng, plat_ticks_200hz()); }  /* jar bubbles: 4 mixed virtue hues */
             cc_ask(1, 3, 1); break;
-        case 'P': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256);   /* held MID-POUR frame (arm tips vial 0 over the jar) */
+        case 'P': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48);   /* held MID-POUR frame (arm tips vial 0 over the jar) */
             { for(int i=0;i<8;i++) g_vial_lvl[i]=3; g_vial_lvl[0]=2; g_jar_lvl=3; g_pour_vial=0;
               g_nflask=0; g_jarbub_lvl=-1; rng_seed(&g_bubrng, plat_ticks_200hz());
               g_arm_sh=1+2; g_arm_x=93; g_arm_y=21; g_hand_sh=9+16; g_hand_x=109; g_hand_y=21;
@@ -1395,7 +1398,7 @@ static void chargen_capture(int which)
             draw_gypsy_scene(); blit_indexed(g_gyp_scroll,g_gscroll_w,g_gscroll_h,0,120);
             ui_text((LW-ui_textw("The gypsy pours thy Honesty."))/2,150,"The gypsy pours thy Honesty.",0x3e);
             rdr_present_doubled(LH); { int k; while(!(k=plat_input_raw())) Vsync(); } break;
-        case 'D': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256);   /* run 3 full pours: drain vial 0 (3->0), jar (0->3) */
+        case 'D': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48);   /* run 3 full pours: drain vial 0 (3->0), jar (0->3) */
             for(int i=0;i<8;i++) g_vial_lvl[i]=3; g_jar_lvl=0;
             g_arm_sh=g_hand_sh=g_pour_sh=g_vl_sh=-1; g_pour_vial=-1;
             g_nflask=0; g_bubble_ctr=0; g_jarbub_lvl=-1; rng_seed(&g_bubrng, plat_ticks_200hz());
@@ -3906,7 +3909,7 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
           for(int i=0;i<nb;i++){ int L=(ap[0]<<8)|ap[1]; ap+=2;
               if(i<BOOK_MAX){ g_book[i]=(const char*)ap; g_booklen[i]=L; } ap+=L; } }
         /* gypsy "casting" scene: [768 pal5][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll] */
-        g_gyp_pal=ap; ap+=768;
+        g_gyp_pal=ap; ap+=768; g_gyp_lc=ap; ap+=48+256;
         g_gyp_w=(ap[0]<<8)|ap[1]; ap+=2; g_gyp_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_gyp_scene=ap; ap+=(int32_t)g_gyp_w*g_gyp_h;
         g_gscroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_gscroll_h=(ap[0]<<8)|ap[1]; ap+=2;
@@ -3918,12 +3921,12 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
         for(int i=0;i<g_ngsh;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
             g_gsh_w[i]=w; g_gsh_h[i]=h; g_gsh[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
         /* woods forest-path lead-in: [768 pal4][u16 ww][u16 wh][ww*wh panorama] */
-        g_woods_pal=ap; ap+=768;
+        g_woods_pal=ap; ap+=768; g_woods_lc=ap; ap+=48+256;
         g_woods_w=(ap[0]<<8)|ap[1]; ap+=2; g_woods_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_woods=ap; ap+=(int32_t)g_woods_w*g_woods_h;
         /* storm window scene: [768 pal2][u16 bw][u16 bh][base][u8 nbolt]+nbolt[u16 w][u16 h][wh]
          * [u8 nstr][u16 sx][u16 sy]+nstr[u16 w][u16 h][wh] */
-        g_storm_pal=ap; ap+=768;
+        g_storm_pal=ap; ap+=768; g_storm_lc=ap; ap+=48+256;
         g_storm_w=(ap[0]<<8)|ap[1]; ap+=2; g_storm_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_storm_base=ap; ap+=(int32_t)g_storm_w*g_storm_h;
         g_storm_nbolt=*ap++; if(g_storm_nbolt>8) g_storm_nbolt=8;

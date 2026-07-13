@@ -1414,6 +1414,7 @@ int main(int argc, char **argv)
         fwrite(p5,1,768,fe);
         static uint8_t gsc[320*200]; memset(gsc,0,sizeof gsc);
         compose_shapes(dir,"GYPSY.SHP",GYP,(int)(sizeof GYP/sizeof GYP[0]),gsc,320,200);
+        { uint8_t lc[48+256]; build_scene_lc(p5,gsc,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* gypsy ST 16 */
         be16(fe,320); be16(fe,200); fwrite(gsc,1,sizeof gsc,fe);
         int sw=0,sh=0; uint8_t*sc=load_shape(dir,"BLOCKS.SHP",3,&sw,&sh);
         be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
@@ -1435,6 +1436,7 @@ int main(int argc, char **argv)
         static uint8_t wpano[511*200]; memset(wpano,0,sizeof wpano);
         static const ishape_t WD[]={{0,0,0},{1,320,0}};
         compose_shapes(dir,"WOODS.SHP",WD,2,wpano,511,200);
+        { uint8_t lc[48+256]; build_scene_lc(p4,wpano,511*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* woods ST 16 */
         be16(fe,511); be16(fe,200); fwrite(wpano,1,sizeof wpano,fe);
         printf("gypsy woods: WOODS.SHP panorama 511x200 pal4\n"); }
       /* STORM WINDOW scene (INTRO_2.SHP, PALETTES.INT 2 — nuvie window_sequence): a curtained,
@@ -1448,6 +1450,7 @@ int main(int argc, char **argv)
         static uint8_t sbase[320*200]; memset(sbase,0,sizeof sbase);
         static const ishape_t WIN[]={{1,0,0},{8,0,0},{10,0,76},{26,57,0},{28,0,0}};
         compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
+        { uint8_t lc[48+256]; build_scene_lc(p2,sbase,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* storm ST 16 */
         be16(fe,320); be16(fe,200); fwrite(sbase,1,sizeof sbase,fe);
         static const int BOLT[]={11,12,13,14,15,16,17,18}; int nbolt=(int)(sizeof BOLT/sizeof BOLT[0]);
         fputc(nbolt,fe);
