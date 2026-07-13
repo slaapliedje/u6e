@@ -1146,8 +1146,8 @@ Status: [~] MOSTLY DONE 2026-07-13 — quantiser + the 4-plane ST shifter backen
         render on a real 4 MB ST; plus BONUS work beyond the original scope: band-palette rasters
         (>16 on-screen colours), per-portrait conversation palettes, a slim ST pack that boots on a
         real 4 MB ST, and a streaming memory manager (front-end loaded off HD + freed for gameplay).
-        REMAINING for acceptance: colour cycling on ST + the STE 4096 variant (see below).
-        (docs/design/palette_lowcolor.md)
+        Colour cycling on ST (fire) is now DONE too (reserved-slot rotation, U6WZ). REMAINING for
+        acceptance: the STE 4096 variant (see below). (docs/design/palette_lowcolor.md)
 Depends on: M6 (pipeline + engine must exist)
 Goal: base ST/STE looks BETTER than the original lazy port.
 
@@ -1174,8 +1174,13 @@ Tasks
       really an indoor/region CLUT swap, modest win). Both wait until dungeon-map navigation lands.
 - [x] Snap candidate colors to hardware-representable values BEFORE measuring
       error. (quantize.c snaps the 16 centroids to the ST/STE gamut, then measures.)
-- [ ] Reserve palette slots for color-cycling ranges (preserve animation);
-      flag scenes needing more cycling slots than fit. (Prerequisite for cycling-on-ST below.)
+- [x] Reserve palette slots for color-cycling ranges (preserve animation) — DONE for FIRE.
+      mkworld holds the fire ramp (224–231) out of the median-cut and pins ST_CYC_SLOTS(=3) reserved
+      slots for it (U6WZ section {first_slot, nslots}); the engine rotates them each tick and rdr_st
+      re-pushes the registers (+ band 0). Global surface 16 → 13 general colours (RMS 25.2→28.0, still
+      < EGA's 33.5). Validated on a 4 MB ST: `make GX=228 GY=167 shot-st-fire` — only the 4 brazier
+      flames animate (760 px, 4 clean dots), no tile redraw. TODO: flag over-budget scenes; water once
+      confirmed. (docs/design/palette_lowcolor.md, docs/formats/palette_cycling.md)
 - [x] Shifter renderer backend (4-plane interleaved) — render/rdr_st.c: 320x200x16 ST-low,
       256->16 LUT + chunky->4-plane c2p, Setscreen mode 0. `make game-st` / `make shot-st`.
       Renders on a plain 8 MHz 68000 ST in the optimised 16 (not garish EGA).

@@ -52,6 +52,12 @@ void     rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256);
  * 256-colour backends. Timer-B counts DE (display-enable) events; see docs/design/palette_lowcolor.md. */
 void     rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut);
 
+/* SHIFTER colour cycling (M7): re-push the 16 hardware colour registers from pal16 (16 x {r,g,b}
+ * 3-bit levels) WITHOUT re-c2p'ing the backbuffer — the shifter re-reads the CLUT, so rotating a
+ * few reserved slots animates fire/water for free. Updates band 0 (the map) too when a band raster
+ * is active. Cheap (16 register writes); call each cycle tick. No-op on 256-colour backends. */
+void     rdr_lowcolor_cycle(const uint8_t *pal16);
+
 /* Convert the backbuffer to the screen's native layout and display it. */
 void     rdr_present(void);
 

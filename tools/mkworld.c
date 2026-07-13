@@ -680,6 +680,16 @@ static int scan_reagents(const char *path, uint8_t counts[8]){
  * The side-by-side vs-EGA quality comparison lives in the tools/quantize QA target. */
 #define RGB6TO8(v) (((v)*255+31)/63)
 
+/* Colour cycling on the ST (docs/formats/palette_cycling.md): the engine can't push a rotated
+ * 256-colour palette to 16-colour hardware, so we RESERVE a small contiguous block of the 16 for
+ * each rotated U6PAL ramp and rotate just those registers at runtime. fire = U6PAL 224..231
+ * (red->orange->yellow, confirmed cycling: throne-room braziers). Reserving costs general slots so
+ * keep it small; band 0 (the map) inherits these slots since it copies the U6WW palette. Mirrors
+ * the engine's 256-colour CYCLE[] {224,8}. Emitted as the U6WZ pack section {first_slot, nslots}. */
+#define ST_CYC_LO    224
+#define ST_CYC_LEN   8
+#define ST_CYC_SLOTS 3
+
 /* build a weighted RGB8 colour list from a freq[256] U6PAL-index histogram (skips empty entries). */
 static int colors_from_freq(const long freq[256], const uint8_t *palb, CCol *col)
 {
@@ -694,17 +704,39 @@ static int colors_from_freq(const long freq[256], const uint8_t *palb, CCol *col
  * levels the ST packs straight into a colour register) + lut[256] (nearest of the 16 to each U6PAL
  * colour). snap[16] returns the snapped RGB8 palette (for the RMS metric). Returns the box count. */
 static int quantize_colors(CCol *col, int ncol, const uint8_t *palb,
-                           uint8_t pal_lvl[48], uint8_t lut[256], CCol snap[16])
+                           uint8_t pal_lvl[48], uint8_t lut[256], CCol snap[16], int nslots)
 {
-    CCol pal[16]; int npal=q_median_cut(col,ncol,16,pal);
+    if (nslots > 16) nslots = 16; if (nslots < 1) nslots = 1;
+    CCol pal[16]; int npal=q_median_cut(col,ncol,nslots,pal);
     q_snap_pal(pal,npal,3);
-    for (int i=0;i<16;i++){ int r=0,g=0,b=0;
+    for (int i=0;i<16;i++){ int r=0,g=0,b=0;               /* slots >= npal stay black (a cycle-reserve pass may overwrite them) */
         if(i<npal){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
         pal_lvl[i*3]=(uint8_t)r; pal_lvl[i*3+1]=(uint8_t)g; pal_lvl[i*3+2]=(uint8_t)b; }
-    for (int i=0;i<256;i++)
+    for (int i=0;i<256;i++)                                /* nearest among the npal general boxes only */
         lut[i]=(uint8_t)q_nearest(pal,npal,RGB6TO8(palb[i*3]),RGB6TO8(palb[i*3+1]),RGB6TO8(palb[i*3+2]));
     for (int i=0;i<npal;i++) snap[i]=pal[i];
     return npal;
+}
+
+/* Reserve the top `nres` slots of a 16 for a rotated U6PAL ramp (colour cycling on the ST): fill
+ * slots [16-nres..15] with nres samples of the ramp [src_lo, src_lo+src_len) (snapped to 3-bit) and
+ * route lut[src_lo..src_lo+src_len) onto them IN RAMP ORDER, so when the engine rotates those
+ * registers the shifter animates the ramp (fire/water). The general quantise must have used only
+ * (16-nres) boxes (call quantize_colors with nslots=16-nres) so no non-ramp pixel lands on these
+ * slots. (docs/formats/palette_cycling.md; the ST counterpart of the engine's 256-colour CYCLE[].) */
+static void reserve_cycle(uint8_t pal_lvl[48], uint8_t lut[256], const uint8_t *palb,
+                          int nres, int src_lo, int src_len)
+{
+    int base = 16 - nres;
+    for (int s=0; s<nres; s++){
+        int si = src_lo + (s*src_len + src_len/2)/nres;          /* centre-sample the ramp */
+        if (si >= src_lo+src_len) si = src_lo+src_len-1;
+        pal_lvl[(base+s)*3+0]=(uint8_t)((RGB6TO8(palb[si*3+0])*7+127)/255);
+        pal_lvl[(base+s)*3+1]=(uint8_t)((RGB6TO8(palb[si*3+1])*7+127)/255);
+        pal_lvl[(base+s)*3+2]=(uint8_t)((RGB6TO8(palb[si*3+2])*7+127)/255);
+    }
+    for (int i=0; i<src_len; i++)                                /* source ramp index -> reserved slot */
+        lut[src_lo+i] = (uint8_t)(base + (i*nres)/src_len);
 }
 
 /* weighted RMS (0..255/ch) of a freq[256] histogram remapped through lut into the snapped palette. */
@@ -726,12 +758,18 @@ static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
         for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
+    /* Hold the fire ramp OUT of the median-cut: it gets ST_CYC_SLOTS dedicated slots (reserve_cycle
+     * below) so the engine can rotate it. Leaving it in would waste a general box on a colour we
+     * pin anyway, and let non-fire pixels land on the (rotating) reserved slots. */
+    for (int i=ST_CYC_LO;i<ST_CYC_LO+ST_CYC_LEN;i++) freq[i]=0;
     static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
-    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap);
+    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap,16-ST_CYC_SLOTS);
+    reserve_cycle(pal_lvl,lut,palb,ST_CYC_SLOTS,ST_CYC_LO,ST_CYC_LEN);   /* fire -> slots 13..15 */
     double rms=quant_rms(freq,palb,lut,snap);
     long wsum=0; for (int i=0;i<256;i++) wsum+=freq[i];
-    printf("lowcolor (U6WW): optimised 16-colour ST palette from %d used colours, %ld px; weighted RMS %.2f\n",
-           ncol, wsum, rms);
+    printf("lowcolor (U6WW): optimised %d-colour ST palette from %d used colours, %ld px; weighted RMS %.2f "
+           "(+%d slots reserved for fire cycling 224-231)\n",
+           16-ST_CYC_SLOTS, ncol, wsum, rms, ST_CYC_SLOTS);
     for (int i=0;i<16;i++)
         printf("   pal[%2d] rgb3(%d,%d,%d) ~rgb6(%2d,%2d,%2d)\n", i,
                pal_lvl[i*3],pal_lvl[i*3+1],pal_lvl[i*3+2], pal_lvl[i*3]*9,pal_lvl[i*3+1]*9,pal_lvl[i*3+2]*9);
@@ -750,7 +788,7 @@ static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint
     for (int t=400;t<410;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
         for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
     static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
-    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap);
+    CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,lut,snap,16);   /* command bar has no cycling ramp */
     long wsum=0; for (int i=0;i<256;i++) wsum+=freq[i];
     printf("lowcolor (U6WX band1): command bar 16 from icons 400-409 + parchment, %d colours, %ld px; RMS %.2f\n",
            ncol, wsum, quant_rms(freq,palb,lut,snap));
@@ -825,7 +863,7 @@ static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, 
             made++;
         }
         static CCol col[256]; int nc=colors_from_freq(comb,palb,col); CCol snap[16];
-        quantize_colors(col,nc,palb,pal_lvl,lut,snap);
+        quantize_colors(col,nc,palb,pal_lvl,lut,snap,16);   /* portrait palette: no cycling ramp */
         fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
     }
     printf("conv palettes (U6WY): %d slots, %d with portraits (PORTRAIT.A=%d, PORTRAIT.B=%d)\n",
@@ -1525,7 +1563,14 @@ int main(int argc, char **argv)
       { static uint8_t bpal[2*48], blut[2*256]; uint8_t y0[2]={0,182};
         memcpy(bpal, pal_lvl, 48); memcpy(blut, lut, 256);            /* band 0 = the U6WW map palette */
         build_command_band(&ts, paper, palb, bpal+48, blut+256);     /* band 1 = command bar          */
-        fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); } }
+        fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); }
+
+      /* COLOUR-CYCLING metadata (U6WZ): which reserved ST-16 slots the engine rotates each tick to
+       * animate a U6PAL ramp on 16-colour hardware. The slots are identical in band 0 (the map),
+       * which copies the U6WW palette above. [4 "U6WZ"][u8 ncyc][ncyc x {u8 first_slot, u8 nslots}].
+       * fire = the top ST_CYC_SLOTS slots (build_lowcolor's reserve_cycle). (palette_cycling.md.) */
+      { fwrite("U6WZ",1,4,f); fputc(1,f); fputc((uint8_t)(16-ST_CYC_SLOTS),f); fputc((uint8_t)ST_CYC_SLOTS,f);
+        printf("lowcolor (U6WZ): 1 cycle range -> ST slots %d..%d (fire 224-231)\n", 16-ST_CYC_SLOTS, 15); } }
 
     /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up. */
     build_conv_palettes(f, &ts, paper, palb, pra, prn, prb, prbn);

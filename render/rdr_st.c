@@ -264,6 +264,24 @@ void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const
     }
 }
 
+/* Colour cycling (M7): re-push the 16 shifter registers from pal16 — NO LUT change, NO c2p. The
+ * engine rotates a few reserved slots (U6WZ) each tick; the shifter re-reads the CLUT so fire/water
+ * animates for free (docs/design/palette_lowcolor.md). When a band raster is active the cycled ramp
+ * lives in band 0 (the map), so update g_band_reg[0] too — the VBL reloads it next frame; Setpalette
+ * sets the vblank resting palette (and drives the single-band case directly). XBIOS Setpalette is
+ * supervisor-safe from user mode (a direct $FF8240 write would bus-error). */
+void rdr_lowcolor_cycle(const uint8_t *pal16)
+{
+    if (!pal16) return;
+    for (int i = 0; i < 16; i++) {
+        unsigned r = pal16[i*3+0] & 7, g = pal16[i*3+1] & 7, b = pal16[i*3+2] & 7;
+        uint16_t v = (uint16_t)((r << 8) | (g << 4) | b);
+        g_stpal[i] = v;
+        if (g_nb >= 2) g_band_reg[0][i] = v;        /* band 0 = the map; the VBL reloads it next frame */
+    }
+    Setpalette(g_stpal);
+}
+
 void rdr_debug_info(uint32_t out[6])
 {
     out[0] = (uint32_t)(uintptr_t)Physbase();

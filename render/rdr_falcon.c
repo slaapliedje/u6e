@@ -124,6 +124,7 @@ void rdr_set_palette(const uint8_t *rgb6, int n)
 /* no-op: the Falcon shows all 256 VGA colours (VIDEL 8-bit / truecolor), so the pack's
  * low-colour (U6WW/U6WX) data is unused here. */
 void rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256) { (void)pal16; (void)lut256; }
+void rdr_lowcolor_cycle(const uint8_t *pal16) { (void)pal16; }   /* Falcon cycles the real CLUT via rdr_set_palette */
 void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut)
 { (void)nb; (void)y0; (void)pal; (void)lut; }
 

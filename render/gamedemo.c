@@ -272,6 +272,12 @@ static const uint8_t *g_lcx_y0, *g_lcx_pal, *g_lcx_lut;
 /* per-portrait conversation palettes (U6WY): the ST swaps to one while a portrait is up. */
 static int            g_nconvpal;
 static const uint8_t *g_convpal;            /* nconvpal x (48 pal + 256 lut), into the pak */
+/* colour-cycling reserved slots (U6WZ): the shifter rotates these ST-16 slots each tick to animate a
+ * U6PAL ramp (fire/water) on 16-colour hardware — the ST counterpart of the 256-colour CYCLE[] above.
+ * The host reserves them in the game 16 (rdr_st inherits them in band 0 = the map). No-op on TT/Falcon. */
+#define CYC_MAX 4
+static int            g_lc_ncyc;            /* number of reserved cycle ranges (0 = none)         */
+static uint8_t        g_lc_cyc[CYC_MAX][2]; /* per range: {first_slot, nslots} in the 16          */
 /* front-end base 16+LUT (the game palette carried in U6FE) — restored between cutscene scenes on ST.
  * Points into the streamed U6FE, valid only during the front-end phase (freed after). */
 static const uint8_t *g_fe_base_lc;
@@ -3003,6 +3009,25 @@ static void cycle_palette(void)
         }
     }
     rdr_set_palette(g_curpal, 256);
+
+    /* ST SHIFTER: rdr_set_palette above is a no-op on 16-colour hardware, so animate the reserved
+     * cycle slots (U6WZ) directly — rotate each range's registers by the same phase and push just
+     * the 16 to the backend (it updates band 0 = the map). Guard on !g_talking: a conversation
+     * palette is active then and has NO reserved slots. (docs/design/palette_lowcolor.md) */
+    if(g_have_lowcolor && g_lc_ncyc && !g_talking){
+        uint8_t cur[48]; memcpy(cur, g_lc_pal, 48);
+        for(int r=0;r<g_lc_ncyc;r++){
+            int first=g_lc_cyc[r][0], nsl=g_lc_cyc[r][1];
+            if(nsl<2 || first+nsl>16) continue;
+            for(int k=0;k<nsl;k++){
+                int src=first + ((k + g_cyc_phase) % nsl);
+                cur[(first+k)*3+0]=g_lc_pal[src*3+0];
+                cur[(first+k)*3+1]=g_lc_pal[src*3+1];
+                cur[(first+k)*3+2]=g_lc_pal[src*3+2];
+            }
+        }
+        rdr_lowcolor_cycle(cur);
+    }
     g_cyc_phase++;
 }
 
@@ -4184,7 +4209,17 @@ int main(void)
             /* per-portrait CONVERSATION palettes (U6WY): [4 "U6WY"][u16 nport][nport x (48+256)] */
             if(ap+6<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='Y'){
                 int np=(ap[4]<<8)|ap[5]; const uint8_t *q=ap+6;
-                if(np>0 && q+(int32_t)np*(48+256) <= pak+n){ g_nconvpal=np; g_convpal=q; }
+                if(np>0 && q+(int32_t)np*(48+256) <= pak+n){ g_nconvpal=np; g_convpal=q; ap=q+(int32_t)np*(48+256); }
+            }
+            /* COLOUR-CYCLING metadata (U6WZ): [4 "U6WZ"][u8 ncyc][ncyc x {u8 first_slot, u8 nslots}] —
+             * which reserved ST-16 slots the shifter rotates each tick (fire/water). TT/Falcon ignore. */
+            if(ap+5<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='Z'){
+                int nc=ap[4]; const uint8_t *q=ap+5;
+                if(nc>0 && nc<=CYC_MAX && q+(int32_t)nc*2 <= pak+n){
+                    g_lc_ncyc=nc;
+                    for(int i=0;i<nc;i++){ g_lc_cyc[i][0]=q[i*2]; g_lc_cyc[i][1]=q[i*2+1]; }
+                    ap=q+(int32_t)nc*2;
+                }
             }
         }
     }

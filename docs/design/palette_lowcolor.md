@@ -226,11 +226,29 @@ ST-RAM pool.
   next application of this same streaming mechanism; and per-CONTEXT palettes for gameplay dungeon /
   town scenes (a different trigger than the front-end scene entry — detect the map context at play time).
 
-## Colour cycling (must survive the reduction)
+## Colour cycling (must survive the reduction) — DONE for fire
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
-confirmed). For the 16-colour path we must RESERVE slots for any cycling range that maps into
-the scene, locking those entries so the optimiser fills only the rest, and flag scenes needing
-more cycling slots than fit. **TODO** — not yet in quantize.c.
+confirmed). On 16-colour hardware `rdr_set_palette(256)` can't be honoured, so the ST path RESERVES
+a small contiguous block of the 16 for each cycling ramp and rotates just those registers at runtime:
+
+- **Host** (`mkworld` `build_lowcolor` + `reserve_cycle`): hold the fire ramp (224–231) OUT of the
+  median-cut, quantise the rest into `16 − ST_CYC_SLOTS` general boxes, then pin `ST_CYC_SLOTS` (=3)
+  slots to 3 ramp samples and route `lut[224..231]` onto them in ramp order (so no non-fire pixel
+  lands on a rotating slot). Emit a **U6WZ** section `[u8 ncyc][ncyc × {u8 first_slot, u8 nslots}]`.
+  Cost: the global surface 16 drops to 13 general colours → weighted RMS 25.2 → 28.0 (still well under
+  EGA-16's 33.5). Band 0 (the map) inherits the reserved slots since it copies the U6WW palette.
+- **Engine** (`cycle_palette`): on the same phase used for the 256-colour rotation, build a rotated
+  copy of the ST 16 (each range's `nslots` registers advanced by phase) and push it via
+  `rdr_lowcolor_cycle`. Guarded on `!g_talking` (a conversation/scene palette is active then and has
+  no reserved slots).
+- **Backend** (`rdr_st` `rdr_lowcolor_cycle`): re-push the 16 shifter registers (Setpalette) and, when
+  a band raster is active, update `g_band_reg[0]` too (the VBL reloads band 0 = the map next frame).
+  No c2p, no recompose — the shifter re-reads the CLUT. No-op on TT/Falcon (they cycle the real 256).
+- **Validated** on a real 4 MB ST (`make GX=228 GY=167 shot-st-fire`): a 4-brazier hall, two frames at
+  different cycle phases, diffed — ONLY the four brazier flames change (760 px, 4 clean dots), nothing
+  else redraws. The ST counterpart of the TT's cyc2_diff.
+
+TODO: flag scenes needing more cycling slots than fit; water (232–239 / frame-anim) once confirmed.
 
 ## Status / remaining
 - [x] Quantiser core: 256→16, ST/STE gamut snap (snap-before-error), remap, RMS metric, QA PNG,
@@ -257,11 +275,13 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
       intro cutscene scenes + the gypsy/woods/storm chargen scenes. Validated on a real 4 MB ST:
       `make shot-st-gypsy` (GYPSY_REQ=G/P) — the gypsy parlour renders skin tones, the magenta
       headscarf, red vest, and 8 distinct virtue-vial hues the terrain-16 can't afford.
-- [ ] Colour-cycling on ST (water/fire): `rdr_set_palette(256)` is a no-op on the shifter (16-colour
-      hw can't take a 256 update), so CLUT cycling doesn't yet show. Reserve cycling slots (below).
+- [x] Colour-cycling on ST (FIRE) — DONE. Host reserves ST-16 slots for the 224–231 ramp (U6WZ),
+      the engine rotates them each tick, rdr_st re-pushes the registers (+ band 0). Validated: only
+      the brazier flames animate (`make GX=228 GY=167 shot-st-fire`, 760 px / 4 dots). Section above.
 - [x] Band-palette rasters (Timer-B) for >16 on-screen colours — the "cheat past 16" (below). Ships
       the U6WX section (2 bands) + a Timer-B palette-swap chain in rdr_st; validated on the ST.
-- [ ] Reserve palette slots for colour-cycling ranges; flag over-budget scenes.
+- [x] Reserve palette slots for colour-cycling ranges (fire) — DONE (U6WZ, `reserve_cycle`). TODO:
+      flag scenes needing more cycling slots than fit; extend to water once its range is confirmed.
 - [ ] Optional ordered dithering (per-asset, off for UI/tiles).
 - [~] MID-LINE split (map/panel, x=176) — INVESTIGATED, NOT the right tool (see below). The real
       headroom is the panel PORTRAIT, which a mid-line raster can't deliver; a per-mode palette can.

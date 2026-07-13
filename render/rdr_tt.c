@@ -133,6 +133,7 @@ void rdr_set_palette(const uint8_t *rgb6, int n)
 void rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256) { (void)pal16; (void)lut256; }
 void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut)
 { (void)nb; (void)y0; (void)pal; (void)lut; }
+void rdr_lowcolor_cycle(const uint8_t *pal16) { (void)pal16; }   /* TT cycles the real 256 CLUT via rdr_set_palette */
 
 void rdr_debug_info(uint32_t out[6])
 {

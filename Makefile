@@ -563,6 +563,25 @@ shot-st-gypsy: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/CHARGEN.REQ
 	@echo "wrote $(BUILD)/gamest_gypsy.png (gypsy chargen scene under its per-scene U6FE palette)"
 
+# M7 COLOUR-CYCLING proof (ST): the throne-room braziers are the ONLY U6PAL 224-231 pixels; on the
+# 16-colour shifter their flame pixels map to the reserved cycle slots (U6WZ), which the engine
+# rotates each tick via rdr_lowcolor_cycle (no tile redraw). Capture the AVI, extract two frames at
+# different cycle phases, and diff — only the brazier flames change colour, proving palette cycling
+# works on 16-colour hardware (the ST counterpart of the TT's cyc2_diff). (docs/formats/palette_cycling.md)
+# FIRE_START lets you place the avatar AT a brazier if the default start doesn't show one.
+FIRE_A ?= 4000
+FIRE_B ?= 4030
+shot-st-fire: gamedata-st $(BUILD)/gamest.prg
+	rm -f $(BUILD)/gamest.avi $(BUILD)/fire_phase_1.png $(BUILD)/fire_phase_2.png $(BUILD)/fire_st.png $(BUILD)/fire_diff.png
+	-$(HATARI) --machine st --memsize 4 --monitor rgb \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
+	          --fast-forward on --run-vbls 5000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
+	-ffmpeg -y -i $(BUILD)/gamest.avi -vf "select='eq(n\,$(FIRE_A))+eq(n\,$(FIRE_B))'" -vsync 0 $(BUILD)/fire_phase_%d.png 2>/dev/null
+	-compare -metric AE $(BUILD)/fire_phase_1.png $(BUILD)/fire_phase_2.png $(BUILD)/fire_diff.png 2>&1 | sed 's/$$/ px differ between two cycle phases (fire)/'
+	-montage $(BUILD)/fire_phase_1.png $(BUILD)/fire_phase_2.png $(BUILD)/fire_diff.png -tile 3x1 -geometry +3+3 $(BUILD)/fire_st.png 2>/dev/null
+	@echo "wrote $(BUILD)/fire_st.png (fire cycle on ST: phaseA | phaseB | diff)"
+
 # headless M5 verify: auto-walk + capture a frame (avatar on the scrolled map)
 m5: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png
