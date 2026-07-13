@@ -439,13 +439,20 @@ game-falcon: $(BUILD)/gamef.prg
 # for -m68000 and link the stock 68000 libc. Drops c2p_asm.s (the TT's 8-plane asm); rdr_st uses
 # its own 4-plane C c2p. 8.3 name (gamest.prg) for Hatari GEMDOS --auto.
 GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c
+# -DPACK_NAME loads the SLIM pack (U6ST.PAK, front-end art omitted) so it fits a real 4 MB ST.
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DPACK_NAME='"U6ST.PAK"' $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
-	@echo "built $@ (pure 68000, ST-low 16-colour shifter)"
+	@echo "built $@ (pure 68000, ST-low 16-colour shifter, slim pack)"
 game-st: $(BUILD)/gamest.prg
+
+# SLIM ST world pack (U6ST.PAK): same as `world` but MKWORLD_SLIM omits the ~1.35 MB front-end/intro
+# art so the pack + libs + buffers fit a real 4 MB ST. The ST capture targets depend on this.
+world-st: $(BUILD)/mkworld roof-extract
+	MKWORLD_SLIM=1 $(BUILD)/mkworld $(REFDATA) $(BUILD)/U6ST.PAK $(GX) $(GY)
+gamedata-st: world-st
 
 # interactive: walk the U6 world on an emulated TT
 run-game: gamedata $(BUILD)/game.prg
@@ -498,12 +505,11 @@ shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This
-# is the headline "optimised 16 vs the lazy EGA port" shot. NOTE: 8 MB (emulated) — the pack (~2.4
-# MB) + conv/portrait libs (~0.57 MB) + buffers overrun a real 4 MB ST's single ST-RAM pool, so
-# fitting a real ST needs a slimmer ST pack (follow-up); this validates the shifter render itself.
-shot-st: gamedata $(BUILD)/gamest.prg
+# is the headline "optimised 16 vs the lazy EGA port" shot. Runs on a REAL 4 MB ST: the slim pack
+# (U6ST.PAK, front-end art omitted) + libs + buffers leave ~900 KB free (see the MEMINFO diagnostic).
+shot-st: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_screen.png
-	-$(HATARI) --machine st --memsize 8 --monitor rgb \
+	-$(HATARI) --machine st --memsize 4 --monitor rgb \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -513,10 +519,10 @@ shot-st: gamedata $(BUILD)/gamest.prg
 # M7 band-raster MECHANISM check: stage RASTER.BIN so the engine installs a 2-band Timer-B split
 # whose band 1 (command bar) has R and B swapped. If the raster fires, the bottom band's colours
 # are visibly swapped vs the map above — proof the palette split works before real band data.
-shot-st-raster: gamedata $(BUILD)/gamest.prg
+shot-st-raster: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_raster.png
 	printf 1 > $(BUILD)/RASTER.BIN
-	-$(HATARI) --machine st --memsize 8 --monitor rgb --conout 2 \
+	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -529,10 +535,10 @@ shot-st-raster: gamedata $(BUILD)/gamest.prg
 # render with true skin/grey tones instead of the muddy brown the terrain-16 gives (splitcheck).
 # CONVPAL_ID overrides the NPC id (0 = nearest adjacent).
 CONVPAL_ID ?= 0
-shot-st-conv: gamedata $(BUILD)/gamest.prg
+shot-st-conv: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_conv.png
 	python3 -c "open('$(BUILD)/CONVPAL.BIN','wb').write(bytes([$(CONVPAL_ID) & 255]))"   # one raw byte = NPC id (0 = nearest)
-	-$(HATARI) --machine st --memsize 8 --monitor rgb --conout 2 \
+	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null

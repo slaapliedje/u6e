@@ -3836,7 +3836,12 @@ int main(void)
     if (!plat_mem_init(&caps)) { Cconws("mem init failed\r\n"); Crawcin(); return 1; }
 
     int32_t n=0;
-    uint8_t *pak=(uint8_t*)plat_load_file("U6.PAK",1,&n);   /* 8.3 name (real-TOS safe) */
+    /* PACK_NAME defaults to the full pack; the ST build (-DPACK_NAME) loads a slim pack (U6ST.PAK,
+     * front-end art omitted) so it fits a real 4 MB ST. See docs/design/palette_lowcolor.md. */
+    #ifndef PACK_NAME
+    #define PACK_NAME "U6.PAK"
+    #endif
+    uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe) */
     if (!pak||n<26||pak[0]!='U'||pak[1]!='6'||pak[2]!='W'||pak[3]!='T'){
         Cconws("cannot load U6.PAK (need U6WT)\r\n"); Crawcin(); return 1; }
     uint32_t map_len=((uint32_t)pak[4]<<24)|(pak[5]<<16)|(pak[6]<<8)|pak[7];
@@ -3993,6 +3998,11 @@ int main(void)
                 objworld_consume(&g_ow,(uint16_t)on,99999);            /* clear the seed */
                 if(g_load_reag[b]>0) inv_add_objn(on,g_load_reag[b]); }
         }
+        /* FRONT-END art block (U6WU..avatar climax): the slim ST pack OMITS this ~1.35 MB of intro/
+         * chargen art to fit a real 4 MB ST (gameplay never uses it) and writes a "NOFE" marker in
+         * its place. Full packs (TT/Falcon) parse it as before. (docs/design/palette_lowcolor.md) */
+        if(ap+4<=pak+n && ap[0]=='N'&&ap[1]=='O'&&ap[2]=='F'&&ap[3]=='E'){ ap+=4; }   /* slim: skip */
+        else {
         /* front-end art (U6WU): [u16 mw][u16 mh][mw*mh][u16 tw][u16 th][tw*th] — point into pak */
         g_menu_w=(ap[0]<<8)|ap[1]; ap+=2; g_menu_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_menu_pix=ap; ap+=(int32_t)g_menu_w*g_menu_h;
@@ -4105,6 +4115,7 @@ int main(void)
             g_av_ox[k]=(ap[0]<<8)|ap[1]; ap+=2; g_av_oy[k]=(ap[0]<<8)|ap[1]; ap+=2;
             g_av_w[k] =(ap[0]<<8)|ap[1]; ap+=2; g_av_h[k] =(ap[0]<<8)|ap[1]; ap+=2;
             g_av_frame[k]=ap; ap+=(int32_t)g_av_w[k]*g_av_h[k]; }
+        }   /* end front-end art block (NOFE gate) */
 
         /* LOW-COLOUR ST palette + 256->16 LUT (U6WW), appended last & self-guarded by a
          * "U6WW" magic (older packs stop at EOF here). [4 magic][16 x {r,g,b} 3-bit levels]
@@ -4146,11 +4157,24 @@ int main(void)
      * so it belongs in ST-RAM — keeping the ~4 MB TT-RAM fast pool free for the asset
      * pack + backbuffer. (With them in fast, U6.PAK + libs overran the pool and rdr_init's
      * fast backbuffer alloc failed → "no renderer".) */
+    /* footprint diagnostic (MEMINFO.BIN): report the ST-RAM pool state at key load points so we can
+     * see how much the pack, then the conv/portrait libs, leave for rdr_init's ~96 KB of buffers. */
+    plat_mem_info_t _mi; int _meminfo=0;
+    {   int32_t mil=0; if(plat_load_file("MEMINFO.BIN",1,&mil)){ _meminfo=1;
+            plat_mem_get_info(&_mi);
+            dbg_num("MEM pool_size KB=", (int)(_mi.chip_size/1024));
+            dbg_num("MEM after_pack_used KB=", (int)(_mi.chip_used/1024));
+            dbg_num("MEM after_pack_free KB=", (int)((_mi.chip_size-_mi.chip_used)/1024)); } }
+
     g_convA=(const uint8_t*)plat_load_file("CONVERSE.A",0,&g_convAlen);
     g_convB=(const uint8_t*)plat_load_file("CONVERSE.B",0,&g_convBlen);
     g_portA=(const uint8_t*)plat_load_file("PORTRAIT.A",0,&g_portAlen);
     g_portB=(const uint8_t*)plat_load_file("PORTRAIT.B",0,&g_portBlen);
-    g_countA=lib_count(g_convA,g_convAlen);
+    g_countA=g_convA?lib_count(g_convA,g_convAlen):0;   /* guard: libs may fail on a tight ST pool */
+
+    if(_meminfo){ plat_mem_get_info(&_mi);
+        dbg_num("MEM after_libs_free KB=", (int)((_mi.chip_size-_mi.chip_used)/1024));
+        dbg_num("MEM libs_ok=", (g_convA&&g_convB&&g_portA&&g_portB)?1:0); }
 
     if (!rdr_init(&caps)) { Cconws("no renderer\r\n"); Crawcin(); return 1; }
     plat_input_init();                              /* fast key auto-repeat for smooth movement */

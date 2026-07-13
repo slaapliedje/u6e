@@ -823,6 +823,7 @@ int main(int argc, char **argv)
     const char *svm_objlist = argc > 6 ? argv[6] : NULL;
     const char *svm_inv     = argc > 7 ? argv[7] : NULL;   /* actor-inventory chunk (readied gear, CB3b) */
     int svm = (svm_objblk && svm_objlist) ? 1 : 0;
+    int slim = getenv("MKWORLD_SLIM") != NULL;   /* ST pack: omit the ~1.35 MB front-end/intro art */
 
     long mn,cn,pn,tn,on,bn,in,zn,fn;
     uint8_t *mapb=slurp(dir,"MAP",&mn), *chk=slurp(dir,"CHUNKS",&cn);
@@ -1224,6 +1225,11 @@ int main(int argc, char **argv)
       fputc((uint8_t)has, f); for(int i=0;i<8;i++) fputc(has?rc[i]:0, f);
       printf("reagents: present=%d [%d,%d,%d,%d,%d,%d,%d,%d] (obj 65-72 carried by Avatar)\n",
              has, rc[0],rc[1],rc[2],rc[3],rc[4],rc[5],rc[6],rc[7]); }
+    long o_frontend = ftell(f);   /* footprint: front-end/intro art starts here (U6WU..U6WV) */
+    /* The slim ST pack OMITS the whole front-end/intro art block (~1.35 MB) to fit a real 4 MB ST —
+     * gameplay never uses it — and writes a "NOFE" marker the engine loader skips. */
+    if(slim){ fwrite("NOFE",1,4,f); printf("slim ST pack: front-end/intro art OMITTED (NOFE marker)\n"); }
+    else {
     /* FRONT-END art (U6WU): MAINMENU.SHP shape 0 + TITLES.SHP shape 0 (shapes.md).
      * [u16 mw][u16 mh][mw*mh indices][u16 tw][u16 th][tw*th indices]. 0x0 if absent. */
     { int mw=0,mh=0,tw=0,th=0;
@@ -1454,7 +1460,11 @@ int main(int argc, char **argv)
                                 else { uint8_t z=0; fwrite(&z,1,1,f); }
           tot+=(long)cw*ch; free(ap); }
         printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(f)-apre); } }
+    }   /* end front-end/intro art block (slim ST pack omits it) */
 
+    long o_lowcolor = ftell(f);   /* footprint: front-end/intro art ends here, low-colour starts */
+    printf("footprint: core+gameplay %ld KB | front-end/intro art %ld KB (U6WU..U6WV)\n",
+           o_frontend/1024, (o_lowcolor-o_frontend)/1024);
     /* LOW-COLOUR ST palette + 256->16 LUT (U6WW): appended LAST so older loaders (which stop
      * at EOF) are unaffected, and guarded by a "U6WW" magic so the reader detects desync.
      * [4 "U6WW"][16 x {u8 r,u8 g,u8 b} ST 3-bit levels][256 x u8 lut]. The shifter backend

@@ -178,6 +178,28 @@ swaps its whole 16 to a palette tuned for the conversation screen (no raster, fu
   portraits gain more (the split-check's 101%). Baseline toggle: CONVPAL.BIN byte1 bit0 disables the
   swap.
 
+## Footprint — booting on a real 4 MB ST
+Measured on a real 4 MB ST (`MEMINFO.BIN` diagnostic → the `MEM ...` console lines): the ST-RAM
+pool is **2579 KB** (after the TPA — text 194 KB + BSS ~1019 KB — and GEMDOS headroom). The FULL
+pack is 2473 KB (incl. 64 KB scratch), leaving only **106 KB** — so the conv/portrait libs (~583 KB)
+fail to load and rdr_init dies "no renderer".
+
+The dominant lever: the **front-end/intro art is 1383 KB** — over half the pack — and gameplay
+never touches it (intro cutscene + gypsy chargen visuals). So the ST ships a **slim pack**:
+
+- `tools/mkworld.c` with `MKWORLD_SLIM=1` writes a 4-byte **`NOFE`** marker in place of the whole
+  front-end art block (U6WU..avatar-climax). Slim pack = **1025 KB** (vs 2409 KB full).
+- The engine loader gates the front-end parse on that marker (`NOFE` → skip, pointers stay NULL);
+  `run_menu`/`run_intro` already no-op on absent art, and the default boot goes straight to the
+  shipped world. `-DPACK_NAME="U6ST.PAK"` selects the slim pack for the ST build.
+- Result on a real 4 MB ST (`make shot-st`, `--memsize 4`): pack+scratch 1089 KB, libs load
+  (**libs_ok=1**), **906 KB free** — the throne room renders and conversations work
+  (`make shot-st-conv`). TT/Falcon are unaffected (they load the full U6.PAK).
+
+Remaining headroom (~900 KB) leaves room for the front-end on ST later (a transient load: run the
+intro/chargen from a separate pack, free it before the libs load — the two phases are disjoint in
+time). BSS is also a target (the full-world maps g_indoor/g_sightblk/g_blocked/wf are 128 KB each).
+
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
 confirmed). For the 16-colour path we must RESERVE slots for any cycling range that maps into
@@ -200,10 +222,8 @@ more cycling slots than fit. **TODO** — not yet in quantize.c.
       Pure-68000 `gamest.prg` (`make game-st`); validated on an emulated plain ST (`make shot-st`
       → the throne room renders in the optimised 16 — natural brick-red/stone-grey/parchment,
       not garish EGA). C c2p for now; a hand-asm span can replace it later (performance.md).
-- [ ] **Footprint**: the current pack (~2.4 MB) + conv/portrait libs (~0.57 MB) + buffers overrun
-      a real 4 MB ST's single ST-RAM pool (`plat_alloc_fast` falls back to chip there) → rdr_init
-      fails "no renderer". Needs a slimmer ST pack (drop/shrink the front-end intro art, or a
-      separate ST asset variant). `shot-st` uses 8 MB emulated to validate the render meanwhile.
+- [x] **Footprint** — DONE: the ST now boots + plays on a REAL 4 MB ST (below). A slim pack
+      (`MKWORLD_SLIM` → U6ST.PAK) omits the ~1.35 MB front-end/intro art gameplay never uses.
 - [ ] Per-scene low-colour palettes + colour-cycling on ST: `rdr_set_palette(256)` is a no-op on
       the shifter (16-colour hw can't take a 256 update), so cutscene palettes + CLUT cycling
       (water/fire) don't yet show. Reserve cycling slots (below) + ship per-scene 16s in U6WW.
