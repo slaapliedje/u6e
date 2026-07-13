@@ -1176,6 +1176,18 @@ Tasks
 - [x] BONUS: band-palette rasters (U6WX, Timer-B) for >16 on-screen colours; per-portrait
       conversation palettes (U6WY); slim ST pack that fits a real 4 MB ST; streaming memory manager
       (plat_chip_mark/reset + U6FE.PAK) that loads the front-end off HD and frees it for gameplay.
+- [ ] LATER: DETECT RAM per Atari system + tier the memory strategy at RUNTIME (not a per-target
+      build flag). plat_mem_get_info already reports ST-RAM + Alt/TT-RAM pool sizes + phystop; use
+      that to CHOOSE residency: on a RAM-tight box take the ST's conserving path — slim core pak +
+      STREAM the front-end (U6FE) off the HD and free it, and consider streaming other transient
+      data (conversation libs, BOOK.DAT, per-scene art) on demand; where RAM is ample, keep it all
+      resident (faster, no reload). This applies to ANY machine, incl. a TT/Falcon whose Alt-RAM
+      pool is small — it should then behave like the ST, not assume the full pack fits. TARGETS:
+      do NOT assume 4 MB (ST RAM upgrades aren't just plugging in SIMMs). The original ST port ran
+      in 1 MB; aim to fit ~2 MB (room for MIDI + drivers), with 1 MB as a stretch goal. So U6FE
+      streaming + the slim pack become a runtime capability keyed on detected free RAM, and the
+      `-DST_STREAM` compile split folds into that. (Foundation exists: plat_chip_mark/reset,
+      U6FE.PAK, the NOFE marker + parse_frontend — all already runtime-capable.)
 - [~] QA: side-by-side PNG (original VGA vs our 16-color) per scene +
       perceptual-error metric. DONE for the tilesheet (4-panel VGA|ST16|STE16|EGA16 + RMS);
       extend to per-scene as the per-region palettes land.
