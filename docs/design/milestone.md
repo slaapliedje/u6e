@@ -1163,9 +1163,15 @@ Tasks
       the 512 map tiles (211 source colours): our ST-16 RMS 26.1 / STE-16 25.4 vs EGA-16 33.5 —
       ~22% better + visibly faithful where EGA is garish (build/quant_qa.png). PER-REGION DONE:
       4 tile-varied surface regions each get their own STE-16 vs one global — per-region 11%
-      lower error, visible in region highlights (build/quant_regions.png). TODO: non-surface
-      SCENES (dungeon/town/PALETTES.INT cutscenes, where the per-scene win is larger) + emit
-      granularity.
+      lower error, visible in region highlights (build/quant_regions.png). PER-SCENE (front-end)
+      DONE: each intro cutscene + gypsy/woods/storm chargen scene ships its OWN ST-16 + LUT
+      (build_scene_lc, quantised from that scene's PALETTES.INT palette) in U6FE, swapped in on
+      scene entry — validated on a 4 MB ST (`make shot-st-gypsy`: skin/headscarf/vest/vials the
+      terrain-16 can't afford). DEFERRED (2026-07-13, user call): per-context palettes for GAMEPLAY
+      dungeon + town — the engine is SURFACE-ONLY (world_tile masks to the 1024² surface; save.c
+      skips the 5 dungeon chunks), so dungeons aren't navigable and there's no context to detect or
+      validate against; U6 towns are surface regions on the same tileset/U6PAL (a "town palette" is
+      really an indoor/region CLUT swap, modest win). Both wait until dungeon-map navigation lands.
 - [x] Snap candidate colors to hardware-representable values BEFORE measuring
       error. (quantize.c snaps the 16 centroids to the ST/STE gamut, then measures.)
 - [ ] Reserve palette slots for color-cycling ranges (preserve animation);
@@ -1191,6 +1197,13 @@ Tasks
 - [~] QA: side-by-side PNG (original VGA vs our 16-color) per scene +
       perceptual-error metric. DONE for the tilesheet (4-panel VGA|ST16|STE16|EGA16 + RMS);
       extend to per-scene as the per-region palettes land.
+
+FOLLOW-UP (later, user-requested 2026-07-13) — TITLE SCREEN polish on the ST:
+- The "Ultima VI" title/menu renders on the ST via the streamed U6FE game-16, but it can look
+  BETTER — the title art has its own vivid palette that the shared game-16 doesn't flatter. Give
+  the title (and menu) their OWN per-scene ST-16 the same way the intro/chargen scenes now do
+  (build_scene_lc on the TITLES.SHP / MAINMENU.SHP pixels + their palette), swapped in for the
+  menu phase. Low-risk, self-contained; slotted for a later pass.
 
 EXTRA FEATURE (later, optional) — native EGA assets for 16-colour targets:
 - The user noted U6 ships dedicated 16-colour **.EGA** art (MAPTILES.EGA,
