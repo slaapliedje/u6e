@@ -196,9 +196,34 @@ never touches it (intro cutscene + gypsy chargen visuals). So the ST ships a **s
   (**libs_ok=1**), **906 KB free** — the throne room renders and conversations work
   (`make shot-st-conv`). TT/Falcon are unaffected (they load the full U6.PAK).
 
-Remaining headroom (~900 KB) leaves room for the front-end on ST later (a transient load: run the
-intro/chargen from a separate pack, free it before the libs load — the two phases are disjoint in
-time). BSS is also a target (the full-world maps g_indoor/g_sightblk/g_blocked/wf are 128 KB each).
+The front-end on ST is then STREAMED (loaded, run, freed) from a separate U6FE.PAK — see "Front-end
+streaming (DONE)" below. BSS is a further target (the full-world maps g_indoor/g_sightblk/g_blocked/
+wf are 128 KB each) if more headroom is ever needed.
+
+## Front-end streaming (DONE) — the ST title/intro/chargen off the hard drive
+The 1.35 MB front-end art can't coexist with the gameplay core+libs on a 4 MB ST, so the ST STREAMS
+it — the period-correct pattern (load from HD, use, free; don't hold it resident). The foundation
+is `plat_chip_mark()`/`plat_chip_reset()` (platform/platmem.h): a scoped (LIFO) region free on the
+ST-RAM pool.
+
+- `tools/mkworld.c` (`MKWORLD_SLIM`) writes the front-end art to a separate **U6FE.PAK** =
+  `[4 "U6FE"][48 pal][256 lut][2048 font][front-end art]`; the core slim pak gets a `NOFE` marker.
+  The palette/lut are the game 16 (U6WW), so the front-end can render before the core loads.
+- `render/gamedemo.c` (`-DST_STREAM`) reorders the ST boot: `rdr_init` early → `plat_chip_mark` →
+  load U6FE → `rdr_set_lowcolor(fe pal/lut)` + `parse_frontend(fe art)` → run the menu/intro/chargen
+  → `plat_chip_reset` (frees the 1.35 MB) → then the core + libs load into the reclaimed space. The
+  chargen result (name/stats) lives in globals, so it survives the free. `parse_frontend()` is the
+  extracted loader block (also used inline by the full pack). All `#ifdef ST_STREAM` — TT/Falcon keep
+  the inline path byte-for-byte.
+- **Validated on a real 4 MB ST** (MEMINFO): U6FE resident = 1543 KB used; freed → core+libs load
+  (1183 KB, 808 KB free, libs_ok=1); the "Ultima VI" title + main menu render in the optimised 16
+  (`make`, MENU.REQ → build/gamest_menu.png); character creation runs from the streamed pack and
+  survives the free (`CHARGEN.REQ=N` → "NEWGAME avatar: Milady"). TT boots unchanged.
+- **Follow-ups**: per-SCENE low-colour palettes (the intro cutscene scenes carry PALETTES.INT
+  palettes; right now they render through the single game 16 — recognisable but not tuned). BOOK.DAT
+  text lived in the front-end block → on ST it's freed with U6FE, so in-game sign/book reading is
+  nulled until BOOKS moves to the core (or streams on demand) — the next application of this same
+  streaming mechanism.
 
 ## Colour cycling (must survive the reduction)
 U6 animates fire/water/etc. by rotating small U6PAL ranges (palette_cycling.md — fire 224–231
