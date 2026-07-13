@@ -3973,9 +3973,12 @@ int main(void)
     g_bb=rdr_backbuffer(); g_W=rdr_width();
     {   plat_mark fe_mark = plat_chip_mark();
         int32_t felen=0; uint8_t *fe=(uint8_t*)plat_load_file("U6FE.PAK",1,&felen);
-        if (fe && felen>2052 && fe[0]=='U'&&fe[1]=='6'&&fe[2]=='F'&&fe[3]=='E'){
-            g_font = fe+4;                              /* font (2048 bytes) for text */
-            parse_frontend(fe+4+2048);                  /* set g_menu/g_intro/g_gyp/... into fe */
+        if (fe && felen>2356 && fe[0]=='U'&&fe[1]=='6'&&fe[2]=='F'&&fe[3]=='E'){
+            /* U6FE = [4 magic][48 pal][256 lut][2048 font][art]. Activate the game 16 so the
+             * front-end renders in colour (the core's U6WW isn't loaded yet). */
+            rdr_set_lowcolor(fe+4, fe+4+48);
+            g_font = fe+4+48+256;                       /* font (2048 bytes) for text */
+            parse_frontend(fe+4+48+256+2048);           /* set g_menu/g_intro/g_gyp/... into fe */
             int32_t ml=0;
             void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq) run_intro();
             void*creq=plat_load_file("CHARGEN.REQ",1,&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');

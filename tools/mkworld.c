@@ -1234,12 +1234,16 @@ int main(int argc, char **argv)
     /* The front-end/intro art is written to `fe`: for the full pack (TT/Falcon) that's the core pak
      * itself (inline, as before); for the slim ST pack it's a SEPARATE U6FE.PAK the engine STREAMS
      * (loads, runs the menu/intro/chargen, frees) so it never stays resident during gameplay. The
-     * core slim pak gets a "NOFE" marker in its place. U6FE = [4 "U6FE"][2048 font][front-end block]. */
+     * core slim pak gets a "NOFE" marker in its place. U6FE = [4 "U6FE"][48 low-colour palette]
+     * [256 lut][2048 font][front-end block] — the palette/lut let the ST render the front-end in the
+     * game's optimised 16 while its core (U6WW) isn't loaded yet. Computed once, reused for U6WW. */
+    static uint8_t g_lc_pal[48], g_lc_lut[256];
+    build_lowcolor(&ts, palb, g_lc_pal, g_lc_lut);   /* the game 16 + 256->16 LUT (also shipped as U6WW) */
     FILE *fe = f;
     if(slim){ fwrite("NOFE",1,4,f);
         fe = fopen(fe_path,"wb");
-        if(fe){ fwrite("U6FE",1,4,fe); fwrite(font,1,2048,fe);
-                printf("slim ST pack: front-end/intro art -> %s (+ font)\n", fe_path); }
+        if(fe){ fwrite("U6FE",1,4,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
+                printf("slim ST pack: front-end/intro art -> %s (+ palette + font)\n", fe_path); }
         else  { fe = f; printf("WARN: cannot open %s; front-end inline\n", fe_path); } }
     {
     /* FRONT-END art (U6WU): MAINMENU.SHP shape 0 + TITLES.SHP shape 0 (shapes.md).
@@ -1482,8 +1486,7 @@ int main(int argc, char **argv)
      * at EOF) are unaffected, and guarded by a "U6WW" magic so the reader detects desync.
      * [4 "U6WW"][16 x {u8 r,u8 g,u8 b} ST 3-bit levels][256 x u8 lut]. The shifter backend
      * (rdr_st) consumes it; TT/Falcon/vcard ignore it (they show all 256 VGA colours). */
-    { static uint8_t pal_lvl[48], lut[256];
-      build_lowcolor(&ts, palb, pal_lvl, lut);
+    { uint8_t *pal_lvl=g_lc_pal, *lut=g_lc_lut;   /* computed once above (also shipped in U6FE) */
       fwrite("U6WW",1,4,f); fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
 
       /* BAND-RASTER low-colour (U6WX): >16 on-screen colours on the ST via a Timer-B palette split
