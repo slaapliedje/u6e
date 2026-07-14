@@ -116,9 +116,36 @@ call-subroutine, 0x82 delay, 0x83 load-instrument, 0x85 fade-out, 0x86 fade-in, 
 - **Volume → velocity** (MIDI/PSG dynamics): `vel = (0x3F − (level & 0x3F)) × 3/2` from the `0x3n`
   set-level command; track per channel, apply on note-on. (`tools/m2mid` now does this.)
 - **MT-32 path** (`mididrv_m_mt32`): uses the MT-32's **built-in patches via program-change, NO
-  SysEx** — it needs an instrument-index → MIDI-program map (`setInstrumentAssignments`), sourced
-  outside the parser (TODO: find those values / derive from U6ROLAND.DRV for authentic timbres). The
-  `0x83` OPL patch bytes are IGNORED on the MT-32 path (they matter only for OPL2→DMA/AdLib).
+  SysEx**. The instrument map is the authentic Origin data in **`MIDI.DAT`** (a plain-TEXT file in the
+  U6 data — no decode needed; ScummVM ships the same values as its `DEFAULT_MT32_INSTRUMENT_MAPPING`
+  fallback, 0-based). The `0x83` OPL patch bytes are IGNORED on the MT-32 path (OPL2→DMA/AdLib only).
+
+### MIDI.DAT — the MT-32 instrument map (CONFIRMED, from the user's own data)
+Self-documenting text: a header, then one line per song `N: Name  (ch/prog,ch/prog,...)`, where
+`ch` = MIDI channel 1..16 and `prog` = MT-32 program 1..128. The pairs are indexed by **instrument
+number**: the `.M`'s `0x7n` (program-change) sets an OPL channel's instrument index → `pair[index]`
+= (MIDI channel, MT-32 program). Songs are listed in a fixed order keyed `1..9,0,-,=` → the 12 `.M`
+files; the full U6 table:
+
+| .M        | song                      | (channel/program) pairs                 |
+|-----------|---------------------------|-----------------------------------------|
+| ULTIMA.M  | Ultima Theme              | 2/26, 3/51, 4/25, 5/28                  |
+| BOOTUP.M  | Bootup                    | 2/38, 3/39                              |
+| INTRO.M   | Introduction              | 2/62, 3/61, 4/56, 5/118, 6/118          |
+| CREATE.M  | Character Creation        | 2/7, 3/2, 4/34                          |
+| FOREST.M  | Forest                    | 2/60, 3/61                              |
+| HORNPIPE.M| Captain Johne's Hornpipe  | 2/88, 3/61, 4/60                        |
+| ENGAGE.M  | Engagement and Melee      | 2/50, 3/27, 4/19, 5/17                  |
+| STONES.M  | Stones                    | 2/7, 3/33                               |
+| DUNGEON.M | Dungeon                   | 2/38, 3/114, 4/56                       |
+| BRIT.M    | Rule Britannia            | 2/13                                    |
+| GARGOYLE.M| Audchar Gargl Zenmur      | 2/39, 3/6                               |
+| END.M     | Endgame Music             | 2/39, 3/13, 4/51, 5/95                  |
+
+Voices sharing an instrument share a MIDI channel (BRIT = all voices → ch2/pg13, polyphonic). The
+engine will extract `MIDI.DAT` into the pack (like BOOK.DAT) and ship it for the MIDI-OUT backend.
+`tools/m2mid` reads `MIDI.DAT` beside the `.M` and applies this map (program-changes + per-instrument
+channel routing) into the exported SMF — so it drives a real MT-32 with the authentic timbres.
 - **Channel map**: 9 data channels → MIDI channels, avoiding the drum channel; a direct 0..8 map works.
 
 ## The `.DRV` device drivers (context, not decoded)
