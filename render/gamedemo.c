@@ -27,6 +27,7 @@
 #include "magic.h"
 #include "platmidi.h"          /* M10: MIDI OUT */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
+#include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
 #include <osbind.h>
 #include <string.h>
 
@@ -4069,6 +4070,43 @@ int main(void)
     platform_caps_t caps; platform_detect(&caps);
     Cconws("u6e M6 authentic UI: loading...\r\n");
     if (!plat_mem_init(&caps)) { Cconws("mem init failed\r\n"); Crawcin(); return 1; }
+
+#ifdef BENCH
+    /* M10 OPL2->DMA feasibility probe (gated on SBENCH.REQ): time the software FM
+     * synth's steady-state throughput on THIS machine — how many mono samples/sec
+     * it can render with all 9 voices sounding. Needs no game data (synthetic OPL
+     * stream). BENCH.BIN = 4 big-endian u32: samples, 200Hz-ticks, samples/sec, rate.
+     * Real-time is feasible iff samples/sec comfortably exceeds the chosen DMA rate. */
+    {   int32_t sbl=0; void *sb=plat_load_file("SBENCH.REQ",1,&sbl);
+        if(sb){
+            /* one sustaining instrument (BRIT's) on all 9 voices, then loop on delays */
+            static const uint8_t INST[11]={0x61,0x1b,0x62,0x56,0x00,0x21,0x00,0x84,0x55,0x00,0x0e};
+            static const uint8_t IDX[9]={1,2,3,4,5,6,7,9,10};   /* non-rest F-nums    */
+            uint8_t strm[64]; int p=0;
+            strm[p++]=0x83; strm[p++]=0x00; for(int k=0;k<11;k++) strm[p++]=INST[k];
+            for(int c=0;c<9;c++){ strm[p++]=(uint8_t)(0x70|c); strm[p++]=0x00; }
+            for(int c=0;c<9;c++){ strm[p++]=(uint8_t)(0x20|c); strm[p++]=(uint8_t)(0x80|IDX[c]); }
+            strm[p++]=0xE0; strm[p++]=0x82; strm[p++]=0xFF; strm[p++]=0xF0;
+            int os = (sbl>0)? ((const char*)sb)[0]-'0' : 1; if(os<1||os>8) os=1;   /* SBENCH.REQ byte0='1'.. */
+            int32_t rate = 25033;
+            int16_t buf[512];
+            opl_start(strm, p, rate, os);
+            opl_render(buf,512);                        /* warm up (prime voices)      */
+            uint32_t t0=plat_ticks_200hz(); int32_t done=0;
+            while(done<20000){ opl_render(buf,512); done+=512; }
+            uint32_t ticks=plat_ticks_200hz()-t0; if(!ticks) ticks=1;
+            uint32_t sps=(uint32_t)((uint64_t)done*200/ticks);
+            uint32_t r[4]={ (uint32_t)done, ticks, sps, (uint32_t)rate };
+            plat_file bf=plat_fcreate("BENCH.BIN");
+            if(bf!=PLAT_BADFILE){ plat_fwrite(bf,r,(int32_t)sizeof r); plat_fclose(bf);}
+            dbg_num("synth OS=", os);
+            dbg_num("synth samples=", (int)done);
+            dbg_num("synth 200Hz-ticks=", (int)ticks);
+            dbg_num("synth samples/sec=", (int)sps);
+            dbg_num("target DMA rate=", (int)rate);
+            Cconws("synth bench done\r\n"); return 0;
+        } }
+#endif
 
     int32_t n=0;
     /* PACK_NAME defaults to the full pack; the ST build (-DPACK_NAME) loads a slim pack (U6ST.PAK,

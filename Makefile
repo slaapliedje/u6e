@@ -368,7 +368,7 @@ rdemo: $(BUILD)/rdemo.prg
 # ---- performance benchmark: time compose vs c2p present on the TT ------------
 BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
              platform/plattime.c engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
-             engine/save.c engine/combat.c engine/magic.c dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
+             engine/save.c engine/combat.c engine/magic.c engine/oplsynth.c dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
              render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # Hybrid 020/no-FPU build (same as game.prg) + -DBENCH: runs on a stock FPU-less TT.
 $(BUILD)/bench.prg: $(BENCH_SRC)
@@ -382,6 +382,25 @@ bench: world $(BUILD)/bench.prg
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
 	          --fast-forward on --run-vbls 9000 </dev/null >/dev/null 2>&1 || true
 	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "compose: %.1f ms   present FULL: %.1f ms   MAP-WINDOW doubled: %.1f ms   MAP-WINDOW 1x: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, $$4*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+
+# ---- M10 OPL2 synth throughput probe: measure how many mono samples/sec the software FM synth
+# can render on each machine (all 9 voices sounding), to decide real-time synth vs host pre-rendered
+# PCM per target. Needs no game data. SBENCH_OS = oversampling factor (1 = cheapest). Runs on TT
+# (68030) and STE (68000) for both data points. BENCH.BIN = 4 u32: samples, ticks, samples/sec, rate.
+SBENCH_OS ?= 1
+.PHONY: sbench
+sbench: $(BUILD)/bench.prg
+	@printf '$(SBENCH_OS)' > $(BUILD)/SBENCH.REQ
+	@for m in tt ste; do \
+	  rm -f $(BUILD)/BENCH.BIN; \
+	  args=""; [ $$m = tt ] && args="--machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)'"; \
+	  [ $$m = ste ] && args="--machine ste --tos '$(TOS_STE)'"; \
+	  eval $(HATARI) $$args --harddrive $(BUILD) --auto 'c:\\bench.prg' \
+	       --fast-boot on --fast-forward on --run-vbls 6000 </dev/null >/dev/null 2>&1 || true; \
+	  printf "%-4s: " $$m; \
+	  od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{if($$3>0) printf "%d samples/sec (%d samples in %d ticks) vs DMA rate %d => %.1fx realtime headroom\n",$$3,$$1,$$2,$$4,$$3/$$4.0; else print "no BENCH.BIN"}'; \
+	done
+	@rm -f $(BUILD)/SBENCH.REQ
 
 # ---- INTRO render-cost bench: run the living-room scene (0) through the REAL run_intro and
 # report per-frame cost split HOLD vs PAN x compose/c2p+double/output. BENCH.BIN = 8 big-endian
