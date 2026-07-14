@@ -230,6 +230,19 @@ opltest: $(BUILD)/opltest
 	$(BUILD)/opltest "$(REFDATA)/$(OPL_SONG).M" "$(BUILD)/wav/$(OPL_SONG)_engine.wav" $(OPL_SECS) $(OPL_RATE) $(OPL_OS)
 	@echo "play: aplay $(BUILD)/wav/$(OPL_SONG)_engine.wav"
 
+# M10 OPL2->DMA pre-render: host-render every .M to signed-8-bit PCM (engine/oplsynth, 4x oversampled)
+# for the Atari to STREAM to DMA sound. Emits build/music/*.PCM (U6PC format; gitignored, derived from
+# the copyrighted score). PCM_RATE = DMA rate; PCM_SECS = render length per song.
+$(BUILD)/m2pcm: tools/m2pcm.c engine/oplsynth.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
+PCM_RATE ?= 12517
+PCM_SECS ?= 60
+.PHONY: m2pcm
+m2pcm: $(BUILD)/m2pcm
+	@mkdir -p $(BUILD)/music
+	@for f in $(REFDATA)/*.M; do b=$$(basename "$$f" .M); $(BUILD)/m2pcm "$$f" "$(BUILD)/music/$$b.PCM" $(PCM_SECS) $(PCM_RATE); done
+
 # M10 ON-TARGET music: stage a .M + MIDI.DAT + MUSIC.REQ and launch the game in Hatari with MIDI on.
 # With your hatari.cfg [Midi] sMidiOutPortName pointing at your MT-32 (e.g. the UM-ONE), the ENGINE
 # plays U6's score on the real synth via the emulated ST MIDI OUT. MUSIC_SONG picks the .M.
