@@ -1276,10 +1276,16 @@ Acceptance
 ---
 
 ## M10 — Audio: music (HEADLINE FEATURE — "fixes" the silent ST port)
-Status: [~] IN PROGRESS 2026-07-13 — format DECODED + validated; the MIDI-OUT backend is DONE and
-        the engine plays U6's score out the ST MIDI port on real MT-32 hardware (validated end-to-end
-        in Hatari). Remaining: the OPL2→DMA (STE/TT/Falcon) + YM2149-PSG (ST) synth backends + runtime
-        detection + per-area hooks.
+Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends DONE:
+        (1) MIDI-OUT (real MT-32, validated in Hatari); (2) OPL2→DMA on STE/TT/Falcon — real-time
+        FM synth proved INFEASIBLE on-target (a 32 MHz TT does 0.1× real-time; `make sbench`), so the
+        host pre-renders each .M to 8-bit PCM (tools/m2pcm, our validated FM synth engine/oplsynth at
+        4× oversampling = the clean AdLib sound) and platform/platdma STREAMS it from disk to the DMA
+        sound chip at ~0 % CPU — validated end-to-end in Hatari (captured audio is real music advancing
+        through the file). Remaining: YM2149-PSG (plain ST) backend; runtime backend selection + MIDI
+        toggle; per-area music hooks; PCM loop-point detection; and a Timer-IRQ 60 Hz tick for the MIDI
+        path (its tempo is currently coupled to the ~6-8 fps main loop → choppy/slow; the DMA path is
+        immune, being hardware-timed).
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
