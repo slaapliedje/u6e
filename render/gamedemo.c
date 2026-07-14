@@ -4073,6 +4073,23 @@ static void music_play(const char *mfile){
     g_music_on=1;
     plat_timer_start(music_isr_tick, 60);     /* steady 60 Hz .M tick + MIDI drain, off the main loop */
 }
+/* Silence + tear down all audio before returning to TOS. MUST run on any clean exit:
+ * (1) remove the Timer-A ISR — its vector points into our program memory, which TOS frees
+ * on exit, so a later 60 Hz tick would jump into reused memory and crash the machine;
+ * (2) send all-notes-off / all-sound-off so a held MIDI note doesn't hang on the MT-32;
+ * (3) stop the DMA sound loop. (A hard kill / power-off can't run this — the external synth
+ * then holds its last note until reset; that's inherent to MIDI, not fixable from a dead program.) */
+static void music_shutdown(void){
+    plat_timer_stop();          /* (1) uninstall the 60 Hz interrupt FIRST */
+    g_music_on = 0;
+    /* (2) explicit note-off for every note the sequencer still has sounding — the
+     * surest way to kill a hung note on the MT-32 (CC123 alone isn't honoured by
+     * every synth/state), then the CC123/CC120 panic on all channels as a backstop. */
+    for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
+    plat_midi_all_off();        /* queue CC123 all-notes-off + CC120 all-sound-off, all channels */
+    plat_midi_flush();          /* transmit it all now (blocking, main context) */
+    plat_dma_music_stop();      /* (3) stop DMA sound */
+}
 
 int main(void)
 {
@@ -5465,6 +5482,7 @@ int main(void)
                else if (mouse_moved) present_cursor();         /* bare mouse move: cheap cursor-only */
                Vsync(); }
     }
+    music_shutdown();   /* uninstall the Timer-A ISR + silence MIDI/DMA before returning to TOS */
     rdr_shutdown();
     return 0;
 }
