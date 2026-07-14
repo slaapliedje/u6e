@@ -215,6 +215,21 @@ $(BUILD)/musictest: tools/musictest.c engine/music.c dataformats/u6lzw.c
 musictest: $(BUILD)/musictest
 	@for f in $(REFDATA)/*.M; do $(BUILD)/musictest "$$f" $(BUILD)/mid/`basename "$$f" .M`_seq.mid 60; done
 
+# M10 OPL2->DMA: HOST test for the ON-TARGET FM synth (engine/oplsynth.c) — renders a .M to WAV through
+# the same integer/no-libm engine code the 68000 runs, to confirm it matches the m2wav de-risk proof
+# before wiring it to DMA sound. OPL_SONG picks the .M; OPL_RATE/OPL_OS = DMA rate + oversampling.
+$(BUILD)/opltest: tools/opltest.c engine/oplsynth.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)/wav
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
+OPL_SONG ?= ULTIMA
+OPL_SECS ?= 30
+OPL_RATE ?= 49716
+OPL_OS   ?= 4
+.PHONY: opltest
+opltest: $(BUILD)/opltest
+	$(BUILD)/opltest "$(REFDATA)/$(OPL_SONG).M" "$(BUILD)/wav/$(OPL_SONG)_engine.wav" $(OPL_SECS) $(OPL_RATE) $(OPL_OS)
+	@echo "play: aplay $(BUILD)/wav/$(OPL_SONG)_engine.wav"
+
 # M10 ON-TARGET music: stage a .M + MIDI.DAT + MUSIC.REQ and launch the game in Hatari with MIDI on.
 # With your hatari.cfg [Midi] sMidiOutPortName pointing at your MT-32 (e.g. the UM-ONE), the ENGINE
 # plays U6's score on the real synth via the emulated ST MIDI OUT. MUSIC_SONG picks the .M.
