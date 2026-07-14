@@ -1286,9 +1286,12 @@ Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends 
         (was coupled to the ~6-8 fps main loop → choppy/slow), with an ISR-safe queue→ACIA MIDI path;
         validated in Hatari (smooth musical timing, no crash). Exit cleanup (uninstall the Timer-A ISR
         before Pterm + all-notes-off) fixes a hung MT-32 note + a latent post-exit crash. A runtime
-        music manager now picks the backend (MIDI on -> MIDI OUT; off + DMA -> DMA sound; off + no DMA
-        -> PSG/TODO) with the toggle defaulting from MIDI.CFG; both branches validated in Hatari.
-        Remaining: YM2149-PSG (plain ST) backend; per-area music hooks; PCM loop-point detection.
+        music manager picks the backend 3-way (MIDI.CFG '1'=MIDI, '2'=DMA, '3'=PSG, else auto: DMA if
+        present else PSG); all three validated in Hatari. THREE backends now DONE: MIDI OUT, OPL2->DMA,
+        and YM2149 PSG (plain ST: U6's 9 OPL voices folded to 3 squares; validated on --machine st as a
+        real melody). NOTE: ST I/O is supervisor-only — main-context register access goes via Supexec
+        (fixed the PSG + a latent MIDI-flush bus-error). Remaining: per-area music hooks (replace the
+        SONG.REQ test stopgap); PCM loop-point detection for seamless loops.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
