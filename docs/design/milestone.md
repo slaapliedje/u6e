@@ -1282,10 +1282,10 @@ Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends 
         host pre-renders each .M to 8-bit PCM (tools/m2pcm, our validated FM synth engine/oplsynth at
         4× oversampling = the clean AdLib sound) and platform/platdma STREAMS it from disk to the DMA
         sound chip at ~0 % CPU — validated end-to-end in Hatari (captured audio is real music advancing
-        through the file). Remaining: YM2149-PSG (plain ST) backend; runtime backend selection + MIDI
-        toggle; per-area music hooks; PCM loop-point detection; and a Timer-IRQ 60 Hz tick for the MIDI
-        path (its tempo is currently coupled to the ~6-8 fps main loop → choppy/slow; the DMA path is
-        immune, being hardware-timed).
+        through the file). The MIDI path's tempo is now driven by a steady MFP Timer-A 60 Hz interrupt
+        (was coupled to the ~6-8 fps main loop → choppy/slow), with an ISR-safe queue→ACIA MIDI path;
+        validated in Hatari (smooth musical timing, no crash). Remaining: YM2149-PSG (plain ST) backend;
+        runtime backend selection + MIDI toggle; per-area music hooks; PCM loop-point detection.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
