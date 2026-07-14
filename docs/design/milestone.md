@@ -1276,7 +1276,10 @@ Acceptance
 ---
 
 ## M10 — Audio: music (HEADLINE FEATURE — "fixes" the silent ST port)
-Status: [~] IN PROGRESS 2026-07-13 — format DECODED + validated (task 1); playback backends next.
+Status: [~] IN PROGRESS 2026-07-13 — format DECODED + validated; the MIDI-OUT backend is DONE and
+        the engine plays U6's score out the ST MIDI port on real MT-32 hardware (validated end-to-end
+        in Hatari). Remaining: the OPL2→DMA (STE/TT/Falcon) + YM2149-PSG (ST) synth backends + runtime
+        detection + per-area hooks.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
@@ -1315,19 +1318,31 @@ Tasks
       host disassembler (`tools/mdump`) reaching a CLEAN END on all 12 `.M` files; 60 Hz
       timing. Remaining detail: the 24-entry F-number pitch table + 11-byte operator layout
       (pinned when we synthesize).
-- [ ] Host-side playback validation: render the OPL stream on the dev PC (software OPL emu
-      or export) to confirm the decode BY EAR before committing to the 68000 synth.
-- [ ] Decode U6ROLAND.DRV → the MT-32 instrument/timbre map (for the MIDI-out path).
-- [ ] Portable sequencer in /engine (or /audio): tick the `.M` events on a 60 Hz clock,
-      feed the active `plat_audio` sink. Integer tempo math, no FPU. Clean-room from the spec.
-- [ ] Platform audio backends behind `plat_audio_*`:
+- [x] Host-side playback validation: DONE. `tools/m2mid` (make m2mid) extracts the note stream
+      to a Standard MIDI File — note counts match the disassembler, renders a correct melody via
+      a Roland SC-55 soundfont. Cross-validated the whole format against ScummVM/Nuvie's
+      `midiparser_m`/`mididrv_m_*` (opcode table + 60 Hz + the FPU-free NOTE_MAP all agree).
+- [x] The MT-32 instrument/timbre map — DONE. It's the authentic Origin **MIDI.DAT** (plain text,
+      per song `(midi_channel/program,...)` indexed by instrument), matching ScummVM's fallback.
+      (U6ROLAND.DRV not needed — MIDI.DAT + the MT-32's built-in patches, no SysEx.)
+- [x] Portable sequencer in /engine — DONE. `engine/music.c`: pure integer (no FPU/TOS) OPL2
+      command-stream sequencer, 60 Hz clock, follows the .M loop/branch structure, drives a
+      pluggable `music_backend_t`. Host unit test `make musictest`.
+- [~] Platform audio backends behind the `music_backend_t` seam:
+      - [x] **MIDI OUT** (all Ataris, user-enabled): `platform/platmidi.c` (XBIOS Midiws) + a MIDI
+            backend in gamedemo. DONE + VALIDATED end-to-end: the engine emits the correct
+            program-changes (ULTIMA's MIDI.DAT map) + notes/velocity out the emulated ST MIDI port,
+            captured via Hatari PortMidi → an ALSA loopback → aseqdump. `make music-tt` plays it on
+            a real MT-32 through your hatari.cfg MIDI port.
       - [ ] **OPL2 → DMA sound** (STE/TT/Falcon): software YM3812 FM synth → 8-bit DMA sound
-            (state the XBIOS/DMA calls). The authentic path.
+            (state the XBIOS/DMA calls). The authentic path. (Reuses the sequencer via a DMA backend.)
       - [ ] **OPL → YM2149 PSG** (plain ST): 3-voice downmix, Timer-driven register writes.
-      - [ ] **MIDI OUT** (all Ataris, user-enabled): MFP/ACIA MIDI dev (Bconout(3,..)/Midiws).
+- [ ] Extract MIDI.DAT/.M into the asset pack (like BOOK.DAT) instead of runtime file loads.
 - [ ] Runtime detection picks DMA vs PSG from the machine (M1 caps); a user setting enables
-      the MIDI-out path instead. Hook into the engine loop: start/stop/loop per area, duck on
-      combat, etc. (data-driven per GameDef so SE/MD reuse it).
+      the MIDI-out path instead. Hook into the engine loop: start/stop/loop per AREA (the MUSIC.REQ
+      hook is a stopgap), duck on combat, etc. (data-driven per GameDef so SE/MD reuse it).
+- [ ] Move the 60 Hz music tick to a timer interrupt (Timer-A) so it keeps playing during blocking
+      waits (menus/conversation); the main-loop pump only advances during the gameplay loop.
 
 Acceptance
 - [ ] U6 on Atari plays its (DOS) score — a feature the original ST port lacked.
