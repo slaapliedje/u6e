@@ -4052,13 +4052,26 @@ static int mus_parse_map(const uint8_t *dat, int32_t len, int idx, music_map_t *
     }
     return np;
 }
-/* Load a .M (LZW), its MT-32 map from MIDI.DAT (beside the game data), start the sequencer on MIDI OUT,
- * driven by a steady 60 Hz Timer-A interrupt (so tempo is independent of the frame/loop rate and keeps
- * playing through blocking waits). */
-static void music_play(const char *mfile){
-    plat_timer_stop();                       /* freeze the tick before touching the sequencer state */
-    music_seq_stop(&g_music); g_music_on=0;
-    plat_midi_flush();                        /* send the queued all-notes-off from the old song */
+/* ---- music manager: runtime backend selection + MIDI toggle -------------------------
+ * One song, three possible sinks chosen at runtime from the machine + a user toggle:
+ *   MIDI on           -> MIDI OUT (BASE.M + MIDI.DAT), any Atari + external synth (MT-32)
+ *   MIDI off, has DMA -> 8-bit DMA sound (BASE.PCM, host pre-rendered), STE/TT/Falcon
+ *   MIDI off, no DMA  -> YM2149 PSG (plain ST) -- TODO, silent for now
+ * The engine calls music_play_song(base); it never picks a backend itself. */
+static int  g_music_midi;       /* the toggle: 0 = DMA/PSG, 1 = MIDI OUT           */
+static int  g_music_dma_ok;     /* 8-bit DMA sound present (STE/MegaSTE/TT/Falcon) */
+static char g_music_cur[16];    /* current song base name ("" = none)             */
+
+/* build "BASE.EXT" (8.3) into dst */
+static void music_name(char *dst, const char *base, const char *ext){
+    int i=0; while(base[i] && i<12){ dst[i]=base[i]; i++; }
+    for(int k=0; ext[k]; k++) dst[i++]=ext[k];
+    dst[i]=0;
+}
+
+/* start the MIDI-OUT backend for a .M file, driven by the steady 60 Hz Timer-A tick
+ * (tempo independent of the frame rate; plays through blocking waits). Caller has stopped audio. */
+static void music_play_midi(const char *mfile){
     int32_t rl=0; uint8_t *raw=(uint8_t*)plat_load_file(mfile, 1, &rl);
     if(!raw || rl<=4) return;
     int32_t usz=u6lzw_unpacked_size(raw, rl); if(usz<=0) return;
@@ -4071,24 +4084,56 @@ static void music_play(const char *mfile){
     plat_midi_init();
     music_seq_start(&g_music, song, got, map, nmap, &g_midi_be);  /* queues the program-changes */
     g_music_on=1;
-    plat_timer_start(music_isr_tick, 60);     /* steady 60 Hz .M tick + MIDI drain, off the main loop */
+    plat_timer_start(music_isr_tick, 60);
 }
-/* Silence + tear down all audio before returning to TOS. MUST run on any clean exit:
- * (1) remove the Timer-A ISR — its vector points into our program memory, which TOS frees
- * on exit, so a later 60 Hz tick would jump into reused memory and crash the machine;
- * (2) send all-notes-off / all-sound-off so a held MIDI note doesn't hang on the MT-32;
- * (3) stop the DMA sound loop. (A hard kill / power-off can't run this — the external synth
- * then holds its last note until reset; that's inherent to MIDI, not fixable from a dead program.) */
-static void music_shutdown(void){
-    plat_timer_stop();          /* (1) uninstall the 60 Hz interrupt FIRST */
-    g_music_on = 0;
-    /* (2) explicit note-off for every note the sequencer still has sounding — the
-     * surest way to kill a hung note on the MT-32 (CC123 alone isn't honoured by
-     * every synth/state), then the CC123/CC120 panic on all channels as a backstop. */
-    for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
-    plat_midi_all_off();        /* queue CC123 all-notes-off + CC120 all-sound-off, all channels */
-    plat_midi_flush();          /* transmit it all now (blocking, main context) */
-    plat_dma_music_stop();      /* (3) stop DMA sound */
+
+/* Stop + silence ALL backends (song change or clean exit). Uninstalls the Timer-A ISR FIRST
+ * — its vector points into our program memory, which TOS frees on exit, so a later 60 Hz tick
+ * would jump into reused memory and crash the machine. Then explicit note-off for every note
+ * the sequencer still has sounding (the surest MT-32 kill; CC123 alone isn't always honoured)
+ * + the CC123/CC120 panic on all channels, and stop the DMA loop. A hard kill / power-off can't
+ * run this — a dead program can't send MIDI, so the synth holds its last note until reset. */
+static void music_stop_all(void){
+    plat_timer_stop();
+    if(g_music_on){             /* MIDI backend was active -> silence it (touch the ACIA only then) */
+        g_music_on = 0;
+        for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
+        plat_midi_all_off();
+        plat_midi_flush();
+    }
+    plat_dma_music_stop();      /* stop DMA (no-op if not playing) */
+}
+
+/* play song `base` (e.g. "BRIT") through the runtime-selected backend */
+static void music_play_song(const char *base){
+    music_stop_all();
+    { int i=0; while(base[i] && base[i]!='.' && i<15){ g_music_cur[i]=base[i]; i++; } g_music_cur[i]=0; }
+    if(!g_music_cur[0]) return;
+    char nm[20];
+    if(g_music_midi){ music_name(nm, g_music_cur, ".M");  music_play_midi(nm); }
+    else if(g_music_dma_ok){ music_name(nm, g_music_cur, ".PCM"); plat_dma_music_start(nm); }
+    /* else plain-ST PSG backend -- TODO (silent for now) */
+}
+
+/* flip the MIDI toggle at runtime and re-cue the current song. The working toggle today is the
+ * MIDI.CFG default (authentic: the original set the synth in config, not in-game); this is the API
+ * the front-end settings screen will call to switch live. Retained until that screen wires it. */
+__attribute__((unused))
+static void music_set_midi(int on){
+    on = on ? 1 : 0;
+    if(on == g_music_midi) return;
+    g_music_midi = on;
+    if(g_music_cur[0]){ char b[16]; int i=0; while(g_music_cur[i]){ b[i]=g_music_cur[i]; i++; } b[i]=0; music_play_song(b); }
+}
+static int music_midi_enabled(void){ return g_music_midi; }
+
+/* detect DMA + default the toggle from MIDI.CFG (byte0 '1' => MIDI on). Absent => off
+ * (DMA/PSG), since most players have no MT-32; the MT-32 owner opts in. */
+static void music_manager_init(void){
+    g_music_dma_ok = plat_dma_available();
+    g_music_cur[0] = 0;
+    int32_t cl=0; void *c=plat_load_file("MIDI.CFG", 1, &cl);
+    g_music_midi = (c && cl>0 && ((const char*)c)[0]=='1') ? 1 : 0;
 }
 
 int main(void)
@@ -4097,6 +4142,7 @@ int main(void)
     Cconws("u6e M6 authentic UI: loading...\r\n");
     if (!plat_mem_init(&caps)) { Cconws("mem init failed\r\n"); Crawcin(); return 1; }
     plat_dma_init(&caps);       /* M10: grab an ST-RAM ring for DMA-sound music (STE/TT/Falcon) */
+    music_manager_init();       /* M10: detect DMA + read the MIDI toggle default (MIDI.CFG) */
 
 #ifdef BENCH
     /* M10 OPL2->DMA feasibility probe (gated on SBENCH.REQ): time the software FM
@@ -5308,21 +5354,14 @@ int main(void)
         Cconws("bench done\r\n"); return 0; }
 #endif
 
-    /* M10 headless music hook: MUSIC.REQ holds a .M filename (e.g. "ULTIMA.M"); load + start it on
-     * MIDI OUT, pumped by the main loop. Absent in normal play (area music wiring comes later). */
-    {   int32_t rl=0; void *req=plat_load_file("MUSIC.REQ",1,&rl);
+    /* M10 headless music hook: SONG.REQ holds a song base name (e.g. "BRIT"); play it via the
+     * RUNTIME-SELECTED backend (MIDI toggle from MIDI.CFG, else DMA sound by machine). Absent in
+     * normal play — per-area song hooks replace this stopgap later. */
+    {   int32_t rl=0; void *req=plat_load_file("SONG.REQ",1,&rl);
         if(req && rl>0){ char nm[16]; int i=0; const char*s=(const char*)req;
-            while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ') { nm[i]=s[i]; i++; } nm[i]=0;
-            if(nm[0]) music_play(nm); } }
-
-    /* M10 headless DMA-music hook: PCMMUS.REQ holds a .PCM path (e.g. "MUSIC\ULTIMA.PCM"); stream it
-     * to 8-bit DMA sound on STE/TT/Falcon, refilled by the main-loop pump. (The MIDI toggle + runtime
-     * backend selection replace this stopgap later.) */
-    {   int32_t rl=0; void *req=plat_load_file("PCMMUS.REQ",1,&rl);
-        if(req && rl>0){ char nm[32]; int i=0; const char*s=(const char*)req;
-            while(i<31 && s[i] && s[i]!='\r' && s[i]!='\n') { nm[i]=s[i]; i++; } nm[i]=0;
-            dbg_num("PCM dma_avail=", plat_dma_available());
-            if(nm[0] && plat_dma_available()) dbg_num("PCM stream_started=", plat_dma_music_start(nm)); } }
+            while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ' && s[i]!='.') { nm[i]=s[i]; i++; } nm[i]=0;
+            dbg_num("music backend (1=MIDI 0=DMA/PSG)=", music_midi_enabled());
+            if(nm[0]) music_play_song(nm); } }
 
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
@@ -5482,7 +5521,7 @@ int main(void)
                else if (mouse_moved) present_cursor();         /* bare mouse move: cheap cursor-only */
                Vsync(); }
     }
-    music_shutdown();   /* uninstall the Timer-A ISR + silence MIDI/DMA before returning to TOS */
+    music_stop_all();   /* uninstall the Timer-A ISR + silence MIDI/DMA before returning to TOS */
     rdr_shutdown();
     return 0;
 }

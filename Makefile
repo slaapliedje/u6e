@@ -243,36 +243,37 @@ m2pcm: $(BUILD)/m2pcm
 	@mkdir -p $(BUILD)/music
 	@for f in $(REFDATA)/*.M; do b=$$(basename "$$f" .M); $(BUILD)/m2pcm "$$f" "$(BUILD)/music/$$b.PCM" $(PCM_SECS) $(PCM_RATE); done
 
-# M10 OPL2->DMA ON-TARGET: stream a pre-rendered .PCM to the emulated STE/TT DMA sound and CAPTURE the
-# emulated audio (Hatari AVI) so we can verify it plays. DMA_SONG picks the song; renders it fresh,
-# stages it + PCMMUS.REQ, boots game.prg on the TT (TT has STE-compatible 8-bit DMA sound), records an
-# AVI, extracts the audio track, and checks it is non-silent. (Also plays live if you drop --fast-forward.)
+# M10 music ON-TARGET: both targets drive the SAME runtime backend selector (SONG.REQ = a song base
+# name; MIDI.CFG byte '1'/'0' sets the toggle) — the game then picks MIDI vs DMA itself.
+#
+# music-dma: MIDI off => 8-bit DMA sound. Renders the PCM fresh, stages it, boots game.prg on the TT
+# (STE-compatible DMA sound), records the emulated audio (Hatari AVI), extracts + checks it is real.
 DMA_SONG ?= ULTIMA
 .PHONY: music-dma
 music-dma: gamedata $(BUILD)/game.prg $(BUILD)/m2pcm
 	$(BUILD)/m2pcm "$(REFDATA)/$(DMA_SONG).M" "$(BUILD)/$(DMA_SONG).PCM" 30 12517
-	printf '$(DMA_SONG).PCM' > $(BUILD)/PCMMUS.REQ
+	printf '$(DMA_SONG)' > $(BUILD)/SONG.REQ
+	printf '0' > $(BUILD)/MIDI.CFG
 	rm -f $(BUILD)/dma.avi
 	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
 	          --sound 50066 --avirecord --avi-vcodec png --avi-file $(BUILD)/dma.avi \
-	          --conout 2 --fast-forward on --run-vbls 3500 --harddrive $(BUILD) --auto 'c:\game.prg' 2>&1 | grep -iE "PCM |dma_avail|stream_started" || true
-	rm -f $(BUILD)/PCMMUS.REQ
+	          --conout 2 --fast-forward on --run-vbls 3500 --harddrive $(BUILD) --auto 'c:\game.prg' 2>&1 | grep -iaE "music backend" || true
+	rm -f $(BUILD)/SONG.REQ $(BUILD)/MIDI.CFG
 	@if command -v ffmpeg >/dev/null && [ -f $(BUILD)/dma.avi ]; then \
 	   ffmpeg -y -i $(BUILD)/dma.avi -vn $(BUILD)/wav/$(DMA_SONG)_dma.wav >/dev/null 2>&1; \
 	   echo "extracted audio -> $(BUILD)/wav/$(DMA_SONG)_dma.wav (play it to verify DMA output)"; \
 	 else echo "AVI at $(BUILD)/dma.avi (install ffmpeg to auto-extract the audio track)"; fi
 
-# M10 ON-TARGET music: stage a .M + MIDI.DAT + MUSIC.REQ and launch the game in Hatari with MIDI on.
-# With your hatari.cfg [Midi] sMidiOutPortName pointing at your MT-32 (e.g. the UM-ONE), the ENGINE
-# plays U6's score on the real synth via the emulated ST MIDI OUT. MUSIC_SONG picks the .M.
-MUSIC_SONG ?= ULTIMA.M
+# music-tt: MIDI on => MIDI OUT. Stages the .M + MIDI.DAT + MIDI.CFG='1' and launches interactively;
+# with your hatari.cfg [Midi] sMidiOutPortName pointing at your MT-32, the ENGINE plays it on the synth.
+MUSIC_SONG ?= ULTIMA
 .PHONY: music-tt
 music-tt: gamedata $(BUILD)/game.prg
-	cp '$(REFDATA)/$(MUSIC_SONG)' '$(REFDATA)/MIDI.DAT' $(BUILD)/
-	printf '$(MUSIC_SONG)' > $(BUILD)/MUSIC.REQ
+	@b=$$(basename '$(MUSIC_SONG)' .M); cp "$(REFDATA)/$$b.M" '$(REFDATA)/MIDI.DAT' $(BUILD)/; printf "$$b" > $(BUILD)/SONG.REQ
+	printf '1' > $(BUILD)/MIDI.CFG
 	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --midi on \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg'
-	rm -f $(BUILD)/MUSIC.REQ
+	rm -f $(BUILD)/SONG.REQ $(BUILD)/MIDI.CFG
 	@echo "played $(MUSIC_SONG) out MIDI (routed by your hatari.cfg [Midi] port)"
 
 # M4 usecode spike: run a real NPC conversation end-to-end (decision gate)
