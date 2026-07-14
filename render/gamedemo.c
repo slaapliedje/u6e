@@ -27,6 +27,7 @@
 #include "magic.h"
 #include "platmidi.h"          /* M10: MIDI OUT */
 #include "platdma.h"           /* M10: STE/TT/Falcon 8-bit DMA sound (pre-rendered PCM streaming) */
+#include "platpsg.h"           /* M10: YM2149 PSG (plain-ST 3-voice fallback) */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
 #include <osbind.h>
@@ -4014,14 +4015,40 @@ static void mus_note_off(int ch,int n){ uint8_t x[3]={(uint8_t)(0x80|(ch&15)),(u
 static void mus_reset   (void){ plat_midi_all_off(); }   /* queues all-notes-off (ISR-safe) */
 static const music_backend_t g_midi_be = { mus_program, mus_note_on, mus_note_off, mus_reset };
 static music_seq_t g_music; static int g_music_on;
+static int g_music_be_kind;   /* which sequencer backend is live: 0 none, 1 MIDI, 2 PSG */
 
-/* Timer-A ISR callback (~60 Hz, steady, frame-rate independent): advance the .M
- * sequencer one tick, then push a bounded burst of queued MIDI to the ACIA. Runs at
- * interrupt level — everything it calls is integer + ISR-safe (no TOS). 52 bytes/tick
- * ~= the 31250-baud MIDI budget per 60 Hz tick. */
+/* PSG backend (plain ST): fold U6's 9 OPL channels into the YM2149's 3 square voices.
+ * Voice allocation = reuse the channel's voice if it has one, else a free voice, else
+ * steal round-robin. No timbres (square only); velocity -> 4-bit volume. Called from the
+ * Timer ISR, writing the PSG registers directly (ISR-safe). */
+static struct { int ch, note; } g_psgv[3];
+static int g_psg_rr;
+static int psg_find(int ch){ for(int v=0;v<3;v++) if(g_psgv[v].ch==ch) return v; return -1; }
+static void psg_be_program(int ch,int prog){ (void)ch;(void)prog; }
+static void psg_be_note_on(int ch,int note,int vel){
+    int v=psg_find(ch);
+    if(v<0){ for(int i=0;i<3;i++) if(g_psgv[i].ch<0){ v=i; break; } }
+    if(v<0){ v=g_psg_rr; g_psg_rr=(g_psg_rr+1)%3; }
+    g_psgv[v].ch=ch; g_psgv[v].note=note;
+    int vol=vel>>3; if(vol<1) vol=1;
+    plat_psg_voice(v, note, vol);
+}
+static void psg_be_note_off(int ch,int note){ (void)note;
+    int v=psg_find(ch);
+    if(v>=0){ plat_psg_voice_off(v); g_psgv[v].ch=-1; g_psgv[v].note=-1; }
+}
+/* reset() may be called from the sequencer tick (ISR) if a song ends, so silence via the
+ * direct per-voice writes (ISR-safe), NOT plat_psg_silence (which uses Supexec/XBIOS). */
+static void psg_be_reset(void){ for(int v=0;v<3;v++){ plat_psg_voice_off(v); g_psgv[v].ch=-1; g_psgv[v].note=-1; } }
+static const music_backend_t g_psg_be = { psg_be_program, psg_be_note_on, psg_be_note_off, psg_be_reset };
+
+/* Timer-A ISR callback (~60 Hz, steady, frame-rate independent): advance the .M sequencer
+ * one tick (which drives whichever backend is live), then — for MIDI only — push a bounded
+ * burst of queued MIDI to the ACIA. Runs at interrupt level: everything it calls is integer
+ * + ISR-safe (no TOS). 52 bytes/tick ~= the 31250-baud MIDI budget per 60 Hz tick. */
 static void music_isr_tick(void){
     if(g_music_on) music_seq_tick(&g_music, 1);
-    plat_midi_drain(52);
+    if(g_music_be_kind == 1) plat_midi_drain(52);
 }
 
 /* .M basename (no ext, case-insensitive) -> MIDI.DAT song order (listed 1..9,0,-,=). */
@@ -4053,13 +4080,14 @@ static int mus_parse_map(const uint8_t *dat, int32_t len, int idx, music_map_t *
     return np;
 }
 /* ---- music manager: runtime backend selection + MIDI toggle -------------------------
- * One song, three possible sinks chosen at runtime from the machine + a user toggle:
- *   MIDI on           -> MIDI OUT (BASE.M + MIDI.DAT), any Atari + external synth (MT-32)
- *   MIDI off, has DMA -> 8-bit DMA sound (BASE.PCM, host pre-rendered), STE/TT/Falcon
- *   MIDI off, no DMA  -> YM2149 PSG (plain ST) -- TODO, silent for now
+ * One song, three possible sinks chosen at runtime from the machine + a user preference:
+ *   MIDI  -> MIDI OUT (BASE.M + MIDI.DAT), any Atari + an external synth (MT-32)
+ *   DMA   -> 8-bit DMA sound (BASE.PCM, host pre-rendered), STE / TT / Falcon
+ *   PSG   -> YM2149 3-voice square (BASE.M re-voiced), any Atari — the plain-ST default
  * The engine calls music_play_song(base); it never picks a backend itself. */
-static int  g_music_midi;       /* the toggle: 0 = DMA/PSG, 1 = MIDI OUT           */
+static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI, 2 DMA, 3 PSG          */
 static int  g_music_dma_ok;     /* 8-bit DMA sound present (STE/MegaSTE/TT/Falcon) */
+static int  g_music_active;     /* backend chosen for the current song: 1 MIDI 2 DMA 3 PSG */
 static char g_music_cur[16];    /* current song base name ("" = none)             */
 
 /* build "BASE.EXT" (8.3) into dst */
@@ -4069,39 +4097,45 @@ static void music_name(char *dst, const char *base, const char *ext){
     dst[i]=0;
 }
 
-/* start the MIDI-OUT backend for a .M file, driven by the steady 60 Hz Timer-A tick
- * (tempo independent of the frame rate; plays through blocking waits). Caller has stopped audio. */
-static void music_play_midi(const char *mfile){
+/* Start a sequencer backend (MIDI or PSG) for a .M file, driven by the steady 60 Hz Timer-A
+ * tick (tempo independent of the frame rate; plays through blocking waits). `kind` = 1 MIDI /
+ * 2 PSG; `load_map` pulls the MT-32 map from MIDI.DAT (MIDI only). Caller has stopped audio. */
+static void music_play_seq(const char *mfile, const music_backend_t *be, int kind, int load_map){
     int32_t rl=0; uint8_t *raw=(uint8_t*)plat_load_file(mfile, 1, &rl);
     if(!raw || rl<=4) return;
     int32_t usz=u6lzw_unpacked_size(raw, rl); if(usz<=0) return;
     uint8_t *song=(uint8_t*)plat_alloc_fast((uint32_t)usz); if(!song) return;
     int32_t got=u6lzw_decompress(raw, rl, song, usz); if(got<=0) return;
     music_map_t map[16]; int nmap=0;
-    { int32_t dl=0; uint8_t *dat=(uint8_t*)plat_load_file("MIDI.DAT", 1, &dl);
+    if(load_map){ int32_t dl=0; uint8_t *dat=(uint8_t*)plat_load_file("MIDI.DAT", 1, &dl);
       if(dat && dl>0){ char base[16]; int i=0; for(const char*p=mfile; *p && *p!='.'&&i<15; p++) base[i++]=*p; base[i]=0;
                        int si=mus_song_index(base); if(si>=0) nmap=mus_parse_map(dat, dl, si, map); } }
-    plat_midi_init();
-    music_seq_start(&g_music, song, got, map, nmap, &g_midi_be);  /* queues the program-changes */
-    g_music_on=1;
+    if(kind==1) plat_midi_init();
+    music_seq_start(&g_music, song, got, map, nmap, be);
+    g_music_on=1; g_music_be_kind=kind;
     plat_timer_start(music_isr_tick, 60);
 }
 
 /* Stop + silence ALL backends (song change or clean exit). Uninstalls the Timer-A ISR FIRST
  * — its vector points into our program memory, which TOS frees on exit, so a later 60 Hz tick
- * would jump into reused memory and crash the machine. Then explicit note-off for every note
- * the sequencer still has sounding (the surest MT-32 kill; CC123 alone isn't always honoured)
- * + the CC123/CC120 panic on all channels, and stop the DMA loop. A hard kill / power-off can't
- * run this — a dead program can't send MIDI, so the synth holds its last note until reset. */
+ * would jump into reused memory and crash the machine. Then silence whichever backend was live:
+ * MIDI = explicit note-off per sounding note (surest MT-32 kill) + CC123/CC120 panic + flush;
+ * PSG = silence the chip. (Guarded on the live backend so DMA mode never touches the MIDI ACIA.)
+ * A hard kill / power-off can't run this — a dead program can't send MIDI, so an external synth
+ * holds its last note until reset. */
 static void music_stop_all(void){
     plat_timer_stop();
-    if(g_music_on){             /* MIDI backend was active -> silence it (touch the ACIA only then) */
-        g_music_on = 0;
+    g_music_on = 0;
+    if(g_music_be_kind == 1){          /* MIDI OUT was live */
         for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
         plat_midi_all_off();
         plat_midi_flush();
+    } else if(g_music_be_kind == 2){   /* PSG was live */
+        plat_psg_silence();
+        for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
     }
-    plat_dma_music_stop();      /* stop DMA (no-op if not playing) */
+    g_music_be_kind = 0;
+    plat_dma_music_stop();             /* stop DMA (no-op if not playing) */
 }
 
 /* play song `base` (e.g. "BRIT") through the runtime-selected backend */
@@ -4109,31 +4143,40 @@ static void music_play_song(const char *base){
     music_stop_all();
     { int i=0; while(base[i] && base[i]!='.' && i<15){ g_music_cur[i]=base[i]; i++; } g_music_cur[i]=0; }
     if(!g_music_cur[0]) return;
+    /* resolve the backend: explicit preference wins; auto = DMA if present, else PSG (MIDI is opt-in). */
+    int use = (g_music_pref==1) ? 1 :               /* MIDI */
+              (g_music_pref==3) ? 3 :               /* PSG  */
+                                  (g_music_dma_ok?2:3);   /* DMA-pref or auto: DMA if present, else PSG */
+    g_music_active = use;
     char nm[20];
-    if(g_music_midi){ music_name(nm, g_music_cur, ".M");  music_play_midi(nm); }
-    else if(g_music_dma_ok){ music_name(nm, g_music_cur, ".PCM"); plat_dma_music_start(nm); }
-    /* else plain-ST PSG backend -- TODO (silent for now) */
+    if(use==1){ music_name(nm, g_music_cur, ".M");   music_play_seq(nm, &g_midi_be, 1, 1); }
+    else if(use==2){ music_name(nm, g_music_cur, ".PCM"); plat_dma_music_start(nm); }
+    else { music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_psg_be, 2, 0); }   /* PSG */
 }
 
-/* flip the MIDI toggle at runtime and re-cue the current song. The working toggle today is the
- * MIDI.CFG default (authentic: the original set the synth in config, not in-game); this is the API
- * the front-end settings screen will call to switch live. Retained until that screen wires it. */
+/* set the backend preference at runtime (0 auto / 1 MIDI / 2 DMA / 3 PSG) and re-cue the current
+ * song. The working control today is the MIDI.CFG default (authentic: the original chose the synth
+ * in config, not in-game); this is the API the front-end settings screen will call to switch live. */
 __attribute__((unused))
-static void music_set_midi(int on){
-    on = on ? 1 : 0;
-    if(on == g_music_midi) return;
-    g_music_midi = on;
+static void music_set_pref(int pref){
+    if(pref<0 || pref>3) pref=0;
+    if(pref == g_music_pref) return;
+    g_music_pref = pref;
     if(g_music_cur[0]){ char b[16]; int i=0; while(g_music_cur[i]){ b[i]=g_music_cur[i]; i++; } b[i]=0; music_play_song(b); }
 }
-static int music_midi_enabled(void){ return g_music_midi; }
+static int music_active_backend(void){ return g_music_active; }   /* 1 MIDI 2 DMA 3 PSG */
 
-/* detect DMA + default the toggle from MIDI.CFG (byte0 '1' => MIDI on). Absent => off
- * (DMA/PSG), since most players have no MT-32; the MT-32 owner opts in. */
+/* detect DMA + read the backend preference from MIDI.CFG (byte0 '1'=MIDI, '2'=DMA, '3'=PSG;
+ * absent/other => auto: DMA if present, else PSG). MIDI stays opt-in since most players have no
+ * MT-32; the owner selects it. Also silence the PSG so a leftover tone doesn't drone at boot. */
 static void music_manager_init(void){
     g_music_dma_ok = plat_dma_available();
     g_music_cur[0] = 0;
+    plat_psg_init();
+    for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
     int32_t cl=0; void *c=plat_load_file("MIDI.CFG", 1, &cl);
-    g_music_midi = (c && cl>0 && ((const char*)c)[0]=='1') ? 1 : 0;
+    char b = (c && cl>0) ? ((const char*)c)[0] : 0;
+    g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : 0;
 }
 
 int main(void)
@@ -5360,8 +5403,8 @@ int main(void)
     {   int32_t rl=0; void *req=plat_load_file("SONG.REQ",1,&rl);
         if(req && rl>0){ char nm[16]; int i=0; const char*s=(const char*)req;
             while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ' && s[i]!='.') { nm[i]=s[i]; i++; } nm[i]=0;
-            dbg_num("music backend (1=MIDI 0=DMA/PSG)=", music_midi_enabled());
-            if(nm[0]) music_play_song(nm); } }
+            if(nm[0]) music_play_song(nm);
+            dbg_num("music backend (1=MIDI 2=DMA 3=PSG)=", music_active_backend()); } }
 
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */

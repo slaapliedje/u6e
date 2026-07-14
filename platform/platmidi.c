@@ -62,7 +62,11 @@ void plat_midi_drain(int budget)
     }
 }
 
-void plat_midi_flush(void) { plat_midi_drain(MIDI_RING); }  /* main context: send everything queued */
+/* Send everything queued, from MAIN (user) context. The MIDI ACIA is in the ST's
+ * supervisor-only I/O region, so a user-mode access bus-errors — go through Supexec.
+ * (The ISR path calls plat_midi_drain directly; interrupts already run supervisor.) */
+static long midi_drain_all(void){ plat_midi_drain(MIDI_RING); return 0; }
+void plat_midi_flush(void) { (void)Supexec(midi_drain_all); }
 
 /* All-notes-off + all-sound-off on every MIDI channel — QUEUED so it is ISR-safe
  * (the sequencer's reset() calls this; flushed by the ISR or plat_midi_flush). */

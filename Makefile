@@ -276,6 +276,17 @@ music-tt: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/SONG.REQ $(BUILD)/MIDI.CFG
 	@echo "played $(MUSIC_SONG) out MIDI (routed by your hatari.cfg [Midi] port)"
 
+# music-st: plain ST => YM2149 PSG (3-voice square). No DMA on the ST, so auto-select picks PSG.
+# Stages the .M + SONG.REQ and launches gamest.prg on a 4 MB ST with sound so you hear the chiptune.
+PSG_SONG ?= BRIT
+.PHONY: music-st
+music-st: gamedata-st $(BUILD)/gamest.prg
+	@b=$$(basename '$(PSG_SONG)' .M); cp "$(REFDATA)/$$b.M" $(BUILD)/; printf "$$b" > $(BUILD)/SONG.REQ
+	-$(HATARI) --machine st --memsize 4 --monitor rgb --sound 44100 \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg'
+	rm -f $(BUILD)/SONG.REQ $(BUILD)/$(PSG_SONG).M
+	@echo "played $(PSG_SONG) on the YM2149 PSG (plain ST)"
+
 # M4 usecode spike: run a real NPC conversation end-to-end (decision gate)
 CONVSPIKE_SRC := dataformats/u6lzw.c dataformats/u6conv.c
 $(BUILD)/convspike: tools/convspike.c $(CONVSPIKE_SRC)
@@ -400,7 +411,7 @@ rdemo: $(BUILD)/rdemo.prg
 
 # ---- performance benchmark: time compose vs c2p present on the TT ------------
 BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
-             platform/plattime.c platform/platmidi.c platform/platdma.c \
+             platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
              engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
              engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c \
              dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
@@ -531,7 +542,7 @@ uipreview: world $(BUILD)/uipreview
 	@echo "wrote $(BUILD)/uipreview.png"
 
 GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
-            platform/plattime.c platform/platmidi.c platform/platdma.c \
+            platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
             engine/combat.c engine/magic.c engine/music.c \
             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
