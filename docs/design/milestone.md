@@ -1284,8 +1284,11 @@ Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends 
         sound chip at ~0 % CPU — validated end-to-end in Hatari (captured audio is real music advancing
         through the file). The MIDI path's tempo is now driven by a steady MFP Timer-A 60 Hz interrupt
         (was coupled to the ~6-8 fps main loop → choppy/slow), with an ISR-safe queue→ACIA MIDI path;
-        validated in Hatari (smooth musical timing, no crash). Remaining: YM2149-PSG (plain ST) backend;
-        runtime backend selection + MIDI toggle; per-area music hooks; PCM loop-point detection.
+        validated in Hatari (smooth musical timing, no crash). Exit cleanup (uninstall the Timer-A ISR
+        before Pterm + all-notes-off) fixes a hung MT-32 note + a latent post-exit crash. A runtime
+        music manager now picks the backend (MIDI on -> MIDI OUT; off + DMA -> DMA sound; off + no DMA
+        -> PSG/TODO) with the toggle defaulting from MIDI.CFG; both branches validated in Hatari.
+        Remaining: YM2149-PSG (plain ST) backend; per-area music hooks; PCM loop-point detection.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
