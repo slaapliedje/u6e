@@ -12,7 +12,8 @@ Tracked in: /docs/INDEX.md · Milestone: **M10 (audio: music)**
 >   (the `.m` parser), `mididrv_m_adlib` (OPL rendering), `mididrv_m_mt32` (the MT-32/MIDI path),
 >   `song_adplug`/`u6_adplug_decoder_stream`; AdPlug `src/u6m.cpp` (AdLib player for these files);
 >   the Codex of Ultima Wisdom "Ultima VI Internal Formats" page (lists the files, no byte spec).
-> - Tools        : `tools/mdump` (our own: LZW-decompress + dump/scan).
+> - Tools        : `tools/mdump` (LZW-decompress + disassemble), `tools/m2mid` (note stream → SMF),
+>   `tools/m2wav` (our own software OPL2/YM3812 FM synth → WAV, the M10 OPL2→DMA de-risk).
 > - Validated by : our `u6lzw_decompress` reproduces the declared decompressed size for every `.M`,
 >   AND our own disassembler (`tools/mdump`, written from the understanding below) walks the command
 >   stream byte-accurately to a CLEAN END on ALL 12 `.M` files — every byte consumed, no desync,
@@ -22,8 +23,9 @@ Tracked in: /docs/INDEX.md · Milestone: **M10 (audio: music)**
 > - Confidence   : **container = confirmed**; **OPL/AdLib not MIDI = confirmed**; **opcode + operand
 >   table = confirmed** (byte-accurate walk); **pitch decode = confirmed** (24-entry F-number table →
 >   MIDI note; note extraction to SMF matches the disassembler + renders a correct melody, `make
->   m2mid`). Remaining probable: the FM `0x83` 11-byte operator layout + volume/vibrato scaling for
->   the OPL2→DMA synth; the instrument→MT-32/GM patch map for MIDI-out (U6ROLAND.DRV).
+>   m2mid`); **`0x83` 11-byte operator layout = confirmed** (grouped mod/car, byte-role evidence +
+>   rendered to correct-pitch audio by our own OPL2 synth `tools/m2wav`). Remaining probable:
+>   portamento/vibrato/fade dynamics scaling; the instrument→MT-32 map is confirmed (MIDI.DAT).
 > - Last updated : 2026-07-13
 
 ## THE KEY FACT (drives the whole M10 approach)
@@ -89,8 +91,34 @@ extraction, below):
 ```
 Hand-check: index 1..7 at octave 4 decode to MIDI 60,62,64,65,67,69,71 = **C4 D4 E4 F4 G4 A4 B4**,
 a clean C-major scale — confirming the decode. The `0x1n`/`0x2n` forms also set the OPL key-on bit
-(0xB0 bit 0x20). The `0x83` 11 bytes = 5 modulator operator regs (0x20/40/60/80/E0) + 5 carrier + 1
-feedback/algorithm (0xC0) — pinned when we build the OPL2→DMA synth.
+(0xB0 bit 0x20).
+
+### `0x83` instrument = 11 OPL operator bytes (CONFIRMED — grouped mod/car layout)
+After the 1-byte instrument index, the 11 bytes are **grouped by operator** (all 5 modulator regs,
+then all 5 carrier regs, then the channel byte) — NOT interleaved (mod,car,mod,car…):
+
+| byte | register | field(s)                                   |
+|------|----------|--------------------------------------------|
+| 0    | mod 0x20 | AM(7) VIB(6) EG-type/sustain(5) KSR(4) MULT(3-0) |
+| 1    | mod 0x40 | KSL(7-6) Total-Level(5-0)                   |
+| 2    | mod 0x60 | Attack(7-4) Decay(3-0)                      |
+| 3    | mod 0x80 | Sustain-Level(7-4) Release(3-0)            |
+| 4    | mod 0xE0 | Waveform-Select(1-0)                        |
+| 5    | car 0x20 | (same fields as byte 0, carrier operator)  |
+| 6    | car 0x40 | KSL / Total-Level                          |
+| 7    | car 0x60 | Attack / Decay                             |
+| 8    | car 0x80 | Sustain-Level / Release                    |
+| 9    | car 0xE0 | Waveform-Select                            |
+| 10   | ch 0xC0  | Feedback(3-1) Connection(0): 0=FM 1=AM     |
+
+How the layout was pinned (byte-role evidence across all `.M`, not transcription): in the grouped
+reading, byte-4 and byte-9 (the two waveform-select bytes) are **always 0/1/2** across every U6
+instrument — the only valid OPL2 waveforms — while any interleaved reading puts values like 0x55/0x5e
+there (invalid). Independently, the carrier `0x40` Total-Level (byte 6) is consistently 0/small (the
+loud, audible operator) and the modulator `0x40` (byte 1) is attenuated (shapes the FM index) —
+textbook 2-operator FM. Example (BRIT, one instrument): `61 1b 62 56 00 | 21 00 84 55 00 | 0e` =
+modulator sine w/ TL 27, carrier sine at full level, feedback 7 / FM. Validated further by rendering
+each `.M` through our own software OPL2 synth (`tools/m2wav`) to correct-pitch, musical audio.
 
 **Note extraction validated (`tools/m2mid`, `make m2mid`)**: exporting each `.M` to a Standard MIDI
 File (note-on/off + the pitch above, per OPL channel → MIDI channel, 60 PPQ so 1 tick = 1/60 s) gives

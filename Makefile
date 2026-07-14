@@ -191,6 +191,21 @@ m2mid: $(BUILD)/m2mid
 	   echo "rendered $(BUILD)/mid/{ULTIMA,BRIT,STONES,INTRO}.wav (soundfont $(SF2))"; \
 	 else echo "no soundfont at $(SF2); play $(BUILD)/mid/*.mid with your own synth"; fi
 
+# M10 OPL2->DMA de-risk: HOST software YM3812 (OPL2) FM synth renders a .M straight to WAV, so we can
+# confirm BY EAR that our .M -> OPL-register translation (instrument 0x83 11-byte layout, F-number/
+# block, feedback/connection) reproduces the authentic DOS AdLib sound BEFORE porting the synth + 8-bit
+# DMA output to the 68000. WAV of the copyrighted score -> build/ (gitignored). M2WAV_SONG picks the .M.
+$(BUILD)/m2wav: tools/m2wav.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^ -lm
+M2WAV_SONG ?= ULTIMA
+M2WAV_SECS ?= 30
+.PHONY: m2wav
+m2wav: $(BUILD)/m2wav
+	@mkdir -p $(BUILD)/wav
+	$(BUILD)/m2wav "$(REFDATA)/$(M2WAV_SONG).M" "$(BUILD)/wav/$(M2WAV_SONG).wav" $(M2WAV_SECS)
+	@echo "play: aplay $(BUILD)/wav/$(M2WAV_SONG).wav   (or any WAV player)"
+
 # M10 music: HOST unit test for the on-target sequencer (engine/music.c) — runs it through a capture
 # backend into an SMF (follows the real loop/branch structure). A clean run over all 12 .M validates it.
 $(BUILD)/musictest: tools/musictest.c engine/music.c dataformats/u6lzw.c
