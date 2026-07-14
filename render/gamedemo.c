@@ -4004,15 +4004,25 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
 }
 
 /* ===================== M10: music — OPL2 .M sequencer -> MIDI OUT ===================== */
-/* MIDI-OUT backend: the portable sequencer (engine/music.c) calls these; we emit raw MIDI
- * (Midiws). Later the OPL2->DMA and YM2149-PSG backends implement the same music_backend_t. */
-static void mus_program (int ch,int prog){ uint8_t x[2]={(uint8_t)(0xC0|(ch&15)),(uint8_t)(prog&127)}; plat_midi_write(x,2); }
-static void mus_note_on (int ch,int n,int v){ uint8_t x[3]={(uint8_t)(0x90|(ch&15)),(uint8_t)(n&127),(uint8_t)(v&127)}; plat_midi_write(x,3); }
-static void mus_note_off(int ch,int n){ uint8_t x[3]={(uint8_t)(0x80|(ch&15)),(uint8_t)(n&127),0}; plat_midi_write(x,3); }
-static void mus_reset   (void){ plat_midi_all_off(); }
+/* MIDI-OUT backend: the portable sequencer (engine/music.c) calls these. The sequencer is
+ * ticked from a Timer interrupt (below), where Midiws (XBIOS) is unsafe — so we QUEUE the
+ * MIDI bytes (plat_midi_queue) and the ISR drains them to the ACIA. Later the OPL2->DMA and
+ * YM2149-PSG backends implement the same music_backend_t. */
+static void mus_program (int ch,int prog){ uint8_t x[2]={(uint8_t)(0xC0|(ch&15)),(uint8_t)(prog&127)}; plat_midi_queue(x,2); }
+static void mus_note_on (int ch,int n,int v){ uint8_t x[3]={(uint8_t)(0x90|(ch&15)),(uint8_t)(n&127),(uint8_t)(v&127)}; plat_midi_queue(x,3); }
+static void mus_note_off(int ch,int n){ uint8_t x[3]={(uint8_t)(0x80|(ch&15)),(uint8_t)(n&127),0}; plat_midi_queue(x,3); }
+static void mus_reset   (void){ plat_midi_all_off(); }   /* queues all-notes-off (ISR-safe) */
 static const music_backend_t g_midi_be = { mus_program, mus_note_on, mus_note_off, mus_reset };
 static music_seq_t g_music; static int g_music_on;
-static uint32_t g_music_last200, g_music_acc;
+
+/* Timer-A ISR callback (~60 Hz, steady, frame-rate independent): advance the .M
+ * sequencer one tick, then push a bounded burst of queued MIDI to the ACIA. Runs at
+ * interrupt level — everything it calls is integer + ISR-safe (no TOS). 52 bytes/tick
+ * ~= the 31250-baud MIDI budget per 60 Hz tick. */
+static void music_isr_tick(void){
+    if(g_music_on) music_seq_tick(&g_music, 1);
+    plat_midi_drain(52);
+}
 
 /* .M basename (no ext, case-insensitive) -> MIDI.DAT song order (listed 1..9,0,-,=). */
 static int mus_song_index(const char *fn){
@@ -4042,9 +4052,13 @@ static int mus_parse_map(const uint8_t *dat, int32_t len, int idx, music_map_t *
     }
     return np;
 }
-/* Load a .M (LZW), its MT-32 map from MIDI.DAT (beside the game data), start the sequencer on MIDI OUT. */
+/* Load a .M (LZW), its MT-32 map from MIDI.DAT (beside the game data), start the sequencer on MIDI OUT,
+ * driven by a steady 60 Hz Timer-A interrupt (so tempo is independent of the frame/loop rate and keeps
+ * playing through blocking waits). */
 static void music_play(const char *mfile){
+    plat_timer_stop();                       /* freeze the tick before touching the sequencer state */
     music_seq_stop(&g_music); g_music_on=0;
+    plat_midi_flush();                        /* send the queued all-notes-off from the old song */
     int32_t rl=0; uint8_t *raw=(uint8_t*)plat_load_file(mfile, 1, &rl);
     if(!raw || rl<=4) return;
     int32_t usz=u6lzw_unpacked_size(raw, rl); if(usz<=0) return;
@@ -4055,15 +4069,9 @@ static void music_play(const char *mfile){
       if(dat && dl>0){ char base[16]; int i=0; for(const char*p=mfile; *p && *p!='.'&&i<15; p++) base[i++]=*p; base[i]=0;
                        int si=mus_song_index(base); if(si>=0) nmap=mus_parse_map(dat, dl, si, map); } }
     plat_midi_init();
-    music_seq_start(&g_music, song, got, map, nmap, &g_midi_be);
-    g_music_on=1; g_music_last200=plat_ticks_200hz(); g_music_acc=0;
-}
-/* Pump from the main loop: advance 60 Hz music ticks off the 200 Hz clock (60/200 = 3/10, exact). */
-static void music_pump(uint32_t now200){
-    if(!g_music_on) return;
-    uint32_t d = now200 - g_music_last200; g_music_last200 = now200;
-    g_music_acc += d*3; int mt=(int)(g_music_acc/10); g_music_acc%=10;
-    if(mt>0) music_seq_tick(&g_music, mt);
+    music_seq_start(&g_music, song, got, map, nmap, &g_midi_be);  /* queues the program-changes */
+    g_music_on=1;
+    plat_timer_start(music_isr_tick, 60);     /* steady 60 Hz .M tick + MIDI drain, off the main loop */
 }
 
 int main(void)
@@ -5429,7 +5437,10 @@ int main(void)
          * loop and dragged cycling/animation down with it.) 33 ticks ~= 6 fps, 23 ~= 8.7 fps. */
         uint32_t now = plat_ticks_200hz();
 
-        music_pump(now);   /* M10: advance the .M sequencer -> MIDI OUT on the 60 Hz music clock */
+        /* M10: the MIDI .M tick now runs on a steady Timer-A interrupt (music_isr_tick), not here,
+         * so tempo is frame-rate independent and survives blocking waits. The DMA path still needs
+         * a main-loop pump for its disk refill (can't do GEMDOS I/O from an ISR; the 2.6 s ring
+         * gives ample slack). */
         plat_dma_music_pump();  /* M10: refill the DMA-sound ring from the streaming PCM file */
 
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)

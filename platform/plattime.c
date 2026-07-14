@@ -17,6 +17,38 @@ static int g_refresh_hz = 50;   /* until measured */
 static long read_hz200(void)  { return (long)*(volatile unsigned long *)0x4baL; }
 static long read_vbclock(void){ return (long)*(volatile unsigned long *)0x462L; }
 
+/* ---- MFP Timer-A periodic interrupt (for the steady music tick) --------------
+ * The 68901 MFP timer is clocked at 2.4576 MHz; TACR mode 7 divides by 200 (=>
+ * 12288 Hz), then the data register divides again: rate = 12288 / data. Timer A is
+ * MFP interrupt channel 13 => in-service register ISRA ($FFFFFA0F) bit 5. The MFP
+ * runs in software-EOI mode, so the handler clears that bit before returning. */
+static void (* volatile g_timer_cb)(void);
+
+static void __attribute__((interrupt_handler)) tima_isr(void)
+{
+    void (*cb)(void) = g_timer_cb;
+    if (cb) cb();
+    *(volatile uint8_t *)0xFFFFFA0FUL = (uint8_t)~0x20;   /* clear Timer A in-service (ISRA bit 5) */
+}
+
+int plat_timer_start(void (*cb)(void), int hz)
+{
+    if (hz < 48)  hz = 48;
+    if (hz > 250) hz = 250;
+    int data = (12288 + hz / 2) / hz;                     /* 12288 Hz / hz, rounded */
+    if (data < 1)   data = 1;
+    if (data > 255) data = 255;
+    g_timer_cb = cb;
+    Xbtimer(0, 7, data, tima_isr);   /* XBIOS 31: Timer A, control 7 (/200), our ISR */
+    return 1;
+}
+
+void plat_timer_stop(void)
+{
+    Xbtimer(0, 0, 0, tima_isr);      /* control 0 = stop Timer A */
+    g_timer_cb = 0;
+}
+
 uint32_t plat_ticks_200hz(void) { return (uint32_t)Supexec(read_hz200); }
 uint32_t plat_vbl_count(void)   { return (uint32_t)Supexec(read_vbclock); }
 

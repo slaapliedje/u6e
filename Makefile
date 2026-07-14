@@ -399,8 +399,10 @@ rdemo: $(BUILD)/rdemo.prg
 
 # ---- performance benchmark: time compose vs c2p present on the TT ------------
 BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
-             platform/plattime.c engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
-             engine/save.c engine/combat.c engine/magic.c engine/oplsynth.c dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
+             platform/plattime.c platform/platmidi.c platform/platdma.c \
+             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
+             engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c \
+             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
              render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # Hybrid 020/no-FPU build (same as game.prg) + -DBENCH: runs on a stock FPU-less TT.
 $(BUILD)/bench.prg: $(BENCH_SRC)
@@ -546,10 +548,17 @@ HYBRID_INC := -Iplatform -Irender -Iengine -Idataformats
 define HYBRID_BUILD
 	@mkdir -p $(BUILD)/$(3)
 	@for s in $(2); do o=$(BUILD)/$(3)/`echo $$s | tr / _`.o; \
-	  $(CC) -m68020-60 -std=gnu11 -O2 -Wall $(HYBRID_INC) $(4) -c $$s -o $$o || exit 1; done
+	  a=-m68020-60; \
+	  case $$s in *plattime.c) a=-m68000;; esac; \
+	  $(CC) $$a -std=gnu11 -O2 -Wall $(HYBRID_INC) $(4) -c $$s -o $$o || exit 1; done
 	$(CC) -std=gnu11 -O2 -o $(1) $(BUILD)/$(3)/*.o
 	@echo "built $(1) (68020 codegen + 68000 soft-float libc; runs FPU-free)"
 endef
+# NOTE: plattime.c is forced to -m68000. Its MFP Timer-A interrupt handler
+# (interrupt_handler attribute) would, under the hard-float -m68020-60 multilib,
+# emit an FPU register save (fmovem fp0-fp1) in its prologue — an illegal
+# instruction on a stock FPU-less TT/Falcon. -m68000 has no FPU so the ISR saves
+# only d0-d1/a0-a1. Safe because the whole engine is FPU-free (no FP state to keep).
 
 $(BUILD)/game.prg: $(GAME_SRC)
 	$(call HYBRID_BUILD,$@,$^,obj_tt)

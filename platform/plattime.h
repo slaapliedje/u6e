@@ -19,4 +19,11 @@ uint32_t plat_vbl_count(void);    /* raw VBL interrupt counter (_vbclock)    */
 void     plat_wait_vbl(void);     /* block until the next VBL (Vsync)        */
 int      plat_refresh_hz(void);   /* measured frames/sec (50/60/~71)         */
 
+/* Periodic MFP Timer-A interrupt at ~`hz` Hz calling `cb` each tick (via Xbtimer,
+ * XBIOS 31). `cb` runs at INTERRUPT level: it must NOT call TOS (GEMDOS/BIOS/XBIOS)
+ * — use only ISR-safe platform paths. Used to drive the music tick at a steady rate
+ * independent of the frame/loop rate. Returns 1 on success. */
+int      plat_timer_start(void (*cb)(void), int hz);
+void     plat_timer_stop(void);
+
 #endif /* U6E_PLATTIME_H */
