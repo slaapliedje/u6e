@@ -191,6 +191,28 @@ m2mid: $(BUILD)/m2mid
 	   echo "rendered $(BUILD)/mid/{ULTIMA,BRIT,STONES,INTRO}.wav (soundfont $(SF2))"; \
 	 else echo "no soundfont at $(SF2); play $(BUILD)/mid/*.mid with your own synth"; fi
 
+# M10 music: HOST unit test for the on-target sequencer (engine/music.c) — runs it through a capture
+# backend into an SMF (follows the real loop/branch structure). A clean run over all 12 .M validates it.
+$(BUILD)/musictest: tools/musictest.c engine/music.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)/mid
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^ -lm
+.PHONY: musictest
+musictest: $(BUILD)/musictest
+	@for f in $(REFDATA)/*.M; do $(BUILD)/musictest "$$f" $(BUILD)/mid/`basename "$$f" .M`_seq.mid 60; done
+
+# M10 ON-TARGET music: stage a .M + MIDI.DAT + MUSIC.REQ and launch the game in Hatari with MIDI on.
+# With your hatari.cfg [Midi] sMidiOutPortName pointing at your MT-32 (e.g. the UM-ONE), the ENGINE
+# plays U6's score on the real synth via the emulated ST MIDI OUT. MUSIC_SONG picks the .M.
+MUSIC_SONG ?= ULTIMA.M
+.PHONY: music-tt
+music-tt: gamedata $(BUILD)/game.prg
+	cp '$(REFDATA)/$(MUSIC_SONG)' '$(REFDATA)/MIDI.DAT' $(BUILD)/
+	printf '$(MUSIC_SONG)' > $(BUILD)/MUSIC.REQ
+	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --midi on \
+	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg'
+	rm -f $(BUILD)/MUSIC.REQ
+	@echo "played $(MUSIC_SONG) out MIDI (routed by your hatari.cfg [Midi] port)"
+
 # M4 usecode spike: run a real NPC conversation end-to-end (decision gate)
 CONVSPIKE_SRC := dataformats/u6lzw.c dataformats/u6conv.c
 $(BUILD)/convspike: tools/convspike.c $(CONVSPIKE_SRC)
@@ -425,9 +447,9 @@ uipreview: world $(BUILD)/uipreview
 	@echo "wrote $(BUILD)/uipreview.png"
 
 GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
-            platform/plattime.c \
+            platform/plattime.c platform/platmidi.c \
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
-            engine/combat.c engine/magic.c \
+            engine/combat.c engine/magic.c engine/music.c \
             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
             render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # 020-OPTIMIZED, FPU-FREE build (resolves the no-FPU vs -m68020-60 conflict).

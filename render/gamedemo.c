@@ -25,6 +25,8 @@
 #include "rng.h"
 #include "combat.h"
 #include "magic.h"
+#include "platmidi.h"          /* M10: MIDI OUT */
+#include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include <osbind.h>
 #include <string.h>
 
@@ -3999,6 +4001,69 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
         return ap;
 }
 
+/* ===================== M10: music — OPL2 .M sequencer -> MIDI OUT ===================== */
+/* MIDI-OUT backend: the portable sequencer (engine/music.c) calls these; we emit raw MIDI
+ * (Midiws). Later the OPL2->DMA and YM2149-PSG backends implement the same music_backend_t. */
+static void mus_program (int ch,int prog){ uint8_t x[2]={(uint8_t)(0xC0|(ch&15)),(uint8_t)(prog&127)}; plat_midi_write(x,2); }
+static void mus_note_on (int ch,int n,int v){ uint8_t x[3]={(uint8_t)(0x90|(ch&15)),(uint8_t)(n&127),(uint8_t)(v&127)}; plat_midi_write(x,3); }
+static void mus_note_off(int ch,int n){ uint8_t x[3]={(uint8_t)(0x80|(ch&15)),(uint8_t)(n&127),0}; plat_midi_write(x,3); }
+static void mus_reset   (void){ plat_midi_all_off(); }
+static const music_backend_t g_midi_be = { mus_program, mus_note_on, mus_note_off, mus_reset };
+static music_seq_t g_music; static int g_music_on;
+static uint32_t g_music_last200, g_music_acc;
+
+/* .M basename (no ext, case-insensitive) -> MIDI.DAT song order (listed 1..9,0,-,=). */
+static int mus_song_index(const char *fn){
+    static const char *O[12]={"ULTIMA","BOOTUP","INTRO","CREATE","FOREST","HORNPIPE",
+                              "ENGAGE","STONES","DUNGEON","BRIT","GARGOYLE","END"};
+    for(int i=0;i<12;i++){ int k=0; while(fn[k]&&O[i][k]&&((fn[k]&~0x20)==(O[i][k]&~0x20))) k++;
+        if(!fn[k] && !O[i][k]) return i; }
+    return -1;
+}
+/* Parse the idx-th song's (ch/prog) pairs from a loaded MIDI.DAT text buffer -> map (0-based). */
+static int mus_parse_map(const uint8_t *dat, int32_t len, int idx, music_map_t *map){
+    int song=-1, np=0; int32_t i=0;
+    while(i<len && np==0){
+        int32_t ls=i; while(i<len && dat[i]!='\n') i++;
+        int32_t op=-1,cl=-1,sl=0;
+        for(int32_t k=ls;k<i;k++){ if(dat[k]=='(')op=k; else if(dat[k]==')'&&op>=0)cl=k; else if(dat[k]=='/'&&op>=0)sl=1; }
+        i++;
+        if(op<0||cl<0||!sl) continue;
+        if(++song != idx) continue;
+        for(int32_t k=op+1;k<cl && np<16;){
+            int ch=0,pr=0;
+            while(k<cl && dat[k]>='0'&&dat[k]<='9') ch=ch*10+(dat[k++]-'0');
+            if(k<cl && dat[k]=='/'){ k++; while(k<cl && dat[k]>='0'&&dat[k]<='9') pr=pr*10+(dat[k++]-'0'); }
+            if(ch>0){ map[np].ch=(uint8_t)((ch-1)&15); map[np].prog=(uint8_t)((pr-1)&127); np++; }
+            while(k<cl && dat[k]!=',') k++; if(k<cl) k++;
+        }
+    }
+    return np;
+}
+/* Load a .M (LZW), its MT-32 map from MIDI.DAT (beside the game data), start the sequencer on MIDI OUT. */
+static void music_play(const char *mfile){
+    music_seq_stop(&g_music); g_music_on=0;
+    int32_t rl=0; uint8_t *raw=(uint8_t*)plat_load_file(mfile, 1, &rl);
+    if(!raw || rl<=4) return;
+    int32_t usz=u6lzw_unpacked_size(raw, rl); if(usz<=0) return;
+    uint8_t *song=(uint8_t*)plat_alloc_fast((uint32_t)usz); if(!song) return;
+    int32_t got=u6lzw_decompress(raw, rl, song, usz); if(got<=0) return;
+    music_map_t map[16]; int nmap=0;
+    { int32_t dl=0; uint8_t *dat=(uint8_t*)plat_load_file("MIDI.DAT", 1, &dl);
+      if(dat && dl>0){ char base[16]; int i=0; for(const char*p=mfile; *p && *p!='.'&&i<15; p++) base[i++]=*p; base[i]=0;
+                       int si=mus_song_index(base); if(si>=0) nmap=mus_parse_map(dat, dl, si, map); } }
+    plat_midi_init();
+    music_seq_start(&g_music, song, got, map, nmap, &g_midi_be);
+    g_music_on=1; g_music_last200=plat_ticks_200hz(); g_music_acc=0;
+}
+/* Pump from the main loop: advance 60 Hz music ticks off the 200 Hz clock (60/200 = 3/10, exact). */
+static void music_pump(uint32_t now200){
+    if(!g_music_on) return;
+    uint32_t d = now200 - g_music_last200; g_music_last200 = now200;
+    g_music_acc += d*3; int mt=(int)(g_music_acc/10); g_music_acc%=10;
+    if(mt>0) music_seq_tick(&g_music, mt);
+}
+
 int main(void)
 {
     platform_caps_t caps; platform_detect(&caps);
@@ -5178,6 +5243,13 @@ int main(void)
         Cconws("bench done\r\n"); return 0; }
 #endif
 
+    /* M10 headless music hook: MUSIC.REQ holds a .M filename (e.g. "ULTIMA.M"); load + start it on
+     * MIDI OUT, pumped by the main loop. Absent in normal play (area music wiring comes later). */
+    {   int32_t rl=0; void *req=plat_load_file("MUSIC.REQ",1,&rl);
+        if(req && rl>0){ char nm[16]; int i=0; const char*s=(const char*)req;
+            while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ') { nm[i]=s[i]; i++; } nm[i]=0;
+            if(nm[0]) music_play(nm); } }
+
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
     for (;;) {                                       /* interactive; holds frame for capture */
@@ -5307,6 +5379,8 @@ int main(void)
          * per-iteration counter, moving the mouse — which forces a full present — slowed the
          * loop and dragged cycling/animation down with it.) 33 ticks ~= 6 fps, 23 ~= 8.7 fps. */
         uint32_t now = plat_ticks_200hz();
+
+        music_pump(now);   /* M10: advance the .M sequencer -> MIDI OUT on the 60 Hz music clock */
 
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)
          * is actually in view — most scenes have none, so this is free there. */
