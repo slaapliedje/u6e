@@ -26,6 +26,7 @@
 #include "combat.h"
 #include "magic.h"
 #include "platmidi.h"          /* M10: MIDI OUT */
+#include "platdma.h"           /* M10: STE/TT/Falcon 8-bit DMA sound (pre-rendered PCM streaming) */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
 #include <osbind.h>
@@ -4070,6 +4071,7 @@ int main(void)
     platform_caps_t caps; platform_detect(&caps);
     Cconws("u6e M6 authentic UI: loading...\r\n");
     if (!plat_mem_init(&caps)) { Cconws("mem init failed\r\n"); Crawcin(); return 1; }
+    plat_dma_init(&caps);       /* M10: grab an ST-RAM ring for DMA-sound music (STE/TT/Falcon) */
 
 #ifdef BENCH
     /* M10 OPL2->DMA feasibility probe (gated on SBENCH.REQ): time the software FM
@@ -5288,6 +5290,15 @@ int main(void)
             while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ') { nm[i]=s[i]; i++; } nm[i]=0;
             if(nm[0]) music_play(nm); } }
 
+    /* M10 headless DMA-music hook: PCMMUS.REQ holds a .PCM path (e.g. "MUSIC\ULTIMA.PCM"); stream it
+     * to 8-bit DMA sound on STE/TT/Falcon, refilled by the main-loop pump. (The MIDI toggle + runtime
+     * backend selection replace this stopgap later.) */
+    {   int32_t rl=0; void *req=plat_load_file("PCMMUS.REQ",1,&rl);
+        if(req && rl>0){ char nm[32]; int i=0; const char*s=(const char*)req;
+            while(i<31 && s[i] && s[i]!='\r' && s[i]!='\n') { nm[i]=s[i]; i++; } nm[i]=0;
+            dbg_num("PCM dma_avail=", plat_dma_available());
+            if(nm[0] && plat_dma_available()) dbg_num("PCM stream_started=", plat_dma_music_start(nm)); } }
+
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
     for (;;) {                                       /* interactive; holds frame for capture */
@@ -5419,6 +5430,7 @@ int main(void)
         uint32_t now = plat_ticks_200hz();
 
         music_pump(now);   /* M10: advance the .M sequencer -> MIDI OUT on the 60 Hz music clock */
+        plat_dma_music_pump();  /* M10: refill the DMA-sound ring from the streaming PCM file */
 
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)
          * is actually in view — most scenes have none, so this is free there. */

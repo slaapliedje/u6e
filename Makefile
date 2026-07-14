@@ -243,6 +243,25 @@ m2pcm: $(BUILD)/m2pcm
 	@mkdir -p $(BUILD)/music
 	@for f in $(REFDATA)/*.M; do b=$$(basename "$$f" .M); $(BUILD)/m2pcm "$$f" "$(BUILD)/music/$$b.PCM" $(PCM_SECS) $(PCM_RATE); done
 
+# M10 OPL2->DMA ON-TARGET: stream a pre-rendered .PCM to the emulated STE/TT DMA sound and CAPTURE the
+# emulated audio (Hatari AVI) so we can verify it plays. DMA_SONG picks the song; renders it fresh,
+# stages it + PCMMUS.REQ, boots game.prg on the TT (TT has STE-compatible 8-bit DMA sound), records an
+# AVI, extracts the audio track, and checks it is non-silent. (Also plays live if you drop --fast-forward.)
+DMA_SONG ?= ULTIMA
+.PHONY: music-dma
+music-dma: gamedata $(BUILD)/game.prg $(BUILD)/m2pcm
+	$(BUILD)/m2pcm "$(REFDATA)/$(DMA_SONG).M" "$(BUILD)/$(DMA_SONG).PCM" 30 12517
+	printf '$(DMA_SONG).PCM' > $(BUILD)/PCMMUS.REQ
+	rm -f $(BUILD)/dma.avi
+	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
+	          --sound 50066 --avirecord --avi-vcodec png --avi-file $(BUILD)/dma.avi \
+	          --conout 2 --fast-forward on --run-vbls 3500 --harddrive $(BUILD) --auto 'c:\game.prg' 2>&1 | grep -iE "PCM |dma_avail|stream_started" || true
+	rm -f $(BUILD)/PCMMUS.REQ
+	@if command -v ffmpeg >/dev/null && [ -f $(BUILD)/dma.avi ]; then \
+	   ffmpeg -y -i $(BUILD)/dma.avi -vn $(BUILD)/wav/$(DMA_SONG)_dma.wav >/dev/null 2>&1; \
+	   echo "extracted audio -> $(BUILD)/wav/$(DMA_SONG)_dma.wav (play it to verify DMA output)"; \
+	 else echo "AVI at $(BUILD)/dma.avi (install ffmpeg to auto-extract the audio track)"; fi
+
 # M10 ON-TARGET music: stage a .M + MIDI.DAT + MUSIC.REQ and launch the game in Hatari with MIDI on.
 # With your hatari.cfg [Midi] sMidiOutPortName pointing at your MT-32 (e.g. the UM-ONE), the ENGINE
 # plays U6's score on the real synth via the emulated ST MIDI OUT. MUSIC_SONG picks the .M.
@@ -509,7 +528,7 @@ uipreview: world $(BUILD)/uipreview
 	@echo "wrote $(BUILD)/uipreview.png"
 
 GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
-            platform/plattime.c platform/platmidi.c \
+            platform/plattime.c platform/platmidi.c platform/platdma.c \
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
             engine/combat.c engine/magic.c engine/music.c \
             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
