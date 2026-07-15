@@ -4179,6 +4179,25 @@ static void music_manager_init(void){
     g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : 0;
 }
 
+/* ---- per-area music: pick the song for the current game context, switch on change ----
+ * The engine calls music_update_area() each turn; it starts the overworld theme when play
+ * begins and swaps to the battle theme in combat. v1 distinguishes combat vs overworld; the
+ * dungeon slot is ready for when dungeon navigation lands, and town/region music can key off
+ * position later. (See docs/rules/music_areas.md — the overworld/town assignment is provisional.) */
+static int g_music_forced;   /* a SONG.REQ / scripted request pins the song (skip auto-switch) */
+
+static const char *music_area_song(void){
+    if(g_combat_mode) return "ENGAGE";     /* battle: "Engagement and Melee"        */
+    /* TODO (needs dungeon nav): if(in_dungeon) return "DUNGEON"; */
+    return "ULTIMA";                        /* overworld + towns: the main theme (provisional) */
+}
+static void music_update_area(void){
+    if(g_music_forced) return;             /* a forced song (test hook / event) owns the music */
+    const char *want = music_area_song();
+    int i=0; while(want[i] && want[i]==g_music_cur[i]) i++;   /* compare vs the current song */
+    if(want[i] != g_music_cur[i]) music_play_song(want);      /* changed -> switch backends+song */
+}
+
 int main(void)
 {
     platform_caps_t caps; platform_detect(&caps);
@@ -5397,13 +5416,13 @@ int main(void)
         Cconws("bench done\r\n"); return 0; }
 #endif
 
-    /* M10 headless music hook: SONG.REQ holds a song base name (e.g. "BRIT"); play it via the
-     * RUNTIME-SELECTED backend (MIDI toggle from MIDI.CFG, else DMA sound by machine). Absent in
-     * normal play — per-area song hooks replace this stopgap later. */
+    /* M10 test hook: SONG.REQ pins a specific song (base name, e.g. "BRIT") via the runtime-selected
+     * backend and DISABLES per-area auto-switching — for `make music-tt/dma/st`. Absent in normal
+     * play, where music_update_area() drives the music from the game context instead. */
     {   int32_t rl=0; void *req=plat_load_file("SONG.REQ",1,&rl);
         if(req && rl>0){ char nm[16]; int i=0; const char*s=(const char*)req;
             while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ' && s[i]!='.') { nm[i]=s[i]; i++; } nm[i]=0;
-            if(nm[0]) music_play_song(nm);
+            if(nm[0]){ music_play_song(nm); g_music_forced=1; }
             dbg_num("music backend (1=MIDI 2=DMA 3=PSG)=", music_active_backend()); } }
 
     int prev_btn=0;
@@ -5541,6 +5560,7 @@ int main(void)
          * a main-loop pump for its disk refill (can't do GEMDOS I/O from an ISR; the 2.6 s ring
          * gives ample slack). */
         plat_dma_music_pump();  /* M10: refill the DMA-sound ring from the streaming PCM file */
+        music_update_area();    /* M10: start/switch the area's song (overworld <-> battle) on change */
 
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)
          * is actually in view — most scenes have none, so this is free there. */
