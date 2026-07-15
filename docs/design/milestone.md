@@ -1290,8 +1290,11 @@ Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends 
         present else PSG); all three validated in Hatari. THREE backends now DONE: MIDI OUT, OPL2->DMA,
         and YM2149 PSG (plain ST: U6's 9 OPL voices folded to 3 squares; validated on --machine st as a
         real melody). NOTE: ST I/O is supervisor-only — main-context register access goes via Supexec
-        (fixed the PSG + a latent MIDI-flush bus-error). Remaining: per-area music hooks (replace the
-        SONG.REQ test stopgap); PCM loop-point detection for seamless loops.
+        (fixed the PSG + a latent MIDI-flush bus-error). Per-area hooks now drive the music from game
+        context (music_update_area each turn: auto-starts the overworld theme, swaps to the battle
+        theme in combat; combat/dungeon/overworld table, docs/rules/music_areas.md) — validated on TT
+        (auto-started ULTIMA, MIDI map matched). Remaining polish: PCM loop-point detection for
+        seamless DMA loops; verify the overworld/town song assignment against the original.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
