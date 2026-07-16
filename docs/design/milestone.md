@@ -1293,8 +1293,18 @@ Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends 
         (fixed the PSG + a latent MIDI-flush bus-error). Per-area hooks now drive the music from game
         context (music_update_area each turn: auto-starts the overworld theme, swaps to the battle
         theme in combat; combat/dungeon/overworld table, docs/rules/music_areas.md) — validated on TT
-        (auto-started ULTIMA, MIDI map matched). Remaining polish: PCM loop-point detection for
-        seamless DMA loops; verify the overworld/town song assignment against the original.
+        (auto-started ULTIMA, MIDI map matched). SEAMLESS DMA LOOPS now done: each .M is an intro then a
+        body that repeats from a loop point (opcode 0xE, or the top); the synth exposes where playback
+        returns there (engine/oplsynth opl_wrap_* / opl_loop_point_sample), and m2pcm renders intro +
+        TWO passes of the body and stamps loop_start = start of the 2nd (warmed) body into the U6PC
+        header, which platdma already loops on. Songs whose two bodies exceed the render cap (BOOTUP,
+        STONES) trim to exactly one aligned body. Verified: the loop boundary matches the engine's own
+        live sequencer (engine/music.c control flow is byte-identical, cross-checked vs mdump), and the
+        seam discontinuity measured on the real PCM (which models platdma's exact play-[0,n)-then-loop-
+        [loop_start,n) frame sequence) is 1-13/255 — the size of one ordinary sample step, i.e. inaudible.
+        On-target smoke test: the new non-zero-loop_start PCM loads + streams real audio on the TT
+        (backend=2), no format regression. Remaining polish: verify the overworld/town song assignment
+        against the original.
 Depends on: M1 (platform timing/IRQ) + M6 (game loop to drive it). Independent of
 the M7/M8 video work — schedulable alongside them.
 Goal: in-game music the original ST port strangely shipped WITHOUT, by playing
@@ -1343,21 +1353,26 @@ Tasks
 - [x] Portable sequencer in /engine — DONE. `engine/music.c`: pure integer (no FPU/TOS) OPL2
       command-stream sequencer, 60 Hz clock, follows the .M loop/branch structure, drives a
       pluggable `music_backend_t`. Host unit test `make musictest`.
-- [~] Platform audio backends behind the `music_backend_t` seam:
+- [x] Platform audio backends behind the `music_backend_t` seam (all three DONE):
       - [x] **MIDI OUT** (all Ataris, user-enabled): `platform/platmidi.c` (XBIOS Midiws) + a MIDI
             backend in gamedemo. DONE + VALIDATED end-to-end: the engine emits the correct
             program-changes (ULTIMA's MIDI.DAT map) + notes/velocity out the emulated ST MIDI port,
             captured via Hatari PortMidi → an ALSA loopback → aseqdump. `make music-tt` plays it on
             a real MT-32 through your hatari.cfg MIDI port.
-      - [ ] **OPL2 → DMA sound** (STE/TT/Falcon): software YM3812 FM synth → 8-bit DMA sound
-            (state the XBIOS/DMA calls). The authentic path. (Reuses the sequencer via a DMA backend.)
-      - [ ] **OPL → YM2149 PSG** (plain ST): 3-voice downmix, Timer-driven register writes.
+      - [x] **OPL2 → DMA sound** (STE/TT/Falcon): DONE. Real-time FM proved infeasible on 68000, so
+            the host FM synth (engine/oplsynth, 4× OS) pre-renders each .M to 8-bit PCM (tools/m2pcm,
+            U6PC) and platform/platdma STREAMS it via the $FFFF89xx DMA-sound registers (base/end/mode,
+            programmed via Supexec; Falcon routes with XBIOS Devconnect 139). SEAMLESS loops: m2pcm
+            renders intro + 2 body passes and stamps loop_start (start of the warmed 2nd body) into the
+            header; platdma's ring wraps the file there. Seam measured at 1-13/255 (inaudible).
+      - [x] **OPL → YM2149 PSG** (plain ST): DONE. 9 OPL voices folded to 3 squares; register writes
+            ($FFFF8800/02) from the Timer-A ISR (init/silence via Supexec). Validated on --machine st.
 - [ ] Extract MIDI.DAT/.M into the asset pack (like BOOK.DAT) instead of runtime file loads.
-- [ ] Runtime detection picks DMA vs PSG from the machine (M1 caps); a user setting enables
-      the MIDI-out path instead. Hook into the engine loop: start/stop/loop per AREA (the MUSIC.REQ
-      hook is a stopgap), duck on combat, etc. (data-driven per GameDef so SE/MD reuse it).
-- [ ] Move the 60 Hz music tick to a timer interrupt (Timer-A) so it keeps playing during blocking
-      waits (menus/conversation); the main-loop pump only advances during the gameplay loop.
+- [x] Runtime detection picks DMA vs PSG from the machine (M1 caps); MIDI.CFG enables the MIDI-out
+      path instead (3-way: '1'=MIDI '2'=DMA '3'=PSG, else auto). Per-area hooks start/stop/loop by
+      game context (music_update_area; combat→ENGAGE, docs/rules/music_areas.md). DONE.
+- [x] Move the 60 Hz music tick to a timer interrupt (MFP Timer-A) so it keeps playing during blocking
+      waits; the main-loop pump only advances the DMA refill. DONE (plat_timer_start, -m68000 ISR).
 
 Acceptance
 - [ ] U6 on Atari plays its (DOS) score — a feature the original ST port lacked.

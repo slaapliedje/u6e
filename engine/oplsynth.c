@@ -102,6 +102,19 @@ static const uint8_t *g_d; static int32_t g_len, g_pos, g_loop;
 static struct { int32_t ret, start, reps; } g_stk[8]; static int32_t g_sp;
 static int32_t g_sub, g_subrem;         /* samples until next batch; 60ths rem  */
 
+/* loop-structure tracking for the host pre-renderer (opl_wrap_* API). A "wrap"
+ * is playback returning to the master loop point (stream end -> g_loop, or a
+ * 0xF return with an empty branch stack); it is NOT an internal 0x81/0xF repeat. */
+#define OPL_MAX_WRAPS 4
+static int32_t g_spos;                    /* output samples rendered so far       */
+static int32_t g_wraps;                   /* master-loop returns so far           */
+static int32_t g_wrap_spos[OPL_MAX_WRAPS];/* g_spos at each of the first wraps     */
+static int32_t g_loop_spos;               /* g_spos when the loop point (0xE) set  */
+static void note_wrap(void){
+    if(g_wraps < OPL_MAX_WRAPS) g_wrap_spos[g_wraps] = g_spos;
+    g_wraps++;
+}
+
 /* operator amplitude for phase index (10-bit) + attenuation + waveform 0..3 */
 static int32_t op_out(uint32_t phase, int32_t att, int32_t ws){
     int32_t idx = phase & 0x3FF, quad = idx >> 8, sub = idx & 0xFF, neg = 0, mute = 0;
@@ -250,7 +263,7 @@ static int freq_decode(uint8_t fb, int *fnum, int *block){
 static int32_t seq_step(void){
     int guard = 0;
     while(guard++ < 8192){
-        if(g_pos >= g_len){ g_pos = g_loop; if(g_pos >= g_len){ g_playing=0; return 1; } continue; }
+        if(g_pos >= g_len){ note_wrap(); g_pos = g_loop; if(g_pos >= g_len){ g_playing=0; return 1; } continue; }
         uint8_t b=g_d[g_pos++]; int hi=b>>4, lo=b&0xF;
         switch(hi){
           case 0x0: { uint8_t fb=g_d[g_pos++]; (void)fb; if(lo<NCH) key_off(&g_chip[lo]); break; }
@@ -270,10 +283,10 @@ static int32_t seq_step(void){
             else if(b==0x83){ int idx=g_d[g_pos++]; if(idx<16){ for(int k=0;k<11;k++) g_instdef[idx][k]=g_d[g_pos+k]; } g_pos+=11; }
             else if(b==0x85||b==0x86){ g_pos++; }
             break;
-          case 0xE: g_loop=g_pos; break;
+          case 0xE: g_loop=g_pos; g_loop_spos=g_spos; break;
           case 0xF:
             if(g_sp>0){ if(--g_stk[g_sp-1].reps>0) g_pos=g_stk[g_sp-1].start; else g_pos=g_stk[--g_sp].ret; }
-            else g_pos=g_loop;
+            else { note_wrap(); g_pos=g_loop; }
             break;
           default: break;
         }
@@ -288,21 +301,32 @@ void opl_start(const uint8_t *stream, int32_t len, int32_t rate, int oversample)
     g_d=stream; g_len=len; g_pos=0; g_loop=0; g_sp=0; g_lp_y=0;
     g_rate=rate>0?rate:25033; g_os=oversample<1?1:oversample;
     g_sub=0; g_subrem=0;
+    g_spos=0; g_wraps=0; g_loop_spos=0;
+    for(int i=0;i<OPL_MAX_WRAPS;i++) g_wrap_spos[i]=-1;
     g_playing = (stream && len>0);
 }
 
 void opl_render(int16_t *buf, int n){
     for(int i=0;i<n;i++){
         if(g_playing && --g_sub <= 0){
-            int32_t ticks = seq_step();
+            int32_t ticks = seq_step();   /* may record a loop wrap at g_spos */
             /* samples-per-tick = rate/60, carrying the remainder for exact timing */
             int32_t num = ticks * g_rate + g_subrem;
             g_sub = num / 60; g_subrem = num - g_sub*60;
             if(g_sub < 1) g_sub = 1;
         }
         buf[i] = g_playing ? render_sample() : 0;
+        g_spos++;                         /* global output-sample counter          */
     }
 }
 
 void opl_stop(void){ g_playing = 0; }
 int  opl_playing(void){ return g_playing; }
+
+int32_t opl_sample_pos(void){ return g_spos; }
+int32_t opl_wrap_count(void){ return g_wraps; }
+int32_t opl_wrap_sample(int n){         /* 1-based; -1 if that wrap hasn't happened */
+    if(n < 1 || n > OPL_MAX_WRAPS || n > g_wraps) return -1;
+    return g_wrap_spos[n-1];
+}
+int32_t opl_loop_point_sample(void){ return g_loop_spos; }

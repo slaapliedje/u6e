@@ -32,4 +32,22 @@ void opl_render(int16_t *buf, int n);
 void opl_stop(void);          /* silence + stop the sequencer */
 int  opl_playing(void);
 
+/* --- loop-structure introspection (host pre-renderer) ----------------------
+ * A U6 `.M` song is an intro played once, then a body that repeats from a loop
+ * point (opcode 0xE; or the top of the stream if the song defines none). As
+ * rendering advances, these report where playback RETURNED to that loop point,
+ * so the host pre-renderer (tools/m2pcm.c) can place a seamless DMA loop:
+ *   opl_sample_pos()   - output samples rendered since opl_start().
+ *   opl_wrap_count()   - number of times playback has returned to the loop point.
+ *   opl_wrap_sample(n) - opl_sample_pos at the n-th wrap (1-based) = the first
+ *                        sample of the (n+1)-th pass through the loop body, or
+ *                        -1 if that wrap has not happened yet.
+ *   opl_loop_point_sample() - opl_sample_pos when the active loop point (opcode
+ *                        0xE) was last set; 0 if the song has none (loops from
+ *                        the top). This is where the FIRST body begins. */
+int32_t opl_sample_pos(void);
+int32_t opl_wrap_count(void);
+int32_t opl_wrap_sample(int n);
+int32_t opl_loop_point_sample(void);
+
 #endif /* U6E_OPLSYNTH_H */

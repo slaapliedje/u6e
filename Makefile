@@ -232,12 +232,13 @@ opltest: $(BUILD)/opltest
 
 # M10 OPL2->DMA pre-render: host-render every .M to signed-8-bit PCM (engine/oplsynth, 4x oversampled)
 # for the Atari to STREAM to DMA sound. Emits build/music/*.PCM (U6PC format; gitignored, derived from
-# the copyrighted score). PCM_RATE = DMA rate; PCM_SECS = render length per song.
+# the copyrighted score). PCM_RATE = DMA rate. m2pcm auto-detects each song's loop and renders intro +
+# two loop bodies for a seamless DMA loop; PCM_SECS is only a SAFETY CAP (large so long loops aren't cut).
 $(BUILD)/m2pcm: tools/m2pcm.c engine/oplsynth.c dataformats/u6lzw.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
 PCM_RATE ?= 12517
-PCM_SECS ?= 60
+PCM_SECS ?= 240
 .PHONY: m2pcm
 m2pcm: $(BUILD)/m2pcm
 	@mkdir -p $(BUILD)/music
@@ -251,7 +252,7 @@ m2pcm: $(BUILD)/m2pcm
 DMA_SONG ?= ULTIMA
 .PHONY: music-dma
 music-dma: gamedata $(BUILD)/game.prg $(BUILD)/m2pcm
-	$(BUILD)/m2pcm "$(REFDATA)/$(DMA_SONG).M" "$(BUILD)/$(DMA_SONG).PCM" 30 12517
+	$(BUILD)/m2pcm "$(REFDATA)/$(DMA_SONG).M" "$(BUILD)/$(DMA_SONG).PCM" 240 12517
 	printf '$(DMA_SONG)' > $(BUILD)/SONG.REQ
 	printf '0' > $(BUILD)/MIDI.CFG
 	rm -f $(BUILD)/dma.avi
