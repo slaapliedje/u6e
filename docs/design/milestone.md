@@ -1276,7 +1276,10 @@ Acceptance
 ---
 
 ## M10 — Audio: music (HEADLINE FEATURE — "fixes" the silent ST port)
-Status: [~] IN PROGRESS 2026-07-14 — format DECODED + validated; TWO backends DONE:
+Status: [~] IN PROGRESS 2026-07-16 — format DECODED + validated; THREE backends DONE (MIDI-OUT,
+        OPL2→DMA, YM2149 PSG) + runtime selection + Timer-A tempo + exit cleanup + per-area hooks +
+        SEAMLESS DMA loops. Remaining: verify overworld/town song assignment vs original; extract
+        MIDI.DAT/.M into the asset pack (currently runtime file loads); (SFX are a separate track).
         (1) MIDI-OUT (real MT-32, validated in Hatari); (2) OPL2→DMA on STE/TT/Falcon — real-time
         FM synth proved INFEASIBLE on-target (a 32 MHz TT does 0.1× real-time; `make sbench`), so the
         host pre-renders each .M to 8-bit PCM (tools/m2pcm, our validated FM synth engine/oplsynth at
