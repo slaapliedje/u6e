@@ -4089,6 +4089,8 @@ static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI, 2 DMA, 3 PSG       
 static int  g_music_dma_ok;     /* 8-bit DMA sound present (STE/MegaSTE/TT/Falcon) */
 static int  g_music_active;     /* backend chosen for the current song: 1 MIDI 2 DMA 3 PSG */
 static char g_music_cur[16];    /* current song base name ("" = none)             */
+static int      g_music_group = -1;  /* current context music group (-1 = none); see music_area_group */
+static uint32_t g_music_rng;         /* LCG state for the random wandering-track pick  */
 
 /* build "BASE.EXT" (8.3) into dst */
 static void music_name(char *dst, const char *base, const char *ext){
@@ -4172,6 +4174,8 @@ static int music_active_backend(void){ return g_music_active; }   /* 1 MIDI 2 DM
 static void music_manager_init(void){
     g_music_dma_ok = plat_dma_available();
     g_music_cur[0] = 0;
+    g_music_group = -1;                                   /* no context group chosen yet    */
+    g_music_rng = (uint32_t)plat_ticks_200hz() | 1u;      /* vary the wandering pick per boot */
     plat_psg_init();
     for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
     int32_t cl=0; void *c=plat_load_file("MIDI.CFG", 1, &cl);
@@ -4179,23 +4183,54 @@ static void music_manager_init(void){
     g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : 0;
 }
 
-/* ---- per-area music: pick the song for the current game context, switch on change ----
- * The engine calls music_update_area() each turn; it starts the overworld theme when play
- * begins and swaps to the battle theme in combat. v1 distinguishes combat vs overworld; the
- * dungeon slot is ready for when dungeon navigation lands, and town/region music can key off
- * position later. (See docs/rules/music_areas.md — the overworld/town assignment is provisional.) */
+/* ---- per-area music: pick the song GROUP for the current game context, switch on change ----
+ * Faithful to the original's selection (DERIVED by READING Nuvie's SoundManager LoadNativeU6Songs,
+ * not transcribed): U6 sorts its songs into GROUPS and plays a track from the group the context
+ * calls for, starting on the "random" group:
+ *   random   -> overworld AND towns (no distinction): a RANDOM pick of four wandering themes
+ *               {BRIT "Rule Britannia", FOREST "Wanderer", STONES "Stones", ULTIMA "Ultima Theme"}
+ *   combat   -> ENGAGE   "Engagement and Melee"
+ *   dungeon  -> DUNGEON  "Dungeon"
+ *   boat     -> HORNPIPE "Captain Johne's Hornpipe" (aboard a ship)
+ *   gargoyle -> GARGOYLE "Audchar Gargl Zenmur" (the gargoyle lands)
+ * We switch groups on a context CHANGE and pick a track from the group (random within the wandering
+ * pool via the deterministic RNG seam; the others are one track). See docs/rules/music_areas.md.
+ * NOTE: the original also re-picks a NEW random wandering track when the current one ends; we loop
+ * the current track seamlessly instead (the DMA loop work) — pool rotation is a future refinement.
+ * Only combat is context-detectable today; boat/dungeon/gargoyle wait on those systems. */
 static int g_music_forced;   /* a SONG.REQ / scripted request pins the song (skip auto-switch) */
 
-static const char *music_area_song(void){
-    if(g_combat_mode) return "ENGAGE";     /* battle: "Engagement and Melee"        */
-    /* TODO (needs dungeon nav): if(in_dungeon) return "DUNGEON"; */
-    return "ULTIMA";                        /* overworld + towns: the main theme (provisional) */
+enum { MG_RANDOM=0, MG_COMBAT, MG_DUNGEON, MG_BOAT, MG_GARGOYLE };
+static const char *const MUS_WANDER[4] = { "BRIT", "FOREST", "STONES", "ULTIMA" };
+
+/* which music group the current game context calls for */
+static int music_area_group(void){
+    if(g_combat_mode) return MG_COMBAT;    /* battle                                 */
+    /* future context hooks (need the systems first):
+       if(player_on_boat)   return MG_BOAT;
+       if(in_dungeon)       return MG_DUNGEON;
+       if(in_gargoyle_land) return MG_GARGOYLE; */
+    return MG_RANDOM;                       /* overworld + towns: a wandering theme    */
+}
+/* pick a track base name from a group (random within the wandering pool) */
+static const char *music_group_pick(int g){
+    switch(g){
+      case MG_COMBAT:   return "ENGAGE";
+      case MG_DUNGEON:  return "DUNGEON";
+      case MG_BOAT:     return "HORNPIPE";
+      case MG_GARGOYLE: return "GARGOYLE";
+      default:                              /* MG_RANDOM: one of four, seeded high-bit pick */
+        g_music_rng = g_music_rng*1103515245u + 12345u;
+        return MUS_WANDER[(g_music_rng >> 24) & 3];
+    }
 }
 static void music_update_area(void){
     if(g_music_forced) return;             /* a forced song (test hook / event) owns the music */
-    const char *want = music_area_song();
-    int i=0; while(want[i] && want[i]==g_music_cur[i]) i++;   /* compare vs the current song */
-    if(want[i] != g_music_cur[i]) music_play_song(want);      /* changed -> switch backends+song */
+    int g = music_area_group();
+    if(g != g_music_group){                /* context changed group -> pick a track + play  */
+        g_music_group = g;
+        music_play_song(music_group_pick(g));
+    }
 }
 
 int main(void)
