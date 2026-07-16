@@ -4285,6 +4285,13 @@ int main(void)
     #define PACK_NAME "U6.PAK"
     #endif
 
+    /* VIDEO.CFG (M8): byte0 'T'/'t' requests the Falcon 16-bit TRUECOLOR present; absent/other =
+     * the indexed default. Read BEFORE rdr_init (which sets the video mode). No-op on the ST
+     * shifter + TT backends (they stay indexed). */
+    {   int32_t vl=0; void *vc=plat_load_file("VIDEO.CFG",1,&vl);
+        char vb=(vc&&vl>0)?((const char*)vc)[0]:0;
+        rdr_prefer_truecolor(vb=='T'||vb=='t'); }
+
 #ifdef ST_STREAM
     /* ST: STREAM the front-end (menu/intro/chargen) off the hard drive BEFORE the gameplay core
      * loads — the 1.35 MB U6FE.PAK can't coexist with the core on a 4 MB ST. rdr_init first

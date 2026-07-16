@@ -65,6 +65,15 @@ void     rdr_lowcolor_cycle(const uint8_t *pal16);
 void     rdr_set_ste_mode(int on);
 int      rdr_is_ste(void);
 
+/* TRUECOLOR present (M8): request a 16-bit direct-colour present mode instead of the indexed
+ * default. Call BEFORE rdr_init (it selects the video mode). The backbuffer stays 8-bit indexed;
+ * the backend expands each pixel through the palette to 16-bit RGB565 at present (no hardware
+ * CLUT). Only the Falcon VIDEL backend honours this today (mode BPS16); the indexed backends
+ * (ST shifter / TT) are no-ops and stay indexed. For U6's 256-colour art this is lossless-equal to
+ * the indexed path — it exists to complete the hardware matrix + de-risk the direct-colour present
+ * shared with the graphics-card backend. */
+void     rdr_prefer_truecolor(int on);
+
 /* Convert the backbuffer to the screen's native layout and display it. */
 void     rdr_present(void);
 

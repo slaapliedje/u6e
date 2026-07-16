@@ -37,39 +37,50 @@ extern void c2p_span_asm(const uint8_t *src, uint16_t *dst, long ngroups);
 
 #define FW 320
 #define FH 240
-#define FALC_SCREEN_BYTES (FW * FH)     /* 8bpp planar == width*height bytes */
+#define FALC_PIXELS (FW * FH)
 
-static uint8_t  *g_screen;              /* visible planar screen (ST-RAM)  */
+static uint8_t  *g_screen;              /* visible screen (ST-RAM): 8bpp planar OR 16bpp chunky */
 static uint8_t  *g_back;                /* chunky 8-bit backbuffer          */
-static uint32_t  g_pal[256];            /* VIDEL 0x00RRGGBB entries         */
+static uint32_t  g_pal[256];            /* VIDEL 0x00RRGGBB entries (indexed mode)              */
+static uint16_t  g_pal16[256];          /* RGB565 expand LUT (truecolor mode)                   */
+static int       g_tc;                  /* 1 = 16-bit truecolor present active                  */
+static int       g_want_tc;             /* rdr_prefer_truecolor request (before rdr_init)        */
+static int32_t   g_screen_bytes;        /* visible screen size (depends on depth)               */
 
 static short     g_old_mode;
 static void     *g_old_phys, *g_old_log;
 
-/* Choose the VIDEL mode word for 320x240x8bpp on the attached monitor.
- *  - VGA: native is 480 lines; VERTFLAG double-scans so 240 logical lines fill
- *    the screen (each shown twice). 40-column (COL40) = 320 px wide. BPS8 = 256c.
- *  - RGB/TV: 320x240 via standard 40-col BPS8 (PAL gives ~240 visible lines;
- *    NTSC ~200 — VERTFLAG would interlace, so leave it off here). */
+void rdr_prefer_truecolor(int on) { g_want_tc = on; }   /* honoured at rdr_init */
+
+/* Choose the VIDEL mode word for 320x240 on the attached monitor, at 8bpp (indexed) or 16bpp
+ * (truecolor per g_tc).
+ *  - VGA: native is 480 lines; VERTFLAG double-scans so 240 logical lines fill the screen (each
+ *    shown twice). 40-column (COL40) = 320 px wide. BPS8 = 256c, BPS16 = 16-bit direct colour.
+ *  - RGB/TV: 320x240 via standard 40-col (PAL ~240 visible lines; NTSC ~200 — VERTFLAG would
+ *    interlace, so leave it off here). */
 static short falcon_mode(void)
 {
+    short depth = (short)(g_tc ? BPS16 : BPS8);
     short mon = VgetMonitor();
     if (mon == MON_VGA)
-        return (short)(VGA | VERTFLAG | BPS8 | COL40);     /* 0x113 */
-    return (short)(TV | PAL | BPS8 | COL40);               /* 0x023 */
+        return (short)(VGA | VERTFLAG | depth | COL40);    /* 8bpp 0x113 / 16bpp 0x114 */
+    return (short)(TV | PAL | depth | COL40);              /* 8bpp 0x023 / 16bpp 0x024 */
 }
 
 bool rdr_init(const platform_caps_t *caps)
 {
     (void)caps;
 
-    g_back   = (uint8_t *)plat_alloc_fast(FALC_SCREEN_BYTES);
-    if (!g_back) g_back = (uint8_t *)plat_alloc_chip(FALC_SCREEN_BYTES);  /* fast pool tight -> ST-RAM */
-    g_screen = (uint8_t *)plat_alloc_chip(FALC_SCREEN_BYTES);   /* ST-RAM for VIDEL */
+    g_tc = g_want_tc ? 1 : 0;                            /* truecolor requested before init? */
+    g_screen_bytes = (int32_t)FALC_PIXELS * (g_tc ? 2 : 1);  /* 16bpp = 2 bytes/pixel        */
+
+    g_back   = (uint8_t *)plat_alloc_fast(FALC_PIXELS);         /* backbuffer is always 8-bit  */
+    if (!g_back) g_back = (uint8_t *)plat_alloc_chip(FALC_PIXELS);  /* fast pool tight -> ST-RAM */
+    g_screen = (uint8_t *)plat_alloc_chip(g_screen_bytes);      /* ST-RAM for VIDEL             */
     if (!g_back || !g_screen) return false;
 
-    for (int32_t i = 0; i < FALC_SCREEN_BYTES; i++) g_screen[i] = 0;
-    for (int32_t i = 0; i < FALC_SCREEN_BYTES; i++) g_back[i]   = 0;
+    for (int32_t i = 0; i < g_screen_bytes; i++) g_screen[i] = 0;
+    for (int32_t i = 0; i < FALC_PIXELS;     i++) g_back[i]   = 0;
 
     /* Save current video state, then switch VIDEL to our mode + buffer. */
     g_old_mode = VsetMode(VM_INQUIRE);
@@ -112,6 +123,17 @@ static inline uint32_t exp6(uint8_t v6)
 void rdr_set_palette(const uint8_t *rgb6, int n)
 {
     if (n > 256) n = 256;
+    if (g_tc) {
+        /* truecolor: build the RGB565 expand LUT (no hardware CLUT). U6 channels are 6-bit:
+         * green maps 1:1 to the 6-bit field; red/blue drop 1 bit. The next present picks it up. */
+        for (int i = 0; i < n; i++) {
+            uint16_t r5 = (uint16_t)((rgb6[i*3+0] & 0x3F) >> 1);   /* 6-bit -> 5-bit */
+            uint16_t g6 = (uint16_t)( rgb6[i*3+1] & 0x3F);         /* 6-bit -> 6-bit */
+            uint16_t b5 = (uint16_t)((rgb6[i*3+2] & 0x3F) >> 1);   /* 6-bit -> 5-bit */
+            g_pal16[i] = (uint16_t)((r5 << 11) | (g6 << 5) | b5);
+        }
+        return;
+    }
     for (int i = 0; i < n; i++) {
         uint32_t r = exp6(rgb6[i*3+0]);
         uint32_t g = exp6(rgb6[i*3+1]);
@@ -137,12 +159,23 @@ void rdr_debug_info(uint32_t out[6])
     out[2] = (uint32_t)(uintptr_t)g_screen;
     out[3] = (uint32_t)(uint16_t)VsetMode(VM_INQUIRE);
     out[4] = (uint32_t)(uint16_t)VgetMonitor();
-    out[5] = (uint32_t)FALC_SCREEN_BYTES;
+    out[5] = (uint32_t)g_screen_bytes;
 }
 
-/* Full-screen present: chunky -> 8 interleaved bitplanes, 1:1 (no doubling). */
+/* truecolor: expand `npix` indexed pixels src[] -> 16-bit RGB565 dst[] via the palette LUT */
+static inline void tc_span(const uint8_t *src, uint16_t *dst, int npix)
+{
+    for (int i = 0; i < npix; i++) dst[i] = g_pal16[src[i]];
+}
+
+/* Full-screen present: truecolor = per-pixel 565 expand; else chunky -> 8 interleaved bitplanes. */
 void rdr_present(void)
 {
+    if (g_tc) {
+        tc_span(g_back, (uint16_t *)g_screen, FALC_PIXELS);
+        Vsync();
+        return;
+    }
     const int groups = FW / 16;                 /* 20 */
     for (int y = 0; y < FH; y++)
         c2p_span_asm(g_back + (int32_t)y * FW,
@@ -157,6 +190,12 @@ void rdr_present_rect(int x, int y, int w, int h)
     if (y < 0) y = 0;
     if (x + w > FW) w = FW - x;
     if (y + h > FH) h = FH - y;
+    if (g_tc) {
+        for (int yy = y; yy < y + h; yy++)
+            tc_span(g_back + (int32_t)yy * FW + x,
+                    (uint16_t *)g_screen + (int32_t)yy * FW + x, w);
+        return;
+    }
     int g0 = x / 16, gn = w / 16;
     for (int yy = y; yy < y + h; yy++)
         c2p_span_asm(g_back + (int32_t)yy * FW + g0 * 16,
@@ -171,6 +210,11 @@ void rdr_present_doubled(int lh)
 {
     if (lh < 1) lh = 1;
     if (lh > FH) lh = FH;
+    if (g_tc) {
+        tc_span(g_back, (uint16_t *)g_screen, FW * lh);
+        Vsync();
+        return;
+    }
     const int groups = FW / 16;
     for (int y = 0; y < lh; y++)
         c2p_span_asm(g_back + (int32_t)y * FW,
@@ -204,6 +248,14 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
     if (lh > FH) lh = FH;
     int last = (FW/16 - 1) * 16;
     if (pan_x < 0) pan_x = 0;
+    if (g_tc) {
+        for (int y = 0; y < lh; y++) {
+            uint16_t *r = (uint16_t *)g_screen + (int32_t)y * FW;
+            memmove(r, r + 16, (size_t)(FW - 16) * 2);          /* shift left one 16-px group  */
+            tc_span(chunky + (int32_t)y*cw + pan_x + last, r + last, 16);  /* expand new group */
+        }
+        return;
+    }
     for (int y = 0; y < lh; y++) {
         uint8_t *r = g_screen + (int32_t)y * FW;
         memmove(r, r + 16, (size_t)(FW - 16));                  /* planar shift left one group */

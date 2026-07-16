@@ -639,6 +639,21 @@ m5-svm-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	-ffmpeg -y -i $(BUILD)/gamef.avi -update 1 $(BUILD)/gamef_screen.png 2>/dev/null
 	@echo "wrote $(BUILD)/gamef_screen.png (Falcon VIDEL 320x240, ScummVM-save state)"
 
+# M8: Falcon 16-bit TRUECOLOR capture. Same rig as m5-svm-falcon but stages VIDEO.CFG='T' so the
+# engine calls rdr_prefer_truecolor -> VIDEL BPS16 (0x114). The AVI captures the REAL VIDEL output
+# (16-bit direct colour), so this validates the 565 expand-present path (not just the backbuffer).
+m5-svm-falcon-tc: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
+	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
+	rm -f $(BUILD)/gameftc.avi $(BUILD)/gameftc_screen.png $(BUILD)/SAVE.000   # no template => static render
+	printf 'T' > $(BUILD)/VIDEO.CFG                                            # request truecolor present
+	$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
+	          --fast-forward on --run-vbls 3500 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gameftc.avi 2>/dev/null || true
+	@rm -f $(BUILD)/VIDEO.CFG                                                  # un-stage (default = indexed)
+	-ffmpeg -y -i $(BUILD)/gameftc.avi -update 1 $(BUILD)/gameftc_screen.png 2>/dev/null
+	@echo "wrote $(BUILD)/gameftc_screen.png (Falcon VIDEL 320x240 16-bit TRUECOLOR)"
+
 # PIXEL-PERFECT screenshot: stage SHOT.REQ so the engine dumps its 320x200 chunky
 # backbuffer (+palette) to SHOT.DAT, then convert host-side. NO emulator scaling/
 # aspect/overscan in the imaging path — image pixel == logical pixel. The clean

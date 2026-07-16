@@ -52,6 +52,7 @@ static uint8_t   g_lut[256];          /* active 256->16 remap (from U6WW)      *
 static int       g_is_ste;            /* 1 = pack 4-bit STE register format; 0 = 3-bit ST      */
 void rdr_set_ste_mode(int on){ g_is_ste = on ? 1 : 0; }
 int  rdr_is_ste(void){ return g_is_ste; }
+void rdr_prefer_truecolor(int on){ (void)on; }   /* shifter is 16-colour indexed; no truecolor */
 static inline uint16_t st_reg(unsigned r, unsigned g, unsigned b)
 {
     if (g_is_ste){
