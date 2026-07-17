@@ -97,6 +97,13 @@ $(BUILD)/vcardtest.prg: render/vcardtest.c
 	$(CC) -m68000 -std=gnu11 -Os -Wall -o $@ $< -lgem16
 	@echo "built $@ (GEM VDI probe, 68000 + libgem16)"
 vcardtest: $(BUILD)/vcardtest.prg
+# M8 vcard RENDERER test: rdr_vcard.c (VDI card backend) + a test-pattern harness. GEM app, pure
+# 68000 + libgem16 + the portable C c2p (no 68020 asm). Validate under ARAnyM+fVDI+AFROS.
+$(BUILD)/vcardrender.prg: render/vcardrender.c render/rdr_vcard.c
+	@mkdir -p $(BUILD)
+	$(CC) -m68000 -std=gnu11 -Os -Wall -Irender -Iplatform -o $@ $^ -lgem16
+	@echo "built $@ (rdr_vcard VDI backend + test pattern, 68000 + libgem16)"
+vcardrender: $(BUILD)/vcardrender.prg
 # Hatari smoke test (built-in TT VDI: no EdDI, but exercises the vq_extnd path + reports the mode).
 vcardtest-tt: $(BUILD)/vcardtest.prg
 	$(HATARI) --machine tt --tos '$(TOS_TT)' $(TT_FLAGS) --harddrive $(BUILD) --auto 'c:\vcardtest.prg' \
