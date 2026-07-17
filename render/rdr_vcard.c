@@ -4,18 +4,18 @@
  * Unlike the direct-hardware ST/TT/Falcon backends, a graphics card is reached THROUGH GEM/VDI: the
  * card ships a VDI driver (fVDI / NVDI) and we present into whatever mode the user has set (we do NOT
  * change the card's resolution — see render/CLAUDE.md). We compose into our own canonical 8-bit
- * chunky backbuffer exactly like the other backends, then present it with a single VDI raster copy:
- *   c2p the backbuffer to an 8-plane STANDARD-format MFDB, then vro_cpyfm it to the screen. The VDI
- *   converts that standard bitmap to the card's real pixel format (8/16/24/32 bpp) using the logical
- *   colour table we load with vs_color — so this one path works on an indexed OR a truecolour card
- *   without us knowing the card's byte layout. Never per-tile VDI ops (project rule).
- *
- * The 320x240 game frame is shown 1:1, centred on the (larger) card screen.
+ * chunky backbuffer exactly like the other backends, then present it with a single VDI raster copy.
+ * We ask vq_scrninfo for the card's real depth + pixel layout and pick one of two present paths:
+ *   INDEXED (<=8bpp): c2p the backbuffer to an 8-plane bitmap, vr_trnfm it to the driver's device
+ *     form, then vro_cpyfm to the screen; the VDI colour table (vs_color) maps our indices.
+ *   TRUECOLOUR (16/24/32bpp): expand each index through the card's exact bit layout to a CHUNKY
+ *     device pixel, then vro_cpyfm that to the screen (the driver reads a 16/24/32-plane source as
+ *     chunky). No hard-coded masks — the layout comes from vq_scrninfo. See docs/formats/vdi_scrninfo.md.
+ * Never per-tile VDI ops (project rule). The 320x240 frame is shown 1:1, centred on the card screen.
  *
  * AES/VDI calls (named for verification): appl_init/appl_exit (AES 10/19), graf_handle (AES 77),
- * v_opnvwk/v_clsvwk (VDI 100/101), vs_color (VDI 14), vro_cpyfm (VDI 109), Getcookie('EdDI').
- * Caps of the validation rig (ARAnyM+fVDI+AFROS, docs/design/vcard-aranym-rig.md): EdDI present,
- * 800x608, 32bpp truecolour (fVDI does the 8->32 transform at blit).
+ * v_opnvwk/v_clsvwk (VDI 100/101), vs_color (VDI 14), vq_scrninfo (VDI 102 sub 1), vr_trnfm (VDI 110),
+ * vro_cpyfm (VDI 109), Getcookie('EdDI'). Validation rig: ARAnyM+fVDI+AFROS, docs/design/vcard-aranym-rig.md.
  */
 #include "render.h"
 
@@ -59,8 +59,14 @@ static uint8_t   g_back[VW * VH];      /* chunky 8-bit backbuffer               
 static uint8_t   g_planar[VW * VH];    /* 8-plane STANDARD-format c2p output           */
 static uint8_t   g_device[VW * VH * 4];/* DEVICE-format copy (vr_trnfm target; up to 32bpp) */
 int              rdr_vcard_force_depth = 0;  /* test hook: override detected screen bpp (0 = auto) */
-static int       g_bpp;                /* screen depth (line-A VPLANES): 8 indexed, 16/24/32 truecolour */
+static int       g_bpp;                /* screen depth: 8 indexed, 15/16/24/32 truecolour (vq_scrninfo) */
+static int       g_truecolor;          /* screen is direct-colour (vq_scrninfo clut==2 / bit_depth>8)   */
 static uint32_t  g_lut[256];           /* index -> device pixel (truecolour expand)     */
+/* Truecolour pixel layout, read from vq_scrninfo so it matches ANY card/config with no hard-coded
+ * masks: g_ch_bits[ch] = bits per channel (R,G,B), g_ch_pos[ch][j] = the SCREEN bit position of that
+ * channel's bit j (j=0 = LSB). See docs/formats/vdi_scrninfo.md. */
+static int       g_ch_bits[3];
+static uint8_t   g_ch_pos[3][8];
 static short     g_handle;             /* our VDI virtual workstation                  */
 static int       g_have_eddi;          /* EdDI cookie present (card / extended VDI)     */
 static int       g_scr_w, g_scr_h;     /* current card resolution                       */
@@ -71,8 +77,19 @@ static int       g_ready;
 /* ---- direct VDI calls via the vdi() trap --------------------------------------------
  * libgem's vs_color (and friends) fault here (bus error), so we drive the VDI parameter block
  * ourselves for the few opcodes we need. */
-static short vc_control[12], vc_intin[8], vc_ptsin[8], vc_intout[128], vc_ptsout[128];
+static short vc_control[12], vc_intin[8], vc_ptsin[8], vc_intout[288], vc_ptsout[128];
 static VDIPB vc_pb = { vc_control, vc_intin, vc_ptsin, vc_intout, vc_ptsout };
+/* vq_scrninfo (opcode 102, sub 1, flag 2): returns the Device struct (272 words) describing the
+ * card's EXACT pixel format — the authoritative depth + truecolour bit layout. See
+ * docs/formats/vdi_scrninfo.md for the word offsets. */
+static void vdi_scrninfo(short *out)
+{
+    vc_control[0] = 102; vc_control[1] = 0; vc_control[3] = 1; vc_control[5] = 1; vc_control[6] = g_handle;
+    vc_intin[0] = 2;
+    vc_pb.intout = out;                 /* Device struct is 272 words — its own buffer */
+    vdi(&vc_pb);
+    vc_pb.intout = vc_intout;
+}
 static void vdi_set_color(short idx, short r, short g, short b)
 {
     vc_control[0] = 14;         /* vs_color */
@@ -113,6 +130,45 @@ static void vdi_cpyfm(short *pxy)
     vdi(&vc_pb);
 }
 
+/* ---- truecolour pixel layout ---------------------------------------------
+ * Fall back to the "usual bit order" layout (565 / 555 / 0x00RRGGBB, red in the high bits) when
+ * vq_scrninfo is unavailable — this matches every ordinary fVDI/NVDI mode. */
+static void tc_default_layout(int bpp)
+{
+    int i;
+    if (bpp >= 24) {                                /* 8-8-8, RGB in the low 24 bits */
+        g_ch_bits[0] = g_ch_bits[1] = g_ch_bits[2] = 8;
+        for (i = 0; i < 8; i++) { g_ch_pos[0][i] = (uint8_t)(16 + i);
+                                  g_ch_pos[1][i] = (uint8_t)(8 + i);
+                                  g_ch_pos[2][i] = (uint8_t)i; }
+    } else if (bpp == 16) {                         /* RGB 565 */
+        g_ch_bits[0] = 5; g_ch_bits[1] = 6; g_ch_bits[2] = 5;
+        for (i = 0; i < 5; i++) g_ch_pos[0][i] = (uint8_t)(11 + i);
+        for (i = 0; i < 6; i++) g_ch_pos[1][i] = (uint8_t)(5 + i);
+        for (i = 0; i < 5; i++) g_ch_pos[2][i] = (uint8_t)i;
+    } else {                                        /* 15: RGB 555 */
+        g_ch_bits[0] = g_ch_bits[1] = g_ch_bits[2] = 5;
+        for (i = 0; i < 5; i++) { g_ch_pos[0][i] = (uint8_t)(10 + i);
+                                  g_ch_pos[1][i] = (uint8_t)(5 + i);
+                                  g_ch_pos[2][i] = (uint8_t)i; }
+    }
+}
+
+/* Assemble a device pixel from 8-bit R/G/B using the reported bit layout (see docs). */
+static uint32_t tc_pixel(int r8, int g8, int b8)
+{
+    int v[3] = { r8, g8, b8 };
+    uint32_t px = 0;
+    for (int ch = 0; ch < 3; ch++) {
+        int nb = g_ch_bits[ch];
+        if (nb <= 0) continue;
+        int cv = v[ch] >> (8 - nb);                 /* top nb bits of the channel */
+        for (int j = 0; j < nb; j++)
+            if (cv & (1 << j)) px |= (uint32_t)1u << g_ch_pos[ch][j];
+    }
+    return px;
+}
+
 /* ---- interface: init / shutdown ------------------------------------------ */
 bool rdr_init(const platform_caps_t *caps)
 {
@@ -145,12 +201,37 @@ bool rdr_init(const platform_caps_t *caps)
     g_ox = (g_scr_w - VW) / 2;                      /* centre the 320x240 frame */
     g_oy = (g_scr_h - VH) / 2;
 
-    /* Screen depth: v_opnvwk work_out + vq_extnd don't distinguish it (both report 256 colours), so
-     * read the line-A VPLANES (real bit-plane count; fVDI keeps it current). <=8 = indexed (the
-     * vr_trnfm path); 16/24/32 = truecolour (the expand path). */
-    linea0();
-    g_bpp = rdr_vcard_force_depth ? rdr_vcard_force_depth : VPLANES;   /* test hook overrides */
+    /* Screen depth + truecolour pixel layout. v_opnvwk work_out + vq_extnd both report 256 colours
+     * on a card and line-A VPLANES misreports a truecolour screen as 8 planes, so ask vq_scrninfo:
+     * bit_depth is authoritative and (for clut==2 / bit_depth>8) it hands us the exact per-channel
+     * bit positions for the expand. See docs/formats/vdi_scrninfo.md. */
+    g_truecolor = 0;
+    g_ch_bits[0] = g_ch_bits[1] = g_ch_bits[2] = 0;
+    if (g_have_eddi) {
+        static short si[288];
+        vdi_scrninfo(si);
+        short clut = si[1], depth = si[2];          /* si[0]=format, si[1]=clut, si[2]=bit_depth */
+        if (depth == 8 || depth == 15 || depth == 16 || depth == 24 || depth == 32) {
+            g_bpp = depth;
+            g_truecolor = (clut == 2) || (depth > 8);
+            if (g_truecolor) {
+                g_ch_bits[0] = si[8]; g_ch_bits[1] = si[9]; g_ch_bits[2] = si[10];
+                for (int j = 0; j < g_ch_bits[0] && j < 8; j++) g_ch_pos[0][j] = (uint8_t)si[16 + j];
+                for (int j = 0; j < g_ch_bits[1] && j < 8; j++) g_ch_pos[1][j] = (uint8_t)si[32 + j];
+                for (int j = 0; j < g_ch_bits[2] && j < 8; j++) g_ch_pos[2][j] = (uint8_t)si[48 + j];
+            }
+        } else {
+            linea0(); g_bpp = VPLANES;               /* scrninfo gave junk — fall back to line-A */
+        }
+    } else {
+        linea0(); g_bpp = VPLANES;                    /* no EdDI: base VDI, indexed only */
+    }
+    if (rdr_vcard_force_depth) g_bpp = rdr_vcard_force_depth;   /* test hook */
     if (g_bpp != 8 && g_bpp != 15 && g_bpp != 16 && g_bpp != 24 && g_bpp != 32) g_bpp = 8;
+    if (g_bpp > 8) g_truecolor = 1;
+    /* If truecolour but vq_scrninfo gave no layout (forced depth, or older driver), assume the usual
+     * 565/555/888 order — correct for every ordinary fVDI/NVDI mode. */
+    if (g_truecolor && g_ch_bits[0] == 0) tc_default_layout(g_bpp);
 
     for (int32_t i = 0; i < (int32_t)VW * VH; i++) { g_back[i] = 0; g_planar[i] = 0; }
 
@@ -163,15 +244,14 @@ bool rdr_init(const platform_caps_t *caps)
     g_src.fd_nplanes = SRC_PLANES;
     g_src.fd_r1 = g_src.fd_r2 = g_src.fd_r3 = 0;
     /* device MFDB. INDEXED: vr_trnfm converts the standard bitmap into this 8-plane device form.
-     * TRUECOLOUR: we expand our indices straight into g_device as device pixels (fd_nplanes=bpp,
-     * fd_wdwidth = pixels*bpp/16), and vro_cpyfm that to the screen. */
+     * TRUECOLOUR: we expand our indices straight into g_device as chunky device pixels and vro_cpyfm
+     * that to the screen. fd_nplanes = real bpp (the driver reads 16/24/32-plane sources as chunky).
+     * fd_wdwidth STAYS VW/16 (=20) at every depth: the driver's byte pitch = fd_wdwidth*nplanes*2, so
+     * it must be the per-plane word width, NOT scaled by bpp (that was the garble). See docs. */
     g_dev = g_src;
     g_dev.fd_addr    = g_device;
     g_dev.fd_stand   = 0;                           /* 0 = device-specific form */
-    if (g_bpp > 8) {
-        g_dev.fd_nplanes = (short)g_bpp;
-        g_dev.fd_wdwidth = (short)((int32_t)VW * g_bpp / 16);
-    }
+    if (g_truecolor) g_dev.fd_nplanes = (short)g_bpp;
     /* dest MFDB: fd_addr = 0 => the physical screen; the VDI fills the geometry itself */
     memset(&g_dst, 0, sizeof g_dst);
 
@@ -202,18 +282,13 @@ void rdr_set_palette(const uint8_t *rgb6, int n)
     if (n > 256) n = 256;
     for (int i = 0; i < n; i++) {
         int r6 = rgb6[i*3+0] & 0x3F, g6 = rgb6[i*3+1] & 0x3F, b6 = rgb6[i*3+2] & 0x3F;
-        /* INDEXED: load the VDI colour table (vro_cpyfm maps our indices through it). */
-        if (g_bpp <= 8)
+        if (!g_truecolor)
+            /* INDEXED: load the VDI colour table (vro_cpyfm maps our indices through it). */
             vdi_set_color((short)i, (short)(r6*1000/63), (short)(g6*1000/63), (short)(b6*1000/63));
-        /* TRUECOLOUR: precompute the device pixel for each index (6-bit -> 8-bit channels).
-         * 32/24-bit fVDI = 0x00RRGGBB; 16/15-bit = RGB 565/555. */
-        int r8 = r6*255/63, g8 = g6*255/63, b8 = b6*255/63;
-        if (g_bpp >= 24)
-            g_lut[i] = ((uint32_t)r8 << 16) | ((uint32_t)g8 << 8) | (uint32_t)b8;
-        else if (g_bpp == 16)
-            g_lut[i] = (uint32_t)(((r8 & 0xF8) << 8) | ((g8 & 0xFC) << 3) | (b8 >> 3));
-        else /* 15 */
-            g_lut[i] = (uint32_t)(((r8 & 0xF8) << 7) | ((g8 & 0xF8) << 2) | (b8 >> 3));
+        else
+            /* TRUECOLOUR: precompute the device pixel (6-bit -> 8-bit channels, then the card's
+             * exact bit layout from vq_scrninfo — no hard-coded 565/888 masks). */
+            g_lut[i] = tc_pixel(r6*255/63, g6*255/63, b6*255/63);
     }
 }
 
@@ -234,28 +309,30 @@ static void blit_rect(int x, int y, int w, int h)
 }
 
 /* build the device bitmap (g_dev) from a full VW-wide, VH-tall chunky source.
- * INDEXED card (<=8bpp): VALIDATED. c2p to a VDI standard 8-plane bitmap, then vr_trnfm to the
- * 8-plane device form (vro_cpyfm needs a device-format, same-depth source; a standard source alone
- * won't blit).
- * TRUECOLOUR card (16/24/32bpp): WIP. We expand each index to its device pixel (g_lut) into g_device
- * and vro_cpyfm that. It DOES blit a 320x240 region to a 32-bit screen, but garbled — a chunky
- * truecolour source described by an MFDB (fd_nplanes=bpp, fd_stand=0) is read as PLANAR by fVDI, and
- * the exact pixel byte order is unconfirmed. The clean fix is v_opnbm (EdDI): open an off-screen
- * bitmap in the card's real device format — its MFDB gives the correct format AND the real depth
- * (line-A VPLANES misreports it as 8), then write device pixels into that bitmap and vro_cpyfm it.
- * Until then a truecolour-capable card should be run in a 256-colour mode (the validated path). */
+ * INDEXED card (<=8bpp): c2p to a VDI standard 8-plane bitmap, then vr_trnfm to the 8-plane device
+ * form (the driver reads an 8-plane source as bitplanes and converts to chunky; a naked standard
+ * source alone won't blit).
+ * TRUECOLOUR card (16/24/32bpp): expand each index to its device pixel (g_lut) as a CHUNKY raster —
+ * the driver reads a 16/24/32-plane source as chunky (2/3/4 bytes per pixel). Row stride is the
+ * natural pixels*bpp/8; the source MFDB's fd_wdwidth stays VW/16 (the driver scales by nplanes*2). */
 static void build_device(const uint8_t *src)
 {
-    if (g_bpp <= 8) {
+    if (!g_truecolor) {
         c2p_frame(src, (uint16_t *)g_planar);
         vdi_trnfm();
         return;
     }
     int32_t npix = (int32_t)VW * VH;
-    if (g_bpp >= 24) {
+    if (g_bpp == 32) {
         uint32_t *d = (uint32_t *)g_device;
         for (int32_t i = 0; i < npix; i++) d[i] = g_lut[src[i]];
-    } else {                                        /* 15/16-bit */
+    } else if (g_bpp == 24) {                        /* 3 bytes/pixel, R,G,B big-endian */
+        uint8_t *d = g_device;
+        for (int32_t i = 0; i < npix; i++) {
+            uint32_t px = g_lut[src[i]];
+            *d++ = (uint8_t)(px >> 16); *d++ = (uint8_t)(px >> 8); *d++ = (uint8_t)px;
+        }
+    } else {                                         /* 15/16-bit, 2 bytes/pixel */
         uint16_t *d = (uint16_t *)g_device;
         for (int32_t i = 0; i < npix; i++) d[i] = (uint16_t)g_lut[src[i]];
     }
@@ -306,8 +383,10 @@ void rdr_debug_info(uint32_t out[6])
 {
     out[0] = (uint32_t)g_scr_w;
     out[1] = (uint32_t)g_scr_h;
-    out[2] = (uint32_t)g_bpp;              /* detected screen depth (line-A VPLANES) */
+    out[2] = (uint32_t)g_bpp;              /* detected screen depth (vq_scrninfo bit_depth) */
     out[3] = (uint32_t)g_have_eddi;
     out[4] = (uint32_t)(uint16_t)g_handle;
-    out[5] = (uint32_t)VW * VH;
+    /* truecolour flag + per-channel bit counts (R,G,B), so the harness can verify the layout */
+    out[5] = ((uint32_t)g_truecolor << 24) | ((uint32_t)(g_ch_bits[0] & 0xFF) << 16)
+           | ((uint32_t)(g_ch_bits[1] & 0xFF) << 8) | (uint32_t)(g_ch_bits[2] & 0xFF);
 }

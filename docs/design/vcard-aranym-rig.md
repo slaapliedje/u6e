@@ -83,14 +83,33 @@ dev-machine setup — none of it ships.
 - Screenshot the running `vcardrender` MID-loop: run ARAnyM under `SDL_VIDEODRIVER=x11 xvfb-run`, sleep
   ~58 s, `import -window root`, then SIGTERM ARAnyM.
 
-## Truecolour-card retest (2026-07-17)
-Reran the harness with fVDI in 800x608x32 (drive_c/fvdi.sys line 264 -> `...x32`). The harness runs
-fine (rdr_init OK, palette set, present loop) but **nothing blits** — the `c2p -> vr_trnfm ->
-vro_cpyfm` path shows on an INDEXED card only. `vr_trnfm` keeps the bitmap 8-plane, and an 8-plane
-device bitmap will not `vro_cpyfm` to a 16/24/32-bit screen (depth mismatch). A truecolour CARD needs
-an explicit 8-bit-index -> device-pixel expand (like the Falcon 8->16 path), driven by `vq_scrninfo`'s
-exact pixel layout — a follow-up. Workaround for a truecolour-capable card: run it in a 256-colour
-mode (the validated path). Rig left back at 640x480x8.
+## Truecolour-card path — RESOLVED + VALIDATED (2026-07-17)
+The truecolour present now works. Two things were wrong and both are fixed in `rdr_vcard.c`:
+
+1. **The garble was the source MFDB `fd_wdwidth`, not the pixel values.** The ARAnyM host blit
+   (`nfvdi_soft.cpp` `blitArea_M2S`) computes `pitch = fd_wdwidth * planes * 2` and, for a source of
+   16/24/32 planes, reads it as **chunky** directly (2/3/4 bytes/pixel). We were setting
+   `fd_wdwidth = pixels*bpp/16`, so the driver's pitch came out 16–32× too big and every row wrapped
+   into garbage. `fd_wdwidth` must stay the per-plane word width `pixels/16` (=20 for 320) at *every*
+   depth — the driver scales by `planes*2` itself. (The indexed path was unaffected because it feeds
+   an 8-plane bitplane bitmap that the driver bitplane→chunky converts.)
+2. **`vq_scrninfo` gives the real depth + exact bit layout — no guessing, no line-A.** line-A VPLANES
+   misreports a truecolour screen as 8 planes. `vq_scrninfo` (VDI 102 sub 1, flag 2) returns the
+   `Device` struct: `bit_depth` (authoritative) and, for `clut==2`, the per-channel bit counts +
+   bit positions. We build each device pixel straight from those, so the expand is correct on any
+   card/config (565, 555, 0x00RRGGBB, byte-swapped) without hard-coded masks. Spec:
+   docs/formats/vdi_scrninfo.md. `v_opnbm` is therefore NOT needed — the chunky-source path is simpler.
+
+**Validated** (drive_c/fvdi.sys line 264 = the res800 fall-through; set its depth to test):
+- `640x480x16` — `make vcardrender`: the 320x240 test grid renders pixel-correct; console reports
+  `bpp=16 truecolor=1 R=5 G=6 B=5` (RGB565).
+- `640x480x32` — grid pixel-correct; `bpp=32 truecolor=1 R=8 G=8 B=8` (0x00RRGGBB). (This is the exact
+  mode that garbled before the fix.)
+- `640x480x16` — `make game-vcard`: the **full U6 game** renders correctly (throne-room map + party
+  roster + status line + command bar + parchment UI), colours faithful, no garble.
+
+Rig left back at 640x480x8 (the indexed baseline). Switch line 264 to `x16`/`x32` to re-exercise
+truecolour.
 
 ## Running the actual game on the card
 `make game-vcard` -> gamevc.prg. Stage into drive_c: `GAMEVC.PRG`, `U6.PAK` (from `make world-svm`),
@@ -99,8 +118,11 @@ mode (the validated path). Rig left back at 640x480x8.
 desktop recolours while the game runs — it owns the shared VDI colour table.)
 
 ## Status
-Rig WORKING; caps captured; **rdr_vcard.c present path VALIDATED** on the card (2026-07-17) — the
-256-colour test grid renders pixel-correct in 640x480x8 (`make vcardrender`), AND the **full U6 game
-renders on the card** via `make game-vcard` (gamevc.prg, throne-room scene + party roster + UI).
-Truecolour-card mode = a known follow-up (needs the v_opnbm device-format path, above). Remaining M8
+Rig WORKING; caps captured; **rdr_vcard.c present path VALIDATED** on the card (2026-07-17), both
+depths:
+- **Indexed** (256-colour, 640x480x8): test grid + full game render pixel-correct.
+- **Truecolour** (640x480x16 RGB565 and x32 0x00RRGGBB): test grid + full game render pixel-correct;
+  depth + bit layout auto-detected via `vq_scrninfo`.
+
+Truecolour-card mode is DONE (root cause was the `fd_wdwidth` pitch bug; see above). Remaining M8
 acceptance: collapse the per-target backend binaries into one runtime-detected binary.

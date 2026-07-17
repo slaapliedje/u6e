@@ -31,16 +31,20 @@ int main(void)
     g_nf = nfGetID(("NF_STDERR"));
     say("vcardrender: start\r\n");
 
-    /* extern int rdr_vcard_force_depth; rdr_vcard_force_depth = 32;  // TEST hook: force truecolour.
-     * With 32 the expand path blits a 320x240 region to a 32-bit screen but garbled (chunky source
-     * read as planar); the correct-device-format path is a v_opnbm follow-up. Auto (indexed) below. */
+    /* Depth + truecolour layout auto-detect via vq_scrninfo (rdr_vcard.c). Set fVDI to a truecolour
+     * mode (e.g. 640x480x16 or x32) and the expand path below drives it. `rdr_vcard_force_depth` can
+     * still override the detected depth for testing, but it is not needed on a real truecolour mode. */
     platform_caps_t caps;
     for (unsigned i = 0; i < sizeof caps; i++) ((char *)&caps)[i] = 0;
     if (!rdr_init(&caps)) { say("rdr_init FAILED\r\n"); return 1; }
     say("rdr_init OK\r\n");
     { uint32_t dbg[6]; rdr_debug_info(dbg);
       sayn("  screen w=", (long)dbg[0]); sayn("  screen h=", (long)dbg[1]);
-      sayn("  detected bpp=", (long)dbg[2]); sayn("  EdDI=", (long)dbg[3]); }
+      sayn("  detected bpp=", (long)dbg[2]); sayn("  EdDI=", (long)dbg[3]);
+      sayn("  truecolor=", (long)((dbg[5] >> 24) & 0xFF));
+      sayn("  Rbits=", (long)((dbg[5] >> 16) & 0xFF));
+      sayn("  Gbits=", (long)((dbg[5] >> 8) & 0xFF));
+      sayn("  Bbits=", (long)(dbg[5] & 0xFF)); }
 
     uint8_t *bb = rdr_backbuffer();
     int w = rdr_width(), h = rdr_height();

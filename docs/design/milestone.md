@@ -1237,7 +1237,9 @@ Acceptance
 
 ## M8 — Truecolor + graphics-card path (goals #2 & #3)  ← RELEASE TAG
 Status: [~] IN PROGRESS 2026-07-17 — Falcon 16-bit truecolor present DONE (Hatari); vcard/VDI
-        graphics-card backend DONE + validated on a real card (ARAnyM+fVDI+AFROS, 640x480x8).
+        graphics-card backend DONE + validated on a real card (ARAnyM+fVDI+AFROS) at BOTH depths:
+        256-colour (640x480x8) AND truecolour (640x480x16 RGB565 / x32) — indexed grid+game and
+        truecolour grid+game all render pixel-correct. Remaining: collapse to one runtime-detected binary.
 Depends on: M7 (or at least M6 + M3 backend work)
 Goal: complete the hardware matrix from ONE detection routine.
 
@@ -1262,23 +1264,27 @@ Tasks
       trap; a standard-format source doesn't blit → vr_trnfm first; VDI "standard format" is
       WHOLE-BITMAP plane-sequential. Validated with `make vcardrender` (a GEM harness paints the
       256-colour grid through the backend → pixel-correct on the card).
-- [~] Verify 68000-ST + 256-color video card path. The 256-colour card path is validated (above); the
-      backend is pure 68000 C (built -m68000, portable c2p, no 68020 asm), so it is 68000-ready. The
-      exact "plain-68000-ST + card" combo wasn't separately emulated (the rig is a 68040 ARAnyM).
-      TRUECOLOUR-card mode is WIP: rdr_vcard now has an 8-bit-index -> device-pixel expand path
-      (g_lut, for 16/24/32bpp) beside the indexed vr_trnfm path. It DOES vro_cpyfm a 320x240 region to
-      a 32-bit screen but garbled — a chunky truecolour source described by an MFDB is read as PLANAR
-      by fVDI, and the pixel byte order is unconfirmed. Depth auto-detect is also unsolved: line-A
-      VPLANES misreports a 32-bit card as 8 (so auto keeps the validated indexed path; a test hook
-      rdr_vcard_force_depth forces it). The clean fix for BOTH is v_opnbm (EdDI present): open an
-      off-screen bitmap in the card's real device format — its MFDB gives the correct pixel format AND
-      the real depth — write device pixels into it, vro_cpyfm it.
+- [x] Verify 68000-ST + video card path — DONE at BOTH depths. The backend is pure 68000 C (built
+      -m68000, portable c2p, no 68020 asm), so it is 68000-ready. (The exact "plain-68000-ST + card"
+      combo wasn't separately emulated — the rig is a 68040 ARAnyM — but nothing in the path is >68000.)
+      • INDEXED (256c): c2p -> vr_trnfm -> vro_cpyfm. Validated (grid + full game) at 640x480x8.
+      • TRUECOLOUR (16/24/32bpp): each index expands to a chunky device pixel (g_lut) and vro_cpyfm's
+        straight to the screen — the driver reads a 16/24/32-plane source as chunky. Two bugs fixed vs
+        the earlier garble: (1) the source MFDB `fd_wdwidth` must be the per-plane word width pixels/16
+        (=20), NOT pixels*bpp/16 — the driver scales by planes*2 itself, so the wrong value made the
+        pitch 16-32x too big and wrapped every row into garbage; (2) depth + exact bit layout now come
+        from `vq_scrninfo` (VDI 102 sub 1) — `bit_depth` is authoritative (line-A VPLANES lied) and the
+        per-channel bit positions build each pixel with no hard-coded 565/888 masks, so it is correct on
+        any card/config. Spec: docs/formats/vdi_scrninfo.md. (v_opnbm turned out unnecessary — the
+        chunky-source path is simpler and equally correct.) Validated pixel-correct: `make vcardrender`
+        grid at 640x480x16 (RGB565, detected R5G6B5) and x32 (detected R8G8B8), AND the full game
+        (`make game-vcard`) at 640x480x16 — throne-room + party roster + status line + command bar +
+        parchment UI, colours faithful, no garble.
       rdr_vcard is WIRED INTO THE GAME BUILD: `make game-vcard` -> gamevc.prg (gamedemo.c + rdr_vcard +
-      libgem16, pure 68000, full pack; runs as a GEM app). VALIDATED on the card — the full U6 game
-      (throne-room scene, party roster, status line, command bar) renders correctly through the VDI
-      backend on ARAnyM+fVDI (640x480x8). Follow-ups: finish truecolour via v_opnbm; collapse the
-      per-target backend binaries (ST/TT/Falcon/vcard) into ONE binary that picks the backend from the
-      runtime detection (the M8 "same detection routine" acceptance) — currently each is its own build.
+      libgem16, pure 68000, full pack; runs as a GEM app). VALIDATED on the card at both depths.
+      Follow-up (the ONE remaining M8 item): collapse the per-target backend binaries (ST/TT/Falcon/
+      vcard) into ONE binary that picks the backend from the runtime detection (the M8 "same detection
+      routine" acceptance) — currently each is its own build.
 
 Acceptance
 - [ ] U6 runs across FULL matrix: base ST (16c improved), STE (4096),
