@@ -207,7 +207,13 @@ static void blit_rect(int x, int y, int w, int h)
     vdi_cpyfm(pxy);
 }
 
-/* build the device bitmap from a full VW-wide, VH-tall chunky source (c2p -> standard -> device) */
+/* build the device bitmap from a full VW-wide, VH-tall chunky source (c2p -> standard -> device).
+ * VALIDATED on an INDEXED (256-colour) card: vr_trnfm yields an 8-plane device bitmap that matches
+ * an 8-bit screen, and vro_cpyfm blits it. On a TRUECOLOUR card this does NOT show: vr_trnfm keeps
+ * the bitmap 8-plane, and an 8-plane device bitmap will not vro_cpyfm to a 16/24/32-bit screen (a
+ * depth mismatch). A truecolour card therefore needs an explicit 8->device-pixel expand (like the
+ * Falcon 8->16 path) driven by vq_scrninfo's exact pixel layout — a follow-up. Workaround for a
+ * truecolour-capable card: set it to a 256-colour mode. */
 static void build_device(const uint8_t *src)
 {
     c2p_frame(src, (uint16_t *)g_planar);

@@ -83,8 +83,17 @@ dev-machine setup — none of it ships.
 - Screenshot the running `vcardrender` MID-loop: run ARAnyM under `SDL_VIDEODRIVER=x11 xvfb-run`, sleep
   ~58 s, `import -window root`, then SIGTERM ARAnyM.
 
+## Truecolour-card retest (2026-07-17)
+Reran the harness with fVDI in 800x608x32 (drive_c/fvdi.sys line 264 -> `...x32`). The harness runs
+fine (rdr_init OK, palette set, present loop) but **nothing blits** — the `c2p -> vr_trnfm ->
+vro_cpyfm` path shows on an INDEXED card only. `vr_trnfm` keeps the bitmap 8-plane, and an 8-plane
+device bitmap will not `vro_cpyfm` to a 16/24/32-bit screen (depth mismatch). A truecolour CARD needs
+an explicit 8-bit-index -> device-pixel expand (like the Falcon 8->16 path), driven by `vq_scrninfo`'s
+exact pixel layout — a follow-up. Workaround for a truecolour-capable card: run it in a 256-colour
+mode (the validated path). Rig left back at 640x480x8.
+
 ## Status
 Rig WORKING; caps captured; **rdr_vcard.c present path VALIDATED** on the card (2026-07-17) — the
 256-colour test grid renders pixel-correct in 640x480x8 (`make vcardrender`, staged as
-drive_c/VCARDRND.PRG + a `run` line in xaaes.cnf). Next: retest a truecolour fVDI mode (revert
-drive_c/fvdi.sys line 264 to `...x32`), and fold rdr_vcard into the game build + runtime detection.
+drive_c/VCARDRND.PRG + a `run` line in xaaes.cnf). Truecolour-card mode = a known follow-up (needs the
+8->device expand, above). Next: fold rdr_vcard into the game build + runtime detection.

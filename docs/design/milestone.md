@@ -1264,10 +1264,12 @@ Tasks
       256-colour grid through the backend → pixel-correct on the card).
 - [~] Verify 68000-ST + 256-color video card path. The 256-colour card path is validated (above); the
       backend is pure 68000 C (built -m68000, portable c2p, no 68020 asm), so it is 68000-ready. The
-      exact "plain-68000-ST + card" combo wasn't separately emulated (the rig is a 68040 ARAnyM); the
-      truecolour card mode reuses the same vr_trnfm path (untested). Remaining: fold rdr_vcard into the
-      game build + the runtime detection so the card path is auto-selected (currently a build/backend
-      choice, like the other targets).
+      exact "plain-68000-ST + card" combo wasn't separately emulated (the rig is a 68040 ARAnyM).
+      TRUECOLOUR-card mode RETESTED (800x608x32) and found NOT to blit via this path: vr_trnfm keeps the
+      bitmap 8-plane and an 8-plane device bitmap won't vro_cpyfm to a 16/24/32-bit screen — a truecolour
+      card needs an explicit 8->device-pixel expand (Falcon-style, driven by vq_scrninfo). Follow-ups:
+      that truecolour-card expand; fold rdr_vcard into the game build + runtime detection so the card
+      path is auto-selected (currently a build/backend choice, like the other targets).
 
 Acceptance
 - [ ] U6 runs across FULL matrix: base ST (16c improved), STE (4096),
