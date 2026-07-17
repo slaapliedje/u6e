@@ -17,16 +17,30 @@ static long NF_getid = 0x73004e75L, NF_call = 0x73014e75L;
 #define nfCall(n)   (((long (*)(long, ...))&NF_call) n)
 static long g_nf = 0;
 static void say(const char *s) { if (g_nf) nfCall((g_nf, s)); }
+static void sayn(const char *label, long v)
+{
+    char b[16]; int i = 15; b[i--] = 0; b[i--] = '\n'; b[i--] = '\r';
+    unsigned u = v < 0 ? -v : v; if (!u) b[i--] = '0';
+    while (u && i >= 0) { b[i--] = (char)('0' + u % 10); u /= 10; }
+    if (v < 0) b[i--] = '-';
+    say(label); say(&b[i + 1]);
+}
 
 int main(void)
 {
     g_nf = nfGetID(("NF_STDERR"));
     say("vcardrender: start\r\n");
 
+    /* extern int rdr_vcard_force_depth; rdr_vcard_force_depth = 32;  // TEST hook: force truecolour.
+     * With 32 the expand path blits a 320x240 region to a 32-bit screen but garbled (chunky source
+     * read as planar); the correct-device-format path is a v_opnbm follow-up. Auto (indexed) below. */
     platform_caps_t caps;
     for (unsigned i = 0; i < sizeof caps; i++) ((char *)&caps)[i] = 0;
     if (!rdr_init(&caps)) { say("rdr_init FAILED\r\n"); return 1; }
     say("rdr_init OK\r\n");
+    { uint32_t dbg[6]; rdr_debug_info(dbg);
+      sayn("  screen w=", (long)dbg[0]); sayn("  screen h=", (long)dbg[1]);
+      sayn("  detected bpp=", (long)dbg[2]); sayn("  EdDI=", (long)dbg[3]); }
 
     uint8_t *bb = rdr_backbuffer();
     int w = rdr_width(), h = rdr_height();
