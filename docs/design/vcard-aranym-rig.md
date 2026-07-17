@@ -92,8 +92,15 @@ an explicit 8-bit-index -> device-pixel expand (like the Falcon 8->16 path), dri
 exact pixel layout — a follow-up. Workaround for a truecolour-capable card: run it in a 256-colour
 mode (the validated path). Rig left back at 640x480x8.
 
+## Running the actual game on the card
+`make game-vcard` -> gamevc.prg. Stage into drive_c: `GAMEVC.PRG`, `U6.PAK` (from `make world-svm`),
+`CONVERSE.A/B`, `PORTRAIT.A/B`; set the `run` line in xaaes.cnf to `run C:\GAMEVC.PRG`; boot (allow
+~80 s — it loads a 2.4 MB pack). The full U6 game renders through the VDI backend on the card. (The
+desktop recolours while the game runs — it owns the shared VDI colour table.)
+
 ## Status
 Rig WORKING; caps captured; **rdr_vcard.c present path VALIDATED** on the card (2026-07-17) — the
-256-colour test grid renders pixel-correct in 640x480x8 (`make vcardrender`, staged as
-drive_c/VCARDRND.PRG + a `run` line in xaaes.cnf). Truecolour-card mode = a known follow-up (needs the
-8->device expand, above). Next: fold rdr_vcard into the game build + runtime detection.
+256-colour test grid renders pixel-correct in 640x480x8 (`make vcardrender`), AND the **full U6 game
+renders on the card** via `make game-vcard` (gamevc.prg, throne-room scene + party roster + UI).
+Truecolour-card mode = a known follow-up (needs the v_opnbm device-format path, above). Remaining M8
+acceptance: collapse the per-target backend binaries into one runtime-detected binary.

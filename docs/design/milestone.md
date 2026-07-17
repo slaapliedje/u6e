@@ -1272,9 +1272,13 @@ Tasks
       VPLANES misreports a 32-bit card as 8 (so auto keeps the validated indexed path; a test hook
       rdr_vcard_force_depth forces it). The clean fix for BOTH is v_opnbm (EdDI present): open an
       off-screen bitmap in the card's real device format — its MFDB gives the correct pixel format AND
-      the real depth — write device pixels into it, vro_cpyfm it. Follow-ups: finish truecolour via
-      v_opnbm; fold rdr_vcard into the game build + runtime detection so the card path is auto-selected
-      (currently a build/backend choice, like the other targets).
+      the real depth — write device pixels into it, vro_cpyfm it.
+      rdr_vcard is WIRED INTO THE GAME BUILD: `make game-vcard` -> gamevc.prg (gamedemo.c + rdr_vcard +
+      libgem16, pure 68000, full pack; runs as a GEM app). VALIDATED on the card — the full U6 game
+      (throne-room scene, party roster, status line, command bar) renders correctly through the VDI
+      backend on ARAnyM+fVDI (640x480x8). Follow-ups: finish truecolour via v_opnbm; collapse the
+      per-target backend binaries (ST/TT/Falcon/vcard) into ONE binary that picks the backend from the
+      runtime detection (the M8 "same detection routine" acceptance) — currently each is its own build.
 
 Acceptance
 - [ ] U6 runs across FULL matrix: base ST (16c improved), STE (4096),
