@@ -627,6 +627,22 @@ $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter, slim pack)"
 game-st: $(BUILD)/gamest.prg
 
+# GRAPHICS-CARD variant (M8): the VDI card backend (rdr_vcard.c) instead of the direct-hardware
+# ST/TT/Falcon ones. Runs as a GEM app (rdr_vcard does appl_init + takes the screen with wind_update)
+# and presents the 320x240 frame centred on the card via VDI (c2p -> vr_trnfm -> vro_cpyfm). PURE
+# 68000 (a card can sit on any Atari, incl. a plain-68000 ST) + libgem16 (VDI/AES) + rdr_vcard's own
+# portable C c2p (drops c2p_asm.s). Full pack (a card machine has the RAM); no ST-stream front-end.
+# 256-colour card path is validated; run a truecolour-capable card in a 256-colour mode (see
+# docs/design/vcard-aranym-rig.md). Test under ARAnyM+fVDI+AFROS.
+GAME_SRC_VCARD := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_vcard.c
+$(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
+	@mkdir -p $(BUILD)/obj_vc
+	@for s in $^; do o=$(BUILD)/obj_vc/`echo $$s | tr / _`.o; \
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vc/*.o -lgem16
+	@echo "built $@ (pure 68000, VDI graphics-card backend, libgem16)"
+game-vcard: $(BUILD)/gamevc.prg
+
 # SLIM ST world pack (U6ST.PAK): same as `world` but MKWORLD_SLIM omits the ~1.35 MB front-end/intro
 # art so the pack + libs + buffers fit a real 4 MB ST. The ST capture targets depend on this.
 world-st: $(BUILD)/mkworld roof-extract
