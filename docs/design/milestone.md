@@ -1236,7 +1236,8 @@ Acceptance
 ---
 
 ## M8 — Truecolor + graphics-card path (goals #2 & #3)  ← RELEASE TAG
-Status: [~] IN PROGRESS 2026-07-16 — Falcon 16-bit truecolor present DONE + validated in Hatari.
+Status: [~] IN PROGRESS 2026-07-17 — Falcon 16-bit truecolor present DONE (Hatari); vcard/VDI
+        graphics-card backend DONE + validated on a real card (ARAnyM+fVDI+AFROS, 640x480x8).
 Depends on: M7 (or at least M6 + M3 backend work)
 Goal: complete the hardware matrix from ONE detection routine.
 
@@ -1251,9 +1252,22 @@ Tasks
       (diff = only the imperceptible 6->5-bit R/B reduction + the VIDEL border outside the active
       display + animated map-edge cursors). Completes goal #2 and de-risks the direct-colour present
       the vcard backend will reuse.
-- [ ] vcard backend: EdDI/vq_extnd detection → off-screen-bitmap +
-      vro_cpyfm present.
-- [ ] Verify 68000-ST + 256-color video card path.
+- [x] vcard backend (render/rdr_vcard.c): DONE + validated on a real graphics-card VDI. Detect via
+      the EdDI cookie + v_opnvwk (resolution); compose into our 8-bit chunky backbuffer as usual, then
+      present the 320x240 frame centred on the card by c2p -> vr_trnfm (VDI standard 8-plane -> device
+      format) -> vro_cpyfm to the screen — one path that works on an indexed OR truecolour card (the
+      driver does the conversion). Palette = the VDI colour table; runs fullscreen (wind_update locks
+      the screen from the multitasking AES + hides the mouse). Bring-up findings (all cost a bug, see
+      docs/design/vcard-aranym-rig.md): libgem's VDI wrappers bus-error → drive every op via the vdi()
+      trap; a standard-format source doesn't blit → vr_trnfm first; VDI "standard format" is
+      WHOLE-BITMAP plane-sequential. Validated with `make vcardrender` (a GEM harness paints the
+      256-colour grid through the backend → pixel-correct on the card).
+- [~] Verify 68000-ST + 256-color video card path. The 256-colour card path is validated (above); the
+      backend is pure 68000 C (built -m68000, portable c2p, no 68020 asm), so it is 68000-ready. The
+      exact "plain-68000-ST + card" combo wasn't separately emulated (the rig is a 68040 ARAnyM); the
+      truecolour card mode reuses the same vr_trnfm path (untested). Remaining: fold rdr_vcard into the
+      game build + the runtime detection so the card path is auto-selected (currently a build/backend
+      choice, like the other targets).
 
 Acceptance
 - [ ] U6 runs across FULL matrix: base ST (16c improved), STE (4096),

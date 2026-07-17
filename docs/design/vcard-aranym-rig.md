@@ -64,6 +64,27 @@ dev-machine setup — none of it ships.
 - The card mode is **user-selected** (fVDI config / card ACC); we adapt to the current mode, we do
   not set it.
 
+## Present-path findings (from bringing up rdr_vcard.c on this rig — each cost a bug)
+- **libgem's VDI wrappers fault here.** `vs_color` (and likely the other `v*`/`vs*` VDI calls) BUS
+  ERROR under this ABI. Drive every VDI op through the generic `vdi(VDIPB*)` trap instead: Set Color
+  Representation (14), `vr_trnfm` (110), `vro_cpyfm` (109), `vs_clip` (129). AES calls (appl_init,
+  graf_handle, v_opnvwk, wind_update, graf_mouse) are fine via libgem.
+- **A standard-format source does not blit.** `vro_cpyfm` from an `fd_stand=1` MFDB draws nothing; you
+  must `vr_trnfm` it to the card's DEVICE format first, then `vro_cpyfm` device->screen.
+- **VDI "standard format" is WHOLE-BITMAP plane-sequential** — all (h*wdwidth) words of plane 0 for the
+  entire bitmap, then plane 1, ... NOT word-interleaved (Atari-screen style) and NOT plane-sequential
+  per line. Word-interleaved gave vertical stripes; per-line plane-sequential gave horizontal stripes;
+  whole-bitmap plane-sequential rendered correctly.
+- **You can't just blit to the screen under XaAES** (multitasking AES): the desktop owns it and
+  redraws. `wind_update(BEG_UPDATE)` + `wind_update(BEG_MCTRL)` + `graf_mouse(M_OFF)` take the screen;
+  the game runs fullscreen like the other backends.
+- Setting the VDI colour table with our palette recolours the whole (shared) desktop — expected for a
+  fullscreen app that owns the screen.
+- Screenshot the running `vcardrender` MID-loop: run ARAnyM under `SDL_VIDEODRIVER=x11 xvfb-run`, sleep
+  ~58 s, `import -window root`, then SIGTERM ARAnyM.
+
 ## Status
-Rig WORKING + caps captured (2026-07-17). Next: implement `rdr_vcard.c` from these caps and validate
-it here (change `drive_c/fvdi.sys` to an 8-bit mode too, to cover the 256-colour card path / goal #3).
+Rig WORKING; caps captured; **rdr_vcard.c present path VALIDATED** on the card (2026-07-17) — the
+256-colour test grid renders pixel-correct in 640x480x8 (`make vcardrender`, staged as
+drive_c/VCARDRND.PRG + a `run` line in xaaes.cnf). Next: retest a truecolour fVDI mode (revert
+drive_c/fvdi.sys line 264 to `...x32`), and fold rdr_vcard into the game build + runtime detection.
