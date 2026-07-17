@@ -21,8 +21,16 @@
 #include <osbind.h>
 #include <mint/cookie.h>
 #include <stdint.h>
+#include <string.h>
 
-static void put(const char *s) { Cconws(s); }
+/* Output goes to the console (Cconws, mirrored by --conout) AND, for robust headless capture under
+ * ARAnyM, to a file VCARD.OUT on the boot drive (read back host-side from the hostfs mount). */
+static long g_out = -1;
+static void put(const char *s)
+{
+    Cconws(s);
+    if (g_out >= 0) { long n = (long)strlen(s); Fwrite((short)g_out, n, s); }
+}
 static void nl(void)           { Cconws("\r\n"); }
 static void put_int(int n)
 {
@@ -50,6 +58,7 @@ static void dump_wo(const short *wo, int n)
 
 int main(void)
 {
+    g_out = Fcreate("VCARD.OUT", 0);          /* tee output to a file for headless capture */
     put("=== u6e vcard VDI probe (M8) ===\r\n");
 
     /* 1. EdDI cookie — is an extended VDI / graphics-card driver installed? */
@@ -102,6 +111,7 @@ int main(void)
     v_clsvwk(handle);
     appl_exit();
     put("=== probe done ===\r\n");
+    if (g_out >= 0) Fclose((short)g_out);      /* flush VCARD.OUT before we (maybe) block */
     Crawcin();
     return 0;
 }
