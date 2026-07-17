@@ -23,13 +23,24 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Output goes to the console (Cconws, mirrored by --conout) AND, for robust headless capture under
- * ARAnyM, to a file VCARD.OUT on the boot drive (read back host-side from the hostfs mount). */
+/* ARAnyM NatFeat stubs: two code words (opcode + RTS) called as functions (per the fVDI aranym
+ * driver). NF_STDERR writes a string straight to the HOST console — the reliable headless capture
+ * channel (hostfs writes aren't flushed until a clean unmount). Harmless illegal-opcode no-op on
+ * real hardware / Hatari (guarded by the id being 0). */
+static long NF_getid = 0x73004e75L;   /* 0x7300 = NatFeat ID  + 0x4e75 RTS */
+static long NF_call  = 0x73014e75L;   /* 0x7301 = NatFeat call + 0x4e75 RTS */
+#define nfGetID(n)  (((long (*)(const char *))&NF_getid) n)
+#define nfCall(n)   (((long (*)(long, ...))&NF_call) n)
+static long g_nfstderr = 0;           /* NF_STDERR feature id (0 = not on ARAnyM) */
+
+/* Output tees to: the console (Cconws, mirrored by Hatari --conout), a file VCARD.OUT on the boot
+ * drive, and the ARAnyM host console (NF_STDERR) for reliable headless capture. */
 static long g_out = -1;
 static void put(const char *s)
 {
     Cconws(s);
     if (g_out >= 0) { long n = (long)strlen(s); Fwrite((short)g_out, n, s); }
+    if (g_nfstderr) nfCall((g_nfstderr, s));
 }
 static void nl(void)           { Cconws("\r\n"); }
 static void put_int(int n)
@@ -58,7 +69,8 @@ static void dump_wo(const short *wo, int n)
 
 int main(void)
 {
-    g_out = Fcreate("VCARD.OUT", 0);          /* tee output to a file for headless capture */
+    g_nfstderr = nfGetID(("NF_STDERR"));      /* ARAnyM host-console channel (0 elsewhere) */
+    g_out = Fcreate("C:\\VCARD.OUT", 0);      /* tee to C: root (CWD-independent) for headless capture */
     put("=== u6e vcard VDI probe (M8) ===\r\n");
 
     /* 1. EdDI cookie — is an extended VDI / graphics-card driver installed? */
@@ -111,7 +123,8 @@ int main(void)
     v_clsvwk(handle);
     appl_exit();
     put("=== probe done ===\r\n");
-    if (g_out >= 0) Fclose((short)g_out);      /* flush VCARD.OUT before we (maybe) block */
-    Crawcin();
+    if (g_out >= 0) Fclose((short)g_out);      /* flush VCARD.OUT */
+    /* No Crawcin(): as an XaAES autorun app it must exit cleanly (a blocking read would stall
+     * synchronous autorun); the console dump + VCARD.OUT are the record. */
     return 0;
 }
