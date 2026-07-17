@@ -1236,12 +1236,21 @@ Acceptance
 ---
 
 ## M8 — Truecolor + graphics-card path (goals #2 & #3)  ← RELEASE TAG
-Status: [ ]
+Status: [~] IN PROGRESS 2026-07-16 — Falcon 16-bit truecolor present DONE + validated in Hatari.
 Depends on: M7 (or at least M6 + M3 backend work)
 Goal: complete the hardware matrix from ONE detection routine.
 
 Tasks
-- [ ] Falcon 16-bit truecolor present (palette-expand).
+- [x] Falcon 16-bit truecolor present (palette-expand). DONE. rdr_falcon gains a runtime-selectable
+      BPS16 path (VGA 0x114 / TV 0x024) beside the BPS8 indexed default: 2 bytes/pixel screen, an
+      RGB565 expand LUT built in rdr_set_palette (U6 6-bit green maps 1:1, R/B drop a bit), and a
+      per-pixel 8->16 expand present (present/rect/doubled/scroll). The backbuffer stays 8-bit indexed
+      so the engine is unchanged; requested via rdr_prefer_truecolor (render.h, no-op on ST/TT),
+      selected by VIDEO.CFG='T'. Validated (`make m5-svm-falcon-tc`): the throne-room scene renders
+      correctly in 16-bit and is pixel-equivalent to the 256-colour present across the whole game area
+      (diff = only the imperceptible 6->5-bit R/B reduction + the VIDEL border outside the active
+      display + animated map-edge cursors). Completes goal #2 and de-risks the direct-colour present
+      the vcard backend will reuse.
 - [ ] vcard backend: EdDI/vq_extnd detection → off-screen-bitmap +
       vro_cpyfm present.
 - [ ] Verify 68000-ST + 256-color video card path.
