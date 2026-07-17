@@ -1265,11 +1265,16 @@ Tasks
 - [~] Verify 68000-ST + 256-color video card path. The 256-colour card path is validated (above); the
       backend is pure 68000 C (built -m68000, portable c2p, no 68020 asm), so it is 68000-ready. The
       exact "plain-68000-ST + card" combo wasn't separately emulated (the rig is a 68040 ARAnyM).
-      TRUECOLOUR-card mode RETESTED (800x608x32) and found NOT to blit via this path: vr_trnfm keeps the
-      bitmap 8-plane and an 8-plane device bitmap won't vro_cpyfm to a 16/24/32-bit screen — a truecolour
-      card needs an explicit 8->device-pixel expand (Falcon-style, driven by vq_scrninfo). Follow-ups:
-      that truecolour-card expand; fold rdr_vcard into the game build + runtime detection so the card
-      path is auto-selected (currently a build/backend choice, like the other targets).
+      TRUECOLOUR-card mode is WIP: rdr_vcard now has an 8-bit-index -> device-pixel expand path
+      (g_lut, for 16/24/32bpp) beside the indexed vr_trnfm path. It DOES vro_cpyfm a 320x240 region to
+      a 32-bit screen but garbled — a chunky truecolour source described by an MFDB is read as PLANAR
+      by fVDI, and the pixel byte order is unconfirmed. Depth auto-detect is also unsolved: line-A
+      VPLANES misreports a 32-bit card as 8 (so auto keeps the validated indexed path; a test hook
+      rdr_vcard_force_depth forces it). The clean fix for BOTH is v_opnbm (EdDI present): open an
+      off-screen bitmap in the card's real device format — its MFDB gives the correct pixel format AND
+      the real depth — write device pixels into it, vro_cpyfm it. Follow-ups: finish truecolour via
+      v_opnbm; fold rdr_vcard into the game build + runtime detection so the card path is auto-selected
+      (currently a build/backend choice, like the other targets).
 
 Acceptance
 - [ ] U6 runs across FULL matrix: base ST (16c improved), STE (4096),
