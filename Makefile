@@ -87,6 +87,26 @@ run-tt: $(BUILD)/selftest_020.prg
 run-falcon: $(BUILD)/selftest_020.prg
 	$(HATARI) --machine falcon --tos '$(EMUTOS)' --harddrive $(BUILD) --auto 'c:\selftest_020.prg'
 
+# ---- M8 vcard: VDI / graphics-card capability probe (GEM app) -------------
+# Detects EdDI + queries vq_extnd for the current screen format. Pure 68000 + libgem16 (the "68000
+# ST + 256c card" path is a target). Run under ARAnyM/fVDI for a real card, or Hatari for a built-in
+# VDI smoke test. ARANYM overridable; set it to your aranym-mmu/aranym binary.
+ARANYM ?= aranym
+$(BUILD)/vcardtest.prg: render/vcardtest.c
+	@mkdir -p $(BUILD)
+	$(CC) -m68000 -std=gnu11 -Os -Wall -o $@ $< -lgem16
+	@echo "built $@ (GEM VDI probe, 68000 + libgem16)"
+vcardtest: $(BUILD)/vcardtest.prg
+# Hatari smoke test (built-in TT VDI: no EdDI, but exercises the vq_extnd path + reports the mode).
+vcardtest-tt: $(BUILD)/vcardtest.prg
+	$(HATARI) --machine tt --tos '$(TOS_TT)' $(TT_FLAGS) --harddrive $(BUILD) --auto 'c:\vcardtest.prg' \
+	          --conout 2 --fast-forward on --run-vbls 1500 2>/dev/null || true
+# ARAnyM + fVDI (real graphics-card driver). Mounts build/ as C:; you provide fVDI + the card mode
+# in your ARAnyM config. Prints the probe via --emutos console or the mounted output.
+vcardtest-aranym: $(BUILD)/vcardtest.prg
+	$(ARANYM) -d C:$(BUILD) --autorun C:\\vcardtest.prg 2>/dev/null || \
+	  echo "adjust the ARANYM invocation to your aranym/fVDI config (see the target)"
+
 # headless TEXT self-verify (unattended): autostart, mirror the VT-52 console to
 # host stdout, fast-forward, quit. `check` runs both the ST (fallback) and TT
 # (Alt-RAM) paths so M1's chip-vs-fast acceptance is covered.
