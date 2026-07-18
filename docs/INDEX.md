@@ -34,7 +34,8 @@ Per-game:   "shared" if identical across all three; else note deltas.
 | nuvie_save.md        | ScummVM/Nuvie save = OUR save fmt (R/W) | all | verify | VERIFIED | confirmed (read + host byte-identical round-trip + ON-TARGET engine writer; ScummVM loads our writes) | /tools, /engine | M6 |
 | strings.md           | Books/signs/item/ground text tables| all     | verify   | VERIFIED (books/signs) | confirmed (BOOK.DAT container + quality→entry + on-TT paged read view; item/ground strings TODO) | /tools, /render | M6 |
 | our_savefmt.md       | OUR versioned save format (write)  | all     | shared   | SUPERSEDED | n/a | — (we adopt ScummVM's Nuvie fmt → nuvie_save.md) | M6 |
-| music.md             | Music (.M) = LZW + OPL2 FM cmd stream | all  | verify   | IN PROGRESS | confirmed (container + OPL2-not-MIDI + opcode/operand table via byte-accurate disassembler on all 12 .M); pitch table + synth semantics TODO | /tools (mdump), later /engine+/platform | M10 |
+| music.md             | Music (.M) = LZW + OPL2 FM cmd stream | all  | verify   | VERIFIED | confirmed end-to-end: container + OPL2-not-MIDI + opcode/operand table + pitch/operator layout, via mdump on all 12 .M AND the working sequencer+synth+3 backends (make musictest, cross-checked vs ScummVM/Nuvie) | /tools (mdump) + /engine (music,oplsynth) + /platform (midi,dma,psg) | M10 |
+| music_areas.md       | Per-area music selection (which track where) | all | per-game area_group hook | VERIFIED | U6 group model confirmed from Nuvie native-U6 loader; overworld/town = random pool (no per-town song); combat→ENGAGE wired; boat/dungeon/gargoyle deferred to those systems | /render (gamedemo music_*) | M10 |
 | vdi_scrninfo.md      | VDI vq_scrninfo Device struct + graphics-card blit MFDB (truecolour layout, fd_wdwidth) | n/a (host video) | shared | VERIFIED | confirmed (rdr_vcard truecolour pixel-correct 16/32bpp on the card) | /render (rdr_vcard) | M8 |
 
 ## Rules specs (/docs/rules/)

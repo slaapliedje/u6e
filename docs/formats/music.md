@@ -192,6 +192,9 @@ in-game music, is unconfirmed — not needed for our playback path.)
 - Per-game deltas for SE / MD `.M` files.
 
 ## Status
-IN PROGRESS — container + "it's OPL not MIDI" CONFIRMED; opcode table PROBABLE. Next: a full
-host disassembler (`tools/mdump` → command-level) to pin the table, THEN pick the playback path
-(see milestone M10) and write the engine sequencer + platform audio backend from this spec.
+VERIFIED (M10, 2026-07-18) — container + "it's OPL not MIDI" + the opcode/operand table all
+CONFIRMED: `tools/mdump` reaches a clean END on all 12 `.M`; the engine sequencer (engine/music.c)
++ software FM synth (engine/oplsynth) + three platform backends (MIDI-OUT, OPL2→DMA PCM via
+tools/m2pcm, YM2149 PSG) were written from this spec and validated end-to-end (`make musictest`
+sequences all 12; cross-checked against ScummVM/Nuvie `midiparser_m`/`mididrv_m_*`). The pitch
+F-number table + 11-byte operator layout are pinned by the working synth.

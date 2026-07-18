@@ -1325,7 +1325,17 @@ Acceptance
 ---
 
 ## M10 — Audio: music (HEADLINE FEATURE — "fixes" the silent ST port)
-Status: [~] IN PROGRESS 2026-07-16 — format DECODED + validated; THREE backends DONE (MIDI-OUT,
+Status: [x] DONE (U6 core) 2026-07-18 — acceptance criteria 1–3 met + validated; the song-assignment
+        polish is closed (`make musictest` sequences all 12 `.M` clean; the group model has no
+        town/overworld distinction, matching U6/Nuvie). Criterion 4 (reuse for Savage/Martian) is
+        M9-dependent but the whole path is game-agnostic. Non-blocking deferrals kept: pack MIDI.DAT/.M
+        into U6.PAK (release-packaging work) and wire boat/dungeon/gargoyle triggers when those game
+        systems land (the group→song table is already correct — only `music_area_group()` gains checks).
+        Pool-rotation DECISION: keep the SEAMLESS single-track loop (the M10 loop_start work) as shipped
+        rather than re-picking a wandering track on song-end — the "better than the original" call, in
+        the same spirit as M7's palette; song-end rotation stays an optional enhancement.
+        --- history ---
+        format DECODED + validated; THREE backends DONE (MIDI-OUT,
         OPL2→DMA, YM2149 PSG) + runtime selection + Timer-A tempo + exit cleanup + per-area hooks +
         SEAMLESS DMA loops + CORRECT song selection (group model from Nuvie: random wandering pool
         {BRIT,FOREST,STONES,ULTIMA} + combat/dungeon/boat/gargoyle groups — docs/rules/music_areas.md).
@@ -1431,12 +1441,23 @@ Tasks
       waits; the main-loop pump only advances the DMA refill. DONE (plat_timer_start, -m68000 ISR).
 
 Acceptance
-- [ ] U6 on Atari plays its (DOS) score — a feature the original ST port lacked.
-- [ ] STE/TT/Falcon play the authentic OPL2 music via DMA sound; a plain ST plays the PSG
+- [x] U6 on Atari plays its (DOS) score — a feature the original ST port lacked. Per-area hooks
+      auto-start a wandering theme on entering play and swap to ENGAGE in combat; validated on TT.
+- [x] STE/TT/Falcon play the authentic OPL2 music via DMA sound; a plain ST plays the PSG
       downmix; the MIDI-out option drives an external MT-32/GM synth. Correct branch chosen
-      at runtime from the detected machine + the MIDI setting.
-- [ ] Sequencer timing stays correct under load (60 Hz clock, not frame rate).
-- [ ] Same path proven reusable for Savage Empire / Martian Dreams music.
+      at runtime from the detected machine + the MIDI setting. All three validated in Hatari
+      (DMA/PSG/MIDI); MIDI.CFG 3-way + auto-detect.
+- [x] Sequencer timing stays correct under load (60 Hz clock, not frame rate). MFP Timer-A 60 Hz
+      ISR drives the tick, decoupled from the ~6-8 fps main loop; validated in Hatari (smooth).
+- [~] Same path proven reusable for Savage Empire / Martian Dreams music. Architecture is
+      game-agnostic (the `.M`/LZW/OPL2 format + the `music_backend_t` seam are shared; per-game
+      group→song policy slots behind a GameDef/RuleSet `area_group` hook — music_areas.md §3).
+      Full proof waits on M9 (those games' data), but nothing in M10 is U6-specific.
+
+Song-assignment verification (the last polish item): `make musictest` sequences all 12 `.M` files
+correctly (event/note counts, 60 s, MIDI.DAT map indices); the group model has NO town/overworld
+distinction (both → the `random` wandering pool), matching U6's actual design (no per-town music)
+and the Nuvie-derived spec. CONFIRMED.
 
 ---
 

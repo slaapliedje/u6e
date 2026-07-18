@@ -75,14 +75,19 @@ pick never destabilises a test.
 ## 6. Open questions
 - [ ] Wire the boat/dungeon/gargoyle triggers once ship/dungeon/region state exists (the group table is
       already correct; only `music_area_group()` gains the checks).
-- [ ] Pool ROTATION: the original re-picks a new random wandering track when the current one ENDS. We
-      loop the current track seamlessly instead (M10 DMA loop work). Decide whether to rotate on song-end
-      for closer fidelity, or keep seamless single-track loops (an enhancement).
+- [x] Pool ROTATION — DECIDED (2026-07-18): keep the SEAMLESS single-track loop (the M10 loop_start
+      work) rather than re-picking a wandering track on song-end. This is the "better than the original"
+      call (same spirit as M7's palette): no audible gap/restart. Song-end rotation remains an optional
+      enhancement if closer fidelity is later wanted (it would override the DMA hardware loop from the
+      music manager on end-of-song).
 - [ ] Confirm the exact original trigger for the `gargoyle` group (region vs event) and any `boat`
       nuance (skiff vs ship) against observation of the original.
 - [ ] Scripted/usecode music cues (events, specific NPCs) — route through the "forced song" path.
 
 ## 7. Status
-IN PROGRESS — group model + song-group table VERIFIED (from Nuvie's native-U6 loader); auto-start +
-combat switch wired and mechanism-verified. Remaining: wire boat/dungeon/gargoyle triggers when those
-systems land; decide on pool rotation vs seamless single-track loops.
+VERIFIED (U6) — group model + song-group table confirmed from Nuvie's native-U6 loader; the
+overworld/town assignment is verified (no per-town song; both draw the `random` wandering pool, per
+U6's design). Auto-start + combat switch wired and mechanism-verified; `make musictest` sequences all
+12 `.M` clean. Pool-rotation decided (seamless loop, §6). Remaining (non-blocking, future systems):
+wire boat/dungeon/gargoyle triggers when ship/dungeon/region state exists — the group→song table is
+already correct, only `music_area_group()` gains the checks.
