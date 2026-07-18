@@ -35,13 +35,22 @@ the map renderer and all world data (`chunks`, `maptiles.ega`, `objtiles.ega`, `
 - The visible area is materialised into a small **decoded map array** (a compact row-major grid of
   tile indices) that the renderer reads — it does not re-walk chunks during drawing.
 
-**Redraw model = visibility flood → dirty-cell queue → per-cell blit (incremental).**
-On a move, a **visibility/line-of-sight flood** walks outward from the avatar, and for each cell a
-**dirty/visible test** (a per-cell state array, one flag = "already drawn") decides whether it needs
-work; changed/newly-visible cells are **appended to a redraw queue**. Only the queued cells are
-repainted. A separate **full-refresh** path (a nested row×col grid loop over the decoded map array,
-with map-edge wrap) exists for entering a new area / initial draw. So the steady-state cost is
-proportional to **what changed**, not to the whole viewport — the original is a dirty-cell renderer.
+**Redraw model — incremental LIGHTING/LOS, but FULL-VIEW pixel repaint.** Two distinct mechanisms,
+and the distinction is the whole point of this doc:
+- *Line-of-sight and lighting are incremental.* On a move, a visibility flood walks outward from the
+  avatar; the cells it reaches are pushed onto a small **ring-buffer queue** (head/tail indices) and
+  drained by a consumer that recomputes per-cell **light** (radial falloff from a distance table)
+  and **visibility** bits into two per-cell state arrays. Only cells near the avatar (bounded by the
+  light radius) are touched. This is the genuinely incremental part.
+- *The tile PIXELS are repainted for the whole visible view.* The view redraw is a grid loop that
+  draws **every cell** of the visible window each time — a visible cell as its tile, an out-of-sight
+  cell as black — gated by the visibility bit but with **no skip for unchanged cells**. It runs per
+  move (via the render+animate wrapper). A separate initial/new-area full-refresh path also exists.
+
+So the original is incremental in **lighting/LOS**, but **not in pixels**: every move re-blits the
+whole visible view with the CPU. This corrects an easy misread (the queue looks like a dirty-*pixel*
+queue but drives lighting) — and it means our incremental buffer-scroll is an advance, not parity
+(below).
 
 **Per-cell draw = attribute/animation dispatch, then a tile blit.**
 Each cell goes through a dispatcher that consults per-tile **attribute/animation tables** (flags for
@@ -76,14 +85,17 @@ architecture is right, not just expedient:
 
 | u6e (measured, `performance.md`) | Original ST port (this RE) |
 |----------------------------------|----------------------------|
-| Windowed map present + incremental buffer-scroll (only redraw the new edge) | Visibility flood → dirty-cell queue → per-cell blit (only changed cells) |
+| Incremental buffer-scroll: on a 1-tile move, memmove the window + repaint only the new edge | **Full-view pixel repaint every move** — the original does NOT do this; it re-blits the whole visible view. **We are ahead here.** |
+| Incremental lighting/visibility (light/LOS recomputed for the affected region) | Incremental lighting/LOS via a ring-buffer flood queue (only cells near the avatar) — same idea |
 | 16-px c2p group granularity; keep tiles word-aligned | Fast tile path is 16-px-aligned word copy; unaligned falls to a ~2× byte path |
 | Double-buffered planar backbuffer → interleaved/c2p present | Double-buffered; planar tile source → interleaved screen |
 | Object **spatial bucket index** (visit only in-view buckets) | Chunk **LRU cache** + decoded view array (touch only the visible window) |
 | Per-scene / band-raster palettes | Per-scene STE palettes (VBL-deferred; we go further with Timer-B band rasters) |
 
-Takeaway: **do not** "add dirty-rect / windowing" as if it were missing — it is the authentic model
-and we already have it. Keep tiles word-aligned so the fast path stays fast.
+Takeaways: (1) our **incremental pixel scroll is a real advance over the original**, which repaints
+the full view in software every move — do not regress it. (2) The original's *incremental* part is
+lighting/LOS, and we already do the analogous thing. (3) Keep tiles word-aligned so the fast copy
+path stays the common case.
 
 ## The remaining headroom the original left on the table
 These are the levers the shipping original never touched — the genuine performance ceiling for a
@@ -115,18 +127,21 @@ These are the levers the shipping original never touched — the genuine perform
    path.
 3. Keep the map-window/tile geometry **16-px word-aligned** end to end so the fast copy path is the
    common case (already true via the 16-px c2p group).
-4. Preserve the **incremental / dirty model** — it is what the original does; never regress to a
-   full-viewport repaint per move.
+4. Preserve our **incremental pixel scroll** — the original repaints the full view in software every
+   move, so this is a lead we already hold; never regress to a full-viewport pixel repaint. (Its
+   incremental machinery is lighting/LOS only, which we also do.)
 
 ## Open questions
-- **Exact on-screen tile pitch of the full-refresh grid view.** The full-refresh loop iterates a
-  40-wide grid with a small per-cell pixel step and a dual-layout row table that did not resolve
-  cleanly under static analysis — so we cannot yet swear whether that path is the main play view at a
-  compact tile size or a full-refresh sibling to the incremental path. It does not change any
-  recommendation above (both share the same blit primitives). One Hatari breakpoint on the per-cell
-  dispatcher during normal play settles it.
-- **Redraw-set size per step.** Following the dirty-cell queue consumer would quantify exactly how
-  many tiles a single step repaints — the direct measure of what a Blitter/HW-scroll rewrite saves.
+- **Exact on-screen tile pitch of the view.** The per-move view redraw iterates a 40-wide grid with
+  a small per-cell pixel step and a dual-layout row table that did not resolve cleanly under static
+  analysis, so the precise on-screen tile size is unconfirmed. It does not change any recommendation
+  (the cost is a full-view CPU repaint regardless). One Hatari breakpoint on the per-cell dispatcher
+  during play settles it.
+- **Confirmed via the queue consumer:** the flood queue drives **lighting/LOS**, not pixels, and the
+  view redraw repaints **every visible cell each move** — so a single step's *pixel* cost is the
+  whole view, which is exactly the full-view repaint the Blitter / HW fine-scroll levers target (and
+  which our incremental scroll already avoids). An emulator counter on the flood queue would give the
+  exact lit-cell count per step, but it does not gate the pixel cost.
 
 ## Cross-links
 - `docs/design/performance.md` — u6e's measured optimisation roadmap (the numbers).
