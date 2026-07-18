@@ -47,8 +47,24 @@ So the binaries are:
 |---------------|------------|-------------------------------------|-------------------------------------|
 | **game.prg**  | 68020 hyb  | st + tt + falcon + vcard (+libgem16)| **TT, Falcon (VIDEL), AND a card** — one image, runtime-selected |
 | gamest.prg    | 68000      | st                                  | plain ST / STE (4 MB slim pack)     |
-| gamevc.prg    | 68000      | vcard (+libgem16)                   | any 68000 Atari with a card         |
+| gamevc.prg    | 68000      | vcard (+libgem16)                   | 68000 Atari + card, RAM-rich (full pack) |
+| **gamevcs.prg** | 68000    | vcard (+libgem16)                   | **stock 4 MB Mega ST/STe + a VDI card** (slim pack + streamed front-end) |
 | gamef.prg     | 68020 hyb  | falcon                              | Falcon-only isolated test image     |
+
+### 68000 + graphics card on a stock 4 MB Mega (gamevcs.prg)
+The headline use for the card backend is a **Mega ST / Mega STe + a VDI graphics card** (e.g. an
+ATW800/2 with an NVDI-style driver) — a 68000 machine with lovely card video modes. `gamevc.prg`
+(full pack) needs ~4.2 MB, so on a stock 4 MB Mega we use **`gamevcs.prg`**: the same card backend
+with the ST build's memory strategy — the slim `U6ST.PAK` + `ST_STREAM` (stream the front-end from
+`U6FE.PAK`, then free it). Gameplay tiles are 8-bit, so the card shows full 256 colour (or its
+truecolour mode); the front-end streams and renders fine on the card too (it sets 256-colour palettes,
+which the VDI honours). Validated on ARAnyM+fVDI: the main menu and gameplay both render on the card
+via the slim/streaming path (indexed 640×480×8) and the truecolour grid at 640×480×16.
+
+The card present buffers are also **sized to the current mode** (not a fixed 32bpp): ~225 KB in an
+8/16bpp mode vs 460 KB — margin a stock 4 MB machine needs. `rdr_init` reads the depth via
+`vq_scrninfo` *before* allocating. With an NVDI/EdDI driver the exact truecolour pixel layout is
+auto-detected; without it, indexed modes work fully and truecolour assumes the standard 565/0x00RRGGBB.
 
 Every one of them uses the **same `render.c` dispatcher + detection** — that is the "one code path"
 the acceptance asks for. `game.prg` is the real collapse: it folds the former separate TT / Falcon /

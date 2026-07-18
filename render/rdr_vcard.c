@@ -194,21 +194,7 @@ bool rdr_init(const platform_caps_t *caps)
     if (g_handle == 0) { appl_exit(); return false; }
     vdi_clip_off();                                 /* full-frame blits must not be clipped */
 
-    /* Present buffers from the pool (see the decl above). Do this before taking the screen so a
-     * failure unwinds cleanly. plat_alloc_fast needs plat_mem_init() first — the game does that at
-     * startup; the standalone vcardrender harness calls it too. */
-    g_back   = (uint8_t *)plat_alloc_fast((uint32_t)VW * VH);
-    g_planar = (uint8_t *)plat_alloc_fast((uint32_t)VW * VH);
-    g_device = (uint8_t *)plat_alloc_fast((uint32_t)VW * VH * 4);
-    if (!g_back || !g_planar || !g_device) { v_clsvwk(g_handle); appl_exit(); return false; }
-
-    /* Take the screen from the (multitasking) AES: under XaAES/GEM another app owns the display and
-     * redraws it, so a bare blit to the physical screen is overdrawn. Lock screen updates + mouse
-     * control and hide the cursor — the game runs fullscreen, like the other backends. */
-    wind_update(BEG_UPDATE);
-    wind_update(BEG_MCTRL);
-    graf_mouse(M_OFF, 0L);
-
+    /* Screen geometry — needs only the v_opnvwk work_out, no screen lock yet. */
     g_scr_w = work_out[0] + 1;
     g_scr_h = work_out[1] + 1;
     if (g_scr_w < VW || g_scr_h < VH) { v_clsvwk(g_handle); appl_exit(); return false; }
@@ -218,7 +204,8 @@ bool rdr_init(const platform_caps_t *caps)
     /* Screen depth + truecolour pixel layout. v_opnvwk work_out + vq_extnd both report 256 colours
      * on a card and line-A VPLANES misreports a truecolour screen as 8 planes, so ask vq_scrninfo:
      * bit_depth is authoritative and (for clut==2 / bit_depth>8) it hands us the exact per-channel
-     * bit positions for the expand. See docs/formats/vdi_scrninfo.md. */
+     * bit positions for the expand. See docs/formats/vdi_scrninfo.md. Done BEFORE allocation so the
+     * present buffers are sized to the ACTUAL depth (a 4 MB Mega can't spare 32bpp buffers in 8bpp). */
     g_truecolor = 0;
     g_ch_bits[0] = g_ch_bits[1] = g_ch_bits[2] = 0;
     if (g_have_eddi) {
@@ -247,7 +234,30 @@ bool rdr_init(const platform_caps_t *caps)
      * 565/555/888 order — correct for every ordinary fVDI/NVDI mode. */
     if (g_truecolor && g_ch_bits[0] == 0) tc_default_layout(g_bpp);
 
-    for (int32_t i = 0; i < (int32_t)VW * VH; i++) { g_back[i] = 0; g_planar[i] = 0; }
+    /* Present buffers from the pool, SIZED TO THE MODE (see the decl above). Before taking the screen
+     * so a failure unwinds cleanly. plat_alloc_fast needs plat_mem_init() first (the game/harness do
+     * that at startup). g_back: the 8-bit chunky backbuffer, always. g_planar: the c2p 8-plane output,
+     * needed ONLY for the indexed path. g_device: the device-format raster — 1 byte/pixel for the
+     * 8-plane indexed device form, else ceil(bpp/8) bytes/pixel for the truecolour chunky form. This
+     * is ~225 KB in an 8/16bpp mode vs 460 KB at a fixed 32bpp — the margin a stock 4 MB Mega needs. */
+    {   uint32_t npix = (uint32_t)VW * VH;
+        int dev_bpp = g_truecolor ? ((g_bpp + 7) / 8) : 1;      /* bytes/pixel in g_device */
+        g_back   = (uint8_t *)plat_alloc_fast(npix);
+        g_planar = g_truecolor ? 0 : (uint8_t *)plat_alloc_fast(npix);
+        g_device = (uint8_t *)plat_alloc_fast(npix * (uint32_t)dev_bpp);
+        if (!g_back || !g_device || (!g_truecolor && !g_planar)) {
+            v_clsvwk(g_handle); appl_exit(); return false;
+        }
+    }
+
+    /* Take the screen from the (multitasking) AES: under XaAES/GEM another app owns the display and
+     * redraws it, so a bare blit to the physical screen is overdrawn. Lock screen updates + mouse
+     * control and hide the cursor — the game runs fullscreen, like the other backends. */
+    wind_update(BEG_UPDATE);
+    wind_update(BEG_MCTRL);
+    graf_mouse(M_OFF, 0L);
+
+    for (int32_t i = 0; i < (int32_t)VW * VH; i++) { g_back[i] = 0; if (g_planar) g_planar[i] = 0; }
 
     /* source MFDB: our 8-plane STANDARD-format bitmap (c2p output) */
     g_src.fd_addr    = g_planar;

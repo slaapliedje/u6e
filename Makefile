@@ -653,6 +653,20 @@ $(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
 	@echo "built $@ (pure 68000 + card; VDI backend via render.c dispatch, libgem16)"
 game-vcard: $(BUILD)/gamevc.prg
 
+# SLIM graphics-card variant (M8): the card backend for a STOCK 4 MB Mega ST/STe + a VDI card
+# (e.g. ATW800/2 with NVDI). Same as gamevc.prg but with the ST build's memory strategy: the SLIM
+# pack (U6ST.PAK) + front-end streaming (ST_STREAM streams U6FE, then frees it) so it fits 4 MB —
+# the full-pack gamevc.prg needs ~4.2 MB. Gameplay tiles are 8-bit, so the card shows full 256
+# colour (or the card's truecolour mode); only the streamed front-end is shifter-oriented. 8.3 name.
+GAME_SRC_VCARD_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_vcard.c
+$(BUILD)/gamevcs.prg: $(GAME_SRC_VCARD_ST)
+	@mkdir -p $(BUILD)/obj_vcs
+	@for s in $^; do o=$(BUILD)/obj_vcs/`echo $$s | tr / _`.o; \
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_VCARD -DST_STREAM=1 -DPACK_NAME='"U6ST.PAK"' $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vcs/*.o -lgem16
+	@echo "built $@ (pure 68000 + card, SLIM pack + streamed front-end for a 4 MB Mega; libgem16)"
+game-vcard-st: $(BUILD)/gamevcs.prg
+
 # SLIM ST world pack (U6ST.PAK): same as `world` but MKWORLD_SLIM omits the ~1.35 MB front-end/intro
 # art so the pack + libs + buffers fit a real 4 MB ST. The ST capture targets depend on this.
 world-st: $(BUILD)/mkworld roof-extract
