@@ -8,6 +8,7 @@
  * NF_STDERR. NOT the game — just proves the backend paints correct colours at the right place.
  */
 #include "render.h"
+#include "platmem.h"
 #include <gem.h>
 #include <osbind.h>
 
@@ -35,9 +36,11 @@ int main(void)
      * mode (e.g. 640x480x16 or x32) and the expand path below drives it. `rdr_vcard_force_depth` can
      * still override the detected depth for testing, but it is not needed on a real truecolour mode. */
     platform_caps_t caps;
-    for (unsigned i = 0; i < sizeof caps; i++) ((char *)&caps)[i] = 0;
+    platform_detect(&caps);
+    if (!plat_mem_init(&caps)) { say("plat_mem_init FAILED\r\n"); return 1; }
     if (!rdr_init(&caps)) { say("rdr_init FAILED\r\n"); return 1; }
     say("rdr_init OK\r\n");
+    sayn("  dispatcher backend (0=st 1=tt 2=falcon 3=vcard)=", (long)rdr_active_backend());
     { uint32_t dbg[6]; rdr_debug_info(dbg);
       sayn("  screen w=", (long)dbg[0]); sayn("  screen h=", (long)dbg[1]);
       sayn("  detected bpp=", (long)dbg[2]); sayn("  EdDI=", (long)dbg[3]);

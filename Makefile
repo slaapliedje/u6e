@@ -99,10 +99,10 @@ $(BUILD)/vcardtest.prg: render/vcardtest.c
 vcardtest: $(BUILD)/vcardtest.prg
 # M8 vcard RENDERER test: rdr_vcard.c (VDI card backend) + a test-pattern harness. GEM app, pure
 # 68000 + libgem16 + the portable C c2p (no 68020 asm). Validate under ARAnyM+fVDI+AFROS.
-$(BUILD)/vcardrender.prg: render/vcardrender.c render/rdr_vcard.c
+$(BUILD)/vcardrender.prg: render/vcardrender.c render/render.c render/rdr_vcard.c platform/detect.c platform/platmem.c
 	@mkdir -p $(BUILD)
-	$(CC) -m68000 -std=gnu11 -Os -Wall -Irender -Iplatform -o $@ $^ -lgem16
-	@echo "built $@ (rdr_vcard VDI backend + test pattern, 68000 + libgem16)"
+	$(CC) -m68000 -std=gnu11 -Os -Wall -DHAVE_RDR_VCARD -Irender -Iplatform -o $@ $^ -lgem16
+	@echo "built $@ (rdr_vcard VDI backend via render.c dispatch + test pattern, 68000 + libgem16)"
 vcardrender: $(BUILD)/vcardrender.prg
 # Hatari smoke test (built-in TT VDI: no EdDI, but exercises the vq_extnd path + reports the mode).
 vcardtest-tt: $(BUILD)/vcardtest.prg
@@ -430,10 +430,10 @@ pack: $(BUILD)/mkpack
 
 # target: the render-demo .PRG (TT/Falcon arch). Links platform + render.
 RDEMO_SRC := platform/detect.c platform/platmem.c platform/platfile.c \
-             render/rdr_tt.c render/c2p_asm.s render/rdemo.c
+             render/render.c render/rdr_tt.c render/c2p_asm.s render/rdemo.c
 # Hybrid 020/no-FPU build (same as game.prg): runs on a stock FPU-less TT/Falcon.
 $(BUILD)/rdemo.prg: $(RDEMO_SRC)
-	$(call HYBRID_BUILD,$@,$^,obj_rdemo)
+	$(call HYBRID_BUILD,$@,$^,obj_rdemo,-DHAVE_RDR_TT)
 
 rdemo: $(BUILD)/rdemo.prg
 
@@ -443,10 +443,10 @@ BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/p
              engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
              engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c \
              dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
-             render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
+             render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # Hybrid 020/no-FPU build (same as game.prg) + -DBENCH: runs on a stock FPU-less TT.
 $(BUILD)/bench.prg: $(BENCH_SRC)
-	$(call HYBRID_BUILD,$@,$^,obj_bench,-DBENCH)
+	$(call HYBRID_BUILD,$@,$^,obj_bench,-DBENCH -DHAVE_RDR_TT)
 
 # run the bench headless; BENCH.BIN = 5 big-endian u32 (compose, present-full, map-doubled,
 # map-1x, N). run-vbls must outlast the bench loop (compose is heavier now: lighting+visibility).
@@ -574,7 +574,7 @@ GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/pl
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
             engine/combat.c engine/magic.c engine/music.c \
             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
-            render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
+            render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # 020-OPTIMIZED, FPU-FREE build (resolves the no-FPU vs -m68020-60 conflict).
 # Compile each source with -m68020-60 (68020+ integer codegen — bitfield ops, 32-bit
 # mul/div, richer addressing; the engine uses NO floats so it emits ZERO FPU ops), but
@@ -583,34 +583,44 @@ GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/pl
 # 68000 libc has no such gate AND contains no FPU instructions, so it runs everywhere a
 # 68000 binary does. Net: 020-fast hot paths (compose/blit) + a libc that runs on a stock
 # Falcon030 / FPU-less TT030. (Hand-asm c2p stays 68000.) See docs/design/toolchain.md.
-# $(1)=output .prg  $(2)=sources  $(3)=obj subdir
+# $(1)=output .prg  $(2)=sources  $(3)=obj subdir  $(4)=extra CFLAGS  $(5)=extra link libs
 HYBRID_INC := -Iplatform -Irender -Iengine -Idataformats
 define HYBRID_BUILD
 	@mkdir -p $(BUILD)/$(3)
 	@for s in $(2); do o=$(BUILD)/$(3)/`echo $$s | tr / _`.o; \
 	  a=-m68020-60; \
-	  case $$s in *plattime.c) a=-m68000;; esac; \
+	  case $$s in *plattime.c|*rdr_st.c) a=-m68000;; esac; \
 	  $(CC) $$a -std=gnu11 -O2 -Wall $(HYBRID_INC) $(4) -c $$s -o $$o || exit 1; done
-	$(CC) -std=gnu11 -O2 -o $(1) $(BUILD)/$(3)/*.o
+	$(CC) -std=gnu11 -O2 -o $(1) $(BUILD)/$(3)/*.o $(5)
 	@echo "built $(1) (68020 codegen + 68000 soft-float libc; runs FPU-free)"
 endef
+# rdr_st.c is forced to -m68000 for the same reason as plattime.c: its Timer-B raster
+# interrupt_handler would, under the hard-float -m68020-60 multilib, save FPU regs in its
+# prologue (illegal on a stock FPU-less machine). Portable C, so 68000 codegen is fine.
 # NOTE: plattime.c is forced to -m68000. Its MFP Timer-A interrupt handler
 # (interrupt_handler attribute) would, under the hard-float -m68020-60 multilib,
 # emit an FPU register save (fmovem fp0-fp1) in its prologue — an illegal
 # instruction on a stock FPU-less TT/Falcon. -m68000 has no FPU so the ISR saves
 # only d0-d1/a0-a1. Safe because the whole engine is FPU-free (no FP state to keep).
 
-$(BUILD)/game.prg: $(GAME_SRC)
-	$(call HYBRID_BUILD,$@,$^,obj_tt)
+# UNIFIED flagship (M8): ONE binary that links every backend and picks it at runtime from the
+# hardware detection (render.c: EdDI cookie -> vcard/VDI, else _VDO -> Falcon/TT/ST). Covers the whole
+# 68020+ tier — TT, Falcon (built-in VIDEL), AND a graphics card / NVDI — from a single .prg. Links
+# libgem16 for the VDI/AES path (unused, harmless, on the direct paths). The plain-68000 ST/STE
+# (gamest.prg) and the 68000+card (gamevc.prg) stay separate binaries only because a 68020-codegen
+# image can't run on a 68000 — the SAME render.c dispatcher drives all of them. See docs/design/renderer-unification.md.
+HAVE_ALL := -DHAVE_RDR_ST -DHAVE_RDR_TT -DHAVE_RDR_FALCON -DHAVE_RDR_VCARD
+GAME_SRC_UNI := $(GAME_SRC) render/rdr_st.c render/rdr_falcon.c render/rdr_vcard.c
+$(BUILD)/game.prg: $(GAME_SRC_UNI)
+	$(call HYBRID_BUILD,$@,$^,obj_tt,$(HAVE_ALL),-lgem16)
 game: $(BUILD)/game.prg
 
-# Falcon variant: same engine + assets, VIDEL 320x240 backend (rdr_falcon.c) instead of
-# TT-low rdr_tt.c — presents the 320x200 UI 1:1 (no 2x doubling / letterbox the TT needs).
-# 8.3 name (gamef.prg) — Hatari GEMDOS-HDD --auto can't match a >8-char name. Same hybrid
-# 020/no-FPU build as game.prg (above).
+# Falcon-only test build (VIDEL 320x240, rdr_falcon.c). Redundant with the unified game.prg (which
+# also auto-selects Falcon) but kept as a smaller single-backend image for isolated Falcon testing.
+# 8.3 name (gamef.prg) for Hatari GEMDOS-HDD --auto. Same hybrid 020/no-FPU build.
 GAME_SRC_FALCON := $(patsubst render/rdr_tt.c,render/rdr_falcon.c,$(GAME_SRC))
 $(BUILD)/gamef.prg: $(GAME_SRC_FALCON)
-	$(call HYBRID_BUILD,$@,$^,obj_falcon)
+	$(call HYBRID_BUILD,$@,$^,obj_falcon,-DHAVE_RDR_FALCON)
 game-falcon: $(BUILD)/gamef.prg
 
 # ST/STE variant (M7): the 16-colour shifter backend (rdr_st.c) + the pack's host-quantised
@@ -622,9 +632,9 @@ GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_ST -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
-	@echo "built $@ (pure 68000, ST-low 16-colour shifter, slim pack)"
+	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch, slim pack)"
 game-st: $(BUILD)/gamest.prg
 
 # GRAPHICS-CARD variant (M8): the VDI card backend (rdr_vcard.c) instead of the direct-hardware
@@ -638,9 +648,9 @@ GAME_SRC_VCARD := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) ren
 $(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
 	@mkdir -p $(BUILD)/obj_vc
 	@for s in $^; do o=$(BUILD)/obj_vc/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vc/*.o -lgem16
-	@echo "built $@ (pure 68000, VDI graphics-card backend, libgem16)"
+	@echo "built $@ (pure 68000 + card; VDI backend via render.c dispatch, libgem16)"
 game-vcard: $(BUILD)/gamevc.prg
 
 # SLIM ST world pack (U6ST.PAK): same as `world` but MKWORLD_SLIM omits the ~1.35 MB front-end/intro

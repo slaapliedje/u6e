@@ -24,6 +24,10 @@
 #include <mint/cookie.h>
 #include <mint/linea.h>       /* line-A VPLANES: real screen depth (indexed vs truecolour) */
 #include <string.h>
+#include "platmem.h"          /* plat_alloc_fast — present buffers come from the pool, not BSS */
+
+#define RDR_BACKEND vcard     /* namespace this backend's entry points; emit rdr_be_vcard (below) */
+#include "render_backend.h"
 
 #define VW 320                 /* canonical game frame (same as the Falcon backend) */
 #define VH 240
@@ -53,11 +57,13 @@ static void c2p_frame(const uint8_t *src, uint16_t *dst)
 
 #define SRC_PLANES 8              /* 8-bit indexed backbuffer -> 8 standard planes      */
 
-/* Static buffers: a graphics-card machine has ample RAM, and this keeps the backend free of the
- * pool allocator (so it runs standalone under GEM/MiNT for the vcard test). ~150 KB BSS. */
-static uint8_t   g_back[VW * VH];      /* chunky 8-bit backbuffer                      */
-static uint8_t   g_planar[VW * VH];    /* 8-plane STANDARD-format c2p output           */
-static uint8_t   g_device[VW * VH * 4];/* DEVICE-format copy (vr_trnfm target; up to 32bpp) */
+/* Present buffers (~460 KB) — allocated from the pool in rdr_init, NOT static: in the unified binary
+ * only the SELECTED backend should spend RAM, and 460 KB of BSS on every build would tip the tight TT
+ * pack pool into "no renderer". A card machine has the RAM; plat_alloc_fast (Alt-RAM preferred) is
+ * fine since these are VDI source rasters, not shifter-DMA'd. Freed implicitly at exit (like rdr_tt). */
+static uint8_t  *g_back;               /* chunky 8-bit backbuffer                      */
+static uint8_t  *g_planar;             /* 8-plane STANDARD-format c2p output           */
+static uint8_t  *g_device;             /* DEVICE-format copy (vr_trnfm target; up to 32bpp) */
 int              rdr_vcard_force_depth = 0;  /* test hook: override detected screen bpp (0 = auto) */
 static int       g_bpp;                /* screen depth: 8 indexed, 15/16/24/32 truecolour (vq_scrninfo) */
 static int       g_truecolor;          /* screen is direct-colour (vq_scrninfo clut==2 / bit_depth>8)   */
@@ -187,6 +193,14 @@ bool rdr_init(const platform_caps_t *caps)
     v_opnvwk(work_in, &g_handle, work_out);
     if (g_handle == 0) { appl_exit(); return false; }
     vdi_clip_off();                                 /* full-frame blits must not be clipped */
+
+    /* Present buffers from the pool (see the decl above). Do this before taking the screen so a
+     * failure unwinds cleanly. plat_alloc_fast needs plat_mem_init() first — the game does that at
+     * startup; the standalone vcardrender harness calls it too. */
+    g_back   = (uint8_t *)plat_alloc_fast((uint32_t)VW * VH);
+    g_planar = (uint8_t *)plat_alloc_fast((uint32_t)VW * VH);
+    g_device = (uint8_t *)plat_alloc_fast((uint32_t)VW * VH * 4);
+    if (!g_back || !g_planar || !g_device) { v_clsvwk(g_handle); appl_exit(); return false; }
 
     /* Take the screen from the (multitasking) AES: under XaAES/GEM another app owns the display and
      * redraws it, so a bare blit to the physical screen is overdrawn. Lock screen updates + mouse
@@ -390,3 +404,5 @@ void rdr_debug_info(uint32_t out[6])
     out[5] = ((uint32_t)g_truecolor << 24) | ((uint32_t)(g_ch_bits[0] & 0xFF) << 16)
            | ((uint32_t)(g_ch_bits[1] & 0xFF) << 8) | (uint32_t)(g_ch_bits[2] & 0xFF);
 }
+
+RDR_MAKE_VTABLE(vcard);       /* -> const rdr_vtable rdr_be_vcard */

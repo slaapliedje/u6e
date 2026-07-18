@@ -28,6 +28,9 @@
 #include <mint/linea.h>     /* line-A: hide the AES mouse sprite */
 #include <string.h>
 
+#define RDR_BACKEND st        /* namespace this backend's entry points; emit rdr_be_st (see below) */
+#include "render_backend.h"
+
 #define STW 320
 #define STH 200
 #define ST_GROUPS   (STW/16)          /* 20 chunky groups / row                */
@@ -413,3 +416,5 @@ void scroll_end(void) { }
 
 /* STE $FF8265 fine-scroll linchpin test — not used on the plain-ST path. */
 void rdr_test_hscroll(int v) { (void)v; }
+
+RDR_MAKE_VTABLE(st);          /* -> const rdr_vtable rdr_be_st */

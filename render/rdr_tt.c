@@ -20,6 +20,9 @@
 #include <mint/linea.h>     /* line-A: hide the AES mouse sprite */
 #include <string.h>         /* memcpy — row-double the planar output */
 
+#define RDR_BACKEND tt        /* namespace this backend's entry points; emit rdr_be_tt (below) */
+#include "render_backend.h"
+
 /* Hand-asm chunky->planar (render/c2p_asm.s). Converts `ngroups` consecutive
  * 16-pixel groups (src) to plane words (dst, 8 u16/group, contiguous), byte-
  * identical to c2p_group(). The sanctioned asm hot path; movem amortised across
@@ -394,3 +397,5 @@ void scroll_end(void)
     Vsync(); (void)Supexec(sc_commit);
     Setscreen(g_screen, g_screen, -1);
 }
+
+RDR_MAKE_VTABLE(tt);          /* -> const rdr_vtable rdr_be_tt */

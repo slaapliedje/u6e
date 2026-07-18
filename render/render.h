@@ -122,4 +122,8 @@ void     rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x);
  * [4]=Getrez, [5]=our screen byte size. */
 void     rdr_debug_info(uint32_t out[6]);
 
+/* Which backend the runtime dispatcher (render.c) selected: 0=ST/STE shifter, 1=TT, 2=Falcon,
+ * 3=graphics-card/VDI, -1=none yet. Valid after rdr_init (or the first rdr_prefer_truecolor). */
+int      rdr_active_backend(void);
+
 #endif

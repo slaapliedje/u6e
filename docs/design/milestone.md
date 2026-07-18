@@ -1236,10 +1236,11 @@ Acceptance
 ---
 
 ## M8 — Truecolor + graphics-card path (goals #2 & #3)  ← RELEASE TAG
-Status: [~] IN PROGRESS 2026-07-17 — Falcon 16-bit truecolor present DONE (Hatari); vcard/VDI
-        graphics-card backend DONE + validated on a real card (ARAnyM+fVDI+AFROS) at BOTH depths:
-        256-colour (640x480x8) AND truecolour (640x480x16 RGB565 / x32) — indexed grid+game and
-        truecolour grid+game all render pixel-correct. Remaining: collapse to one runtime-detected binary.
+Status: [x] DONE 2026-07-17 — Falcon 16-bit truecolor present; vcard/VDI graphics-card backend on a
+        real card (ARAnyM+fVDI+AFROS) at BOTH depths (256c 640x480x8 AND truecolour 640x480x16 RGB565
+        / x32, grid+game pixel-correct); AND the renderer UNIFIED behind one runtime dispatcher
+        (render/render.c) — the flagship game.prg links all four backends and auto-selects from the
+        hardware (validated: vcard on ARAnyM+fVDI, tt on bare Hatari TT). Only the release TAG remains.
 Depends on: M7 (or at least M6 + M3 backend work)
 Goal: complete the hardware matrix from ONE detection routine.
 
@@ -1287,10 +1288,18 @@ Tasks
       routine" acceptance) — currently each is its own build.
 
 Acceptance
-- [ ] U6 runs across FULL matrix: base ST (16c improved), STE (4096),
+- [x] U6 runs across FULL matrix: base ST (16c improved), STE (4096),
       TT (256), Falcon (256 + truecolor), 68000-ST + emulated 256c card.
-- [ ] All targets driven by the SAME detection routine (goals #2 & #3
-      confirmed collapsed into one code path).
+      All backends validated (ST-low/STE shifter, TT-low, Falcon VIDEL 256+truecolor, VDI card
+      256+truecolor).
+- [x] All targets driven by the SAME detection routine (goals #2 & #3 collapsed into one code path).
+      DONE: render/render.c is a runtime dispatcher over an rdr_vtable per backend; it selects from
+      the hardware (EdDI cookie -> card/VDI, else _VDO -> Falcon/TT/ST) and every binary uses it.
+      The flagship game.prg links all four backends (st+tt+falcon+vcard, +libgem16) and picks at
+      runtime — VALIDATED as ONE image: on ARAnyM+fVDI it selects vcard and renders on the card, on a
+      bare Hatari TT (TOS 3.06, no EdDI) it selects tt and renders via the direct shifter. The 68000
+      tier (gamest.prg) and 68000+card (gamevc.prg) stay separate binaries only for the CPU-codegen /
+      4 MB-memory reasons (NOT renderer ones) — same dispatcher. See docs/design/renderer-unification.md.
 - [ ] TAG RELEASE: "full hardware matrix on U6."
 
 ---

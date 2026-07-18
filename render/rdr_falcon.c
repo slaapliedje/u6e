@@ -33,6 +33,9 @@
 #include <mint/linea.h>    /* line-A: hide the AES mouse sprite */
 #include <string.h>
 
+#define RDR_BACKEND falcon    /* namespace this backend's entry points; emit rdr_be_falcon (below) */
+#include "render_backend.h"
+
 extern void c2p_span_asm(const uint8_t *src, uint16_t *dst, long ngroups);
 
 #define FW 320
@@ -268,3 +271,5 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
  * cleanly; a real impl is a small follow-up). No-op stubs keep single-buffer behaviour. */
 void rdr_flip_begin(void) { }
 void rdr_flip_end(void)   { }
+
+RDR_MAKE_VTABLE(falcon);      /* -> const rdr_vtable rdr_be_falcon */
