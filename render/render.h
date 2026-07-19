@@ -118,6 +118,17 @@ void     rdr_present_rect_doubled(int x, int y, int w, int h, int lh);
  * pan_x = 16, 32, ... Single-buffer (writes the visible screen); no Vsync (caller paces). */
 void     rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x);
 
+/* NATIVE-PLANAR compose (ST shifter only; docs/design/native-planar-st.md). The engine keeps its
+ * shared chunky compose logic and drives WHICH cells change; the renderer owns the planar buffers +
+ * the 256->16 LUT and composites/present directly in ST-low planar, deleting the per-frame c2p.
+ * PREDIM-only. Declared here but only defined in rdr_st.c (guard engine calls with HAVE_RDR_ST). */
+void     rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride);       /* c2p all 176 rows -> g_pdimmed */
+void     rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy); /* c2p one dirty cell */
+void     rdr_pstatic_shift(int dx, int dy);                             /* planar shift g_pdimmed (cells) */
+void     rdr_pframe_begin(void);                                        /* g_ptmp = g_pdimmed (static) */
+void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit */
+void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
+
 /* Diagnostic: out[0]=Physbase, [1]=Logbase, [2]=our screen, [3]=EgetShift,
  * [4]=Getrez, [5]=our screen byte size. */
 void     rdr_debug_info(uint32_t out[6]);

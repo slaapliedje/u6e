@@ -377,6 +377,146 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
     /* no Vsync: caller batches */
 }
 
+/* ================= Native-planar compose (docs/design/native-planar-st.md) =================
+ * Composite the map in ST-low planar and present with NO per-frame c2p. Two layers of primitive:
+ *  - per-cell (Phase 1): chunky->planar+mask convert, the masked planar blit, a (tile,level) cache.
+ *  - per-frame (Phase 2): an incrementally-maintained planar STATIC layer (g_pdimmed, the planar
+ *    mirror of gamedemo's g_dimmed_map) + a per-frame planar composite (g_ptmp) presented as ONE
+ *    shifted planar block-copy (the 8-px MAP_INSET). PREDIM-only.
+ * The renderer owns the planar buffers + the 256->16 LUT; gamedemo drives WHICH cells change (the
+ * shared compose logic stays chunky). Proven byte-identical to c2p by rdr_planar_selftest (Phase 1)
+ * and rdr_pverify (Phase 2, BENCH: g_ptmp == c2p(the chunky composite)). */
+
+#define PLANAR_TRANSPARENT 255          /* == gamedemo TILE_TRANSPARENT (not visible from here) */
+typedef struct { uint16_t planar[64]; uint16_t mask[16]; } planar_tile_t;
+
+/* Convert a 256-byte chunky 16x16 tile (index; 255 = transparent) to planar (128 B) + 1bpp mask
+ * (32 B), remapping opaque indices through the 256->16 lut EXACTLY as c2p4_lut (pixel 0 -> bit 15);
+ * transparent pixels set mask bit 0. Feed it the already-dimmed chunky tile for a planar dim variant. */
+static void rdr_chunky_tile_to_planar(const uint8_t *chunky, const uint8_t *lut, planar_tile_t *out)
+{
+    for (int r = 0; r < 16; r++) {
+        uint16_t p0=0,p1=0,p2=0,p3=0,m=0;
+        const uint8_t *s = chunky + r*16;
+        for (int c = 0; c < 16; c++) {
+            uint8_t v = s[c]; int op = (v != PLANAR_TRANSPARENT);
+            unsigned n = op ? (unsigned)(lut[v] & 0x0F) : 0u;
+            p0=(uint16_t)((p0<<1)|(n&1));      p1=(uint16_t)((p1<<1)|((n>>1)&1));
+            p2=(uint16_t)((p2<<1)|((n>>2)&1)); p3=(uint16_t)((p3<<1)|((n>>3)&1));
+            m =(uint16_t)((m<<1)|(unsigned)op);
+        }
+        out->planar[r*4]=p0; out->planar[r*4+1]=p1; out->planar[r*4+2]=p2; out->planar[r*4+3]=p3;
+        out->mask[r]=m;
+    }
+}
+
+/* The one hot primitive: place a 16x16 planar tile into the 4-plane destination at pixel (x,y).
+ * dstride_w = destination row stride in WORDS. Per row+plane d=(d&~m)|(s&m) so transparent pixels
+ * leave dst untouched. sh==0 = fast group-aligned path (the compose case); (x&15)!=0 spans two
+ * groups gx,gx+1 via a 32-bit shift window (the 8-px MAP_INSET). Byte-exact vs c2p over the same bg. */
+static void rdr_blit_planar_masked(uint16_t *dst, int dstride_w, const planar_tile_t *pt, int x, int y)
+{
+    int gx = x >> 4, sh = x & 15;
+    const uint16_t *tp = pt->planar, *tm = pt->mask;
+    if (sh == 0) {
+        for (int r = 0; r < 16; r++) {
+            uint16_t m = tm[r];
+            uint16_t *d = dst + (int32_t)(y+r)*dstride_w + gx*4;
+            const uint16_t *s = tp + r*4;
+            d[0]=(uint16_t)((d[0]&~m)|(s[0]&m)); d[1]=(uint16_t)((d[1]&~m)|(s[1]&m));
+            d[2]=(uint16_t)((d[2]&~m)|(s[2]&m)); d[3]=(uint16_t)((d[3]&~m)|(s[3]&m));
+        }
+        return;
+    }
+    int rsh = 16 - sh;
+    for (int r = 0; r < 16; r++) {
+        uint32_t mm = (uint32_t)tm[r] << rsh;
+        uint16_t mhi=(uint16_t)(mm>>16), mlo=(uint16_t)mm;
+        uint16_t *d = dst + (int32_t)(y+r)*dstride_w + gx*4;
+        const uint16_t *s = tp + r*4;
+        for (int p = 0; p < 4; p++) {
+            uint32_t ss = (uint32_t)s[p] << rsh;
+            uint16_t shi=(uint16_t)(ss>>16), slo=(uint16_t)ss;
+            d[p]  =(uint16_t)((d[p]  &~mhi)|(shi&mhi));
+            d[p+4]=(uint16_t)((d[p+4]&~mlo)|(slo&mlo));
+        }
+    }
+}
+
+/* Planar tile/mask cache — the planar analogue of gamedemo's g_dimcache: a (tile,level) key maps to
+ * a cached planar_tile_t, built once from the (already-dimmed) chunky source, reused every frame.
+ * Direct-mapped, same Knuth hash. 512x160 B = 80 KB. */
+#define PLANAR_SLOTS 512
+static planar_tile_t g_pcache[PLANAR_SLOTS];
+static int32_t       g_pkey[PLANAR_SLOTS];
+static int           g_pcache_ready;
+static const planar_tile_t *rdr_planar_get(int32_t key, const uint8_t *chunky, const uint8_t *lut)
+{
+    if (!g_pcache_ready){ for (int i=0;i<PLANAR_SLOTS;i++) g_pkey[i]=-1; g_pcache_ready=1; }
+    int slot = (int)(((uint32_t)key * 2654435761u) >> 23) & (PLANAR_SLOTS-1);
+    if (g_pkey[slot] != key){ rdr_chunky_tile_to_planar(chunky, lut, &g_pcache[slot]); g_pkey[slot]=key; }
+    return &g_pcache[slot];
+}
+
+/* --- Phase 2: planar map buffers + incremental static maintenance + present --- */
+#define PMAP_GROUPS   11                       /* 176 px = 11 groups (== gamedemo TMP_T) */
+#define PMAP_ROWS     176
+#define PMAP_STRIDE_W (PMAP_GROUPS*4)          /* 44 words / row */
+static uint16_t g_pdimmed[PMAP_ROWS*PMAP_STRIDE_W];  /* incremental planar dimmed STATIC layer */
+static uint16_t g_ptmp   [PMAP_ROWS*PMAP_STRIDE_W];  /* per-frame planar composite (mirrors chunky tmp) */
+
+/* full rebuild: c2p all 176 rows of the (opaque) dimmed chunky map into g_pdimmed (jump/first frame). */
+void rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride)
+{
+    for (int r = 0; r < PMAP_ROWS; r++)
+        c2p4_lut_asm(dimmed + (int32_t)r*cstride, g_lut, g_pdimmed + (int32_t)r*PMAP_STRIDE_W, PMAP_GROUPS);
+}
+/* c2p one 16x16 cell (vx,vy) of the dimmed chunky map into g_pdimmed (group-aligned) — the only
+ * per-frame convert on a walk (dirty cells: revealed edge + light-changed), mirroring dim_cell_into. */
+void rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy)
+{
+    for (int r = 0; r < 16; r++)
+        c2p4_lut_asm(dimmed + (int32_t)(vy*16+r)*cstride + vx*16, g_lut,
+                     g_pdimmed + (int32_t)(vy*16+r)*PMAP_STRIDE_W + vx*4, 1);
+}
+/* planar shift g_pdimmed by (dx,dy) CELLS so new[v]=old[v+(dx,dy)] (mirrors shift_static; the lead
+ * band is left stale -> refreshed by the dirty-cell rdr_pstatic_cell). Whole-group units = bit-exact. */
+void rdr_pstatic_shift(int dx, int dy)
+{
+    int sx = dx*4, sy = dy*16;                                     /* words, rows */
+    int x0 = sx>0?0:-sx, ww = PMAP_STRIDE_W-(sx<0?-sx:sx); if (ww<=0) return;
+    int hh = PMAP_ROWS-(sy<0?-sy:sy); if (hh<=0) return;
+    if (sy>0){ for (int ny=0; ny<hh; ny++)
+                 memmove(&g_pdimmed[ny*PMAP_STRIDE_W+x0], &g_pdimmed[(ny+sy)*PMAP_STRIDE_W+x0+sx], (size_t)ww*2); }
+    else     { for (int ny=PMAP_ROWS-1; ny>=-sy; ny--)
+                 memmove(&g_pdimmed[ny*PMAP_STRIDE_W+x0], &g_pdimmed[(ny+sy)*PMAP_STRIDE_W+x0+sx], (size_t)ww*2); }
+}
+/* begin the frame's planar composite: g_ptmp = the static layer (mirrors memcpy(tmp,g_dimmed_map)). */
+void rdr_pframe_begin(void) { memcpy(g_ptmp, g_pdimmed, sizeof g_ptmp); }
+/* blit a dynamic cell (dimmed chunky tile, 255=transparent) into g_ptmp at view cell (vx,vy),
+ * group-aligned, via the (tile,level) planar cache — mirrors draw_cell's masked chunky copy. */
+void rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
+{
+    rdr_blit_planar_masked(g_ptmp, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, g_lut), vx*16, vy*16);
+}
+/* present: shifted planar block-copy of g_ptmp's visible 160x160 span into the screen map region at
+ * the +8-px MAP_INSET — writes screen px 8..167 (border cols 0..7 / 168.. preserved). NO c2p, NO
+ * Vsync (caller batches). Per screen group g the +8 shift splits each src group across two:
+ *   screen[g] = (src[g-1]_lo8 << 8) | (src[g]_hi8);  grp 0 low-half only, grp 10 high-half only. */
+void rdr_ppresent(void)
+{
+    for (int y = 0; y < 160; y++) {
+        const uint16_t *s = g_ptmp + (int32_t)y*PMAP_STRIDE_W;               /* src groups 0..9 */
+        uint16_t *d = (uint16_t *)(g_screen + (int32_t)(8+y)*ST_ROWBYTES);   /* screen row (group 0) */
+        for (int p = 0; p < 4; p++) {
+            d[p] = (uint16_t)((d[p] & 0xFF00) | (s[p] >> 8));                 /* grp 0: low half (px 8..15) */
+            for (int g = 1; g <= 9; g++)
+                d[g*4+p] = (uint16_t)(((s[(g-1)*4+p] & 0x00FF) << 8) | (s[g*4+p] >> 8));
+            d[10*4+p] = (uint16_t)((d[10*4+p] & 0x00FF) | ((s[9*4+p] & 0x00FF) << 8)); /* grp 10: high half */
+        }
+    }
+}
+
 #ifdef BENCH
 /* BENCH-only: the intro-bench harness in gamedemo.c splits present into c2p vs output on the TT.
  * The ST present is 1:1 (no letterbox/doubling/flip) — effectively all c2p — so report zeros; the
@@ -450,89 +590,6 @@ void rdr_planar_microbench(uint32_t out[3], int N)
     out[2] = plat_ticks_200hz() - t2;
 }
 
-/* ---- Phase 1: native-planar primitives + tile/mask cache (docs/design/native-planar-st.md §3,§6)
- * The three things the milestone integrates in Phase 2 (here proven byte-identical to c2p, BENCH-only,
- * so the shipping ST binary is unchanged): (1) chunky->planar tile+mask convert, (2) the masked planar
- * blit, (3) a (tile,level) planar cache. rdr_planar_selftest() below is the Phase-1 gate. */
-
-#define PLANAR_TRANSPARENT 255          /* == gamedemo's TILE_TRANSPARENT (not visible from here) */
-
-/* A tile pre-converted to ST-low planar: 16 rows x 4 interleaved plane words (128 B) + a 1-bit-per-
- * pixel opacity mask, one word/row (32 B). 160 B total vs the 256-B chunky tile. */
-typedef struct { uint16_t planar[64]; uint16_t mask[16]; } planar_tile_t;
-
-/* Convert a 256-byte chunky 16x16 tile (index values; 255 = transparent) to planar + mask, remapping
- * each opaque index through the 256->16 lut EXACTLY as c2p4_lut does (pixel 0 -> bit 15). Transparent
- * pixels set mask bit 0 and contribute 0 plane bits. This is the one-time convert (per (tile,level))
- * that replaces the per-frame c2p; feed it the already-dimmed chunky tile to get a planar dim variant. */
-static void rdr_chunky_tile_to_planar(const uint8_t *chunky, const uint8_t *lut, planar_tile_t *out)
-{
-    for (int r = 0; r < 16; r++) {
-        uint16_t p0=0,p1=0,p2=0,p3=0,m=0;
-        const uint8_t *s = chunky + r*16;
-        for (int c = 0; c < 16; c++) {
-            uint8_t v = s[c]; int op = (v != PLANAR_TRANSPARENT);
-            unsigned n = op ? (unsigned)(lut[v] & 0x0F) : 0u;
-            p0=(uint16_t)((p0<<1)|(n&1));      p1=(uint16_t)((p1<<1)|((n>>1)&1));
-            p2=(uint16_t)((p2<<1)|((n>>2)&1)); p3=(uint16_t)((p3<<1)|((n>>3)&1));
-            m =(uint16_t)((m<<1)|(unsigned)op);
-        }
-        out->planar[r*4]=p0; out->planar[r*4+1]=p1; out->planar[r*4+2]=p2; out->planar[r*4+3]=p3;
-        out->mask[r]=m;
-    }
-}
-
-/* The one hot primitive: place a 16x16 planar tile into the 4-plane destination at pixel (x,y).
- * dstride_w = destination row stride in WORDS. Per row+plane, d = (d & ~m) | (s & m), so transparent
- * pixels (mask bit 0) leave dst untouched. x need not be group-aligned: when (x&15)!=0 (the 8-px
- * MAP_INSET case) each plane spans the two 16-px groups gx, gx+1 — src/mask are shifted into a 32-bit
- * window and split. sh==0 takes the fast group-aligned path (the compose case, per the Phase-0
- * alignment decision). Byte-exact equivalent of c2p-ing this tile over the same background. */
-static void rdr_blit_planar_masked(uint16_t *dst, int dstride_w, const planar_tile_t *pt, int x, int y)
-{
-    int gx = x >> 4, sh = x & 15;
-    const uint16_t *tp = pt->planar, *tm = pt->mask;
-    if (sh == 0) {                                          /* fast group-aligned path */
-        for (int r = 0; r < 16; r++) {
-            uint16_t m = tm[r];
-            uint16_t *d = dst + (int32_t)(y+r)*dstride_w + gx*4;
-            const uint16_t *s = tp + r*4;
-            d[0]=(uint16_t)((d[0]&~m)|(s[0]&m)); d[1]=(uint16_t)((d[1]&~m)|(s[1]&m));
-            d[2]=(uint16_t)((d[2]&~m)|(s[2]&m)); d[3]=(uint16_t)((d[3]&~m)|(s[3]&m));
-        }
-        return;
-    }
-    int rsh = 16 - sh;                                      /* left-shift into the 32-bit window */
-    for (int r = 0; r < 16; r++) {
-        uint32_t mm = (uint32_t)tm[r] << rsh;
-        uint16_t mhi=(uint16_t)(mm>>16), mlo=(uint16_t)mm;
-        uint16_t *d = dst + (int32_t)(y+r)*dstride_w + gx*4;
-        const uint16_t *s = tp + r*4;
-        for (int p = 0; p < 4; p++) {
-            uint32_t ss = (uint32_t)s[p] << rsh;
-            uint16_t shi=(uint16_t)(ss>>16), slo=(uint16_t)ss;
-            d[p]  =(uint16_t)((d[p]  &~mhi)|(shi&mhi));
-            d[p+4]=(uint16_t)((d[p+4]&~mlo)|(slo&mlo));
-        }
-    }
-}
-
-/* Planar tile/mask cache — the planar analogue of gamedemo's g_dimcache: a (tile,level) key maps to a
- * cached planar_tile_t, built once from the (already-dimmed) chunky source, reused every later frame.
- * Direct-mapped, same Knuth multiplicative hash spread. 512 slots x 160 B = 80 KB (< the chunky cache's
- * 128 KB). Phase 2 wires this into the ST draw_cell in place of dim_tile's chunky block-copy. */
-#define PLANAR_SLOTS 512
-static planar_tile_t g_pcache[PLANAR_SLOTS];
-static int32_t       g_pkey[PLANAR_SLOTS];
-static int           g_pcache_ready;
-static const planar_tile_t *rdr_planar_get(int32_t key, const uint8_t *chunky, const uint8_t *lut)
-{
-    if (!g_pcache_ready){ for (int i=0;i<PLANAR_SLOTS;i++) g_pkey[i]=-1; g_pcache_ready=1; }
-    int slot = (int)(((uint32_t)key * 2654435761u) >> 23) & (PLANAR_SLOTS-1);
-    if (g_pkey[slot] != key){ rdr_chunky_tile_to_planar(chunky, lut, &g_pcache[slot]); g_pkey[slot]=key; }
-    return &g_pcache[slot];
-}
-
 /* Phase-1 GATE: prove the planar path is byte-identical to c2p. Invariant, for any chunky tile ct over
  * any opaque background bg at any x-offset:
  *     blit_planar_masked( planar(ct), x )  onto  c2p(bg)   ==   c2p( bg with ct overlaid at x, masked )
@@ -567,6 +624,20 @@ int rdr_planar_selftest(void)
             }
             for (int i = 0; i < 16*8; i++) if (dst[i] != ref[i]) diff++;
         }
+    }
+    return diff;
+}
+
+/* Phase-2 GATE (INV2): after a compose, the planar composite g_ptmp must equal c2p of the chunky
+ * composite `tmp` over the visible 160x160 span. If this is 0 across the walk, the whole native-planar
+ * path (incremental static + dynamic blits + present) is byte-identical to today's chunky+c2p. */
+int rdr_pverify(const uint8_t *tmp, int cstride)
+{
+    int diff = 0; uint16_t ref[40];                              /* 10 groups */
+    for (int y = 0; y < 160; y++) {
+        c2p4_lut_asm(tmp + (int32_t)y*cstride, g_lut, ref, 10);
+        const uint16_t *g = g_ptmp + (int32_t)y*PMAP_STRIDE_W;
+        for (int i = 0; i < 40; i++) if (g[i] != ref[i]) diff++;
     }
     return diff;
 }

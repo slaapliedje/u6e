@@ -8,9 +8,11 @@
 >                  Mandin's Atari Doom (dual chunky/planar model) — READ for understanding,
 >                  not copied.
 > - Tools        : make bench-st / bench / bench-falcon (our harness).
-> - Validated by  : Phase-0 microbench (thesis, GO) + Phase-1 self-test (`rdr_planar_selftest`,
->                  planar blit byte-identical to c2p, `diff=0`) — both via `make bench-st`.
-> - Confidence   : design = probable; perf win = VALIDATED (Phase 0); primitives = VERIFIED (Phase 1).
+> - Validated by  : Phase-0 microbench (thesis, GO) + Phase-1 self-test (`rdr_planar_selftest`) +
+>                  Phase-2 INV2 (`rdr_pverify`: planar composite == c2p(chunky), `diff=0` over a walk)
+>                  and the measured frame (933→619 ms) — all via `make bench-st`.
+> - Confidence   : design = confirmed; perf win = MEASURED (present 5.5× / frame 1.51× on plain ST);
+>                  primitives + integrated compose = VERIFIED byte-identical to c2p.
 > - Last updated : 2026-07-19
 
 ## 1. Why
@@ -121,9 +123,9 @@ path; STE/Mega/TT get the Blitter speedup for free on top.
   the plain ST from the real number. No integration yet.
 - **Phase 1 (DONE):** `blit_planar_masked` (CPU) + the planar tile/mask cache + planar `dim_tile`. Unit
   self-test: blit == c2p(chunky) for the same tile (byte-identical planar output). → `diff=0`, see §8.
-- **Phase 2:** divert the ST `draw_cell`/`draw_multi` to planar; a planar `g_dimmed_map`; drop the
-  ST c2p present. Byte-verify the planar screen vs the current chunky+c2p screen (in-memory diff, the
-  same trick as the c2p selftest). Measure the frame.
+- **Phase 2 (DONE):** divert the ST `draw_cell`/`draw_multi` to planar; a planar static layer
+  (`g_pdimmed`); drop the ST c2p present. Byte-verify the planar composite vs c2p(chunky) (INV2,
+  in-memory). → `diff=0` over 41 frames; frame 933→619 ms (1.51×), present 444→81 ms. See §8.
 - **Phase 3:** Blitter path for `blit_planar_masked` (STE/Mega/TT), runtime-detected.
 - **Phase 4:** actors as planar sprites; roofs; fields; the full lit scene.
 
@@ -155,7 +157,34 @@ now exist and are proven byte-identical to c2p on real hardware (`PLANAR blit-vs
   transparent = the multi-tile bleed / a dim variant) × 2 offsets (aligned + inset), building the tile
   THROUGH the cache. Result: **0 mismatched plane-words**.
 
-All Phase-1 code is BENCH-only (in render/rdr_st.c) so the shipping ST/unified binaries are unchanged
-(game-st + game link clean; enginetest ALL PASS). Next: **Phase 2** — promote these to production and
-divert the ST `draw_cell`/`draw_multi` to planar (planar `g_dimmed_map`, drop the c2p present),
-byte-verifying the planar screen vs the current chunky+c2p screen in-memory, then measure the frame.
+**Phase 2 DONE — integrated, byte-verified, measured (2026-07-19, `make bench-st`).** The compose now
+maintains a planar mirror and presents with no c2p; the shared chunky compose LOGIC is untouched — only
+the per-cell OUTPUT diverges (§3.4 held). Pieces:
+- **Incremental planar STATIC** (`g_pdimmed`, renderer-owned): full c2p on rebuild, planar block-shift
+  on scroll (whole-group units → bit-exact), and per-dirty-cell c2p in lockstep with `dim_cell_into`
+  (the same revealed-edge + light-changed cells). Mirrors gamedemo's `g_dimmed_map` maintenance.
+- **Dynamic planar blits**: the ST `draw_cell`/`draw_multi` (fields, actors, avatar, foreground) and the
+  roof loop blit the same cells into `g_ptmp` via the (tile,level) planar cache — the chunky copies are
+  skipped on the planar-only path (`g_chunky_dyn=0`).
+- **No-c2p present** (`rdr_ppresent`): ONE shifted planar block-copy of `g_ptmp`'s 160×160 span into the
+  screen at the +8-px `MAP_INSET` (per-group `screen[g]=(src[g-1]_lo8<<8)|(src[g]_hi8)`; border cols
+  preserved).
+- **Gate (INV2, `rdr_pverify`)**: after every composed frame, `g_ptmp == c2p(tmp)` over the visible span.
+  **Result: 0 mismatches over 41 frames** (a full rebuild + a two-directional walk).
+
+Measured, PREDIM night throne room, plain ST 8 MHz (`make bench-st`, `LIGHTSTY.REQ=3`):
+
+| path | compose | present | **frame** | fps |
+|------|--------:|--------:|----------:|----:|
+| baseline (PREDIM chunky + c2p) | 489 ms | **444 ms** | 933 ms | 1.07 |
+| native planar-only            | 538 ms | **81 ms**  | **619 ms** | **1.62** |
+
+The **present is 5.5× cheaper** (444→81 ms) and the **frame 1.51× faster** (1.07→1.62 fps), byte-identical.
+The residual +49 ms compose is the planar STATIC c2p maintenance (per-dirty-cell, ~20 cells/frame on a
+lit walk); dimming DIRECTLY in planar (a planar darklut, later phase) would remove even that c2p.
+
+Native planar is enabled only in the ST bench so far (`PLANAR.REQ`/`LIGHTSTY.REQ` toggles); the live
+ST game loop still uses the proven chunky+c2p present. Next: **Phase 2c/live** — flip `g_native_planar`
+on for the ST game map present (gamedemo `present_map`), invalidate the planar cache on palette change
+(`rdr_set_lowcolor`), and validate on a real ST visually; then **Phase 3** (Blitter) / **Phase 4**
+(planar sprites, planar dimming).

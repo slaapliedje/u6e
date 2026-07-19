@@ -373,3 +373,21 @@ cache + no shifter steal). So the ~1 fps we optimized on the ST is NOT the produ
 plain ST *itself* to 2 fps needs native planar (eliminate c2p; the Blitter pays off on STE/Mega) — a
 milestone, not a lever. Note: the TT bench's fast pool outgrew a 4 MB config once the M9 core sections
 (CACT/CFAC/CTLK) grew U6.PAK to 2.36 MB under EmuTOS — run it with `--ttram 14` (fast-pool-tight-on-TT).
+
+## 2026-07-19 — native-planar ST milestone: present 444 → 81 ms, frame 933 → 619 ms (1.51×)
+The "native planar" milestone (docs/design/native-planar-st.md) attacks the 444 ms c2p directly:
+composite the map in ST-low planar and present with NO per-frame c2p. Phases 0–2 done and byte-verified
+vs c2p (`rdr_planar_selftest` + `rdr_pverify`, both `diff=0`). Measured `make bench-st` (PREDIM night
+throne room walking, `LIGHTSTY.REQ=3`), plain ST 8 MHz:
+
+| path | compose | present | frame | **fps** |
+|------|--------:|--------:|------:|--------:|
+| baseline PREDIM (chunky + c2p) | 489 ms | **444 ms** | 933 ms | 1.07 |
+| native planar-only            | 538 ms | **81 ms**  | **619 ms** | **1.62** |
+
+Present **5.5× cheaper**; frame **1.51×**, byte-identical. Mechanism: an incrementally-maintained planar
+STATIC layer (`g_pdimmed` = planar mirror of `g_dimmed_map`, per-dirty-cell c2p + planar shift), planar
+dynamic blits (`draw_cell`/roofs → `g_ptmp` via a (tile,level) planar cache), and a single shifted
+planar block-copy present. Residual +49 ms compose = the planar-static per-cell c2p on the lit walk
+(~20 dirty cells/frame); dimming DIRECTLY in planar (a later phase) removes even that. Enabled in the
+ST bench so far; the live ST game map present + the Blitter path (STE/Mega) are the next steps.

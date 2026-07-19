@@ -1894,6 +1894,23 @@ static const uint8_t  *g_predim_light, *g_predim_vis;   /* per-cell VTxVT (set b
 static const uint8_t  *dim_tile(int tile, int lev);     /* flat pre-dim (body after g_darklut) */
 static const uint8_t  *dim_tile_d(int tile, int Lc);    /* dithered pre-dim (body after g_bayer4) */
 
+/* NATIVE-PLANAR (ST shifter, PREDIM-only; docs/design/native-planar-st.md): when active, the shared
+ * chunky compose runs as today AND the renderer maintains a planar mirror (g_pdimmed static + g_ptmp
+ * composite) presented with no per-frame c2p. draw_cell/roofs blit the same dynamic cells planar; the
+ * incremental static layer is c2p'd per dirty cell. g_pd_valid gates the incremental path (0 => the
+ * planar static must be fully rebuilt before shifting). All under HAVE_RDR_ST (ST backend linked). */
+#ifdef HAVE_RDR_ST
+static int g_native_planar = 0;         /* planar compose active this session */
+static int g_pd_valid = 0;              /* g_pdimmed is built (else force a full rebuild) */
+static int g_chunky_dyn = 1;            /* keep the chunky dynamic composite (0 = planar-only present path) */
+#ifdef BENCH
+uint32_t   g_planar_diff = 0, g_planar_frames = 0;   /* INV2: g_ptmp vs c2p(tmp) mismatch accumulator */
+static int g_planar_verify = 0;                      /* gate the INV2 c2p check off during timing runs */
+#endif
+#else
+#define g_chunky_dyn 1                  /* non-ST builds always composite chunky */
+#endif
+
 /* blit one 16x16 tile into the compose buffer at view cell (cvx,cvy),
  * transparency-aware and clipped to the VTxVT view. `pass` selects the layer
  * (matching Nuvie's drawTopTile): <0 = draw regardless (actors); 0 = LOWER pass,
@@ -1907,8 +1924,16 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
     const uint8_t*src;
     if(g_predim){ int cc=cvy*VT+cvx;                       /* dim-at-draw: pre-dimmed variant for this cell */
         int Lc=g_predim_vis[cc]?g_predim_light[cc]:0;      /* full 0..255 cell light */
-        src = g_dim_dither ? dim_tile_d(tile,Lc) : dim_tile(tile,Lc>>4); }
+        src = g_dim_dither ? dim_tile_d(tile,Lc) : dim_tile(tile,Lc>>4);
+#ifdef HAVE_RDR_ST
+        if(g_native_planar){                               /* mirror this dynamic cell into g_ptmp (planar) */
+            int32_t pk = g_dim_dither ? (0x40000000|((int32_t)tile<<6)|(Lc>>2))   /* == dim_tile_d key */
+                                      : (((int32_t)tile<<4)|(Lc>>4));             /* == dim_tile key   */
+            rdr_pdyn_cell(pk, src, cvx, cvy); }
+#endif
+    }
     else src=g_tileset+(int32_t)tile*256;
+    if(!g_predim || g_chunky_dyn)                          /* planar-only path skips the chunky dynamic copy */
     for(int r=0;r<16;r++){uint8_t*d=tmp+(cvy*16+r)*T+cvx*16;const uint8_t*s=src+r*16;
         for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
 }
@@ -2251,21 +2276,33 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
         SUB_T();
         shift_buf(g_dimmed_map,TMP_T,16*dx,16*dy);             /* dimmed cache: shift in lockstep */
         shift_buf(g_dm_light,VT,dx,dy);                        /* last-light: shift in lockstep */
+#ifdef HAVE_RDR_ST
+        if(g_native_planar && g_pd_valid) rdr_pstatic_shift(dx,dy); /* planar mirror: shift in lockstep */
+#endif
         SUB_ADD(g_ph0_shift);
         SUB_T();
         for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
             if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_dm_light[cc]){   /* revealed OR light changed */
                 dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc];
+#ifdef HAVE_RDR_ST
+                if(g_native_planar && g_pd_valid) rdr_pstatic_cell(g_dimmed_map,TMP_T,vx,vy); /* c2p dirty cell -> g_pdimmed */
+#endif
 #ifdef BENCH
                 g_ph0_dirty++;
 #endif
             }
         }
         SUB_ADD(g_ph0_redim);
+#ifdef HAVE_RDR_ST
+        if(g_native_planar && !g_pd_valid){ rdr_pstatic_rebuild(g_dimmed_map,TMP_T); g_pd_valid=1; } /* first planar frame after enable */
+#endif
     } else {                                                   /* full rebuild */
         build_static(w);                                       /* undimmed cache: base tiles + lower objects */
         for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
             dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+#ifdef HAVE_RDR_ST
+        if(g_native_planar){ rdr_pstatic_rebuild(g_dimmed_map,TMP_T); g_pd_valid=1; } /* planar static: full c2p */
+#endif
     }
     g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1; g_dm_valid=1;
 }
@@ -2283,6 +2320,14 @@ static void compose_map(const world_t*w)
      * pre-dimmed variant (draw_cell -> dim_tile) — the whole composite dims for free, actors included. */
     int predim = (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER);
     g_dim_dither = (g_light_style==LSTY_PREDIM_DITHER);
+#ifdef HAVE_RDR_ST
+    g_chunky_dyn = 1;                        /* default: build the chunky dynamic layer (tmp) */
+#ifdef BENCH
+    if(g_native_planar && !g_planar_verify) g_chunky_dyn = 0;  /* planar-only present: skip redundant chunky (verify still builds it) */
+#else
+    if(g_native_planar) g_chunky_dyn = 0;   /* production planar-only path */
+#endif
+#endif
     static uint8_t plight[VT*VT], pvis[VT*VT];
     if(predim){
         compute_predim_light(w,plight,pvis);
@@ -2296,7 +2341,10 @@ static void compose_map(const world_t*w)
          * it out. Actors dim-at-draw in ph1 (g_predim armed just below). */
         g_predim=0;
         predim_compose_static(w,plight,g_dim_dither);
-        SUB_T(); memcpy(tmp,g_dimmed_map,sizeof tmp); SUB_ADD(g_ph0_copy);   /* dimmed static -> compose buffer */
+        SUB_T(); if(g_chunky_dyn) memcpy(tmp,g_dimmed_map,sizeof tmp); SUB_ADD(g_ph0_copy);   /* dimmed static -> compose buffer (skipped when planar-only) */
+#ifdef HAVE_RDR_ST
+        if(g_native_planar) rdr_pframe_begin();     /* planar composite g_ptmp = the static layer (mirrors the memcpy) */
+#endif
     } else {
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;     /* wrap to shortest signed delta */
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
@@ -2353,8 +2401,12 @@ static void compose_map(const world_t*w)
             int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
             int di=roof_at(wx,wy); if(di<0||di>=g_nrtiles) continue;
             const uint8_t*src=g_rtiles+(int32_t)di*256;
+            if(g_chunky_dyn)
             for(int r=0;r<16;r++){uint8_t*d=tmp+(vy*16+r)*T+vx*16; const uint8_t*s=src+r*16;
                 for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
+#ifdef HAVE_RDR_ST
+            if(g_native_planar) rdr_pdyn_cell(0x20000000|di, src, vx, vy); /* roof cell -> g_ptmp (planar, undimmed) */
+#endif
         }
     }
     /* lighting overlay: SMOOTH/DITHER/BINARY compute the per-cell field HERE then apply it per pixel;
@@ -2376,7 +2428,12 @@ static void compose_map(const world_t*w)
     PH_BEGIN();
     int span=MAPSZ-2*MAP_INSET;                     /* 160 = 10 whole tiles */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
+#if defined(BENCH) && defined(HAVE_RDR_ST)
+        if(g_native_planar && g_planar_verify){ extern int rdr_pverify(const uint8_t*,int); /* INV2: g_ptmp == c2p(tmp) */
+            g_planar_diff += (uint32_t)rdr_pverify(tmp,T); g_planar_frames++; }
+#endif
         g_predim=0;
+        if(g_chunky_dyn)                            /* planar-only present reads g_ptmp, not the chunky backbuffer */
         for(int y=0;y<span;y++)                     /* plain copy -> memcpy (long-word moves, ~4x the byte loop) */
             memcpy(ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET, tmp+y*T, (size_t)span);
         PH_END(3); return;
@@ -5875,6 +5932,22 @@ int main(void)
         { int32_t lrl=0; char *lrq=(char*)plat_load_file("LIGHTSTY.REQ",1,&lrl);
           if(lrq && lrl>0 && lrq[0]>='0' && lrq[0]<='4'){ g_light_style=lrq[0]-'0';
               dbg_num("LIGHT STYLE=", g_light_style); } }
+#ifdef HAVE_RDR_ST
+        /* Native-planar (PREDIM only): compose in planar + present with no c2p. Enabled here in the ST
+         * bench to measure the frame + verify INV2 (g_ptmp == c2p(tmp)); g_pd_valid=0 forces the first
+         * frame to fully rebuild the planar static layer. */
+        int pl_on=1;                                                       /* PLANAR.REQ '0' -> baseline (no planar) */
+        { int32_t prl=0; char*prq=(char*)plat_load_file("PLANAR.REQ",1,&prl); if(prq&&prl>0&&prq[0]=='0') pl_on=0; }
+        if(pl_on && (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER)){
+            g_native_planar=1; g_pd_valid=0; g_tmp_valid=0; dbg_num("NATIVE PLANAR on=", 1); }
+        /* INV2 verify pass (verify ON, NOT timed): 1 full rebuild + a walk, checking g_ptmp==c2p(tmp)
+         * each frame. Kept out of the timed loops below (the c2p check would swamp them). */
+        if(g_native_planar){ int bpx0=(int)w.px;
+            g_planar_verify=1; g_planar_diff=0; g_planar_frames=0;
+            g_tmp_valid=0; compose_map(&w);                                 /* full rebuild + verify */
+            for(int i=0;i<N;i++){ w.px=(uint16_t)((bpx0+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
+            w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
+#endif
         /* FULL-build compose (force a rebuild each time): the no-cache baseline. */
         uint32_t tf0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ g_tmp_valid=0; compose_map(&w); }
@@ -5888,6 +5961,10 @@ int main(void)
         for (int i=0;i<N;i++){ w.px=(uint16_t)((basepx+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
         uint32_t t1=plat_ticks_200hz();
         w.px=(uint16_t)basepx;
+#ifdef HAVE_RDR_ST
+        if(g_native_planar) for (int i=0;i<N;i++) rdr_ppresent();      /* shifted planar copy (no c2p) */
+        else
+#endif
         for (int i=0;i<N;i++) rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); /* map window, doubled */
         uint32_t t2=plat_ticks_200hz();
         rdr_shutdown();
@@ -5907,6 +5984,12 @@ int main(void)
         dbg_num("  scroll ph2 light+vis ms=", (int)(g_phase[2]*5/N));
         dbg_num("  scroll ph3 composite ms=", (int)(g_phase[3]*5/N));
         dbg_num("present map doubled ms=", (int)((t2-t1)*5/N));
+#ifdef HAVE_RDR_ST
+        if(g_native_planar){                                          /* Phase-2 GATE: planar == c2p(chunky) */
+            dbg_num("NATIVE PLANAR INV2 diff=", (int)g_planar_diff);   /* 0 = byte-identical over every composed frame */
+            dbg_num("NATIVE PLANAR frames  =", (int)g_planar_frames);
+            dbg_num("NATIVE PLANAR present ms=", (int)((t2-t1)*5/N)); }/* rdr_ppresent vs the old 444ms c2p */
+#endif
         { extern uint32_t g_dim_calls, g_dim_miss;
           dbg_num("PREDIM dim_tile calls=", (int)g_dim_calls);
           dbg_num("PREDIM dim_tile MISS =", (int)g_dim_miss); }
