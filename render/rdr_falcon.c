@@ -231,6 +231,13 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
     rdr_present_rect(x, y, w, h);
 }
 
+#ifdef BENCH
+/* BENCH-only: the intro bench splits present into c2p vs output; the Falcon present is a truecolor
+ * expand+blit (no separate c2p pass), so report zeros. The game-frame bench (make bench-falcon) times
+ * the whole rect present directly and doesn't use this. */
+void rdr_bench_present(uint32_t *c2p, uint32_t *out){ *c2p = 0; *out = 0; }
+#endif
+
 /* Hardware horizontal scroll — NOT YET implemented on the Falcon VIDEL backend, so
  * scroll_begin returns false and the intro uses the CPU scroll (same as the TT). Unlike
  * TT-low, the Falcon CAN do wide-buffer hardware scroll: VIDEL line-width $FF8210 is a WORD

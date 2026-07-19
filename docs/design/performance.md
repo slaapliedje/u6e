@@ -354,3 +354,22 @@ buffer (compose straight to the backbuffer, drop the copy + ph3, ~48 ms) was **e
 the VT=11 compose overruns the 176-px map region into the panel (x>176), and `tmp` exists precisely to
 isolate that — direct-to-backbuffer would need extra per-cell clipping and risks panel corruption for
 a small win. The instrumentation (`g_ph0_*`, BENCH) stays as the profiling map for any future pass.
+
+## 2026-07-19 — cross-machine frame rate MEASURED: plain ST is the floor, Falcon/TT crush 2 fps
+Same harness, same scene (PREDIM night throne room, walking), three backends. `make bench-st`
+(plain ST, rdr_st 4-plane c2p), `make bench` (TT, rdr_tt 8-plane c2p, `--ttram 14`), the new
+`make bench-falcon` (rdr_falcon 16-bit truecolor = **no c2p**):
+
+| machine | CPU | compose | present | frame | **fps** |
+|---------|-----|--------:|--------:|------:|--------:|
+| plain ST | 68000 @ 8 MHz  | 490 ms | 444 ms | 934 ms | **1.07** |
+| Falcon   | 68030 @ 16 MHz | 106 ms | 91 ms (truecolor expand, no c2p) | 198 ms | **5.06** |
+| TT030    | 68030 @ 32 MHz | 39 ms  | 49 ms  | 88 ms  | **11.4** |
+
+The plain **ST 8 MHz is the extreme worst case** (slowest CPU in the line, no blitter, code+screen in
+ST-RAM contended ~50% with the shifter). The 68030 machines are ~5–11× faster (clock + 32-bit bus +
+cache + no shifter steal). So the ~1 fps we optimized on the ST is NOT the product's frame rate —
+**Falcon and TT already run 5–11 fps**; 2 fps is only ever in question on the 8 MHz ST. Getting the
+plain ST *itself* to 2 fps needs native planar (eliminate c2p; the Blitter pays off on STE/Mega) — a
+milestone, not a lever. Note: the TT bench's fast pool outgrew a 4 MB config once the M9 core sections
+(CACT/CFAC/CTLK) grew U6.PAK to 2.36 MB under EmuTOS — run it with `--ttram 14` (fast-pool-tight-on-TT).

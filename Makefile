@@ -472,6 +472,18 @@ bench: world $(BUILD)/bench.prg
 	          --fast-forward on --run-vbls 9000 </dev/null >/dev/null 2>&1 || true
 	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
 
+# ---- Falcon frame bench: the SAME harness as `bench`, but the Falcon VIDEL backend (rdr_falcon.c,
+# 16-bit truecolor present = NO c2p) on a 68030 @ 16 MHz. Confirms the Falcon frame rate.
+BENCH_FALCON_SRC := $(patsubst render/rdr_tt.c,render/rdr_falcon.c,$(BENCH_SRC))
+$(BUILD)/benchf.prg: $(BENCH_FALCON_SRC)
+	$(call HYBRID_BUILD,$@,$^,obj_benchf,-DBENCH -DHAVE_RDR_FALCON)
+bench-falcon: world $(BUILD)/benchf.prg $(BUILD)/NEWDESK.INF
+	rm -f $(BUILD)/BENCH.BIN
+	-$(HATARI) --machine falcon --fast-boot on --monitor vga \
+	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\BENCHF.PRG' \
+	          --fast-forward on --run-vbls 12000 </dev/null >/dev/null 2>&1 || true
+	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "Falcon (68030) SCROLL compose: %.1f ms   present: %.1f ms   => frame %.1f ms = %.2f fps (n=%d)\n", $$1*5.0/n, $$3*5.0/n, $$1*5.0/n+$$3*5.0/n, 1000.0/($$1*5.0/n+$$3*5.0/n), n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+
 # ---- ST frame bench: the SAME harness as `bench`, but the ST backend (rdr_st.c, 4-plane C c2p)
 # on a real 8 MHz 68000 (`--machine st`), so we measure the ACTUAL ST cost the TT bench can't.
 # BENCH.BIN is the same 5 u32 [scroll-compose, full-compose, present-c2p, unused, N]. Set
