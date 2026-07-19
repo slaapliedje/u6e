@@ -84,9 +84,12 @@ unblocks (most foundational first):
   pteranodon). **SE font DONE**: cracked the WOU proportional format (`SAVAGE.FNT` = `.LZC`→LZW→
   `[height][transp][widths 256][split lo/hi offset table][row-major glyphs, ink = byte≠transp]`;
   docs/formats/fonts.md), converted to U6.CH 8×8 in a `CFNT` core-pack section → `g_font`; "The Savage
-  Empire" renders on the Falcon panel in the game's own font. Remaining P2: FACES portraits (nested
-  shape-lib), SE NPCs (SE ships no OBJLIST — initial actor table TBD), and the SE RuleSet (4-of-6
-  levels + gargoyle variant, tribal-skill stub). Deltas → docs/rules.
+  Empire" renders on the Falcon panel in the game's own font. **FACES portraits DONE**: each
+  `FACES.LZC` item is a plain U6 shape (79×85) — `u6shape_decode` handles it unchanged; `mkworld`
+  ships every present face in a `CFAC` core-pack section and the panel draws one — the SE Avatar's
+  portrait renders on the Falcon (docs/formats/portraits.md). Remaining P2: SE NPCs (SE ships no
+  OBJLIST — initial actor table TBD; needed for the FACES→NPC mapping too), and the SE RuleSet
+  (4-of-6 levels + gargoyle variant, tribal-skill stub). Deltas → docs/rules.
 - **P3 — MD data path + vertical slice.** Locate MD's game palette; MD manifest; era-mechanics
   RuleSet; MD boots + walks + objects.
 - **P4 — Acceptance.** All three boot from ONE binary; a vertical slice of each runs; all per-game

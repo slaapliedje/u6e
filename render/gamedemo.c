@@ -53,6 +53,8 @@ enum { C_BLACK=0 };            /* U6PAL index 0 is pure black                 */
 
 static const uint8_t *g_tileset, *g_objs, *g_font, *g_paper, *g_portraits;
 static const char *g_gamename;   /* set for a CORE pack (SE/MD): shown in the panel; NULL for U6 */
+static const uint8_t *g_seface;  /* SE/MD portrait bank (CFAC): g_senface x g_sefw*g_sefh indices */
+static int g_senface, g_sefw, g_sefh;
 static int32_t        g_nobjs;
 static int            g_nport;
 static int            g_demo_npc;       /* NPC whose conversation the VM runs   */
@@ -2292,8 +2294,16 @@ static void draw_conversation(uint8_t col)
     } else {
         draw_sky();                                /* day/night bar + party roster */
         draw_party_roster(col);
-        if(g_gamename)                             /* CORE pack (SE/MD): title the panel with the game name */
-            ui_text(PANX+(PANW-ui_textw(g_gamename))/2, 100, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
+        if(g_gamename){                            /* CORE pack (SE/MD): portrait + game name in the panel */
+            int ty=100;
+            if(g_seface && g_senface>0){           /* a real portrait (79x85 U6 shape) at the panel top */
+                int fx=PANX+(PANW-g_sefw)/2, fy=MAPY+8;
+                for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++)
+                    ui_px(fx+xx, fy+yy, g_seface[yy*g_sefw+xx]);
+                ty=fy+g_sefh+4;
+            }
+            ui_text(PANX+(PANW-ui_textw(g_gamename))/2, ty, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
+        }
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
             const char*p = g_pending_verb=='A'?"Attack-(dir)?":g_pending_verb=='L'?"Look-(dir)?":
@@ -4395,6 +4405,13 @@ int main(void)
                 if (ext+4+2048 > pak+n) break;
                 g_font = ext+4;                              /* SE/MD 8x8 font (points into pak) */
                 ext += 4+2048;
+            } else if (ext[0]=='C'&&ext[1]=='F'&&ext[2]=='A'&&ext[3]=='C'){
+                if (ext+10 > pak+n) break;                   /* [u16 nface][u16 w][u16 h][n x w*h] */
+                int nf=(ext[4]<<8)|ext[5], fw=(ext[6]<<8)|ext[7], fh=(ext[8]<<8)|ext[9];
+                const uint8_t *fp=ext+10;
+                if (fp+(long)nf*fw*fh > pak+n) break;
+                g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;   /* portrait bank (points into pak) */
+                ext = fp+(long)nf*fw*fh;
             } else break;
         }
     } else {

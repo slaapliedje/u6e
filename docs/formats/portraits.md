@@ -44,6 +44,27 @@ output — that is a low-colour fallback. Our VGA/256-colour path uses the raw
 indices directly. The ST 16-colour target will dither at build time in /tools,
 not at runtime.)
 
+## Savage / Martian: `FACES.LZC` / `MDFACES.LZC` (portraits as U6 shapes)
+
+SE/MD do **not** use the PORTRAIT.A/.B/.Z LZW-block scheme. Their portraits live
+in `FACES.LZC` (SE) / `MDFACES.LZC` (MD): an [.LZC](lzc.md) container (SE items
+flag 0x02 stored, MD 0xC1) whose **each present item IS a U6 shape file**
+(see [shapes.md](shapes.md)) — byte 0 = total size, a 1-entry offset table, then
+one shape with the rightX/leftX/upperY/lowerY header + plain/RLE pixel blocks.
+
+- **SE faces are 79×85** (rightX=78, lowerY=84; leftX=upperY=0), SEPAL indices,
+  index 0 = background. 83 present of 92 slots. VERIFIED: 24-face contact sheet
+  renders recognisable SE characters (Jimmy Malone in his fedora, tribal warriors
+  with face paint, a lizard-man, an Aztec totem, a parrot).
+- The existing `u6shape_decode` handles them unchanged — `u6lzc_entry` → decode
+  shape 0.
+- Host pipeline: `tools/mkworld.c::convert_faces` decodes every present same-size
+  face and ships them in the SE/MD CORE pack's optional **`CFAC`** section
+  `[4 "CFAC"][u16 nface][u16 w][u16 h][nface × w*h indices]` (docs/design/
+  multigame.md P2). The loader points `g_seface` at it; the panel draws one.
+- Open: the FACES item→NPC mapping (needs the SE actor model); MD `MDFACES`
+  dims (likely also 79×85) — confirm when MD boots (P3).
+
 ## Index mapping (NPC → portrait)
 From the actor model: portrait index = **actor_num − 1**.
 - index < 98 → PORTRAIT.A, item = index

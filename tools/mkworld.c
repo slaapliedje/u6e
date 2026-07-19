@@ -898,12 +898,13 @@ typedef struct {
     char        magic[4];    /* core-pack magic (per game)    */
     const char *palette;     /* palette filename in <dir>     */
     const char *font;        /* WOU proportional font (NULL = none) */
+    const char *faces;       /* portrait library .LZC (NULL = none) */
 } GameProfile;
 
 static const GameProfile G_PROFILES[] = {
-    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL          },
-    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT"  },
-    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC"   },
+    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL          },
+    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC"   },
+    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC" },
 };
 
 static const GameProfile *profile_for(const char *id)
@@ -973,6 +974,40 @@ static int convert_wou_font(const char *dir, const char *name, uint8_t marker, u
         }
     }
     return 1;
+}
+
+/* Decode the SE/MD portrait library (`FACES.LZC` / `MDFACES.LZC`) and stream a
+ * "CFAC" section to `out`: [4 "CFAC"][u16 nface][u16 w][u16 h][nface x w*h indices].
+ * Each .LZC item IS a U6 shape file (docs/formats/shapes.md) — byte0 = size, an
+ * offset table, then one shape with an rightX/leftX/upperY/lowerY header + RLE
+ * pixel blocks; SE faces are 79x85. We ship every present face that matches the
+ * first face's dimensions (SEPAL indices, index 0 = background). Returns nface. */
+static int convert_faces(const char *dir, const char *name, uint8_t marker, FILE *out)
+{
+    long fl; uint8_t *b = slurp(dir, name, &fl);
+    u6lzc_t lc;
+    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); return 0; }
+    int ni = u6lzc_count(&lc);
+    static uint8_t px[256 * 256];
+    int FW = 0, FH = 0, nface = 0;
+    for (int it = 0; it < ni; it++){                     /* pass 1: dims + count */
+        int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
+        if (!p) continue;
+        int w, h; if (!u6shape_decode(p, sz, 0, &w, &h, px, sizeof px)) continue;
+        if (FW == 0){ FW = w; FH = h; }
+        if (w == FW && h == FH) nface++;
+    }
+    if (nface == 0 || FW <= 0){ printf("%s: no decodable faces\n", name); return 0; }
+    fwrite("CFAC", 1, 4, out); be16(out, (unsigned)nface); be16(out, (unsigned)FW); be16(out, (unsigned)FH);
+    for (int it = 0; it < ni; it++){                     /* pass 2: emit pixels */
+        int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
+        if (!p) continue;
+        int w, h; if (!u6shape_decode(p, sz, 0, &w, &h, px, sizeof px)) continue;
+        if (w != FW || h != FH) continue;
+        fwrite(px, 1, (size_t)FW * FH, out);
+    }
+    printf("  +CFAC: %s -> %d faces %dx%d (%d B)\n", name, nface, FW, FH, nface * FW * FH);
+    return nface;
 }
 
 /* Build the CORE world pack for `prof` from the game data in `dir`. Shares the
@@ -1068,6 +1103,9 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
     if (prof->font && convert_wou_font(dir, prof->font, marker, font8)){
         fwrite("CFNT", 1, 4, f); fwrite(font8, 1, 2048, f); have_font = 1;
     }
+
+    /* Optional "CFAC" section: the game's portrait library (79x85 U6 shapes). */
+    if (prof->faces) convert_faces(dir, prof->faces, marker, f);
     fclose(f);
 
     printf("core pack: game=%s magic=%.4s -> %s\n", prof->id, prof->magic, out);
