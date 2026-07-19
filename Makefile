@@ -514,7 +514,7 @@ bench-intro: world $(BUILD)/bench.prg
 # headless capture auto-talks him (real portrait + name + greeting via the VM).
 GX ?= 315
 GY ?= 367
-MKWORLD_SRC := dataformats/u6lzw.c dataformats/u6lib.c dataformats/u6pal.c dataformats/u6tile.c dataformats/u6obj.c dataformats/u6shape.c dataformats/u6map.c engine/combat.c engine/rng.c
+MKWORLD_SRC := dataformats/u6lzw.c dataformats/u6lzc.c dataformats/u6lib.c dataformats/u6pal.c dataformats/u6tile.c dataformats/u6obj.c dataformats/u6shape.c dataformats/u6map.c engine/combat.c engine/rng.c
 $(BUILD)/mkworld: tools/mkworld.c $(MKWORLD_SRC)
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -Itools -Iengine -o $@ $^ -lm
@@ -533,6 +533,29 @@ roof-extract:
 
 world: $(BUILD)/mkworld roof-extract
 	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(GX) $(GY)
+
+# M9: emit a CORE world pack for Savage / Martian from the user's SE/MD data.
+# Reuses the U6 loaders (MAP/CHUNKS/tileset/palette/passable/objects); SE/MD wrap
+# the compressible core files in a single-item .LZC which mkworld unwraps.
+# SE_REFDATA / MD_REFDATA are defined with the lzctest target above.
+SE_X ?= 512
+SE_Y ?= 512
+MD_X ?= 512
+MD_Y ?= 512
+world-se: $(BUILD)/mkworld
+	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y)
+world-md: $(BUILD)/mkworld
+	MKWORLD_GAME=martian $(BUILD)/mkworld $(MD_REFDATA) $(BUILD)/MD.PAK $(MD_X) $(MD_Y)
+
+# host-validate a core pack: render its densest object cluster (terrain+objects)
+COREDUMP_SRC := dataformats/u6pal.c dataformats/u6map.c tools/png.c
+$(BUILD)/coredump: tools/coredump.c $(COREDUMP_SRC)
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+coredump-se: $(BUILD)/coredump world-se
+	$(BUILD)/coredump $(BUILD)/SE.PAK $(BUILD)/coredump-se.png
+coredump-md: $(BUILD)/coredump world-md
+	$(BUILD)/coredump $(BUILD)/MD.PAK $(BUILD)/coredump-md.png
 
 # decode a ScummVM/Nuvie U6 save -> extract surface objects + objlist (host)
 $(BUILD)/nuviesave: tools/nuviesave.c

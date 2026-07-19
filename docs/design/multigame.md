@@ -62,9 +62,15 @@ unblocks (most foundational first):
 - **P0 — Foundation (items 1-3).** GameDef{id, manifest, geometry, level-policy}; replace the pack
   magic; make world geometry + buffer sizes data-driven. Acceptance sub-goal: the U6 build still
   passes unchanged AND the same binary *accepts* a non-U6 pack header.
-- **P1 — SE data path.** `mkworld` grows a game arg + SE manifest (palette=SEPAL, tile-count fix,
-  `.LZC` for talk/look/faces). Decode `.LZC` → docs/formats/lzc.md. Host-validate the SE world +
-  tiles + objects render (mapdump/objrender parity, like U6's M2/M3 golden dumps).
+- **P1 — SE data path.** ✅ DONE (2026-07-18). `.LZC` decoded → docs/formats/lzc.md (+ `u6lzc`,
+  `make lzctest`: all SE+MD `.LZC` verified). `mkworld` grew `$MKWORLD_GAME` (u6|savage|martian) + a
+  `GameProfile` + a self-contained **core-pack emitter** (MAP/CHUNKS/tileset/palette/passable/objects)
+  reusing the U6 loaders; SE/MD wrap the compressible core files (MAPTILES/MASKTYPE/LZOBJBLK) in a
+  single-item `.LZC` that `load_core_asset` unwraps. `make world-se`/`world-md` emit `SE.PAK`/`MD.PAK`
+  (SE 4844 objs, MD 7600 objs, both 2048 tiles). Host-validated: `make coredump-se`/`coredump-md`
+  render the densest object cluster — SE shows a recognizable tribal village (huts/campfire/pottery),
+  MD the red Mars terrain + era objects. U6 full-pack path unchanged; enginetest ALL PASS.
+  Remaining for P2: `.LZC` TALK/LOOK/FACES *content* (dialogue/look-names/portraits) into the pack.
 - **P2 — SE vertical slice.** SE boots from the shared binary: walk its map, objects/NPCs draw,
   look/get/use work via the obj_n table. SE RuleSet: 4-of-6 levels + gargoyle-variant, tribal skills
   stub. Deltas → docs/rules.
@@ -77,12 +83,17 @@ unblocks (most foundational first):
 - **Savage Empire:** Eodon (Amazon-valley) world; 4 of 6 levels, level 6 = gargoyle-world variant;
   tribal skills replace U6 magic; palette `SEPAL` (RGB6, verified compatible). `SE.1..SE.8` = saves.
 - **Martian Dreams:** Mars; toroidal world; era/technology mechanics; far more `.LZC` scripted
-  content (SCENE*/MIDGAME*/MARS); game palette location TBD (no `U6PAL`-equivalent file).
+  content (SCENE*/MIDGAME*/MARS); game palette = **`MDPAL`** (RGB6, first 768B; renders correctly).
+- **Container wrapping (SE/MD):** compressible core files (MAPTILES.VGA, MASKTYPE.VGA, LZOBJBLK) are
+  single-item `.LZC` wraps holding raw data, where U6 uses bare LZW; MAP/CHUNKS/TILEINDX/OBJTILES/
+  BASETILE/TILEFLAG are raw in all three. SE/MD TALK/LOOK/FACES = multi-item `.LZC` (see lzc.md).
 
 ## Status
-KICKED OFF (2026-07-18). Thesis validated: SE+MD world map/chunks decode with the unmodified U6
-decoders (host, mapdump). Plan set; P0 (GameDef + manifest + geometry-as-data) is next. Depends on
-M6/M8; per-game specs land in /docs/formats + /docs/rules as decoded (`.LZC` first).
+IN PROGRESS (2026-07-18). P0 (GameDef identity + magic→game registry) and **P1 (SE/MD data path)**
+DONE: `.LZC` decoded + spec'd, `mkworld` emits host-validated SE/MD core packs (terrain+objects
+render correctly — SE tribal village, MD Mars). Next: **P2 — SE vertical slice** (register
+`gamedef_se`, teach the runtime pack reader the core layout, boot SE from the shared binary; then
+fold `.LZC` TALK/LOOK/FACES content into the pack). Depends on M6/M8; deltas land in /docs as decoded.
 
 ## Cross-links
 - `engine/ruleset.h` (GameDef/RuleSet), `dataformats/u6map.h` (geometry #defines to promote),

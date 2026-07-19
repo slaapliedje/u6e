@@ -37,6 +37,7 @@
 #include <math.h>
 #include "quant.h"
 #include "u6lzw.h"
+#include "u6lzc.h"
 #include "u6lib.h"
 #include "u6pal.h"
 #include "u6tile.h"
@@ -881,8 +882,160 @@ static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, 
            nport, made, cA, cB);
 }
 
+/* ------------------------------------------------------------------------ *
+ * M9 multi-game: a per-game input profile + a self-contained CORE-pack emitter.
+ * The full U6 pack (main() below) bakes in ~20 U6-only sub-sections (chargen,
+ * PAPER background, portraits, intro cutscenes, ST low-colour palettes, roof
+ * lighting, ...). To bring up Savage/Martian we first emit just the CORE world
+ * — geometry + terrain tiles + palette + passability + objects — which is all
+ * that is needed to host-validate that SE/MD data decodes with our U6 loaders.
+ * The core pack is a strict prefix of the U6WT layout (through the objects
+ * section); P2 extends the runtime reader to consume it. See multigame.md.
+ *
+ * Selected by $MKWORLD_GAME (u6|savage|martian); unset => the full U6 path. */
+typedef struct {
+    const char *id;          /* MKWORLD_GAME value            */
+    char        magic[4];    /* core-pack magic (per game)    */
+    const char *palette;     /* palette filename in <dir>     */
+} GameProfile;
+
+static const GameProfile G_PROFILES[] = {
+    { "u6",      { 'U','6','W','T' }, "U6PAL" },
+    { "savage",  { 'S','E','W','T' }, "SEPAL" },
+    { "martian", { 'M','D','W','T' }, "MDPAL" },
+};
+
+static const GameProfile *profile_for(const char *id)
+{
+    if (!id) return NULL;
+    for (unsigned i = 0; i < sizeof G_PROFILES / sizeof G_PROFILES[0]; i++)
+        if (strcmp(G_PROFILES[i].id, id) == 0) return &G_PROFILES[i];
+    return NULL;
+}
+
+/* Load a CORE asset that may be wrapped three ways and return malloc'd LOGICAL
+ * bytes (*outlen): (1) an .LZC single-item container — SE/MD wrap MAPTILES/
+ * MASKTYPE/LZOBJBLK this way (docs/formats/lzc.md); (2) a bare LZW container —
+ * the U6-style wrapping; (3) raw. `marker` is the game's LZC compressed flag
+ * (U6LZC_COMP_SE/_MD). Verified host-side: SE/MD compressed core files are LZC
+ * single stored items, the rest (MAP/CHUNKS/TILEINDX/OBJTILES/BASETILE/TILEFLAG)
+ * are raw in all three games. */
+static uint8_t *load_core_asset(const char *dir, const char *name, uint8_t marker, long *outlen)
+{
+    long n; uint8_t *b = slurp(dir, name, &n);
+    u6lzc_t lc;
+    if (u6lzc_open(&lc, b, (int32_t)n, marker) && u6lzc_count(&lc) >= 1){   /* .LZC wrap */
+        int32_t isz; uint8_t fl; const uint8_t *p = u6lzc_entry(&lc, 0, &isz, &fl);
+        if (p){
+            int32_t cap = u6lzc_is_compressed(&lc, 0) ? u6lzw_unpacked_size(p, isz) : isz;
+            if (cap <= 0) cap = isz;
+            uint8_t *out = malloc((size_t)cap);
+            int32_t got = u6lzc_read(&lc, 0, out, cap);
+            free(b);
+            if (got > 0){ *outlen = got; return out; }
+            printf("%s: LZC item0 decode failed\n", name); free(out); return NULL;
+        }
+    }
+    int32_t un = u6lzw_unpacked_size(b, (int32_t)n);                        /* bare LZW (U6 style) */
+    if (un > 0 && n >= 6 && b[4] == 0x00 && (b[5] & 1)){
+        uint8_t *out = malloc((size_t)un);
+        int32_t got = u6lzw_decompress(b, (int32_t)n, out, un);
+        free(b);
+        if (got == un){ *outlen = un; return out; }
+        printf("%s: LZW decode failed\n", name); free(out); return NULL;
+    }
+    *outlen = n; return b;                                                  /* raw */
+}
+
+/* Build the CORE world pack for `prof` from the game data in `dir`. Shares the
+ * MAP/CHUNKS/tileset(MASKTYPE-aware)/palette/passable/objects pipeline with the
+ * U6 path — only the palette filename and pack magic vary. All three games use
+ * 2048 tiles and byte-identical MAP/CHUNKS geometry (verified host-side). */
+static int emit_core_pack(const GameProfile *prof, const char *dir,
+                          const char *out, int startx, int starty)
+{
+    uint8_t marker = (strcmp(prof->id, "savage") == 0)  ? U6LZC_COMP_SE
+                   : (strcmp(prof->id, "martian") == 0) ? U6LZC_COMP_MD : U6LZC_COMP_SNIFF;
+    long mn, cn, pn, on, in, bn, tfn, mtl, mskl, uz;
+    uint8_t *mapb = slurp(dir, "MAP", &mn),          *chk = slurp(dir, "CHUNKS", &cn);
+    uint8_t *palb = slurp(dir, prof->palette, &pn),  *ti  = slurp(dir, "TILEINDX.VGA", &in);
+    uint8_t *ot   = slurp(dir, "OBJTILES.VGA", &on), *bt  = slurp(dir, "BASETILE", &bn);
+    uint8_t *tflag = slurp(dir, "TILEFLAG", &tfn);
+    uint8_t *mtc = load_core_asset(dir, "MAPTILES.VGA", marker, &mtl);   /* LZC/LZW -> logical */
+    uint8_t *msk = load_core_asset(dir, "MASKTYPE.VGA", marker, &mskl);
+    uint8_t *od  = load_core_asset(dir, "LZOBJBLK",     marker, &uz);
+    if (pn < 768)   { printf("%s too small (%ld, need >=768)\n", prof->palette, pn); return 2; }
+    if (tfn < 0x1C00){ printf("TILEFLAG too small (%ld, need 7168)\n", tfn); return 2; }
+    if (!mtc || !msk || !od){ printf("core asset decode failed\n"); return 2; }
+
+    u6pal_t pal; u6pal_parse(&pal, palb, (int32_t)pn);   /* validate the palette parses */
+
+    /* combined tileset (maptiles ++ objtiles), MASKTYPE-aware decode */
+    int32_t comb_len = (int32_t)mtl + (int32_t)on;
+    uint8_t *comb = malloc((size_t)comb_len);
+    memcpy(comb, mtc, (size_t)mtl);
+    memcpy(comb + mtl, ot, (size_t)on);
+    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
+    if (mskl < NTILES){ printf("MASKTYPE too small (%ld, need >=%d)\n", mskl, NTILES); return 2; }
+    u6tile_set_masktype(&ts, msk);
+
+    /* passability from TILEFLAG (shared Impassable|Wall rule) */
+    static uint8_t passable[256]; compute_passable_tflag(tflag, passable);
+
+    /* objects: LZOBJBLK -> world decode -> repack surface roots + contained chains */
+    u6_object_t *objs = malloc(sizeof(u6_object_t) * MAXOBJ);
+    int32_t nobj = u6obj_decode_world(od, (int32_t)uz, objs, MAXOBJ);
+    int nsurf = 0;
+    { static int32_t shipidx[MAXOBJ];
+      for (int32_t i = 0; i < nobj; i++){
+          int keep; uint16_t newpar = U6OBJ_PARENT_NONE;
+          if (objs[i].parent == U6OBJ_PARENT_NONE) keep = (objs[i].z == 0);
+          else { int32_t r = shipidx[objs[i].parent]; keep = (r >= 0); if (keep) newpar = (uint16_t)r; }
+          shipidx[i] = keep ? nsurf : -1;
+          if (keep){ objs[nsurf] = objs[i]; objs[nsurf].parent = newpar;
+              if (newpar != U6OBJ_PARENT_NONE){ objs[nsurf].x = 0; objs[nsurf].y = 0; objs[nsurf].z = 0xF; }
+              nsurf++; } }
+      nobj = nsurf; }
+
+    FILE *f = fopen(out, "wb"); if (!f){ printf("cannot write %s\n", out); return 2; }
+    fwrite(prof->magic, 1, 4, f);                     /* per-game core magic (SEWT/MDWT/U6WT) */
+    be32(f, (unsigned long)mn); be32(f, (unsigned long)cn);
+    be32(f, NTILES); be32(f, (unsigned long)nobj);
+    be16(f, (unsigned)startx); be16(f, (unsigned)starty);
+    be16(f, 12*60);                                   /* start_min = noon (core packs have no save clock) */
+    fwrite(mapb, 1, (size_t)mn, f); fwrite(chk, 1, (size_t)cn, f);
+    for (int t = 0; t < NTILES; t++){ uint8_t tile[256]; u6tile_decode(&ts, t, tile); fwrite(tile, 1, 256, f); }
+    fwrite(palb, 1, 768, f);
+    fwrite(passable, 1, 256, f);
+    for (int32_t i = 0; i < nobj; i++){               /* {u16 x,y,tile,obj_n,qty16,quality,parent} BE */
+        int tile = u6_basetile(bt, objs[i].obj_n) + objs[i].frame;
+        int contained = (objs[i].parent != U6OBJ_PARENT_NONE);
+        be16(f, contained ? 0 : objs[i].x); be16(f, contained ? 0 : objs[i].y);
+        be16(f, (unsigned)tile); be16(f, objs[i].obj_n);
+        be16(f, objs[i].quantity); be16(f, objs[i].quality); be16(f, objs[i].parent); }
+    fclose(f);
+
+    printf("core pack: game=%s magic=%.4s -> %s\n", prof->id, prof->magic, out);
+    printf("  MAP=%ld CHUNKS=%ld tiles=%d objects=%d palette=%s(%ld) start=(%d,%d)\n",
+           mn, cn, NTILES, nobj, prof->palette, pn, startx, starty);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    /* M9: $MKWORLD_GAME selects a non-U6 core pack (savage/martian). Unset or
+     * "u6" => the full U6 world pack built by the rest of main(). */
+    { const char *gid = getenv("MKWORLD_GAME");
+      if (gid && strcmp(gid, "u6") != 0){
+          const GameProfile *prof = profile_for(gid);
+          if (!prof){ printf("unknown MKWORLD_GAME '%s' (u6|savage|martian)\n", gid); return 2; }
+          const char *cdir = argc > 1 ? argv[1] : "refdata/dos/savage/SAVAGE";
+          const char *cout = argc > 2 ? argv[2] : "build/se.world";
+          int csx = argc > 3 ? atoi(argv[3]) : 512;
+          int csy = argc > 4 ? atoi(argv[4]) : 512;
+          return emit_core_pack(prof, cdir, cout, csx, csy);
+      } }
+
     const char *dir = argc > 1 ? argv[1] : "refdata/dos/u6";
     const char *out = argc > 2 ? argv[2] : "build/u6.world";
     int startx = argc > 3 ? atoi(argv[3]) : 336;
