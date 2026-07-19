@@ -84,8 +84,11 @@ static void     *g_old_phys, *g_old_log;
 
 /* chunky 8-bit -> 4 interleaved ST bitplanes for `ngroups` 16-pixel groups, remapping each
  * index through the 256->16 LUT on the way. Branchless: 4 plane accumulators shifted a bit
- * per pixel (pixel 0 ends in bit 15). C REFERENCE — a hand-asm span can replace this later
- * (docs/design/performance.md), but correctness first: the base ST is CPU-bound here. */
+ * per pixel (pixel 0 ends in bit 15). This is the C REFERENCE; the present path calls the
+ * byte-identical hand-asm c2p4_lut_asm (render/c2p_st.s) — rdr_c2p_selftest() diffs them.
+ * Kept compiled (used) as the correctness oracle + selftest source. */
+extern void c2p4_lut_asm(const uint8_t *src, const uint8_t *lut, uint16_t *dst, int ngroups);
+__attribute__((unused))
 static void c2p4_lut(const uint8_t *src, const uint8_t *lut, uint16_t *dst, int ngroups)
 {
     for (int g = 0; g < ngroups; g++) {
@@ -315,7 +318,7 @@ void rdr_present(void)
     for (int y = 0; y < STH; y++) {
         const uint8_t *px  = g_back + (int32_t)y * STW;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
-        c2p4_lut(px, g_row_lut[y], dst, ST_GROUPS);
+        c2p4_lut_asm(px, g_row_lut[y], dst, ST_GROUPS);
     }
     Vsync();
 }
@@ -331,7 +334,7 @@ void rdr_present_rect(int x, int y, int w, int h)
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px  = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
-        c2p4_lut(px, g_row_lut[yy], dst, gn);
+        c2p4_lut_asm(px, g_row_lut[yy], dst, gn);
     }
     /* no Vsync: caller may present several rects per frame */
 }
@@ -348,7 +351,7 @@ void rdr_present_doubled(int lh)
     for (int y = 0; y < lh; y++) {
         const uint8_t *px = g_back + (int32_t)y * STW;
         uint16_t     *d   = (uint16_t *)(dst + (int32_t)y * ST_ROWBYTES);
-        c2p4_lut(px, g_row_lut[y], d, ST_GROUPS);
+        c2p4_lut_asm(px, g_row_lut[y], d, ST_GROUPS);
     }
     if (g_flip) { Setscreen(dst, dst, -1); Vsync(); g_vis = dst; return; }
     Vsync();
@@ -366,10 +369,29 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t     *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
-        c2p4_lut(px, g_lut, dst, gn);
+        c2p4_lut_asm(px, g_lut, dst, gn);
     }
     /* no Vsync: caller batches */
 }
+
+#ifdef BENCH
+/* BENCH-only: the intro-bench harness in gamedemo.c splits present into c2p vs output on the TT.
+ * The ST present is 1:1 (no letterbox/doubling/flip) — effectively all c2p — so report zeros; the
+ * game-frame bench (`make bench-st`) times the whole rect present directly and doesn't use this. */
+void rdr_bench_present(uint32_t *c2p, uint32_t *out){ *c2p = 0; *out = 0; }
+/* c2p selftest: run the C reference and the asm on a 256-pixel pattern (every index value, all 16
+ * bit positions) through the live LUT and return the mismatched plane-word count (0 = byte-identical
+ * -> the asm is a safe drop-in for c2p4_lut). Called from the bench harness (make bench-st). */
+int rdr_c2p_selftest(void)
+{
+    uint8_t  src[256]; for (int i = 0; i < 256; i++) src[i] = (uint8_t)i;   /* 16 groups */
+    uint16_t a[64], b[64];                                                  /* 16 x 4 planes */
+    c2p4_lut    (src, g_lut, a, 16);
+    c2p4_lut_asm(src, g_lut, b, 16);
+    int diff = 0; for (int i = 0; i < 64; i++) if (a[i] != b[i]) diff++;
+    return diff;
+}
+#endif
 
 /* Incremental horizontal scroll (render.h): shift the visible screen LEFT by one 16-px group in
  * place (a planar block move of 8 bytes/plane-word-group per row), then c2p only the newly-
@@ -385,7 +407,7 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
         uint16_t *r = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
         memmove(r, r + 4, (size_t)(ST_ROWBYTES - 8));       /* planar shift left one 4-word group */
         const uint8_t *px = chunky + (int32_t)y*cw + pan_x + lastp;
-        c2p4_lut(px, g_row_lut[y], r + lastw, 1);           /* c2p the new rightmost group */
+        c2p4_lut_asm(px, g_row_lut[y], r + lastw, 1);           /* c2p the new rightmost group */
     }
 }
 

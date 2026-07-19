@@ -294,3 +294,33 @@ Trade-offs / notes:
 **Still open (cheap):** clear the letterbox once, not every full present. **Falcon:** real VIDEL HW
 scroll ($FF8210 is a WORD line-width reg, unlike TT-low) would make the pan HW-driven — the next
 "take full advantage of the Falcon" step.
+
+## 2026-07-19 — ST hand-asm 4-plane c2p (`render/c2p_st.s`): present 678 → 444 ms (1.53×)
+The ST backend's `c2p4_lut` (serial C bit-scatter, 16 shift/OR per group × 4 planes) is now the C
+reference; the present path calls the byte-identical hand-asm `c2p4_lut_asm` — the ST sibling of the
+TT's `c2p_span_asm`. Method: per pixel, LUT the index to a nibble, then a `lsr.b #1` / `roxl.w #1`
+carry chain drops each of the 4 plane bits into its 16-bit accumulator (pixel 0 → bit 15). Only the
+low 4 bits are consumed, so the C's `& 0x0F` needs no mask. **Byte-identical** to the C reference:
+`rdr_c2p_selftest()` (BENCH, `make bench-st`) runs both on a 256-index / 16-position pattern through
+the live LUT and reports `c2p asm-vs-C diff wd=0`. Wired into all three ST targets (game.prg unified,
+gamest.prg, benchst.prg); TT keeps its own 8-plane `c2p_asm.s`.
+
+Measured `make bench-st` (night throne room, full 176×176 map-rect present): **678 → 444 ms/frame**.
+Only 1.53×, not the 3–4× a table c2p suggests, because the **plain ST is RAM-bandwidth bound**: the
+screen is chip RAM, whose writes contend with the shifter DMA (~half the bus in ST-low), so the
+carry-chain is already near the memory floor. A 128 KB byte-pair table would fold the LUT but not
+beat the memory wall, and it breaks the per-row band-raster LUT (M7) — rejected. Walking frame
+(PREDIM flat): SCROLL compose 551 ms + present 444 ms ≈ **995 ms → ~1.0 fps** (was 1226 ms / 0.82).
+
+## 2026-07-19 — incremental planar present (the 2026-07-01 deferred lever): re-opened by PREDIM
+The **incremental present** deferred above ("Open remaining levers") was blocked on reason (1): the
+lit backbuffer isn't a pure shift (the avatar's centered torch), so a present-side scroll needs
+dirty-region recompositing that was "hairier and artifact-prone." **PREDIM incremental scroll now
+solves exactly that** — `g_dimmed_map` shifts on a walk and only the edge + light-changed cells are
+re-dimmed (byte-identical, mode==11 self-test). So the on-screen planar could shift in lockstep
+(Blitter block-move on STE/Mega/TT, CPU memmove on plain ST — the `rdr_scroll_left16` mechanism) and
+re-c2p ONLY those same dirty cells: present would drop from a full 176×176 c2p (444 ms) toward
+~dirty-cells-worth. **Reason (2) still stands, though**: the headless SHOT dumps the *chunky*
+backbuffer, not the planar screen, so this cannot be byte-verified headlessly — validation is
+auto-walk AVI only. Requires plumbing the compose-side dirty-cell set + scroll delta to a new
+backend `rdr_present_map_incremental`. STATUS: designed, not built — next step.

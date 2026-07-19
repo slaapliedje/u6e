@@ -109,6 +109,37 @@ NPC interactively.
 - [ ] `$G` and any other substitution tokens; the `0xB0`/arg semantics.
 - [ ] Confirm CONVERSE.B + per-game (Savage/Martian) opcode deltas.
 
+## 6b. Savage / Martian: `TALK.LZC` (per-actor conversations)
+
+SE/MD do **not** use CONVERSE.A/.B. Conversations live in **`TALK.LZC`** — an
+[.LZC](lzc.md) multi-item container (SE 77 slots / 68 present, LZW items). Each
+present item is ONE actor's conversation and **self-describes its actor number**:
+
+| Offset | Field | Notes |
+|--------|-------|-------|
+| 0      | `0xFF` | item marker |
+| 1      | `u8 actor` | the OBJLIST actor number this conversation belongs to |
+| 2..    | name | printable ASCII (e.g. `Jimmy`) |
+| —      | `0xF1` | name / description separator |
+| ..     | description | the "look" text (`a lanky, sharp-eyed man in his mid-20s.`) |
+| —      | `0x0A 0x2A` | end of the plain header |
+| —      | `0xF2` … | the **usecode** conversation script (opcodes, keyword loop) |
+
+VERIFIED (2026-07-19): byte 1 gives the actor directly — TALK item0 `actor=2`
+(Aiela), item7 `actor=9` (Triolo), item2 `actor=4` (Jimmy) — matching the captured
+objlist and the FACES map `face(actor)=slot actor−1` (portraits.md). Companions
+occupy actors 2–11 (TALK items 0–9); general NPCs follow, actor-numbered so their
+TALK items land alphabetically (Aloron…Darden…).
+
+Host pipeline: `tools/mkworld.c::convert_talk` ships the plain **name + look
+description** per actor in the core pack's optional **`CTLK`** section
+`[4 "CTLK"][u16 nact=256][u16 blob_len][256 × u16 off][blob of "name\0desc\0"]`,
+`off[a]=0xFFFF` when actor `a` has no conversation. The engine (`gamedemo.c::
+se_talk`) shows the NPC's portrait (CFAC) + name + look description on talk. The
+**usecode script after `0xF2` is NOT yet wired** — the SE/MD conversation VM
+(branching dialogue, keywords, JOIN/give) is a later milestone; the opcode set
+likely differs from U6's (§4). This section documents identity only.
+
 ## 7. Status
 VERIFIED — container + readable layer + the full usecode VM
 (engine/converse_vm.c) which executes the bytecode (expression eval, IF/ELSE/

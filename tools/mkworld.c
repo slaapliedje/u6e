@@ -899,12 +899,13 @@ typedef struct {
     const char *palette;     /* palette filename in <dir>     */
     const char *font;        /* WOU proportional font (NULL = none) */
     const char *faces;       /* portrait library .LZC (NULL = none) */
+    const char *talk;        /* conversation library .LZC (NULL = none) */
 } GameProfile;
 
 static const GameProfile G_PROFILES[] = {
-    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL          },
-    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC"   },
-    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC" },
+    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL,          NULL       },
+    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC",   "TALK.LZC" },
+    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC", "TALK.LZC" },
 };
 
 static const GameProfile *profile_for(const char *id)
@@ -989,25 +990,77 @@ static int convert_faces(const char *dir, const char *name, uint8_t marker, FILE
     if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); return 0; }
     int ni = u6lzc_count(&lc);
     static uint8_t px[256 * 256];
-    int FW = 0, FH = 0, nface = 0;
-    for (int it = 0; it < ni; it++){                     /* pass 1: dims + count */
+    int FW = 0, FH = 0, nvalid = 0;
+    for (int it = 0; it < ni; it++){                     /* pass 1: max dims (faces vary 79x85/79x86) */
         int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
         if (!p) continue;
         int w, h; if (!u6shape_decode(p, sz, 0, &w, &h, px, sizeof px)) continue;
-        if (FW == 0){ FW = w; FH = h; }
-        if (w == FW && h == FH) nface++;
+        if (w > FW) FW = w; if (h > FH) FH = h; nvalid++;
     }
-    if (nface == 0 || FW <= 0){ printf("%s: no decodable faces\n", name); return 0; }
-    fwrite("CFAC", 1, 4, out); be16(out, (unsigned)nface); be16(out, (unsigned)FW); be16(out, (unsigned)FH);
-    for (int it = 0; it < ni; it++){                     /* pass 2: emit pixels */
+    if (nvalid == 0 || FW <= 0){ printf("%s: no decodable faces\n", name); return 0; }
+    /* SLOT-INDEXED bank: emit ALL ni slots at a uniform FWxFH cell so bank[i] is
+     * FACES.LZC slot i (the SE actor->portrait map is face(actor N) = slot N-1;
+     * see docs/formats/portraits.md). Absent/undecodable slots -> blank (index 0
+     * = transparent); shorter faces are top-left padded to FH. */
+    fwrite("CFAC", 1, 4, out); be16(out, (unsigned)ni); be16(out, (unsigned)FW); be16(out, (unsigned)FH);
+    static uint8_t cell[256 * 256];
+    for (int it = 0; it < ni; it++){                     /* pass 2: one cell per slot */
+        memset(cell, 0, (size_t)FW * FH);
         int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
-        if (!p) continue;
-        int w, h; if (!u6shape_decode(p, sz, 0, &w, &h, px, sizeof px)) continue;
-        if (w != FW || h != FH) continue;
-        fwrite(px, 1, (size_t)FW * FH, out);
+        int w = 0, h = 0;
+        if (p && u6shape_decode(p, sz, 0, &w, &h, px, sizeof px) && w <= FW && h <= FH)
+            for (int y = 0; y < h; y++) memcpy(cell + (size_t)y * FW, px + (size_t)y * w, (size_t)w);
+        fwrite(cell, 1, (size_t)FW * FH, out);
     }
-    printf("  +CFAC: %s -> %d faces %dx%d (%d B)\n", name, nface, FW, FH, nface * FW * FH);
-    return nface;
+    printf("  +CFAC: %s -> %d slots %dx%d (%d present, %d B)\n",
+           name, ni, FW, FH, nvalid, ni * FW * FH);
+    return ni;
+}
+
+/* Decode the SE/MD conversation library (`TALK.LZC`) into a "CTLK" section that
+ * maps ACTOR NUMBER -> {name, look-description}. Each present TALK item begins
+ * [0xff][u8 actor][name...][0xf1][description...][0x0a][0x2a][0xf2 usecode...],
+ * i.e. the item self-describes its actor (byte 1) — no ordering assumption. We
+ * ship only the plain leading text (name + "look" description); the usecode
+ * script after 0xf2 is a separate milestone (the conversation VM). Section:
+ * [4 "CTLK"][u16 nact=256][u16 blob_len][256 x u16 off][blob of "name\0desc\0"].
+ * off[a] = 0xffff when actor a has no conversation. See docs/design/multigame.md. */
+static int convert_talk(const char *dir, const char *name, uint8_t marker, FILE *out)
+{
+    long fl; uint8_t *b = slurp(dir, name, &fl);
+    u6lzc_t lc;
+    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); return 0; }
+    int ni = u6lzc_count(&lc);
+    static uint8_t dec[1 << 17];
+    static uint16_t off[256];
+    static uint8_t  blob[1 << 15];
+    for (int i = 0; i < 256; i++) off[i] = 0xFFFF;
+    int blen = 0, nnpc = 0;
+    for (int it = 0; it < ni; it++){
+        int32_t sz; uint8_t flg; if (!u6lzc_entry(&lc, it, &sz, &flg)) continue;
+        int32_t got = u6lzc_read(&lc, it, dec, sizeof dec);
+        if (got < 3 || dec[0] != 0xFF) continue;
+        int actor = dec[1];
+        if (actor <= 0 || actor >= 256 || off[actor] != 0xFFFF) continue;   /* first wins */
+        int j = 2;
+        int ns = j; while (j < got && dec[j] >= 32 && dec[j] < 127) j++;     /* name run */
+        int nlen = j - ns;
+        while (j < got && !(dec[j] >= 32 && dec[j] < 127)) j++;              /* skip 0xf1 sep */
+        int ds = j; while (j < got && dec[j] >= 32 && dec[j] < 127) j++;     /* description run */
+        int dlen = j - ds;
+        if (nlen <= 0) continue;
+        if (blen + nlen + dlen + 2 > (int)sizeof blob) break;               /* blob full */
+        off[actor] = (uint16_t)blen;
+        memcpy(blob + blen, dec + ns, (size_t)nlen); blen += nlen; blob[blen++] = 0;
+        memcpy(blob + blen, dec + ds, (size_t)dlen); blen += dlen; blob[blen++] = 0;
+        nnpc++;
+    }
+    if (nnpc == 0){ printf("%s: no conversations decoded\n", name); return 0; }
+    fwrite("CTLK", 1, 4, out); be16(out, 256); be16(out, (unsigned)blen);
+    for (int i = 0; i < 256; i++) be16(out, off[i]);
+    fwrite(blob, 1, (size_t)blen, out);
+    printf("  +CTLK: %s -> %d NPC names/descriptions (blob %d B)\n", name, nnpc, blen);
+    return nnpc;
 }
 
 /* Build the CORE world pack for `prof` from the game data in `dir`. Shares the
@@ -1015,7 +1068,8 @@ static int convert_faces(const char *dir, const char *name, uint8_t marker, FILE
  * U6 path — only the palette filename and pack magic vary. All three games use
  * 2048 tiles and byte-identical MAP/CHUNKS geometry (verified host-side). */
 static int emit_core_pack(const GameProfile *prof, const char *dir,
-                          const char *out, int startx, int starty)
+                          const char *out, int startx, int starty,
+                          const char *objlist_path)
 {
     uint8_t marker = (strcmp(prof->id, "savage") == 0)  ? U6LZC_COMP_SE
                    : (strcmp(prof->id, "martian") == 0) ? U6LZC_COMP_MD : U6LZC_COMP_SNIFF;
@@ -1104,8 +1158,68 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
         fwrite("CFNT", 1, 4, f); fwrite(font8, 1, 2048, f); have_font = 1;
     }
 
-    /* Optional "CFAC" section: the game's portrait library (79x85 U6 shapes). */
+    /* Optional "CFAC" section: the game's portrait library (79x85 U6 shapes),
+     * slot-indexed so face(actor N) = FACES slot N-1 (docs/formats/portraits.md). */
     if (prof->faces) convert_faces(dir, prof->faces, marker, f);
+
+    /* Optional "CTLK" section: per-actor NPC name + look-description from TALK.LZC. */
+    if (prof->talk) convert_talk(dir, prof->talk, marker, f);
+
+    /* Optional "CACT" section: the initial ACTOR ROSTER. SE/MD ship NO
+     * savegame/objlist (U6 does); the 256-actor roster is generated by GAME.EXE
+     * at new-game. We CAPTURE it from a ScummVM new-game save via tools/nuviesave
+     * (see docs/design/multigame.md + memory se-actor-capture). objlist layout
+     * (DOS little-endian, objlist.md): appearance@0x400 (2B: obj_n|frame),
+     * position@0x100 (3B packed x/y/z), status@0x800 (bit 0x80 = in party),
+     * stats @0x900(str)/0xA00(dex)/0xB00(int)/0xE00(hp).
+     * Section = [4 "CACT"][u16 nact][nact x u16 tile]
+     *           [nact x {u16 x,u16 y,u8 z}][nact x {u8 hp,str,dex,int}]
+     *           [u8 nparty][nparty x u8 idx].
+     * Appearance obj_n+frame is resolved to an ABSOLUTE tile here (via BASETILE)
+     * because the core loader stubs BASETILE. The avatar (actor 1) is planted at
+     * the demo start; other party members get "no position" (z=0xff) so the
+     * engine spawns them beside the avatar (party-follow, gamedemo). */
+    int have_cact = 0, cact_npc = 0, cact_party = 0;
+    if (objlist_path){
+        long oln; uint8_t *objl = slurp_path(objlist_path, NULL, &oln);
+        if (objl && oln >= 0x600){
+            enum { CN = 256 };
+            static uint16_t ct[CN], cx[CN], cy[CN]; static uint8_t cz[CN];
+            static uint8_t chp[CN], cst[CN], cdx[CN], cit[CN], cpl[CN];
+            int cnp = 0;
+            for (int i = 0; i < CN; i++){
+                ct[i]=0xFFFF; cx[i]=0; cy[i]=0; cz[i]=0xFF;
+                chp[i]=cst[i]=cdx[i]=cit[i]=0;
+                const uint8_t *q = objl + 0x400 + i*2;          /* appearance (LE) */
+                uint16_t obj_n=(uint16_t)(q[0]|((q[1]&3)<<8));
+                uint8_t  fr   =(uint8_t)((q[1]&0xfc)>>2);
+                int in_party  = (oln>0x800+i) && (objl[0x800+i]&0x80);
+                if (obj_n){
+                    int tt = u6_basetile(bt, obj_n) + fr;
+                    if (tt>=0 && tt<NTILES){ ct[i]=(uint16_t)tt; cact_npc++; }
+                    const uint8_t *p = objl + 0x100 + i*3;       /* position (LE 3B) */
+                    cx[i]=(uint16_t)(p[0]|((p[1]&3)<<8));
+                    cy[i]=(uint16_t)(((p[1]&0xfc)>>2)|((p[2]&0xf)<<6));
+                    cz[i]=(uint8_t)((p[2]&0xf0)>>4);
+                }
+                if (oln >= 0xF00){                               /* stat blocks */
+                    chp[i]=objl[0xE00+i]; cst[i]=objl[0x900+i];
+                    cdx[i]=objl[0xA00+i]; cit[i]=objl[0xB00+i];
+                }
+                if (i>0 && in_party && cnp<CN) cpl[cnp++]=(uint8_t)i;
+            }
+            /* plant the avatar at the demo start; party-mates spawn beside him */
+            if (ct[1]!=0xFFFF){ cx[1]=(uint16_t)startx; cy[1]=(uint16_t)starty; cz[1]=0; }
+            for (int k=0;k<cnp;k++){ int a=cpl[k]; if(a!=1) cz[a]=0xFF; }
+            fwrite("CACT",1,4,f); be16(f,CN);
+            for(int i=0;i<CN;i++) be16(f,ct[i]);
+            for(int i=0;i<CN;i++){ be16(f,cx[i]); be16(f,cy[i]); fputc(cz[i],f); }
+            for(int i=0;i<CN;i++){ fputc(chp[i],f);fputc(cst[i],f);fputc(cdx[i],f);fputc(cit[i],f); }
+            fputc(cnp,f); for(int i=0;i<cnp;i++) fputc(cpl[i],f);
+            cact_party = cnp; have_cact = 1;
+        }
+        if (objl) free(objl);
+    }
     fclose(f);
 
     printf("core pack: game=%s magic=%.4s -> %s\n", prof->id, prof->magic, out);
@@ -1113,6 +1227,8 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
            mn, cn, NTILES, nobj, prof->palette, pn, startx, starty);
     if (lookl > 0)  printf("  +CLOK: look table %ld B, %d/1024 gettable obj_n\n", lookl, nget);
     if (have_font)  printf("  +CFNT: %s -> 8x8 font (2048 B)\n", prof->font);
+    if (have_cact)  printf("  +CACT: %d actors placed (party=%d) from captured objlist %s\n",
+                           cact_npc, cact_party, objlist_path);
     return 0;
 }
 
@@ -1128,7 +1244,10 @@ int main(int argc, char **argv)
           const char *cout = argc > 2 ? argv[2] : "build/se.world";
           int csx = argc > 3 ? atoi(argv[3]) : 512;
           int csy = argc > 4 ? atoi(argv[4]) : 512;
-          return emit_core_pack(prof, cdir, cout, csx, csy);
+          /* argv[5] (or $MKWORLD_OBJLIST) = a captured objlist (tools/nuviesave
+           * output) -> ships the initial actor roster as a "CACT" section. */
+          const char *cobjl = argc > 5 ? argv[5] : getenv("MKWORLD_OBJLIST");
+          return emit_core_pack(prof, cdir, cout, csx, csy, cobjl);
       } }
 
     const char *dir = argc > 1 ? argv[1] : "refdata/dos/u6";

@@ -58,12 +58,18 @@ one shape with the rightX/leftX/upperY/lowerY header + plain/RLE pixel blocks.
   with face paint, a lizard-man, an Aztec totem, a parrot).
 - The existing `u6shape_decode` handles them unchanged — `u6lzc_entry` → decode
   shape 0.
-- Host pipeline: `tools/mkworld.c::convert_faces` decodes every present same-size
-  face and ships them in the SE/MD CORE pack's optional **`CFAC`** section
-  `[4 "CFAC"][u16 nface][u16 w][u16 h][nface × w*h indices]` (docs/design/
-  multigame.md P2). The loader points `g_seface` at it; the panel draws one.
-- Open: the FACES item→NPC mapping (needs the SE actor model); MD `MDFACES`
-  dims (likely also 79×85) — confirm when MD boots (P3).
+- Host pipeline: `tools/mkworld.c::convert_faces` ships every FACES slot in the
+  SE/MD CORE pack's optional **`CFAC`** section `[4 "CFAC"][u16 nslot][u16 w][u16 h]
+  [nslot × w*h indices]` — **SLOT-INDEXED** (all 92 slots, uniform `w×h` = the max
+  79×86, shorter faces top-left padded, absent slots blank) so `bank[i]` == FACES
+  slot `i`. The loader points `g_seface` at it (`docs/design/multigame.md` P2).
+- **FACES → actor mapping (VERIFIED 2026-07-19): `face(actor N) = FACES slot N−1`.**
+  Actor 1 (the Avatar) → slot 0 (a generic blonde male face used for the idle
+  panel); Aiela (actor 2) → slot 1, Dokray (actor 3) → slot 2, Jimmy Malone
+  (actor 4) → slot 3 (the fedora face). Confirmed by rendering the FACES contact
+  sheet against the TALK names (which carry the actor number in byte 1 — see
+  fonts.md / multigame.md CTLK) and by an on-target talk (actor 4 → Jimmy's
+  portrait). MD `MDFACES` dims (likely 79×85) — confirm when MD boots (P3).
 
 ## Index mapping (NPC → portrait)
 From the actor model: portrait index = **actor_num − 1**.

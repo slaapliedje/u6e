@@ -97,6 +97,38 @@ the full view in software every move — do not regress it. (2) The original's *
 lighting/LOS, and we already do the analogous thing. (3) Keep tiles word-aligned so the fast copy
 path stays the common case.
 
+## Lighting: BINARY per-cell visibility (the native-planar model)
+
+The most decision-relevant finding for the ST/STe/Amiga ports (RE: `~/src/u6e-re/REVERSE.md`
+§"Lighting APPLICATION"). The original computes a graded light field but **renders it binary**:
+
+- **Compute** (`light_accumulate $7efe`): per cell, read a **radial-falloff table** (indexed by
+  `|dx|,|dy|` from the light source), clamp `4 − falloff + base` to **0..4**, accumulate into a
+  per-cell byte `g_light` (sums multiple sources), and if the contribution > 0 set bit 7 of the
+  per-cell `g_vis_state`. Then flood to the 8 neighbours (a ring-buffer queue) — incremental, only
+  cells near the avatar. (This half matches what u6e already does.)
+- **Apply** (`terrain_grid $3069c`): reads **only the visible bit** — visible → the real tile;
+  not-visible → **a solid black tile (index `$FF`)**. Gated by a "lighting-active" flag (off outdoors
+  by day → every tile full-bright). **The 0..4 level never touches a pixel** — it only drives light
+  propagation and the visible threshold. So on-screen lighting is **binary, at cell granularity**.
+
+**Why this matters — the perf lesson.** u6e currently applies lighting as a **per-pixel bilinear
+darkness LUT** (`compose_map` ph3). Benched on TT that phase is ≈ **72 ms/frame — the single biggest
+cost, larger than c2p (50 ms)** (`performance.md`). The original spends ≈ 0 extra at draw time:
+lighting is a **per-cell tile choice** (40×40 = 1,600 cells) that the planar tile blit already
+carries — versus our **per-pixel pass** (160×160 = 25,600 px) layered on top of compositing.
+
+**Native-planar recommendation (`rdr_st` / future Amiga).** Move lighting off the pixel path and onto
+**tile selection**, computed per cell before the blit:
+- level 0 → the black tile; max → the real tile (this alone = the original, and it's essentially free);
+- for a gradient the original lacked, add a **small set of dither-masked or pre-dimmed tile variants**
+  (e.g. 3–4 levels via 2×2/4×4 stipple masks AND-ed into the planes) — still per-cell, still absorbed
+  by the blit, no per-pixel math. Build the dim/dither variants in the host asset pipeline.
+- This removes ph3 entirely on those targets **and** eases c2p pressure (fewer distinct pixels). On
+  TT/Falcon we can keep the smooth per-pixel LUT (bandwidth affords it) or offer the tile-level model
+  as a fast mode. See `docs/rules/lighting.md` (LIGHTING_STYLE_ORIGINAL vs _SMOOTH) — this adds a
+  third point, **_DITHER**, between them.
+
 ## The remaining headroom the original left on the table
 These are the levers the shipping original never touched — the genuine performance ceiling for a
 "better than the original" ST/STe port. They line up with the still-open items in `performance.md`.

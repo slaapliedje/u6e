@@ -462,14 +462,34 @@ BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/p
 $(BUILD)/bench.prg: $(BENCH_SRC)
 	$(call HYBRID_BUILD,$@,$^,obj_bench,-DBENCH -DHAVE_RDR_TT)
 
-# run the bench headless; BENCH.BIN = 5 big-endian u32 (compose, present-full, map-doubled,
-# map-1x, N). run-vbls must outlast the bench loop (compose is heavier now: lighting+visibility).
+# run the bench headless; BENCH.BIN = 5 big-endian u32 matching gamedemo.c's harness:
+# [0]=SCROLL compose (walking), [1]=FULL compose (no cache), [2]=present map-window (c2p+double),
+# [3]=unused(0), [4]=N. --conout 2 also prints the per-phase compose split (ph0..ph3).
 bench: world $(BUILD)/bench.prg
 	rm -f $(BUILD)/BENCH.BIN
 	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
 	          --fast-forward on --run-vbls 9000 </dev/null >/dev/null 2>&1 || true
-	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "compose: %.1f ms   present FULL: %.1f ms   MAP-WINDOW doubled: %.1f ms   MAP-WINDOW 1x: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, $$4*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+
+# ---- ST frame bench: the SAME harness as `bench`, but the ST backend (rdr_st.c, 4-plane C c2p)
+# on a real 8 MHz 68000 (`--machine st`), so we measure the ACTUAL ST cost the TT bench can't.
+# BENCH.BIN is the same 5 u32 [scroll-compose, full-compose, present-c2p, unused, N]. Set
+# START_MIN=<0..1439> to force night (exercises the lighting path); stage LIGHTSTY.REQ ('0'/'1'/'2')
+# in build/ before running to pick SMOOTH/DITHER/BINARY. Uses the slim ST pack (U6ST.PAK).
+BENCH_ST_SRC := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(BENCH_SRC)) render/rdr_st.c render/c2p_st.s
+$(BUILD)/benchst.prg: $(BENCH_ST_SRC)
+	@mkdir -p $(BUILD)/obj_benchst
+	@for s in $^; do o=$(BUILD)/obj_benchst/`echo $$s | tr / _`.o; \
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DBENCH -DHAVE_RDR_ST -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_benchst/*.o
+	@echo "built $@ (pure 68000, ST-low 16-colour bench)"
+bench-st: gamedata-st $(BUILD)/benchst.prg
+	rm -f $(BUILD)/BENCH.BIN
+	$(HATARI) --machine st --memsize 4 --monitor rgb \
+	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\benchst.prg' \
+	          --fast-forward on --run-vbls 20000 </dev/null >/dev/null 2>&1 || true
+	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0){ printf "ST (8MHz 68000)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; printf "  scroll phases  ph0 static: %.1f  ph1 actors+fg: %.1f  ph2 light+vis: %.1f  ph3 composite: %.1f ms\n", $$6*5.0/n, $$7*5.0/n, $$8*5.0/n, $$9*5.0/n; } else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
 
 # ---- M10 OPL2 synth throughput probe: measure how many mono samples/sec the software FM synth
 # can render on each machine (all 9 voices sounding), to decide real-time synth vs host pre-rendered
@@ -548,6 +568,15 @@ world-se: $(BUILD)/mkworld
 	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y)
 world-md: $(BUILD)/mkworld
 	MKWORLD_GAME=martian $(BUILD)/mkworld $(MD_REFDATA) $(BUILD)/MD.PAK $(MD_X) $(MD_Y)
+
+# SE with its initial ACTOR ROSTER (CACT). SE ships no savegame/objlist, so we
+# capture it from a ScummVM new-game save (docs/design/multigame.md P2 +
+# memory se-actor-capture): nuviesave extracts the objlist, then mkworld emits a
+# CACT section from it so the Kurak village boots populated with NPCs + party.
+SE_SCUMMVM_SAVE ?= $(HOME)/.local/share/scummvm/saves/thesavageempire_enh.001
+world-se-svm: $(BUILD)/mkworld $(BUILD)/nuviesave
+	$(BUILD)/nuviesave "$(SE_SCUMMVM_SAVE)" $(BUILD)/se.objblk $(BUILD)/se.objlist
+	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y) $(BUILD)/se.objlist
 
 # host-validate a core pack: render its densest object cluster (terrain+objects)
 COREDUMP_SRC := dataformats/u6pal.c dataformats/u6map.c tools/png.c
@@ -649,7 +678,7 @@ endef
 # (gamest.prg) and the 68000+card (gamevc.prg) stay separate binaries only because a 68020-codegen
 # image can't run on a 68000 — the SAME render.c dispatcher drives all of them. See docs/design/renderer-unification.md.
 HAVE_ALL := -DHAVE_RDR_ST -DHAVE_RDR_TT -DHAVE_RDR_FALCON -DHAVE_RDR_VCARD
-GAME_SRC_UNI := $(GAME_SRC) render/rdr_st.c render/rdr_falcon.c render/rdr_vcard.c
+GAME_SRC_UNI := $(GAME_SRC) render/rdr_st.c render/c2p_st.s render/rdr_falcon.c render/rdr_vcard.c
 $(BUILD)/game.prg: $(GAME_SRC_UNI)
 	$(call HYBRID_BUILD,$@,$^,obj_tt,$(HAVE_ALL),-lgem16)
 game: $(BUILD)/game.prg
@@ -665,8 +694,8 @@ game-falcon: $(BUILD)/gamef.prg
 # ST/STE variant (M7): the 16-colour shifter backend (rdr_st.c) + the pack's host-quantised
 # palette (U6WW). PURE 68000 (NOT the 020 hybrid) — a plain ST/STE has a 68000, so we compile
 # for -m68000 and link the stock 68000 libc. Drops c2p_asm.s (the TT's 8-plane asm); rdr_st uses
-# its own 4-plane C c2p. 8.3 name (gamest.prg) for Hatari GEMDOS --auto.
-GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c
+# its own 4-plane c2p — hand-asm c2p_st.s (C reference c2p4_lut kept). 8.3 name for Hatari --auto.
+GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c render/c2p_st.s
 # -DPACK_NAME loads the SLIM pack (U6ST.PAK, front-end art omitted) so it fits a real 4 MB ST.
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
@@ -791,6 +820,20 @@ shot-se: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT (SE boot)"; exit 1; }
 	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png
 	@echo "wrote $(BUILD)/shot-se.png (Savage Empire, shared binary + core pack)"
+
+# As shot-se, but on the SE pack WITH the captured actor roster (CACT): boots the
+# Kurak village populated with NPCs + party. Verifies the CACT load + actor render.
+shot-se-svm: world-se-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
+	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK
+	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png $(BUILD)/SAVE.000
+	printf 'x' > $(BUILD)/SHOT.REQ
+	-$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
+	          --fast-forward on --run-vbls 4000 2>/dev/null
+	@rm -f $(BUILD)/SHOT.REQ
+	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT (SE+CACT boot)"; exit 1; }
+	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png
+	@echo "wrote $(BUILD)/shot-se-svm.png (Savage Empire village, populated via CACT)"
 
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This

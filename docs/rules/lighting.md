@@ -139,3 +139,85 @@ crop the map window, compare to our `make m5-svm` / a positioned capture at matc
   interior + lighting unchanged. Verified: castle shows its rooftop from outside (was black),
   throne room interior unchanged. roof_tiles.bmp is a Nuvie/ScummVM asset used as a USER-
   PROVIDED build input (extracted from ultima.dat by the Makefile roof-extract), not shipped.
+- Stage F — LIGHTING STYLES (prototype, 2026-07-19). `g_light_style` selects how the per-cell
+  light field is applied (render/gamedemo.c ph3), runtime-selectable via `LIGHTSTY.REQ` byte
+  '0'/'1'/'2'; default SMOOTH so nothing regresses. Motivated by the original ST-port RE
+  (`docs/design/original-st-renderer.md`): the original applies lighting as a per-CELL tile
+  choice, not per-pixel — hence cheap.
+  - **SMOOTH (0, default)**: the per-pixel bilinear darklut above. Fidelity path for 256-colour
+    TT/Falcon.
+  - **DITHER (1)**: per-CELL light + ordered 4×4 Bayer dither between the 16 darklut levels — no
+    per-pixel bilinear. Spatially mixes adjacent darkness levels for a low-colour-friendly
+    gradient (aimed at `rdr_st`). Runs on both the 256 (Falcon) and 16-colour (ST) paths.
+  - **BINARY (2)**: the original ST port's model (lit cell → full tile, else black) — reference.
+  - **PREDIM+DITHER (4)** — the recommended combination: the pre-dim variant is itself DITHERED, so a
+    cell reads as a sub-tile-smooth blend of two darkness levels instead of one flat level (closes
+    PREDIM's tile-granular gap). `dim_tile_d` dims each pixel at darklut level k or k+1 by the 4×4
+    Bayer threshold vs the cell's fractional light; cache keyed by (tile, Lc>>2) = 64 sub-levels, the
+    high key bit distinguishing it from flat variants. Cache hits are still plain block copies, so it
+    is **~free over plain PREDIM** (ST 862 vs 840 ms, +2.6%; ~94% hit rate — more misses than flat's
+    99% due to the finer variants, but each miss is a one-time dither amortized over the hits).
+    Verified: visibly smoother than PREDIM, full composite with actors. **This is the ST target.**
+  - **PREDIM (3) — DIM-AT-DRAW (full composite, actors survive)**: lighting = every tile/sprite draw
+    sources its PRE-DIMMED variant for that cell's light level, so the whole composite (terrain +
+    objects + actors) dims for ZERO per-pixel lighting work. Hook: `draw_cell` knows its own cell, so
+    when `g_predim` is on it fetches `dim_tile(tile, light[cell]>>4)` instead of the base tile — the
+    masked copy loop is unchanged, dimming is baked into the source (transparency preserved so masked
+    sprites stay masked). compose_map for PREDIM: compute the light field FIRST, then build a full
+    dimmed composite into `tmp` (terrain via `draw_cell`, then the existing object/actor draws — all
+    dim automatically), then a plain `tmp→screen` copy (no per-pixel lighting pass). Shipping all
+    16 × 2048 dimmed tiles = 8 MB is impossible on a 4 MB ST, so tiles are **dimmed on demand into a
+    128 KB direct-mapped cache** (`DIMSLOTS=512`, Knuth-multiplicative hash on `(tile<<4)|level`; a
+    pair is dimmed once, ~99% hit rate) — used for ACTORS (ph1 dim-at-draw, transparent sprites).
+    Chunky proxy for the planar path (the Blitter would blit planar variants). Caveat: **tile-granular**
+    (per-cell, no sub-tile gradient — combine with DITHER for smoothness); roofs (outside-only) not yet
+    dimmed.
+  - **PREDIM incremental scroll (2026-07-19)** — the static layer no longer full-rebuilds each frame.
+    A persistent DIMMED composite cache `g_dimmed_map` (the undimmed `g_tmp_map` dimmed per-cell) is
+    memmove-scrolled in lockstep with `g_tmp_map` on a 1-tile walk; only the freshly-revealed edge band
+    plus the cells whose **light changed** frame-to-frame are re-dimmed, every other cell is reused. The
+    naive "scroll the baked buffer" is wrong because the avatar's own light globe is VIEW-anchored (it
+    would smear); the fix is that the WORLD-anchored dimming translates exactly with the shift and only
+    the changed cells (the globe's moving arc + emitters crossing the edge) get re-dimmed — so the free
+    block-copy present is kept AND the rebuild collapses to edge+globe work. `predim_compose_static` +
+    `dim_cell_into` (`render/gamedemo.c`); last-light is cached in `g_dm_light` to find the changed
+    cells. **Proven byte-identical to a full dim rebuild** in all 4 scroll directions, flat and dither
+    (`gamedemo.c` mode==11 self-test: `dimF`/`dimD` diffs all 0). Full rebuild still runs on jumps /
+    style switches / first frame (gated on `g_dm_valid && g_tmp_valid`).
+  - **Measured (TT, `make bench`, night throne room)**: DITHER cuts compose **131→103 ms/frame
+    (~22%)** vs SMOOTH by dropping the bilinear; a per-pixel darklut lookup REMAINS (that residual
+    only vanishes with the future planar tile-variant path — lighting baked into tile selection,
+    zero per-pixel work). Present/c2p unchanged (52 ms).
+  - **Measured (ST 8 MHz 68000, `make bench-st`, throne room = indoor)** — the real target, and it
+    is brutal. Indoor scenes are ALWAYS non-uniform (LOS zeroes wall-blocked cells) so the bilinear
+    runs day or night:
+    `make bench-st` reports the SCROLL compose (1-tile walk = the real walking cost) split into
+    ph0 static / ph1 actors+fg / ph2 light+vis / ph3 composite; the FULL compose (forced rebuild each
+    frame) is the jump cost. Walking-frame numbers below use SCROLL compose:
+    | style | SCROLL compose | ph0 static | c2p/frame | frame | ~fps |
+    |-------|---------------:|-----------:|----------:|------:|-----:|
+    | SMOOTH (current) | ~3025 ms | 158 ms | 678 ms | ~3.7 s | 0.27 |
+    | DITHER | ~1048 ms | — | 678 ms | ~1.7 s | 0.58 |
+    | PREDIM full-rebuild (pre-incremental) | ~865 ms | 598 ms | 678 ms | ~1.5 s | 0.65 |
+    | **PREDIM incremental (flat, style 3)** | **~548 ms** | **282 ms** | 678 ms | ~1.2 s | **0.82** |
+    | **PREDIM+DITHER incremental (style 4)** | **~639 ms** | **377 ms** | 678 ms | ~1.3 s | **0.76** |
+    DITHER is **2.9× on compose** (vs 1.3× on TT) — the 68000's ~70-cycle hardware multiply makes the
+    bilinear's 3 mults/pixel especially ruinous, and dither removes them. The lighting-APPLY itself
+    goes ~free under PREDIM (TT ph3 106→11 ms; ST dim-cache **~99% hit**). **Incremental scroll** then
+    halved PREDIM's static rebuild (ph0 598→282 ms flat / 377 ms dither) by re-dimming only the edge +
+    light-changed cells, taking the walking frame from PREDIM's 0.65 fps to **0.82 fps (flat) / 0.76 fps
+    (dither)** — a **5.5× compose speedup over the SMOOTH baseline** (3025→548 ms). After that the
+    **c2p (678 ms) is now the single dominant term** — next lever is Blitter c2p (the bench's 678 ms is
+    a FULL rect present; real walking uses `rdr_scroll_left16` ≈ 1/20). Outdoor daytime (uniform) hits
+    the cheap `lut[]` path regardless.
+  - **Visual — with a correction.** A render-path bug (the `LIGHTSTY` hook ran AFTER `compose_map`,
+    and only accepted '0'..'2') meant EARLIER style shots were all SMOOTH — do not trust any lighting
+    A/B image dated before that fix. Fixed (hook runs before compose, accepts '0'..'3'); proved by
+    diffing (styles now differ by tens of millions of px, not zero). Verified on the night throne room
+    (Falcon 256-colour): **DITHER** genuinely dithers (stippled shadows), full composite. **PREDIM
+    dim-at-draw** is now a **full composite with actors/avatar**, dimmed correctly; SMOOTH is
+    byte-identical (no regression, enginetest ALL PASS). PREDIM's only visual gap vs SMOOTH is
+    **tile-granularity** (per-cell, no sub-tile gradient) — close the gap by combining with DITHER
+    (dither the pre-dim level selection, or ship dithered variants).
+  - Repro: build a night pack (`START_MIN=0 make world-svm` / `gamedata-st`), stage `SHOT.REQ` +
+    `LIGHTSTY.REQ`, boot gamef.prg (Falcon) or gamest.prg (ST), `shot2png` the dump.

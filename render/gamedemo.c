@@ -55,6 +55,21 @@ static const uint8_t *g_tileset, *g_objs, *g_font, *g_paper, *g_portraits;
 static const char *g_gamename;   /* set for a CORE pack (SE/MD): shown in the panel; NULL for U6 */
 static const uint8_t *g_seface;  /* SE/MD portrait bank (CFAC): g_senface x g_sefw*g_sefh indices */
 static int g_senface, g_sefw, g_sefh;
+/* SE/MD conversation identity (CTLK): per-actor name + look-description. g_setalk_off
+ * is 256 big-endian u16 offsets into g_setalk_blob ("name\0desc\0"); 0xffff = none. */
+static const uint8_t *g_setalk_off, *g_setalk_blob;
+static int            g_setalk_nact;
+static int            g_talk_actor;   /* actor being talked to (SE/MD core path); 0 = none */
+/* name/description for SE/MD actor `a`, or NULL if none. */
+static const char *se_npc_str(int a, int want_desc){
+    if(!g_setalk_off || a<0 || a>=g_setalk_nact) return 0;
+    unsigned off=(g_setalk_off[a*2]<<8)|g_setalk_off[a*2+1];
+    if(off==0xFFFF) return 0;
+    const char *name=(const char*)(g_setalk_blob+off);
+    if(!want_desc) return name;
+    const char *d=name; while(*d) d++; d++;   /* skip name + NUL -> description */
+    return d;
+}
 static int32_t        g_nobjs;
 static int            g_nport;
 static int            g_demo_npc;       /* NPC whose conversation the VM runs   */
@@ -189,6 +204,16 @@ static uint16_t       g_obkt_idx[MAXWOBJ];
 #define TMP_T (VT*16)
 static uint8_t        g_tmp_map[TMP_T*TMP_T];
 static int            g_tmp_valid=0, g_tmp_px=-30000, g_tmp_py=-30000;
+/* Incremental PREDIM: g_dimmed_map is the DIMMED static layer (g_tmp_map dimmed by the per-cell
+ * light), persisted across frames and memmove-scrolled in lockstep with g_tmp_map. Only cells
+ * whose light CHANGED frame-to-frame (the view-anchored avatar globe's moving arc + emitters that
+ * crossed the view edge) plus the freshly-revealed lead band are re-dimmed; every other cell is
+ * reused from the shifted buffer. So the free block-copy present of PREDIM is kept, but the 598 ms
+ * full re-dim collapses to edge+globe work. g_dm_light caches last frame's per-cell light (0..255,
+ * vis already folded in as 0) to detect the changed cells. See docs/rules/lighting.md Stage F. */
+static uint8_t        g_dimmed_map[TMP_T*TMP_T];
+static uint8_t        g_dm_light[VT*VT];
+static int            g_dm_valid=0;
 /* cell-granular clip rect for draw_cell (default = whole view); recompose_band narrows it so a
  * band redraw composes only band cells byte-identically (multi-tile bleed into the band lands;
  * everything else is rejected per-cell). */
@@ -1861,6 +1886,14 @@ static int obj_tile(const wobj_t*o)
     return anim_tile(o->tile);
 }
 
+/* DIM-AT-DRAW (PREDIM lighting): when g_predim is on, draw_cell sources each tile from its
+ * PRE-DIMMED variant for that cell's light level — the whole composite (terrain, objects, actors)
+ * dims for free, with the masked copy unchanged (dimming baked into the source). Defined below. */
+static int             g_predim = 0, g_dim_dither = 0;   /* g_dim_dither: PREDIM+DITHER variant */
+static const uint8_t  *g_predim_light, *g_predim_vis;   /* per-cell VTxVT (set by compose_map) */
+static const uint8_t  *dim_tile(int tile, int lev);     /* flat pre-dim (body after g_darklut) */
+static const uint8_t  *dim_tile_d(int tile, int Lc);    /* dithered pre-dim (body after g_bayer4) */
+
 /* blit one 16x16 tile into the compose buffer at view cell (cvx,cvy),
  * transparency-aware and clipped to the VTxVT view. `pass` selects the layer
  * (matching Nuvie's drawTopTile): <0 = draw regardless (actors); 0 = LOWER pass,
@@ -1871,7 +1904,11 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
     if(cvx<0||cvy<0||cvx>=VT||cvy>=VT||tile<0||tile>=2048) return;
     if(cvx<g_clip_x0||cvx>=g_clip_x1||cvy<g_clip_y0||cvy>=g_clip_y1) return;  /* band clip (incremental recompose) */
     if(pass>=0 && ((g_tflags[tile]>>4)&1)!=pass) return;   /* tile belongs to other pass */
-    const uint8_t*src=g_tileset+(int32_t)tile*256;
+    const uint8_t*src;
+    if(g_predim){ int cc=cvy*VT+cvx;                       /* dim-at-draw: pre-dimmed variant for this cell */
+        int Lc=g_predim_vis[cc]?g_predim_light[cc]:0;      /* full 0..255 cell light */
+        src = g_dim_dither ? dim_tile_d(tile,Lc) : dim_tile(tile,Lc>>4); }
+    else src=g_tileset+(int32_t)tile*256;
     for(int r=0;r<16;r++){uint8_t*d=tmp+(cvy*16+r)*T+cvx*16;const uint8_t*s=src+r*16;
         for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
 }
@@ -1906,6 +1943,68 @@ static void draw_multi(uint8_t*tmp,int T,int vx,int vy,int tile,int pass)
  * palette LUTs shipped in the pack (U6WJ). NLEV must match tools/mkworld. */
 #define NLEV 16
 static uint8_t g_darklut[NLEV][256];
+
+/* Lighting STYLE (docs/design/original-st-renderer.md — the native-planar model from the ST-port RE):
+ *  0 SMOOTH = per-pixel BILINEAR darkness LUT — the fidelity path, right for 256-colour TT/Falcon.
+ *  1 DITHER = per-CELL light + ordered 4x4 dither between the 16 darklut levels. No per-pixel
+ *            bilinear (cheap) and it spatially mixes adjacent darkness levels — the low-colour-
+ *            friendly gradient that beats the original ST port's BINARY look. Target: rdr_st.
+ *  2 BINARY = the original ST port's model (lit cell -> full tile, else black) — reference only.
+ * Selectable at runtime via LIGHTSTY.REQ (byte '0'..'2'); default SMOOTH so nothing regresses. */
+enum { LSTY_SMOOTH=0, LSTY_DITHER=1, LSTY_BINARY=2, LSTY_PREDIM=3, LSTY_PREDIM_DITHER=4 };
+static int g_light_style = LSTY_SMOOTH;
+static const uint8_t g_bayer4[4][4] = {   /* ordered-dither thresholds 0..15 (recursive Bayer) */
+    {  0,  8,  2, 10 }, { 12,  4, 14,  6 },
+    {  3, 11,  1,  9 }, { 15,  7, 13,  5 } };
+
+/* PREDIM: pre-dimmed tile variants. Lighting becomes a per-CELL block-copy of a tile that ALREADY
+ * has darklut[level] baked in — ZERO per-pixel lighting work. Shipping all 16 levels x 2048 tiles
+ * would be 8 MB (impossible on a 4 MB ST), so we DIM ON DEMAND into a tiny direct-mapped cache
+ * (64 KB): a (tile,level) pair is dimmed once (256 LUT lookups) then reused every frame it stays on
+ * screen — a standing/steady view costs ~0 dimming after the first frame. This is the chunky proxy
+ * for the future planar path (the same variant selection, but the Blitter blits planar variants). */
+#define DIMSLOTS 512               /* 128 KB cache; multiplicative hash spreads (tile,level) evenly */
+static uint8_t  g_dimcache[DIMSLOTS][256];
+static int32_t  g_dimkey[DIMSLOTS];       /* (tile<<4)|level per slot; -1 = empty */
+static int      g_dim_ready = 0;
+uint32_t        g_dim_calls=0, g_dim_miss=0;   /* BENCH instrumentation */
+static const uint8_t *dim_tile(int tile, int lev){
+    if(!g_dim_ready){ for(int i=0;i<DIMSLOTS;i++) g_dimkey[i]=-1; g_dim_ready=1; }
+    int key=(tile<<4)|lev;
+    int slot=(int)(((unsigned)key*2654435761u)>>23)&(DIMSLOTS-1);   /* Knuth mult. hash (not low bits) */
+    g_dim_calls++;
+    if(g_dimkey[slot]!=key){ g_dim_miss++;            /* miss: dim this tile at this level ONCE */
+        const uint8_t *src=g_tileset+(int32_t)tile*256, *lut=g_darklut[lev];
+        uint8_t *d=g_dimcache[slot];
+        for(int i=0;i<256;i++){ uint8_t v=src[i];      /* PRESERVE transparency so masked sprites stay masked */
+            d[i]=(v==TILE_TRANSPARENT)?TILE_TRANSPARENT:lut[v]; }
+        g_dimkey[slot]=key;
+    }
+    return g_dimcache[slot];
+}
+/* DITHERED pre-dim variant (PREDIM+DITHER): dim each pixel at darklut level k OR k+1, chosen by the
+ * 4x4 Bayer threshold vs the cell's fractional light — so a cell reads as a SUB-tile-smooth blend of
+ * two darkness levels instead of one flat level. Keyed by (tile, Lc>>2) = 64 sub-levels; the Bayer is
+ * indexed by the tile's own pixel position, which is 16px (=4-Bayer) aligned per cell so cells tile
+ * seamlessly. Cache hits are still plain block copies (fast); only misses pay the dither. */
+static const uint8_t *dim_tile_d(int tile, int Lc){
+    if(!g_dim_ready){ for(int i=0;i<DIMSLOTS;i++) g_dimkey[i]=-1; g_dim_ready=1; }
+    int key=0x40000000|(tile<<6)|(Lc>>2);            /* high bit: distinct from flat dim_tile keys */
+    int slot=(int)(((unsigned)key*2654435761u)>>23)&(DIMSLOTS-1);
+    g_dim_calls++;
+    if(g_dimkey[slot]!=key){ g_dim_miss++;
+        const uint8_t *src=g_tileset+(int32_t)tile*256;
+        int k=Lc>>4, f=Lc&15;                        /* darklut level + 0..15 fraction */
+        uint8_t *d=g_dimcache[slot];
+        for(int i=0;i<256;i++){ uint8_t v=src[i];
+            if(v==TILE_TRANSPARENT){ d[i]=TILE_TRANSPARENT; continue; }
+            int lev = k + ((g_bayer4[(i>>4)&3][i&3] < f)?1:0);   /* dither k vs k+1 by Bayer<frac */
+            if(lev>NLEV-1) lev=NLEV-1;
+            d[i]=g_darklut[lev][v]; }
+        g_dimkey[slot]=key;
+    }
+    return g_dimcache[slot];
+}
 #define LIGHT_INDOOR_AMB 24       /* indoor ambient AT NIGHT (torch-lit only); by DAY interiors are full daylight */
 #define LIGHT_NIGHT_AMB  56       /* outdoor night ambient (moonlight)                   */
 static int light_of(int tile){ return (tile>=0&&tile<2048)?(g_tflags[tile]&0x03):0; } /* tflag2 bits0-1 */
@@ -2017,11 +2116,15 @@ uint32_t g_phase[4]; static uint32_t g_pht;
 #endif
 
 /* draw the world objects overlapping the view, for layer `pass`, via the spatial bucket index
- * (g_obkt_*) — visits only the (<=2x2) buckets the view touches instead of all g_ow.nobjs.
- * Same per-object in-view test + draw as the old full scan, so the result is identical. */
+ * (g_obkt_*) — visits only the buckets the view touches instead of all g_ow.nobjs. The scan and the
+ * per-object test reach ONE cell past the right/bottom edge (left+VT / top+VT, and vx/vy<=VT) because
+ * a multi-tile object anchors at its bottom-RIGHT and its dblw/dblh body bleeds LEFT/UP by 1 cell —
+ * so an anchor just off the right/bottom edge still has an in-view cell. draw_multi->draw_cell clips
+ * the off-view anchor, drawing only the in-view bleed. (Without this the edge object vanishes on a
+ * fresh build but persists in the scroll cache — the mode==11 dx=-1 mismatch.) */
 static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pass){
-    int bx0=((int)left>>4)&(OBKT-1), bx1=(((int)left+VT-1)>>4)&(OBKT-1);
-    int by0=((int)top >>4)&(OBKT-1), by1=(((int)top +VT-1)>>4)&(OBKT-1);
+    int bx0=((int)left>>4)&(OBKT-1), bx1=(((int)left+VT)>>4)&(OBKT-1);
+    int by0=((int)top >>4)&(OBKT-1), by1=(((int)top +VT)>>4)&(OBKT-1);
     for(int by=by0;;by=(by+1)&(OBKT-1)){
         for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){
             int b=by*OBKT+bx;
@@ -2029,7 +2132,7 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
                 const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive) continue;
                 int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1);
                 int32_t vy=((int32_t)o->y-top )&(U6_SURFACE_TILES-1);
-                if(vx<VT&&vy<VT) draw_multi(tmp,T,(int)vx,(int)vy,obj_tile(o),pass);
+                if(vx<=VT&&vy<=VT) draw_multi(tmp,T,(int)vx,(int)vy,obj_tile(o),pass);
             }
             if(bx==bx1) break;
         }
@@ -2063,14 +2166,15 @@ static void recompose_band(const world_t*w,int cx0,int cy0,int cx1,int cy1){
     draw_view_objects(g_tmp_map,TMP_T,left,top,0);
     g_clip_x0=0; g_clip_y0=0; g_clip_x1=VT; g_clip_y1=VT;       /* restore full clip */
 }
-/* shift g_tmp_map so new[v] = old[v+(dx,dy)] in tiles (dx,dy in {-1,0,1}); lead band stale */
-static void shift_static(int dx,int dy){
-    int sx=16*dx, sy=16*dy;                                     /* dest(x,y) <- src(x+sx,y+sy) */
-    int x0=sx>0?0:-sx, ww=TMP_T-(sx<0?-sx:sx); if(ww<=0) return;
-    int hh=TMP_T-(sy<0?-sy:sy); if(hh<=0) return;
-    if(sy>0){ for(int ny=0;ny<hh;ny++)        memmove(&g_tmp_map[ny*TMP_T+x0],&g_tmp_map[(ny+sy)*TMP_T+x0+sx],(size_t)ww); }
-    else    { for(int ny=TMP_T-1;ny>=-sy;ny--) memmove(&g_tmp_map[ny*TMP_T+x0],&g_tmp_map[(ny+sy)*TMP_T+x0+sx],(size_t)ww); }
+/* shift a stride-`str` byte buffer by (sx,sy) px so new(x,y)=old(x+sx,y+sy); lead band stale */
+static void shift_buf(uint8_t*buf,int str,int sx,int sy){
+    int x0=sx>0?0:-sx, ww=str-(sx<0?-sx:sx); if(ww<=0) return;
+    int hh=str-(sy<0?-sy:sy); if(hh<=0) return;
+    if(sy>0){ for(int ny=0;ny<hh;ny++)     memmove(&buf[ny*str+x0],&buf[(ny+sy)*str+x0+sx],(size_t)ww); }
+    else    { for(int ny=str-1;ny>=-sy;ny--) memmove(&buf[ny*str+x0],&buf[(ny+sy)*str+x0+sx],(size_t)ww); }
 }
+/* shift g_tmp_map so new[v] = old[v+(dx,dy)] in tiles (dx,dy in {-1,0,1}); lead band stale */
+static void shift_static(int dx,int dy){ shift_buf(g_tmp_map,TMP_T,16*dx,16*dy); }
 /* incremental scroll: shift the static buffer, recompose the lead 2-cell band (2-wide so
  * multi-tile bleed from the new edge is captured) for whichever edge(s) scrolled in. */
 static void scroll_static(const world_t*w,int dx,int dy){
@@ -2087,14 +2191,91 @@ static void mark_view_anim(const world_t*w){
     for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++) (void)anim_tile(world_tile(w,left+vx,top+vy));
 }
 
+/* --- incremental PREDIM (see g_dimmed_map above) --- */
+/* dim view cell (vx,vy) of the (opaque) g_tmp_map composite into g_dimmed_map by full cell light
+ * Lc (0..255). FLAT uses one darklut level (Lc>>4); DITHER (style 4) mixes level k and k+1 per pixel
+ * via the same 4x4 Bayer<frac test as dim_tile_d, so the incremental result is byte-identical to the
+ * full re-dim. g_tmp_map is opaque (fill_tiles maps transparent->0), so no 255 handling is needed. */
+static void dim_cell_into(int vx,int vy,int Lc,int dither){
+    const uint8_t*s=g_tmp_map   +(vy*16)*TMP_T+vx*16;
+    uint8_t      *d=g_dimmed_map+(vy*16)*TMP_T+vx*16;
+    if(!dither){
+        const uint8_t*lut=g_darklut[Lc>>4];
+        for(int r=0;r<16;r++){const uint8_t*sr=s+r*TMP_T; uint8_t*dr=d+r*TMP_T;
+            for(int c=0;c<16;c++) dr[c]=lut[sr[c]];}
+    } else {
+        int k=Lc>>4, f=Lc&15;                                    /* level k, blend f/16 toward k+1 */
+        const uint8_t*lk=g_darklut[k], *lk1=g_darklut[k<NLEV-1?k+1:k];
+        for(int r=0;r<16;r++){const uint8_t*sr=s+r*TMP_T; uint8_t*dr=d+r*TMP_T; const uint8_t*br=g_bayer4[r&3];
+            for(int c=0;c<16;c++){ uint8_t v=sr[c]; dr[c]=(br[c&3]<f)?lk1[v]:lk[v]; }}
+    }
+}
+/* is cell (vx,vy) inside the lead 2-cell recompose band for a (dx,dy) scroll? (matches scroll_static) */
+static int in_lead_band(int vx,int vy,int dx,int dy){
+    return (dx>0&&vx>=VT-2)||(dx<0&&vx<2)||(dy>0&&vy>=VT-2)||(dy<0&&vy<2);
+}
+/* per-cell PREDIM light field: ambient+globes, roofs forced visible from outside, then vis folded
+ * in as 0 (hidden cell -> darklut[0] = black). Shared by compose_map and the mode==26 self-test so
+ * they can't drift. Fills plight[VT*VT] (and pvis[VT*VT] scratch). */
+static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
+    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int pin = tile_is_indoor((int)(w->px&(U6_SURFACE_TILES-1)),(int)(w->py&(U6_SURFACE_TILES-1)));
+    compute_light(w,plight,pin); compute_visibility(w,pvis);
+    if(!pin && g_nroof>0){ for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
+        int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
+        if(roof_at(wx,wy)>=0) pvis[vy*VT+vx]=1; } }
+    for(int i=0;i<VT*VT;i++) if(!pvis[i]) plight[i]=0;
+}
+/* Incremental dimmed rebuild of g_dimmed_map for the current frame. `light` is the per-cell 0..255
+ * field (vis already folded in as 0). On a valid 1-tile scroll: shift both the undimmed cache and
+ * the dimmed cache + last-light, recompose the newly-revealed edge band in g_tmp_map, then re-dim
+ * ONLY the band cells and the cells whose light changed (the view-anchored avatar globe's moving arc
+ * + emitters that crossed the edge). Otherwise (first frame / jump / style switch): full rebuild. */
+static void predim_compose_static(const world_t*w,const uint8_t*light,int dither){
+    int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;         /* wrap to shortest signed delta */
+    if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
+    if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
+    if(g_dm_valid && g_tmp_valid && dx>=-1&&dx<=1 && dy>=-1&&dy<=1 && (dx||dy)){
+        scroll_static(w,dx,dy); mark_view_anim(w);             /* undimmed cache: shift + edge band */
+        shift_buf(g_dimmed_map,TMP_T,16*dx,16*dy);             /* dimmed cache: shift in lockstep */
+        shift_buf(g_dm_light,VT,dx,dy);                        /* last-light: shift in lockstep */
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+            if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_dm_light[cc]){   /* revealed OR light changed */
+                dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+        }
+    } else {                                                   /* full rebuild */
+        build_static(w);                                       /* undimmed cache: base tiles + lower objects */
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+            dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+    }
+    g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1; g_dm_valid=1;
+}
+
 static void compose_map(const world_t*w)
 {
     static uint8_t tmp[TMP_T*TMP_T];               /* 176x176 working buffer (static layer + dynamic) */
     const int T=TMP_T;
     g_view_has_anim=0;                              /* set by anim_tile/obj_tile if any in view */
     int32_t left=w->px-VT/2, top=w->py-VT/2;
+    /* DIM-AT-DRAW (PREDIM): compute the per-cell light FIRST, then every tile/sprite draw sources its
+     * pre-dimmed variant (draw_cell -> dim_tile) — the whole composite dims for free, actors included. */
+    int predim = (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER);
+    g_dim_dither = (g_light_style==LSTY_PREDIM_DITHER);
+    static uint8_t plight[VT*VT], pvis[VT*VT];
+    if(predim){
+        compute_predim_light(w,plight,pvis);
+        g_predim_light=plight; g_predim_vis=pvis;   /* g_predim armed AFTER the static build (for ph1 actors) */
+    }
     /* --- STATIC layer (tiles + lower-pass objects): incremental scroll on a 1-tile walk --- */
     PH_BEGIN();
+    if(predim){
+        /* Incremental dimmed static: build the UNDIMMED g_tmp_map (g_predim off so draw_cell sources
+         * raw tiles), dim only the revealed edge + light-changed cells into g_dimmed_map, then copy
+         * it out. Actors dim-at-draw in ph1 (g_predim armed just below). */
+        g_predim=0;
+        predim_compose_static(w,plight,g_dim_dither);
+        memcpy(tmp,g_dimmed_map,sizeof tmp);
+    } else {
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;     /* wrap to shortest signed delta */
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
     if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
@@ -2104,7 +2285,10 @@ static void compose_map(const world_t*w)
         build_static(w);
     }
     g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1;
+    g_dm_valid=0;                                   /* this frame didn't maintain the dimmed cache */
     memcpy(tmp,g_tmp_map,sizeof tmp);
+    }
+    if(predim) g_predim=1;                          /* arm dim-at-draw for the ph1 actor/field/fg pass */
     PH_END(0);
     PH_BEGIN();
     /* --- DYNAMIC layer (per-frame): actors + avatar, then foreground objects OVER them ---
@@ -2123,7 +2307,9 @@ static void compose_map(const world_t*w)
         int ax,ay; if(!actor_pos(i,&ax,&ay)) continue;
         int32_t vx=((int32_t)ax-left)&(U6_SURFACE_TILES-1);
         int32_t vy=((int32_t)ay-top )&(U6_SURFACE_TILES-1);
-        if(vx<VT&&vy<VT) draw_multi(tmp,T,(int)vx,(int)vy,anim_tile(npc_tile(i)),-1);
+        if(vx<=VT&&vy<=VT) draw_multi(tmp,T,(int)vx,(int)vy,anim_tile(npc_tile(i)),-1); /* <=VT: a multi-tile
+                                              NPC anchored 1 cell off the right/bottom edge bleeds in (see
+                                              draw_view_objects); draw_multi clips the off-view anchor */
     }
     { int at=g_basetile?(g_basetile[410*2]|(g_basetile[410*2+1]<<8)):0;   /* avatar at centre (obj_n 410) */
       if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,-1); }
@@ -2149,23 +2335,30 @@ static void compose_map(const world_t*w)
                 for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
         }
     }
-    /* lighting overlay: bilinearly interpolate the per-cell light (cell centre at
-     * tile+8px) to each pixel, then remap through darklut[light>>4] (NLEV=16). Smooth
-     * gradient instead of 16x16 blocks. */
-    uint8_t light[VT*VT]; compute_light(w,light,inside);
-    uint8_t vis[VT*VT];   compute_visibility(w,vis);              /* C1: line-of-sight */
-    if(!inside && g_nroof>0){                                     /* roofs are always visible from outside */
-        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
-            int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
-            if(roof_at(wx,wy)>=0) vis[vy*VT+vx]=1;
+    /* lighting overlay: SMOOTH/DITHER/BINARY compute the per-cell field HERE then apply it per pixel;
+     * PREDIM already computed it up-front and baked dimming into tmp (dim-at-draw), so it skips this. */
+    uint8_t light[VT*VT], vis[VT*VT]; int mnL=255,mxL=0;
+    if(!predim){
+        compute_light(w,light,inside);
+        compute_visibility(w,vis);                                /* C1: line-of-sight */
+        if(!inside && g_nroof>0){                                 /* roofs are always visible from outside */
+            for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
+                int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
+                if(roof_at(wx,wy)>=0) vis[vy*VT+vx]=1;
+            }
         }
+        for(int i=0;i<VT*VT;i++){ if(!vis[i]) light[i]=0;         /* darken visible edges by walls */
+            int L=light[i]; if(L<mnL)mnL=L; if(L>mxL)mxL=L; }
     }
-    int mnL=255,mxL=0;
-    for(int i=0;i<VT*VT;i++){ if(!vis[i]) light[i]=0;            /* darken visible edges by walls */
-        int L=light[i]; if(L<mnL)mnL=L; if(L>mxL)mxL=L; }
     PH_END(2);
     PH_BEGIN();
     int span=MAPSZ-2*MAP_INSET;                     /* 160 = 10 whole tiles */
+    if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
+        g_predim=0;
+        for(int y=0;y<span;y++){ uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
+            for(int x=0;x<span;x++) drow[x]=trow[x]; }
+        PH_END(3); return;
+    }
 #if !defined(LIGHT_DEBUG_VIS) && !defined(LIGHT_DEBUG_FIELD)
     if(mnL==mxL){                                    /* UNIFORM light + fully visible (outdoor daytime, the common
                                                       * walking case): one darklut level, no per-pixel bilinear/vis.
@@ -2173,6 +2366,33 @@ static void compose_map(const world_t*w)
         const uint8_t *lut=g_darklut[mnL>>4];
         for(int y=0;y<span;y++){ uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
             for(int x=0;x<span;x++) drow[x]=lut[trow[x]]; }
+        PH_END(3); return;
+    }
+#endif
+#if !defined(LIGHT_DEBUG_VIS) && !defined(LIGHT_DEBUG_FIELD)
+    if(g_light_style==LSTY_DITHER){
+        /* per-CELL light + ordered 4x4 dither between the 16 darklut levels: no per-pixel
+         * bilinear (cheap), and the spatial mix of adjacent levels reads as a gradient even in
+         * a low-colour palette. The cell's fractional light picks level k vs k+1 per pixel via
+         * the Bayer threshold. (docs/design/original-st-renderer.md "native-planar" model.) */
+        for(int y=0;y<span;y++){
+            const uint8_t *lr=&light[(y>>4)*VT], *vr=&vis[(y>>4)*VT];
+            const uint8_t *br=g_bayer4[y&3];
+            uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
+            for(int x=0;x<span;x++){
+                if(!vr[x>>4]){ drow[x]=0; continue; }
+                int lev=(lr[x>>4]+br[x&3])>>4; if(lev>NLEV-1)lev=NLEV-1;
+                drow[x]=g_darklut[lev][trow[x]];
+            }
+        }
+        PH_END(3); return;
+    }
+    if(g_light_style==LSTY_BINARY){                  /* original ST port: lit cell -> full tile, else black */
+        for(int y=0;y<span;y++){
+            const uint8_t *lr=&light[(y>>4)*VT], *vr=&vis[(y>>4)*VT];
+            uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
+            for(int x=0;x<span;x++) drow[x]=(vr[x>>4] && lr[x>>4])?trow[x]:0;
+        }
         PH_END(3); return;
     }
 #endif
@@ -2277,9 +2497,19 @@ static void draw_conversation(uint8_t col)
         line[t++]='_'; line[t]=0;
         ui_text(PANX+6, 36+(g_ncast<11?g_ncast:11)*12+6, line, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
+        if(g_gamename){                            /* SE/MD core: draw the actor's own CFAC portrait (slot actor-1) */
+            int fi=g_talk_actor-1;
+            if(g_seface && fi>=0 && fi<g_senface){
+                int fx=PANX+(PANW-g_sefw)/2, fy=MAPY+8;
+                for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++)
+                    ui_px(fx+xx, fy+yy, g_seface[((long)fi*g_sefh+yy)*g_sefw+xx]);
+                ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, fy+g_sefh+4, g_talk_name, 15);
+            } else ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, MAPY+8, g_talk_name, 15);
+        } else {
         if(g_have_pc) draw_portrait_buf(g_cur_portrait,pxx,pyy);
         ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, pyy+PH+4, g_talk_name, col);
-        ui_text_wrap(PANX+6, 116, PANW-12, g_transcript, g_await_input?7:8, col);
+        }
+        ui_text_wrap(PANX+6, 116, PANW-12, g_transcript, g_await_input?7:8, g_gamename?15:col);  /* white on SE's black panel */
         if(g_await_input){                         /* the input box: "> typed_" */
             char line[24]; int t=0; line[t++]='>'; line[t++]=' ';
             for(int k=0;k<g_inlen && t<21;k++) line[t++]=g_inbuf[k];
@@ -2443,8 +2673,25 @@ static void conv_palette_leave(void)
     if(g_lcx_nb>=2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, LCPAL(g_lcx_pal, g_lcx_pal4), g_lcx_lut);
 }
 
+/* SE/MD (core pack) conversation: no usecode VM yet — resolve the NPC's identity
+ * from CTLK (name + look-description, keyed by actor number) and show it with the
+ * actor's own portrait (CFAC slot actor-1). The full branching dialogue (the
+ * usecode after 0xf2) is a later milestone. */
+static void se_talk(int id)
+{
+    const char *nm=se_npc_str(id,0), *ds=se_npc_str(id,1);
+    g_talk_actor=id;
+    { int o=0; const char*s=nm?nm:"Someone"; while(s[o]&&o<31){ g_talk_name[o]=s[o]; o++; } g_talk_name[o]=0; }
+    int tl=tappend(0,"You see ");
+    tl=tappend(tl, ds?ds:"one of the tribesfolk.");
+    if(!nm){ /* generic villager: no unique conversation */ tappend(tl," They have nothing to say."); }
+    else    { tl=tappend(tl,"\n\""); tl=tappend(tl,nm); tappend(tl," greets thee.\""); }
+    g_talking=1; g_have_pc=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0;
+}
+
 static void talk(int id)
 {
+    if(g_gamename){ se_talk(id); return; }        /* SE/MD core pack: identity-only talk */
     const uint8_t *cf; int32_t cl; int ci;
     if(id<g_countA){ cf=g_convA; cl=g_convAlen; ci=id; }
     else           { cf=g_convB; cl=g_convBlen; ci=id-g_countA; }
@@ -4410,8 +4657,47 @@ int main(void)
                 int nf=(ext[4]<<8)|ext[5], fw=(ext[6]<<8)|ext[7], fh=(ext[8]<<8)|ext[9];
                 const uint8_t *fp=ext+10;
                 if (fp+(long)nf*fw*fh > pak+n) break;
-                g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;   /* portrait bank (points into pak) */
+                g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;   /* SLOT-indexed portrait bank: face(actor N)=slot N-1 */
                 ext = fp+(long)nf*fw*fh;
+            } else if (ext[0]=='C'&&ext[1]=='T'&&ext[2]=='L'&&ext[3]=='K'){
+                /* per-actor NPC name + look-description (CTLK):
+                 * [u16 nact][u16 blob_len][nact x u16 off][blob "name\0desc\0"]. */
+                if (ext+8 > pak+n) break;
+                int na=(ext[4]<<8)|ext[5], bl=(ext[6]<<8)|ext[7];
+                const uint8_t *ofs=ext+8, *blob=ofs+(long)na*2;
+                if (blob+bl > pak+n) break;
+                g_setalk_nact=na; g_setalk_off=ofs; g_setalk_blob=blob;
+                ext = blob+bl;
+            } else if (ext[0]=='C'&&ext[1]=='A'&&ext[2]=='C'&&ext[3]=='T'){
+                /* initial ACTOR ROSTER (captured objlist -> mkworld CACT):
+                 * [u16 nact][nact x u16 tile][nact x {u16 x,u16 y,u8 z}]
+                 * [nact x {u8 hp,str,dex,int}][u8 nparty][nparty x u8 idx].
+                 * Tiles are pre-resolved; positions place NPCs; party list drives
+                 * the party panel + follow. (docs/design/multigame.md P2) */
+                if (ext+6 > pak+n) break;
+                int na=(ext[4]<<8)|ext[5];
+                if (na<0 || na>U6_MAX_ACTORS) break;
+                const uint8_t *at=ext+6, *ap=at+(long)na*2;
+                const uint8_t *as=ap+(long)na*5, *pp=as+(long)na*4;
+                if (pp+1 > pak+n) break;
+                int np=pp[0]; const uint8_t *pl=pp+1;
+                if (pl+np > pak+n) break;
+                for(int i=0;i<na && i<U6_MAX_ACTORS;i++){
+                    g_atile[i]=(uint16_t)((at[i*2]<<8)|at[i*2+1]);
+                    const uint8_t *p=ap+i*5;
+                    g_actx[i]=(uint16_t)((p[0]<<8)|p[1]);
+                    g_acty[i]=(uint16_t)((p[2]<<8)|p[3]);
+                    g_actz[i]=p[4];
+                    const uint8_t *s=as+i*4;
+                    g_ahp[i]=s[0]; g_astr[i]=s[1]; g_adex[i]=s[2]; g_aint[i]=s[3];
+                    g_amaxhp[i]=s[0];
+                    g_amaxmana[i]=(uint8_t)magic_max_mana(s[3], i==1);
+                    g_amana[i]=g_amaxmana[i];
+                }
+                if(np>MAXPARTY) np=MAXPARTY;
+                g_nsparty=np; for(int i=0;i<np;i++) g_sparty[i]=pl[i];
+                g_savestate = (na>1 && g_actz[1]!=0xff);
+                ext = pl+np;
             } else break;
         }
     } else {
@@ -5132,9 +5418,33 @@ int main(void)
                     w.px=(uint16_t)((PX+ddx)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)((PY+ddy)&(U6_SURFACE_TILES-1));
                     scroll_static(&w,ddx,ddy);                                       /* then scroll P->P+d */
                     int diff=0; for(int i=0;i<TMP_T*TMP_T;i++) if(g_tmp_map[i]!=ref[i]) diff++;
-                    dbg_num(nm[k], diff);                                            /* 0 = byte-identical */
+                    dbg_num(nm[k], diff);                                            /* 0 = byte-identical (dx=-1 was
+                                                            358 until the draw_view_objects edge-bleed fix: build_static
+                                                            used to drop a multi-tile object anchored just off the
+                                                            right/bottom edge whose body bleeds in). */
                 }
-                w.px=(uint16_t)PX; w.py=(uint16_t)PY; g_tmp_valid=0;
+                /* dimmed-cache diff-test: predim_compose_static (incremental) == full dim rebuild?
+                 * both FLAT (style 3) and DITHER (style 4). Proves the incremental re-dim of only the
+                 * revealed edge + light-changed cells reproduces a from-scratch dim exactly. */
+                { static uint8_t rdim[TMP_T*TMP_T]; uint8_t pl[VT*VT], pv[VT*VT];
+                  const char* dn[2][4]={{"dimF dx+1 =","dimF dx-1 =","dimF dy+1 =","dimF dy-1 ="},
+                                        {"dimD dx+1 =","dimD dx-1 =","dimD dy+1 =","dimD dy-1 ="}};
+                  g_predim=0;
+                  for(int dith=0;dith<2;dith++) for(int k=0;k<4;k++){ int ddx=dd[k][0], ddy=dd[k][1];
+                      w.px=(uint16_t)((PX+ddx)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)((PY+ddy)&(U6_SURFACE_TILES-1));
+                      compute_predim_light(&w,pl,pv); g_dm_valid=0; g_tmp_valid=0;
+                      predim_compose_static(&w,pl,dith); memcpy(rdim,g_dimmed_map,sizeof rdim);   /* ref: full at P+d */
+                      w.px=(uint16_t)PX; w.py=(uint16_t)PY;
+                      compute_predim_light(&w,pl,pv); g_dm_valid=0; g_tmp_valid=0;
+                      predim_compose_static(&w,pl,dith);                                          /* prime at P */
+                      w.px=(uint16_t)((PX+ddx)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)((PY+ddy)&(U6_SURFACE_TILES-1));
+                      compute_predim_light(&w,pl,pv);
+                      predim_compose_static(&w,pl,dith);                                          /* incremental P->P+d */
+                      int diff=0; for(int i=0;i<TMP_T*TMP_T;i++) if(g_dimmed_map[i]!=rdim[i]) diff++;
+                      dbg_num(dn[dith][k], diff);                                                 /* 0 = byte-identical */
+                  }
+                }
+                w.px=(uint16_t)PX; w.py=(uint16_t)PY; g_tmp_valid=0; g_dm_valid=0;
             } else if(mode==12){                          /* STAT TRAINERS: raise the avatar's lowest stat for gold (cap 30) */
                 dbg_num("gold before =", (int)g_cg.gold);
                 dbg_num("str=", g_astr[1]); dbg_num("dex=", g_adex[1]); dbg_num("int=", g_aint[1]);
@@ -5488,8 +5798,23 @@ int main(void)
             if(id>0){ talk(id); dbg_num("CONVPAL talk id=", id); dbg_num("CONVPAL portrait=", g_have_pc); } }
     }
 
+    /* DEBUG: LIGHTSTY.REQ byte '0'=SMOOTH '1'=DITHER '2'=BINARY '3'=PREDIM selects the lighting
+     * style once, BEFORE compose_map so the very first composed frame uses it. Harmless in play. */
+    { static int ls_done=0;
+      if(!ls_done){ int32_t rl=0; char *rq=(char*)plat_load_file("LIGHTSTY.REQ",1,&rl);
+          if(rq && rl>0 && rq[0]>='0' && rq[0]<='4'){ g_light_style=rq[0]-'0'; g_tmp_valid=0; }
+          ls_done=1; } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
+    /* DEBUG: TALKTEST.REQ (holding an actor number, or empty = nearest NPC) opens
+     * that NPC's conversation once, so a headless shot can verify the FACES/TALK
+     * mapping. Harmless in normal play (the file is never staged). */
+    { static int tt_done=0;
+      if(!tt_done){ int32_t rl=0; char *rq=(char*)plat_load_file("TALKTEST.REQ",1,&rl);
+          if(rq){ int id=0,k=0; while(k<rl && rq[k]>='0'&&rq[k]<='9'){ id=id*10+(rq[k]-'0'); k++; }
+              if(id<=0) id=find_adjacent_npc(&w);
+              if(id>0){ g_talking=0; talk(id); } }
+          tt_done=1; } }
     draw_conversation(ink);
     draw_status(&w,ink);
     draw_command_bar(15);
@@ -5523,6 +5848,11 @@ int main(void)
             Cconws("intro bench done\r\n"); return 0;
         } }
     {   enum { N = 20 };
+        /* LIGHTSTY.REQ ('0'=SMOOTH '1'=DITHER '2'=BINARY) selects the lighting style so we can
+         * bench per-pixel bilinear vs per-cell dither. Defaults SMOOTH. */
+        { int32_t lrl=0; char *lrq=(char*)plat_load_file("LIGHTSTY.REQ",1,&lrl);
+          if(lrq && lrl>0 && lrq[0]>='0' && lrq[0]<='4'){ g_light_style=lrq[0]-'0';
+              dbg_num("LIGHT STYLE=", g_light_style); } }
         /* FULL-build compose (force a rebuild each time): the no-cache baseline. */
         uint32_t tf0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ g_tmp_valid=0; compose_map(&w); }
@@ -5538,7 +5868,8 @@ int main(void)
         for (int i=0;i<N;i++) rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); /* map window, doubled */
         uint32_t t2=plat_ticks_200hz();
         rdr_shutdown();
-        uint32_t r[5]={ (t1-t0),(tf1-tf0),(t2-t1),0,(uint32_t)N };  /* [0]=scroll compose, [1]=full compose, [2]=present */
+        uint32_t r[9]={ (t1-t0),(tf1-tf0),(t2-t1),0,(uint32_t)N,      /* [0]=scroll compose, [1]=full compose, [2]=present */
+                        g_phase[0],g_phase[1],g_phase[2],g_phase[3] };/* [5..8]=scroll ph0..ph3 (summed over N) */
         plat_file bf=plat_fcreate("BENCH.BIN");
         if (bf!=PLAT_BADFILE){ plat_fwrite(bf,r,(int32_t)sizeof r); plat_fclose(bf);}
         dbg_num("FULL  compose   ms=", (int)((tf1-tf0)*5/N));
@@ -5548,6 +5879,13 @@ int main(void)
         dbg_num("  scroll ph2 light+vis ms=", (int)(g_phase[2]*5/N));
         dbg_num("  scroll ph3 composite ms=", (int)(g_phase[3]*5/N));
         dbg_num("present map doubled ms=", (int)((t2-t1)*5/N));
+        { extern uint32_t g_dim_calls, g_dim_miss;
+          dbg_num("PREDIM dim_tile calls=", (int)g_dim_calls);
+          dbg_num("PREDIM dim_tile MISS =", (int)g_dim_miss); }
+#ifdef HAVE_RDR_ST
+        { extern int rdr_c2p_selftest(void);
+          dbg_num("c2p asm-vs-C diff wd=", rdr_c2p_selftest()); }   /* 0 = asm byte-identical to c2p4_lut */
+#endif
         Cconws("bench done\r\n"); return 0; }
 #endif
 
