@@ -897,12 +897,13 @@ typedef struct {
     const char *id;          /* MKWORLD_GAME value            */
     char        magic[4];    /* core-pack magic (per game)    */
     const char *palette;     /* palette filename in <dir>     */
+    const char *font;        /* WOU proportional font (NULL = none) */
 } GameProfile;
 
 static const GameProfile G_PROFILES[] = {
-    { "u6",      { 'U','6','W','T' }, "U6PAL" },
-    { "savage",  { 'S','E','W','T' }, "SEPAL" },
-    { "martian", { 'M','D','W','T' }, "MDPAL" },
+    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL          },
+    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT"  },
+    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC"   },
 };
 
 static const GameProfile *profile_for(const char *id)
@@ -945,6 +946,33 @@ static uint8_t *load_core_asset(const char *dir, const char *name, uint8_t marke
         printf("%s: LZW decode failed\n", name); free(out); return NULL;
     }
     *outlen = n; return b;                                                  /* raw */
+}
+
+/* Convert a WOU proportional font (SE `SAVAGE.FNT` / MD `FONTS.LZC`, itself
+ * LZC-wrapped LZW) to the U6.CH 8x8 1bpp format (256 glyphs x 8 bytes, MSB-left,
+ * bit set = ink) so the engine's existing text renderer can draw it. See
+ * docs/formats/fonts.md. WOU layout (decompressed): [0]=height(8) [3]=transparent
+ * pixel value; [4..259] widths[256]; [260..515] glyph-offset LOW bytes + [516..771]
+ * HIGH bytes -> u16 absolute glyph offset; glyph = width*8 bytes, ROW-major
+ * (8 rows x width), a pixel is INK iff its byte != the transparent value. Widths
+ * are <=9 (one glyph is 9); columns past 8 are clipped. Returns 1 on success. */
+static int convert_wou_font(const char *dir, const char *name, uint8_t marker, uint8_t out[2048])
+{
+    long fl; uint8_t *f = load_core_asset(dir, name, marker, &fl);
+    if (!f || fl < 772){ printf("%s: WOU font missing/short (%ld)\n", name, f ? fl : -1); return 0; }
+    int transp = f[3];
+    for (int ch = 0; ch < 256; ch++){
+        int w = f[4 + ch];
+        long g = f[260 + ch] | ((long)f[516 + ch] << 8);
+        for (int r = 0; r < 8; r++){
+            uint8_t bits = 0;
+            for (int col = 0; col < w && col < 8; col++)
+                if (g + (long)r * w + col < fl && f[g + (long)r * w + col] != transp)
+                    bits |= (uint8_t)(0x80 >> col);
+            out[ch * 8 + r] = bits;
+        }
+    }
+    return 1;
 }
 
 /* Build the CORE world pack for `prof` from the game data in `dir`. Shares the
@@ -1032,12 +1060,21 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
         }
         fwrite(gettable, 1, 1024, f);
     }
+
+    /* Optional "CFNT" section: the game's WOU proportional font converted to the
+     * U6.CH 8x8 1bpp format so the shared text renderer can draw it.
+     * [4 "CFNT"][2048 font]. */
+    uint8_t font8[2048]; int have_font = 0;
+    if (prof->font && convert_wou_font(dir, prof->font, marker, font8)){
+        fwrite("CFNT", 1, 4, f); fwrite(font8, 1, 2048, f); have_font = 1;
+    }
     fclose(f);
 
     printf("core pack: game=%s magic=%.4s -> %s\n", prof->id, prof->magic, out);
     printf("  MAP=%ld CHUNKS=%ld tiles=%d objects=%d palette=%s(%ld) start=(%d,%d)\n",
            mn, cn, NTILES, nobj, prof->palette, pn, startx, starty);
-    if (lookl > 0) printf("  +CLOK: look table %ld B, %d/1024 gettable obj_n\n", lookl, nget);
+    if (lookl > 0)  printf("  +CLOK: look table %ld B, %d/1024 gettable obj_n\n", lookl, nget);
+    if (have_font)  printf("  +CFNT: %s -> 8x8 font (2048 B)\n", prof->font);
     return 0;
 }
 

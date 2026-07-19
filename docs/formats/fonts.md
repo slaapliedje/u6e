@@ -17,8 +17,9 @@ no compression and no size header. (`U6.SET` is a *different*, LZW-compressed
 file and is **not** this 8×8 font — do not confuse them. An earlier decode pass
 wasted effort assuming U6.SET was the font; it is out of scope here.)
 
-All three games ship a `U6.CH` (U6, Savage Empire, Martian Dreams); the layout
-below is assumed shared until a per-game decode proves otherwise.
+**U6 only** ships `U6.CH`. Savage Empire and Martian Dreams instead use a
+**proportional "WOU" font** (`SAVAGE.FNT` / `FONTS.LZC`) — a different format,
+documented in its own section below. The 8×8 layout here is U6's.
 
 ## Container facts
 - Size: exactly **2048 bytes**. Raw — no LZW, no 4-byte size header.
@@ -54,6 +55,40 @@ the foreground palette index, clear bits are left untouched (transparent). See
 `render/gamedemo.c::ui_text` and `tools/uipreview.c::text` — both iterate rows
 and test `bits & (0x80 >> col)`.
 
+## Savage / Martian: the WOU proportional font (`SAVAGE.FNT` / `FONTS.LZC`)
+
+Games: Savage Empire (`SAVAGE.FNT`) / Martian Dreams (`FONTS.LZC`) — SE/MD only.
+Confidence: **confirmed** (SE decoded + rendered on-target). Derived clean-room
+from the user's own `SAVAGE.FNT` byte-by-byte (headers, widths, offset table,
+glyph pixels); validated by converting to 8×8 and rendering "The quick SAVAGE
+fox 0123456789" (host, legible) and "The Savage Empire" on the Falcon panel.
+
+- **Container**: the file is an [.LZC](lzc.md) single item (SE flag 0x01 = LZW,
+  MD 0x20 = LZW) — decompress with our `u6lzw` first. SE `SAVAGE.FNT` → 7188 B.
+- **Decompressed layout**:
+  | Offset | Size | Field | Meaning |
+  |--------|------|-------|---------|
+  | 0      | 1    | height | pixel height (8) |
+  | 1..2   | 2    | —     | (0; unused) |
+  | 3      | 1    | transp | the "background" pixel value (0x48 = 72) |
+  | 4      | 256  | widths | per-char advance/bitmap width (chars 0..255; Σ = total columns) |
+  | 260    | 256  | off_lo | glyph-offset LOW bytes |
+  | 516    | 256  | off_hi | glyph-offset HIGH bytes → `off[ch] = off_lo[ch] | off_hi[ch]<<8` = absolute file offset of glyph ch |
+  | off[ch]| w×8  | glyph | `width[ch]` columns × 8 rows, **row-major**, 1 byte/pixel |
+- **Pixel**: a byte is INK iff it is **not** the transparent value (`!= transp`);
+  else transparent. (SE glyphs use only 0 and 72; ink = the 0 bytes.)
+  `off[ch] == 4 + 8·Σwidths[0..ch-1] + 768`, i.e. glyphs pack end-to-end from
+  a base of 772; the offset table is redundant with the widths but authoritative.
+- Widths are ≤ 9 (one glyph is 9); all others ≤ 8.
+
+### Conversion for the engine
+`tools/mkworld.c::convert_wou_font` folds the WOU font into the **U6.CH 8×8
+1bpp** format (bit set where a pixel is ink, columns clipped to 8) and ships it
+in the SE/MD CORE pack's optional **`CFNT`** section `[4 "CFNT"][2048 bytes]`
+(docs/design/multigame.md P2). The loader points `g_font` at it, so the shared
+`ui_text`/`ptext` renderer draws SE/MD text with no renderer change. (A future
+enhancement could render the WOU font proportionally at its native widths.)
+
 ## Distribution (clean-room)
 `U6.CH` is original game data: it is **loaded at runtime**, never committed. The
 host asset pipeline (`tools/mkworld.c`) copies the user's `U6.CH` verbatim into
@@ -67,10 +102,11 @@ the reference screenshots. A per-glyph dump confirms 'A','V','a','6','!' etc.
 render correctly at their ASCII indices.
 
 ## Open questions
-- Per-game deltas: confirm SE/MD `U6.CH` are layout-identical (very likely).
 - Runic/gargish exact code offsets when we render gargoyle dialogue (M6 talk).
-- Is there a separate larger/title font (U6.SET? WOU font in Nuvie) needed for
-  intro/menus? Out of scope until those screens are implemented.
+- MD `FONTS.LZC`: confirm the WOU layout is byte-identical to SE (very likely;
+  same engine + `.LZC` compressed item) — decode when MD boots (P3).
+- WOU: render proportionally at native widths (nicer than the 8×8 clip) once
+  SE/MD get their own HUD text surfaces.
 
 ## Status
 VERIFIED (confirmed) — English 8×8 glyphs render correctly; runic range present

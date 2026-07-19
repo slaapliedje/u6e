@@ -81,9 +81,12 @@ unblocks (most foundational first):
   gettable fold into the core pack's optional magic-guarded **`CLOK`** section; the loader parses it
   (magic-based `is_core = gd != gamedef_u6`, so the core pack can grow). `tools/coredump` labels the
   rendered SE village with authentic names (atl atl / obsidian knife / totem of Aphazz / roast
-  pteranodon). Remaining P2: SE font (SAVAGE.FNT is its own proportional format — text still blank),
-  FACES portraits (nested shape-lib), SE NPCs (SE ships no OBJLIST — initial actor table TBD), and the
-  SE RuleSet (4-of-6 levels + gargoyle variant, tribal-skill stub). Deltas → docs/rules.
+  pteranodon). **SE font DONE**: cracked the WOU proportional format (`SAVAGE.FNT` = `.LZC`→LZW→
+  `[height][transp][widths 256][split lo/hi offset table][row-major glyphs, ink = byte≠transp]`;
+  docs/formats/fonts.md), converted to U6.CH 8×8 in a `CFNT` core-pack section → `g_font`; "The Savage
+  Empire" renders on the Falcon panel in the game's own font. Remaining P2: FACES portraits (nested
+  shape-lib), SE NPCs (SE ships no OBJLIST — initial actor table TBD), and the SE RuleSet (4-of-6
+  levels + gargoyle variant, tribal-skill stub). Deltas → docs/rules.
 - **P3 — MD data path + vertical slice.** Locate MD's game palette; MD manifest; era-mechanics
   RuleSet; MD boots + walks + objects.
 - **P4 — Acceptance.** All three boot from ONE binary; a vertical slice of each runs; all per-game

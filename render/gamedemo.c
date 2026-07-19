@@ -52,6 +52,7 @@
 enum { C_BLACK=0 };            /* U6PAL index 0 is pure black                 */
 
 static const uint8_t *g_tileset, *g_objs, *g_font, *g_paper, *g_portraits;
+static const char *g_gamename;   /* set for a CORE pack (SE/MD): shown in the panel; NULL for U6 */
 static int32_t        g_nobjs;
 static int            g_nport;
 static int            g_demo_npc;       /* NPC whose conversation the VM runs   */
@@ -2291,6 +2292,8 @@ static void draw_conversation(uint8_t col)
     } else {
         draw_sky();                                /* day/night bar + party roster */
         draw_party_roster(col);
+        if(g_gamename)                             /* CORE pack (SE/MD): title the panel with the game name */
+            ui_text(PANX+(PANW-ui_textw(g_gamename))/2, 100, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
             const char*p = g_pending_verb=='A'?"Attack-(dir)?":g_pending_verb=='L'?"Look-(dir)?":
@@ -4350,6 +4353,7 @@ int main(void)
     long core_end = 26 + (long)map_len + chunks_len + (long)ntiles*256 + 768 + 256
                   + (long)g_nobjs*14;
     int is_core = (gd != &gamedef_u6);
+    g_gamename = is_core ? gd->name : (const char *)0;   /* panel title for SE/MD core packs */
     const uint8_t *gettable;
     static uint8_t s_stub_paper[64000+2];   /* black background (no PAPER.BMP)     */
     static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */
@@ -4366,13 +4370,16 @@ int main(void)
         for(int i=0;i<2048;i++) g_looktbl[i]="";
         gettable=s_stub_1k;
 
-        /* optional core sections after the objects (magic-guarded; grow over time).
-         * "CLOK": object identity — [4 "CLOK"][u32 look_len][look run-fill][gettable 1024]. */
+        /* optional core sections after the objects (magic-guarded; grow over time):
+         *   "CLOK": object identity — [4 "CLOK"][u32 look_len][look run-fill][gettable 1024]
+         *   "CFNT": text font       — [4 "CFNT"][2048 U6.CH-format 8x8 glyphs] */
         const uint8_t *ext = pak + core_end;
-        if (ext+8 <= pak+n && ext[0]=='C'&&ext[1]=='L'&&ext[2]=='O'&&ext[3]=='K'){
-            uint32_t look_len=((uint32_t)ext[4]<<24)|(ext[5]<<16)|(ext[6]<<8)|ext[7];
-            const uint8_t *blob=ext+8, *gt=blob+look_len;
-            if (gt+1024 <= pak+n){
+        while (ext+4 <= pak+n){
+            if (ext[0]=='C'&&ext[1]=='L'&&ext[2]=='O'&&ext[3]=='K'){
+                if (ext+8 > pak+n) break;
+                uint32_t look_len=((uint32_t)ext[4]<<24)|(ext[5]<<16)|(ext[6]<<8)|ext[7];
+                const uint8_t *blob=ext+8, *gt=blob+look_len;
+                if (gt+1024 > pak+n) break;
                 int j=0; const uint8_t *p=blob;              /* same run-fill parse as the U6 path */
                 for(int i=0;i<2048 && p+2<gt;){
                     i=p[0]|(p[1]<<8); if(i>=2048) break;
@@ -4383,7 +4390,12 @@ int main(void)
                 }
                 for(;j<2048;j++) g_looktbl[j]=g_looktbl[0]?g_looktbl[0]:"";
                 gettable=gt;                                 /* packed gettable[1024], points into pak */
-            }
+                ext=gt+1024;
+            } else if (ext[0]=='C'&&ext[1]=='F'&&ext[2]=='N'&&ext[3]=='T'){
+                if (ext+4+2048 > pak+n) break;
+                g_font = ext+4;                              /* SE/MD 8x8 font (points into pak) */
+                ext += 4+2048;
+            } else break;
         }
     } else {
     g_font=g_objs+(int32_t)g_nobjs*14;                           /* 14 bytes/object (U6WT) */
