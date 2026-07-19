@@ -45,7 +45,8 @@ int main(int argc, char **argv)
     long need = 26 + (long)map_len + chk_len + (long)ntiles*256 + 768 + 256 + (long)nobj*14;
     printf("== coredump %.4s: map=%u chunks=%u tiles=%u objects=%u start=(%d,%d) ==\n",
            (const char*)pak, map_len, chk_len, ntiles, nobj, startx, starty);
-    if (need != n) { printf("pack size %ld != expected %ld (layout mismatch)\n", n, need); return 2; }
+    if (need > n) { printf("core sections need %ld > pack size %ld (layout mismatch)\n", need, n); return 2; }
+    if (need < n) printf("(+%ld bytes of optional sections follow the core)\n", n - need);
 
     u6map_t w;
     if (!u6map_load(&w, map, (int32_t)map_len, chunks, (int32_t)chk_len)) { printf("u6map_load failed\n"); return 2; }
@@ -97,5 +98,32 @@ int main(int argc, char **argv)
     for (int i = 0; i < PXW*PXW; i++) { u6_rgb c = pal.color[bb[i]]; img[i*3]=c.r; img[i*3+1]=c.g; img[i*3+2]=c.b; }
     int rc = png_write_rgb(argv[2], PXW, PXW, img);
     printf("wrote %s (%dx%d) centred (%d,%d); %d objects drawn\n", argv[2], PXW, PXW, left, top, drawn);
+
+    /* object identity: parse the optional CLOK section (after the objects) and
+     * label the drawn objects with their look-names — proof SE/MD object naming
+     * decodes. [4 "CLOK"][u32 look_len][look run-fill][gettable 1024]. */
+    long core_end = 26 + (long)map_len + chk_len + (long)ntiles*256 + 768 + 256 + (long)nobj*14;
+    const uint8_t *ext = pak + core_end;
+    if (ext+8 <= pak+n && ext[0]=='C'&&ext[1]=='L'&&ext[2]=='O'&&ext[3]=='K') {
+        uint32_t look_len = be32(ext+4);
+        const uint8_t *blob = ext+8, *gt = blob+look_len;
+        static const char *name[2048]; int prev=-1; const uint8_t *p=blob;
+        while (p+2 < gt) { int ix=p[0]|(p[1]<<8); if(ix>=2048) break;
+            const char *s=(const char*)(p+2); int len=0; while(s+len<(const char*)gt && s[len]) len++;
+            for(int t=prev+1;t<=ix && t<2048;t++) name[t]=s; prev=ix; p+=len+3; }
+        /* histogram of drawn objects by look-name */
+        struct { const char *nm; int c; } hist[64]; int nh=0;
+        for (int i = 0; i < nsurf; i++) {
+            int vx=ox[i]-left, vy=oy[i]-top; if(vx<0||vx>=VT||vy<0||vy>=VT) continue;
+            const char *nm = (otile[i]<2048 && name[otile[i]]) ? name[otile[i]] : "?";
+            int h=-1; for(int k=0;k<nh;k++) if(!strcmp(hist[k].nm,nm)){h=k;break;}
+            if(h<0 && nh<64){ h=nh++; hist[h].nm=nm; hist[h].c=0; }
+            if(h>=0) hist[h].c++;
+        }
+        printf("CLOK object identity — drawn objects by look-name:\n");
+        for (int k=0;k<nh;k++) printf("  %3d x %s\n", hist[k].c, hist[k].nm);
+    } else {
+        printf("(no CLOK section — object names unavailable)\n");
+    }
     return rc;
 }

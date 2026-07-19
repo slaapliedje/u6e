@@ -1013,11 +1013,31 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
         be16(f, contained ? 0 : objs[i].x); be16(f, contained ? 0 : objs[i].y);
         be16(f, (unsigned)tile); be16(f, objs[i].obj_n);
         be16(f, objs[i].quantity); be16(f, objs[i].quality); be16(f, objs[i].parent); }
+
+    /* Optional "CLOK" section (object identity): SE/MD LOOK.LZC decodes to the
+     * SAME run-fill tile->name table as U6's LOOK.LZD ([u16 tile][name\0]...),
+     * plus a precomputed gettable[obj_n] from TILEFLAG. Magic-guarded so the
+     * core pack can grow; the loader parses whatever sections are present.
+     * [4 "CLOK"][u32 look_len][look][gettable 1024]. */
+    long lookl = 0; uint8_t *lookd = load_core_asset(dir, "LOOK.LZC", marker, &lookl);
+    int nget = 0;
+    if (lookd && lookl > 0){
+        fwrite("CLOK", 1, 4, f); be32(f, (unsigned long)lookl); fwrite(lookd, 1, lookl, f);
+        uint8_t gettable[1024];
+        for (int o = 0; o < 1024; o++){
+            uint8_t w = tflag[0x1000 + o];                 /* weight block, by obj_n */
+            uint16_t base = u6_basetile(bt, (uint16_t)o);
+            int toptile = (base < NTILES) && (tflag[0x800 + base] & 0x10);
+            gettable[o] = (w != 0 && w != 255 && !toptile) ? 1 : 0; nget += gettable[o];
+        }
+        fwrite(gettable, 1, 1024, f);
+    }
     fclose(f);
 
     printf("core pack: game=%s magic=%.4s -> %s\n", prof->id, prof->magic, out);
     printf("  MAP=%ld CHUNKS=%ld tiles=%d objects=%d palette=%s(%ld) start=(%d,%d)\n",
            mn, cn, NTILES, nobj, prof->palette, pn, startx, starty);
+    if (lookl > 0) printf("  +CLOK: look table %ld B, %d/1024 gettable obj_n\n", lookl, nget);
     return 0;
 }
 

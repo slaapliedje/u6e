@@ -77,9 +77,13 @@ unblocks (most foundational first):
   verbs/anim/lighting/save) so the real render pipeline runs on SE's terrain + objects. `make shot-se`
   boots the Falcon binary on `SE.PAK` and pixel-dumps the Kurak-valley village (huts/pottery/food in
   SEPAL) — verified. U6 full-pack path unchanged (throne-room boot re-verified; enginetest ALL PASS).
-  Remaining P2: fold `.LZC` TALK/LOOK/FACES into the SE pack (dialogue/look-names/portraits), SE NPCs
-  from its OBJLIST/SCHEDULE, look/get/use via obj_n; SE RuleSet (4-of-6 levels + gargoyle variant,
-  tribal-skill stub). Deltas → docs/rules.
+  **Object identity DONE**: SE/MD `LOOK.LZC` (same run-fill table as U6 `LOOK.LZD`, via `u6lzc`) +
+  gettable fold into the core pack's optional magic-guarded **`CLOK`** section; the loader parses it
+  (magic-based `is_core = gd != gamedef_u6`, so the core pack can grow). `tools/coredump` labels the
+  rendered SE village with authentic names (atl atl / obsidian knife / totem of Aphazz / roast
+  pteranodon). Remaining P2: SE font (SAVAGE.FNT is its own proportional format — text still blank),
+  FACES portraits (nested shape-lib), SE NPCs (SE ships no OBJLIST — initial actor table TBD), and the
+  SE RuleSet (4-of-6 levels + gargoyle variant, tribal-skill stub). Deltas → docs/rules.
 - **P3 — MD data path + vertical slice.** Locate MD's game palette; MD manifest; era-mechanics
   RuleSet; MD boots + walks + objects.
 - **P4 — Acceptance.** All three boot from ONE binary; a vertical slice of each runs; all per-game

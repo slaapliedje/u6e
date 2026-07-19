@@ -4340,15 +4340,16 @@ int main(void)
     const uint8_t *palette=g_tileset+(int32_t)ntiles*256, *passable=palette+768;
     g_objs=passable+256;
 
-    /* M9: a CORE pack (Savage/Martian, magic SEWT/MDWT) ends right after the
-     * objects — it carries none of the U6-only tail (font/paper/portraits/actors/
-     * verbs/anim/lighting/...). Detect it structurally (nothing follows objects)
-     * and stub the globals the shared render loop reads so SE/MD boot the map
-     * window on the real pipeline. The full U6 path (the else branch) is
-     * unchanged. See docs/design/multigame.md P2. */
+    /* M9: a CORE pack (Savage/Martian) carries the shared world (map/tiles/
+     * objects) + optional magic-guarded sections, but none of the U6-only tail
+     * (paper/portraits/actors/anim/lighting/save). Selected by the pack magic:
+     * only U6's own pack uses the full U6 layout. On a core pack we stub the
+     * globals the shared render loop reads, then parse whatever optional
+     * sections ARE present (CLOK object identity, ...). The U6 path (the else
+     * branch) is unchanged. See docs/design/multigame.md P2. */
     long core_end = 26 + (long)map_len + chunks_len + (long)ntiles*256 + 768 + 256
                   + (long)g_nobjs*14;
-    int is_core = (core_end >= (long)n);
+    int is_core = (gd != &gamedef_u6);
     const uint8_t *gettable;
     static uint8_t s_stub_paper[64000+2];   /* black background (no PAPER.BMP)     */
     static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */
@@ -4364,6 +4365,26 @@ int main(void)
             g_amana[i]=g_amaxmana[i]=0; g_afood[i]=FOOD_START; }
         for(int i=0;i<2048;i++) g_looktbl[i]="";
         gettable=s_stub_1k;
+
+        /* optional core sections after the objects (magic-guarded; grow over time).
+         * "CLOK": object identity — [4 "CLOK"][u32 look_len][look run-fill][gettable 1024]. */
+        const uint8_t *ext = pak + core_end;
+        if (ext+8 <= pak+n && ext[0]=='C'&&ext[1]=='L'&&ext[2]=='O'&&ext[3]=='K'){
+            uint32_t look_len=((uint32_t)ext[4]<<24)|(ext[5]<<16)|(ext[6]<<8)|ext[7];
+            const uint8_t *blob=ext+8, *gt=blob+look_len;
+            if (gt+1024 <= pak+n){
+                int j=0; const uint8_t *p=blob;              /* same run-fill parse as the U6 path */
+                for(int i=0;i<2048 && p+2<gt;){
+                    i=p[0]|(p[1]<<8); if(i>=2048) break;
+                    const char *s=(const char*)(p+2);
+                    int len=0; while(s+len<(const char*)gt && s[len]) len++;
+                    for(;j<=i;j++) g_looktbl[j]=s;
+                    p+=len+3;
+                }
+                for(;j<2048;j++) g_looktbl[j]=g_looktbl[0]?g_looktbl[0]:"";
+                gettable=gt;                                 /* packed gettable[1024], points into pak */
+            }
+        }
     } else {
     g_font=g_objs+(int32_t)g_nobjs*14;                           /* 14 bytes/object (U6WT) */
     g_paper=g_font+2048;
