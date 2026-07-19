@@ -153,6 +153,20 @@ $(BUILD)/dftest: tools/dftest.c $(DF_SRC)
 dftest: $(BUILD)/dftest
 	$(BUILD)/dftest $(REFDATA)
 
+# M9: validate the SE/MD ".LZC" flagged-library container (docs/formats/lzc.md)
+# against the user's real Savage/Martian files, decoding with our own u6lzw.
+LZC_SRC := dataformats/u6lzc.c dataformats/u6lzw.c
+SE_REFDATA ?= refdata/dos/savage/SAVAGE
+MD_REFDATA ?= refdata/dos/martian/MARTIAN
+$(BUILD)/lzctest: tools/lzctest.c $(LZC_SRC)
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+
+lzctest: $(BUILD)/lzctest
+	$(BUILD)/lzctest $(SE_REFDATA) se
+	@echo
+	$(BUILD)/lzctest $(MD_REFDATA) md
+
 # decode the world + tiles and render PNGs (visual proof of M2 decode)
 MAPDUMP_SRC := dataformats/u6lzw.c dataformats/u6pal.c dataformats/u6map.c \
                dataformats/u6tile.c tools/png.c

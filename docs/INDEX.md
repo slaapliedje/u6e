@@ -14,6 +14,7 @@ Per-game:   "shared" if identical across all three; else note deltas.
 |----------------------|------------------------------------|---------|----------|--------|------------|------------------------|-----------|
 | lzw.md               | LZW container (LE size hdr, reset) | all     | shared   | VERIFIED | confirmed | /dataformats, /tools   | M2 |
 | library.md           | Library/index file structure       | all     | shared   | VERIFIED | confirmed | /dataformats           | M2 |
+| lzc.md               | SE/MD ".LZC" flagged library (per-entry LZW/stored) | SE/MD | SE marker 0x01, MD 0x20 | VERIFIED | confirmed (every SE+MD *.LZC tiles to EOF + all LZW items decode to declared size via our u6lzw; SE/MD TALK → readable dialogue) | /dataformats (u6lzc), /tools (lzctest) | M9 |
 | map_chunks.md        | MAP + CHUNKS world geography       | all     | shared   | VERIFIED | confirmed | /dataformats, /engine  | M2 |
 | tiles.md             | tileindx/maptiles/masktype/objtiles| all     | verify   | VERIFIED | confirmed (incl. pixel-block) | /dataformats, /tools | M2 |
 | palette.md           | u6pal / palettes.int / convert.pal | all     | verify   | VERIFIED | confirmed (u6pal) | /tools, /render | M2/M7 |
