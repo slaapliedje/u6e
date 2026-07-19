@@ -4339,11 +4339,36 @@ int main(void)
     g_tileset=chunks+chunks_len;
     const uint8_t *palette=g_tileset+(int32_t)ntiles*256, *passable=palette+768;
     g_objs=passable+256;
+
+    /* M9: a CORE pack (Savage/Martian, magic SEWT/MDWT) ends right after the
+     * objects — it carries none of the U6-only tail (font/paper/portraits/actors/
+     * verbs/anim/lighting/...). Detect it structurally (nothing follows objects)
+     * and stub the globals the shared render loop reads so SE/MD boot the map
+     * window on the real pipeline. The full U6 path (the else branch) is
+     * unchanged. See docs/design/multigame.md P2. */
+    long core_end = 26 + (long)map_len + chunks_len + (long)ntiles*256 + 768 + 256
+                  + (long)g_nobjs*14;
+    int is_core = (core_end >= (long)n);
+    const uint8_t *gettable;
+    static uint8_t s_stub_paper[64000+2];   /* black background (no PAPER.BMP)     */
+    static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */
+    static uint8_t s_stub_1k[1024];          /* empty gettable                      */
+    static uint8_t s_stub_basetile[2048];    /* obj_n -> base tile 0                */
+    const uint8_t *after_actors = NULL;
+
+    if (is_core) {
+        g_font=s_stub_font; g_paper=s_stub_paper; g_nport=0; g_portraits=NULL;
+        g_demo_npc=0; g_script_len=0; g_script=NULL; g_nsparty=0; g_savestate=0;
+        for(int i=0;i<U6_MAX_ACTORS;i++){ g_atile[i]=0xffff; g_actz[i]=0xff;
+            g_ahp[i]=g_astr[i]=g_adex[i]=g_aint[i]=0; g_amaxhp[i]=0;
+            g_amana[i]=g_amaxmana[i]=0; g_afood[i]=FOOD_START; }
+        for(int i=0;i<2048;i++) g_looktbl[i]="";
+        gettable=s_stub_1k;
+    } else {
     g_font=g_objs+(int32_t)g_nobjs*14;                           /* 14 bytes/object (U6WT) */
     g_paper=g_font+2048;
     g_nport=(g_paper[64000]<<8)|g_paper[64001];
     g_portraits=g_paper+64000+2;
-    const uint8_t *after_actors;
     {   const uint8_t *demo=g_portraits+(int32_t)g_nport*PW*PH;  /* demo NPC block */
         g_demo_npc=(demo[0]<<8)|demo[1];
         g_script_len=(demo[2]<<8)|demo[3];
@@ -4377,7 +4402,6 @@ int main(void)
         after_actors=sched+sched_len; }
 
     /* object verbs section: [u32 look_len][look payload][gettable 1024] */
-    const uint8_t *gettable;
     {   const uint8_t *lk=after_actors;
         uint32_t look_len=((uint32_t)lk[0]<<24)|(lk[1]<<16)|(lk[2]<<8)|lk[3]; lk+=4;
         const char *blob=(const char*)lk;
@@ -4391,6 +4415,7 @@ int main(void)
             p+=len+3;
         }
         for(;j<2048;j++) g_looktbl[j]=g_looktbl[0]?g_looktbl[0]:""; }
+    }   /* end full-pack section A (a core pack stubbed these globals above) */
 
     /* build the mutable world-object store from the packed records */
     {   int nw=g_nobjs<MAXWOBJ?(int)g_nobjs:MAXWOBJ;
@@ -4405,6 +4430,7 @@ int main(void)
         objworld_init(&g_ow,g_wobj,nw,gettable); }
     magic_init();                          /* seed spellbook + reagents (magic_skills.md §4) */
 
+    if (!is_core) {   /* full U6 pack: cursor + basetile + anim/lighting/save tail */
     /* mouse cursor: [u8 w][u8 h][u8 hotx][u8 hoty][w*h pixels] after gettable;
      * then BASETILE[2048] (1024 x u16 LE) for frame-aware use (doors). */
     {   const uint8_t *cur=gettable+1024;
@@ -4541,6 +4567,19 @@ int main(void)
                 ap=q;
             }
         }
+    }
+    } else {   /* core pack (SE/MD): stub the U6-only cursor/basetile/anim/lighting/save tail */
+        g_cw=g_ch=0; g_basetile=s_stub_basetile;
+        for(int i=0;i<2048;i++){ g_anim_idx[i]=-1; g_tflags[i]=0; g_tflags1[i]=0; }
+        g_nanim=0;
+        for(int i=0;i<1024;i++) g_objanim[i]=0;
+        for(int lev=0;lev<NLEV;lev++) for(int i=0;i<256;i++) g_darklut[lev][i]=(uint8_t)i;
+        for(int i=0;i<(1024*1024/8);i++) g_indoor[i]=0;   /* all outdoor => full daylight */
+        g_nrtiles=0; g_nroof=0;
+        for(int i=0;i<U6_MAX_ACTORS;i++){ g_aweapon[i]=0; g_aac[i]=0; g_align_hostile[i]=0;
+            g_coward[i]=0; g_aexp[i]=0; g_trainer[i]=0; }
+        g_load_gold=0; g_load_karma=0; g_load_book_present=0; g_load_book_all=0; g_load_reag_present=0;
+        g_have_lowcolor=0; g_have_ste=0; g_nconvpal=0; g_lc_ncyc=0; g_lcx_nb=0; g_nbook=0;
     }
 
     GameDef def = *gd;                 /* the game selected by the pack magic (M9) */

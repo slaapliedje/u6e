@@ -23,7 +23,22 @@ const GameDef gamedef_u6 = {
     &ruleset_u6,
 };
 
-static const GameDef *const g_gamedefs[] = { &gamedef_u6 };
+/* Savage Empire + Martian Dreams: same U6 engine + surface geometry (verified —
+ * 1024x1024, 2048 tiles). They boot from the mkworld CORE pack (magics "SEWT"/
+ * "MDWT"); rules default to U6 for now (tribal-skill / era deltas land in P2/P3,
+ * docs/design/multigame.md). start_x/y come from the pack header. */
+const GameDef gamedef_se = {
+    "savage", "The Savage Empire",
+    { 'S','E','W','T' },
+    U6_SURFACE_TILES, U6_DUNGEON_LEVELS, 0, 0, &ruleset_u6,
+};
+const GameDef gamedef_md = {
+    "martian", "Martian Dreams",
+    { 'M','D','W','T' },
+    U6_SURFACE_TILES, U6_DUNGEON_LEVELS, 0, 0, &ruleset_u6,
+};
+
+static const GameDef *const g_gamedefs[] = { &gamedef_u6, &gamedef_se, &gamedef_md };
 
 const GameDef *gamedef_for_magic(const char *magic)
 {

@@ -538,10 +538,12 @@ world: $(BUILD)/mkworld roof-extract
 # Reuses the U6 loaders (MAP/CHUNKS/tileset/palette/passable/objects); SE/MD wrap
 # the compressible core files in a single-item .LZC which mkworld unwraps.
 # SE_REFDATA / MD_REFDATA are defined with the lzctest target above.
-SE_X ?= 512
-SE_Y ?= 512
-MD_X ?= 512
-MD_Y ?= 512
+# default start = the dense village cluster coredump found (SE Kurak-valley huts),
+# so a boot lands on recognizable land rather than open ocean.
+SE_X ?= 380
+SE_Y ?= 555
+MD_X ?= 124
+MD_Y ?= 168
 world-se: $(BUILD)/mkworld
 	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y)
 world-md: $(BUILD)/mkworld
@@ -773,6 +775,22 @@ shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT"; exit 1; }
 	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot.png
 	@echo "wrote $(BUILD)/shot.png (pixel-perfect 320x200, 1:1)"
+
+# M9 P2: boot The Savage Empire from the SHARED Falcon binary + its CORE pack, and
+# pixel-dump the map window. Stages SE.PAK as the loaded pack name (PACK_NAME=U6.PAK);
+# gamef.prg detects the "SEWT" core magic (gamedef_se) and stubs the U6-only UI tail.
+# No CONVERSE/PORTRAIT (SE has none) -> idle conversation panel; that's expected.
+shot-se: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
+	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK                     # engine loads PACK_NAME (=U6.PAK)
+	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png $(BUILD)/SAVE.000
+	printf 'x' > $(BUILD)/SHOT.REQ
+	-$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
+	          --fast-forward on --run-vbls 4000 2>/dev/null
+	@rm -f $(BUILD)/SHOT.REQ
+	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT (SE boot)"; exit 1; }
+	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png
+	@echo "wrote $(BUILD)/shot-se.png (Savage Empire, shared binary + core pack)"
 
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This

@@ -71,9 +71,15 @@ unblocks (most foundational first):
   render the densest object cluster — SE shows a recognizable tribal village (huts/campfire/pottery),
   MD the red Mars terrain + era objects. U6 full-pack path unchanged; enginetest ALL PASS.
   Remaining for P2: `.LZC` TALK/LOOK/FACES *content* (dialogue/look-names/portraits) into the pack.
-- **P2 — SE vertical slice.** SE boots from the shared binary: walk its map, objects/NPCs draw,
-  look/get/use work via the obj_n table. SE RuleSet: 4-of-6 levels + gargoyle-variant, tribal skills
-  stub. Deltas → docs/rules.
+- **P2 — SE vertical slice.** 🟡 STARTED (2026-07-18): **SE boots from the shared binary.**
+  `gamedef_se`/`gamedef_md` registered (magics `SEWT`/`MDWT`); the pack loader detects a CORE pack
+  structurally (nothing follows the objects) and stubs the U6-only tail (font/paper/portraits/actors/
+  verbs/anim/lighting/save) so the real render pipeline runs on SE's terrain + objects. `make shot-se`
+  boots the Falcon binary on `SE.PAK` and pixel-dumps the Kurak-valley village (huts/pottery/food in
+  SEPAL) — verified. U6 full-pack path unchanged (throne-room boot re-verified; enginetest ALL PASS).
+  Remaining P2: fold `.LZC` TALK/LOOK/FACES into the SE pack (dialogue/look-names/portraits), SE NPCs
+  from its OBJLIST/SCHEDULE, look/get/use via obj_n; SE RuleSet (4-of-6 levels + gargoyle variant,
+  tribal-skill stub). Deltas → docs/rules.
 - **P3 — MD data path + vertical slice.** Locate MD's game palette; MD manifest; era-mechanics
   RuleSet; MD boots + walks + objects.
 - **P4 — Acceptance.** All three boot from ONE binary; a vertical slice of each runs; all per-game
@@ -89,11 +95,11 @@ unblocks (most foundational first):
   BASETILE/TILEFLAG are raw in all three. SE/MD TALK/LOOK/FACES = multi-item `.LZC` (see lzc.md).
 
 ## Status
-IN PROGRESS (2026-07-18). P0 (GameDef identity + magic→game registry) and **P1 (SE/MD data path)**
-DONE: `.LZC` decoded + spec'd, `mkworld` emits host-validated SE/MD core packs (terrain+objects
-render correctly — SE tribal village, MD Mars). Next: **P2 — SE vertical slice** (register
-`gamedef_se`, teach the runtime pack reader the core layout, boot SE from the shared binary; then
-fold `.LZC` TALK/LOOK/FACES content into the pack). Depends on M6/M8; deltas land in /docs as decoded.
+IN PROGRESS (2026-07-18). P0 (GameDef identity + magic→game registry) + P1 (SE/MD data path) DONE;
+**P2 started — SE boots from the shared binary** (core-pack loader path + `gamedef_se`/`gamedef_md`;
+`make shot-se` renders the SE village on the Falcon; U6 unchanged). Next P2: SE `.LZC` TALK/LOOK/FACES
+content + SE NPCs into the pack, look/get/use, SE RuleSet. Then P3 (MD slice) / P4 (acceptance).
+Depends on M6/M8; deltas land in /docs as decoded.
 
 ## Cross-links
 - `engine/ruleset.h` (GameDef/RuleSet), `dataformats/u6map.h` (geometry #defines to promote),
