@@ -11,6 +11,32 @@ static int u6_move_turn_cost(const world_t *w, int dx, int dy)
 }
 const RuleSet ruleset_u6 = { u6_move_turn_cost };
 
+/* Game registry ---------------------------------------------------------- *
+ * The engine is one binary; the GameDef is selected at load time by the asset-pack magic.
+ * SE/MD append their GameDefs here as they land (M9, docs/design/multigame.md). */
+const GameDef gamedef_u6 = {
+    "u6", "Ultima VI",
+    { 'U','6','W','T' },              /* pack_magic                                   */
+    U6_SURFACE_TILES,                 /* surface_tiles = 1024                         */
+    U6_DUNGEON_LEVELS,                /* dungeon_levels = 5                           */
+    0, 0,                             /* start_x/y: the pack header overrides these   */
+    &ruleset_u6,
+};
+
+static const GameDef *const g_gamedefs[] = { &gamedef_u6 };
+
+const GameDef *gamedef_for_magic(const char *magic)
+{
+    if (!magic) return NULL;
+    for (unsigned i = 0; i < sizeof g_gamedefs / sizeof g_gamedefs[0]; i++) {
+        const GameDef *g = g_gamedefs[i];
+        if (g->pack_magic[0] == magic[0] && g->pack_magic[1] == magic[1] &&
+            g->pack_magic[2] == magic[2] && g->pack_magic[3] == magic[3])
+            return g;
+    }
+    return NULL;
+}
+
 /* ------------------------------------------------------------------------ */
 bool world_init(world_t *w, const uint8_t *map, int32_t map_len,
                 const uint8_t *chunks, int32_t chunks_len,

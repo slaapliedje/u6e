@@ -60,7 +60,7 @@ int main(int argc,char**argv)
     const uint8_t*map=pak+24,*chunks=map+map_len,*tileset=chunks+chk_len;
     const uint8_t*palette=tileset+(int32_t)ntiles*256,*passable=palette+768;
     u6pal_t pal; u6pal_parse(&pal,palb,(int32_t)pn);
-    GameDef def={"u6",0,0,0}; world_t w;
+    GameDef def={ .id="u6" }; world_t w;
     if(!world_init(&w,map,(int32_t)map_len,chunks,(int32_t)chk_len,passable,&def,1)){ printf("world_init failed\n"); return 2; }
 
     /* place every NPC at its scheduled position for `hour`; tally placements */

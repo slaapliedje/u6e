@@ -357,7 +357,7 @@ int main(int argc,char**argv)
     g_have_paper=load_paper(bpath);
     if(!g_have_paper) printf("warning: PAPER.BMP not loaded (using placeholder border)\n");
 
-    GameDef def={"u6",sx,sy,0}; world_t w;
+    GameDef def={ .id="u6", .start_x=sx, .start_y=sy }; world_t w;
     if(!world_init(&w,map,(int32_t)map_len,chunks,(int32_t)chk_len,passable,&def,1)){
         printf("world_init failed\n");return 2;}
 

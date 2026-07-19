@@ -63,7 +63,7 @@ int main(int argc, char **argv)
     printf("== M5 engine logic test ==\n");
 
     /* init world at a known passable tile */
-    GameDef def = { "u6", 0, 0, NULL };
+    GameDef def = { .id = "u6" };
     world_t w;
     check("world_init", world_init(&w, mapb, (int32_t)mn, chkb, (int32_t)cn, passable, &def, 12345));
 
@@ -97,7 +97,7 @@ int main(int argc, char **argv)
 
     /* 3) toroidal wrap: stepping off the west edge lands on the east edge */
     {
-        GameDef d2 = { "u6", 0, sy, NULL };
+        GameDef d2 = { .id = "u6", .start_y = sy };
         world_t w2; world_init(&w2, mapb, (int32_t)mn, chkb, (int32_t)cn, passable, &d2, 1);
         /* force position to x=0 and move west if passable there or just check wrap math */
         w2.px = 0; w2.py = sy;

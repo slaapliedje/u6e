@@ -4324,8 +4324,11 @@ int main(void)
     }
 #endif
     uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe) */
-    if (!pak||n<26||pak[0]!='U'||pak[1]!='6'||pak[2]!='W'||pak[3]!='T'){
-        Cconws("cannot load U6.PAK (need U6WT)\r\n"); Crawcin(); return 1; }
+    /* M9: the pack magic SELECTS the game (GameDef). The same binary accepts any registered
+     * game's pack; U6's magic is "U6WT". SE/MD register their own magics as they land. */
+    const GameDef *gd = (pak && n>=26) ? gamedef_for_magic((const char*)pak) : NULL;
+    if (!gd){
+        Cconws("cannot load asset pack (unknown game magic)\r\n"); Crawcin(); return 1; }
     uint32_t map_len=((uint32_t)pak[4]<<24)|(pak[5]<<16)|(pak[6]<<8)|pak[7];
     uint32_t chunks_len=((uint32_t)pak[8]<<24)|(pak[9]<<16)|(pak[10]<<8)|pak[11];
     uint32_t ntiles=((uint32_t)pak[12]<<24)|(pak[13]<<16)|(pak[14]<<8)|pak[15];
@@ -4540,7 +4543,8 @@ int main(void)
         }
     }
 
-    GameDef def={ "u6", startx, starty, 0 };
+    GameDef def = *gd;                 /* the game selected by the pack magic (M9) */
+    def.start_x = startx; def.start_y = starty;   /* per-save start from the pack header */
     world_t w;
     if (!world_init(&w,map,(int32_t)map_len,chunks,(int32_t)chunks_len,passable,&def,1)){
         Cconws("world_init failed\r\n"); Crawcin(); return 1; }
