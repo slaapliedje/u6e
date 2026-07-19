@@ -2231,18 +2231,37 @@ static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
  * the dimmed cache + last-light, recompose the newly-revealed edge band in g_tmp_map, then re-dim
  * ONLY the band cells and the cells whose light changed (the view-anchored avatar globe's moving arc
  * + emitters that crossed the edge). Otherwise (first frame / jump / style switch): full rebuild. */
+#ifdef BENCH
+uint32_t g_ph0_scroll, g_ph0_shift, g_ph0_redim, g_ph0_dirty, g_ph0_copy;   /* sub-phase ticks + dirty count */
+#define SUB_T() (subt=plat_ticks_200hz())
+#define SUB_ADD(acc) ((acc)+=plat_ticks_200hz()-subt)
+#else
+#define SUB_T() ((void)0)
+#define SUB_ADD(acc) ((void)0)
+#endif
 static void predim_compose_static(const world_t*w,const uint8_t*light,int dither){
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;         /* wrap to shortest signed delta */
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
     if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
+#ifdef BENCH
+    uint32_t subt;
+#endif
     if(g_dm_valid && g_tmp_valid && dx>=-1&&dx<=1 && dy>=-1&&dy<=1 && (dx||dy)){
-        scroll_static(w,dx,dy); mark_view_anim(w);             /* undimmed cache: shift + edge band */
+        SUB_T(); scroll_static(w,dx,dy); mark_view_anim(w); SUB_ADD(g_ph0_scroll);  /* undimmed cache (mark_view_anim ~8ms) */
+        SUB_T();
         shift_buf(g_dimmed_map,TMP_T,16*dx,16*dy);             /* dimmed cache: shift in lockstep */
         shift_buf(g_dm_light,VT,dx,dy);                        /* last-light: shift in lockstep */
+        SUB_ADD(g_ph0_shift);
+        SUB_T();
         for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
             if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_dm_light[cc]){   /* revealed OR light changed */
-                dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+                dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc];
+#ifdef BENCH
+                g_ph0_dirty++;
+#endif
+            }
         }
+        SUB_ADD(g_ph0_redim);
     } else {                                                   /* full rebuild */
         build_static(w);                                       /* undimmed cache: base tiles + lower objects */
         for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
@@ -2255,6 +2274,9 @@ static void compose_map(const world_t*w)
 {
     static uint8_t tmp[TMP_T*TMP_T];               /* 176x176 working buffer (static layer + dynamic) */
     const int T=TMP_T;
+#ifdef BENCH
+    uint32_t subt;                                 /* for the SUB_T/SUB_ADD ph0-copy timer */
+#endif
     g_view_has_anim=0;                              /* set by anim_tile/obj_tile if any in view */
     int32_t left=w->px-VT/2, top=w->py-VT/2;
     /* DIM-AT-DRAW (PREDIM): compute the per-cell light FIRST, then every tile/sprite draw sources its
@@ -2274,7 +2296,7 @@ static void compose_map(const world_t*w)
          * it out. Actors dim-at-draw in ph1 (g_predim armed just below). */
         g_predim=0;
         predim_compose_static(w,plight,g_dim_dither);
-        memcpy(tmp,g_dimmed_map,sizeof tmp);
+        SUB_T(); memcpy(tmp,g_dimmed_map,sizeof tmp); SUB_ADD(g_ph0_copy);   /* dimmed static -> compose buffer */
     } else {
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;     /* wrap to shortest signed delta */
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
@@ -2355,8 +2377,8 @@ static void compose_map(const world_t*w)
     int span=MAPSZ-2*MAP_INSET;                     /* 160 = 10 whole tiles */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
         g_predim=0;
-        for(int y=0;y<span;y++){ uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
-            for(int x=0;x<span;x++) drow[x]=trow[x]; }
+        for(int y=0;y<span;y++)                     /* plain copy -> memcpy (long-word moves, ~4x the byte loop) */
+            memcpy(ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET, tmp+y*T, (size_t)span);
         PH_END(3); return;
     }
 #if !defined(LIGHT_DEBUG_VIS) && !defined(LIGHT_DEBUG_FIELD)
@@ -5861,6 +5883,7 @@ int main(void)
         int basepx=(int)w.px;
         compose_map(&w);                                    /* prime the cache */
         g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0;      /* isolate the scroll phases */
+        g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_dirty=g_ph0_copy=0; /* isolate the ph0 sub-phases */
         uint32_t t0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ w.px=(uint16_t)((basepx+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
         uint32_t t1=plat_ticks_200hz();
@@ -5875,6 +5898,11 @@ int main(void)
         dbg_num("FULL  compose   ms=", (int)((tf1-tf0)*5/N));
         dbg_num("SCROLL compose  ms=", (int)((t1-t0)*5/N));
         dbg_num("  scroll ph0 static ms=", (int)(g_phase[0]*5/N));   /* incremental static layer */
+        dbg_num("    ph0 scroll(undim) ms=", (int)(g_ph0_scroll*5/N)); /* scroll_static+mark_view_anim */
+        dbg_num("    ph0 shift(dim+lgt) ms=", (int)(g_ph0_shift*5/N)); /* shift_buf x2             */
+        dbg_num("    ph0 re-dim dirty ms=", (int)(g_ph0_redim*5/N));   /* dim_cell_into loop       */
+        dbg_num("    ph0 copy->tmp ms=", (int)(g_ph0_copy*5/N));       /* g_dimmed_map -> tmp       */
+        dbg_num("    ph0 dirty cells/frm=", (int)(g_ph0_dirty/N));     /* avg re-dimmed cells      */
         dbg_num("  scroll ph1 actors+fg ms=", (int)(g_phase[1]*5/N));
         dbg_num("  scroll ph2 light+vis ms=", (int)(g_phase[2]*5/N));
         dbg_num("  scroll ph3 composite ms=", (int)(g_phase[3]*5/N));

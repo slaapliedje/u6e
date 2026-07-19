@@ -320,7 +320,37 @@ solves exactly that** — `g_dimmed_map` shifts on a walk and only the edge + li
 re-dimmed (byte-identical, mode==11 self-test). So the on-screen planar could shift in lockstep
 (Blitter block-move on STE/Mega/TT, CPU memmove on plain ST — the `rdr_scroll_left16` mechanism) and
 re-c2p ONLY those same dirty cells: present would drop from a full 176×176 c2p (444 ms) toward
-~dirty-cells-worth. **Reason (2) still stands, though**: the headless SHOT dumps the *chunky*
-backbuffer, not the planar screen, so this cannot be byte-verified headlessly — validation is
-auto-walk AVI only. Requires plumbing the compose-side dirty-cell set + scroll delta to a new
-backend `rdr_present_map_incremental`. STATUS: designed, not built — next step.
+~dirty-cells-worth. **Reason (2) is closable after all**: while the SHOT dumps the chunky backbuffer,
+a BENCH selftest can diff the planar `g_screen` (incremental-present vs full-present) *in memory* —
+same trick as the c2p selftest — so it IS byte-verifiable headlessly. **The real caps are geometry +
+Amdahl**: the 8 px `MAP_INSET` offsets composed cells from the 16 px-aligned c2p groups (so the clean
+version is block-move + re-c2p the outer border ring + the light-changed bounding box, not per-cell),
+and compose (below) is now the dominant term — so a *perfect* present caps the frame at ~1.8 fps and
+a realistic one buys ~1.0 → ~1.35 fps. STATUS: designed + costed, **deferred in favour of compose**
+(higher ceiling). Requires plumbing the compose dirty-set + delta to a backend `rdr_present_map_scroll`.
+
+## 2026-07-19 — compose profiled + memcpy'd ph3 (551 → 490 ms); now distributed / near-floor
+With the present asm'd, compose (~551 ms) became the ST walking bottleneck. `make bench-st` now
+splits the SCROLL compose into ph0 sub-phases + ph1/ph2/ph3. PREDIM-flat, night throne room:
+
+| sub-phase | ms | what |
+|-----------|---:|------|
+| compute_predim_light (pre-ph0) | ~75 | compute_light globes + compute_visibility flood (unattributed) |
+| ph0 scroll_static + mark_view_anim | ~109 | shift g_tmp_map (31k memmove) + edge recompose; mark_view_anim only ~8 |
+| ph0 shift g_dimmed_map + g_dm_light | ~33 | two memmoves in lockstep with the undimmed cache |
+| ph0 re-dim dirty cells | ~40 | dim_cell_into over only **~20 dirty cells/frame** (incremental tracking working) |
+| ph0 copy g_dimmed_map → tmp | ~55 | 31k ST-RAM→ST-RAM memcpy (memory-bound) |
+| ph1 actors + fg objects | ~99 | masked sprite blits + dim-at-draw (inherent) |
+| ph3 composite (tmp → backbuffer) | **94 → 33** | **was a byte loop; now `memcpy` per row (long-word moves)** |
+
+**Landed:** ph3 was a per-pixel byte copy — a plain move, so `memcpy` (long-word) took it **94 → 33 ms**
+(~60 ms, byte-identical; mode==11 still 0, frame visually identical). Compose **551 → 490 ms**; ST
+PREDIM-flat walking frame **995 → ~934 ms → ~1.07 fps**.
+
+**Conclusion — compose is near its floor.** After incremental PREDIM (ph0) + this, the remaining cost
+is **distributed, memory-bound, and mostly inherent**: two 31k buffer shifts, a 31k dimmed→tmp copy,
+the masked actor blits, and the light/vis compute — no single dominant lever. Eliminating the `tmp`
+buffer (compose straight to the backbuffer, drop the copy + ph3, ~48 ms) was **evaluated and rejected**:
+the VT=11 compose overruns the 176-px map region into the panel (x>176), and `tmp` exists precisely to
+isolate that — direct-to-backbuffer would need extra per-cell clipping and risks panel corruption for
+a small win. The instrumentation (`g_ph0_*`, BENCH) stays as the profiling map for any future pass.
