@@ -8,8 +8,9 @@
 >                  Mandin's Atari Doom (dual chunky/planar model) — READ for understanding,
 >                  not copied.
 > - Tools        : make bench-st / bench / bench-falcon (our harness).
-> - Validated by  : NOT YET — thesis to be confirmed by the Phase-0 microbench below.
-> - Confidence   : design = probable; perf win = unproven until Phase 0 measures it.
+> - Validated by  : Phase-0 microbench (thesis, GO) + Phase-1 self-test (`rdr_planar_selftest`,
+>                  planar blit byte-identical to c2p, `diff=0`) — both via `make bench-st`.
+> - Confidence   : design = probable; perf win = VALIDATED (Phase 0); primitives = VERIFIED (Phase 1).
 > - Last updated : 2026-07-19
 
 ## 1. Why
@@ -118,8 +119,8 @@ path; STE/Mega/TT get the Blitter speedup for free on top.
 - **Phase 0 (NOW): microbench.** Convert one representative tile to planar+mask; masked-planar-blit
   the ~100-cell view N times (CPU); compare to the current c2p of the same area. Decide go/no-go for
   the plain ST from the real number. No integration yet.
-- **Phase 1:** `blit_planar_masked` (CPU) + the planar tile/mask cache + planar `dim_tile`. Unit
-  self-test: blit == c2p(chunky) for the same tile (byte-identical planar output).
+- **Phase 1 (DONE):** `blit_planar_masked` (CPU) + the planar tile/mask cache + planar `dim_tile`. Unit
+  self-test: blit == c2p(chunky) for the same tile (byte-identical planar output). → `diff=0`, see §8.
 - **Phase 2:** divert the ST `draw_cell`/`draw_multi` to planar; a planar `g_dimmed_map`; drop the
   ST c2p present. Byte-verify the planar screen vs the current chunky+c2p screen (in-memory diff, the
   same trick as the c2p selftest). Measure the frame.
@@ -139,5 +140,22 @@ planar tile bits are palette-index bits, so band palettes still work — verify)
 
 ## 8. Status
 **Phase 0 DONE — thesis VALIDATED (GO).** Planar blit 2.8–7.7× cheaper than c2p on the plain ST.
-Next: Phase 1 (`blit_planar_masked` CPU + planar tile/mask + planar `dim_tile` cache, byte-verified).
-No engine render path changed yet — only the BENCH microbench (`rdr_planar_microbench`) exists.
+
+**Phase 1 DONE — primitives byte-verified (2026-07-19, `make bench-st`).** The three integration pieces
+now exist and are proven byte-identical to c2p on real hardware (`PLANAR blit-vs-c2p diff=0`):
+- `rdr_chunky_tile_to_planar(chunky, lut, out)` — one-time convert (256-B chunky → 128-B planar +
+  32-B mask), remapping opaque indices through the same 256→16 lut as c2p4_lut; 255 → mask bit 0.
+- `rdr_blit_planar_masked(dst, dstride_w, pt, x, y)` — the one hot primitive: per row+plane
+  `d=(d&~m)|(s&m)`. Fast group-aligned path (sh==0, the compose case) + the 8-px-inset offset path
+  (each plane spans groups gx, gx+1 via a 32-bit shift window). Exactly the validated Phase-0 case (c).
+- `rdr_planar_get(key, chunky, lut)` — direct-mapped (tile,level) planar cache, 512×160 B = 80 KB,
+  same Knuth hash as gamedemo's `g_dimcache`; the planar analogue of `dim_tile`.
+- **Gate:** `rdr_planar_selftest()` proves the invariant `blit(planar(ct), x) over c2p(bg) ==
+  c2p(bg⊕ct masked at x)` across 4 tile patterns (opaque / sparse-transparent / left+top-edge-
+  transparent = the multi-tile bleed / a dim variant) × 2 offsets (aligned + inset), building the tile
+  THROUGH the cache. Result: **0 mismatched plane-words**.
+
+All Phase-1 code is BENCH-only (in render/rdr_st.c) so the shipping ST/unified binaries are unchanged
+(game-st + game link clean; enginetest ALL PASS). Next: **Phase 2** — promote these to production and
+divert the ST `draw_cell`/`draw_multi` to planar (planar `g_dimmed_map`, drop the c2p present),
+byte-verifying the planar screen vs the current chunky+c2p screen in-memory, then measure the frame.

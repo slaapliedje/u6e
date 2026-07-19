@@ -5913,6 +5913,8 @@ int main(void)
 #ifdef HAVE_RDR_ST
         { extern int rdr_c2p_selftest(void);
           dbg_num("c2p asm-vs-C diff wd=", rdr_c2p_selftest()); }   /* 0 = asm byte-identical to c2p4_lut */
+        { extern int rdr_planar_selftest(void);                     /* Phase 1: planar blit == c2p (byte-identical) */
+          dbg_num("PLANAR blit-vs-c2p diff=", rdr_planar_selftest()); }   /* 0 = native-planar path proven */
         { extern void rdr_planar_microbench(uint32_t*,int); uint32_t pm[3]; rdr_planar_microbench(pm,N);  /* Phase-0 */
           dbg_num("PLANAR c2p 176^2 ms=",   (int)(pm[0]*5/N));      /* today's present cost                */
           dbg_num("PLANAR blit aligned ms=",(int)(pm[1]*5/N));      /* masked planar blit, group-aligned  */
