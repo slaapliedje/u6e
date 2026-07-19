@@ -23,6 +23,9 @@
  */
 #include "render.h"
 #include "platmem.h"
+#ifdef BENCH
+#include "plattime.h"       /* plat_ticks_200hz for the BENCH selftest + planar microbench */
+#endif
 
 #include <osbind.h>
 #include <mint/linea.h>     /* line-A: hide the AES mouse sprite */
@@ -390,6 +393,61 @@ int rdr_c2p_selftest(void)
     c2p4_lut_asm(src, g_lut, b, 16);
     int diff = 0; for (int i = 0; i < 64; i++) if (a[i] != b[i]) diff++;
     return diff;
+}
+
+/* Phase-0 native-planar microbench (docs/design/native-planar-st.md): on the plain ST (no Blitter),
+ * is a masked planar tile blit cheaper than the c2p? Builds one planar (4x16 plane words) + mask tile,
+ * then times N iters of (a) c2p the 176x176 map area (today's present), (b) masked-planar-blit an
+ * 11x11 tile grid GROUP-ALIGNED, (c) the same at the 8-px map inset (x=8, each plane spans 2 groups).
+ * Returns 200Hz ticks for N iters in out[0..2]. Writes into g_screen (bench: contents don't matter). */
+void rdr_planar_microbench(uint32_t out[3], int N)
+{
+    static uint16_t ptile[64], pmask[16];
+    uint8_t ctile[256];
+    for (int i = 0; i < 256; i++) ctile[i] = (uint8_t)((i * 7) & 0x0F);   /* opaque 4bpp pattern */
+    ctile[3] = 255; ctile[200] = 255;                                    /* 255 = transparent px  */
+    for (int r = 0; r < 16; r++) {
+        uint16_t p0=0,p1=0,p2=0,p3=0,m=0;
+        for (int c = 0; c < 16; c++) {
+            uint8_t v = ctile[r*16+c]; int op = (v != 255); unsigned n = op ? (v & 0x0F) : 0;
+            p0=(uint16_t)((p0<<1)|(n&1));      p1=(uint16_t)((p1<<1)|((n>>1)&1));
+            p2=(uint16_t)((p2<<1)|((n>>2)&1)); p3=(uint16_t)((p3<<1)|((n>>3)&1));
+            m=(uint16_t)((m<<1)|op);
+        }
+        ptile[r*4]=p0; ptile[r*4+1]=p1; ptile[r*4+2]=p2; ptile[r*4+3]=p3; pmask[r]=m;
+    }
+    const int DW = ST_ROWBYTES/2;                 /* 80 words/row */
+    uint16_t *scr = (uint16_t *)g_screen;
+
+    uint32_t t0 = plat_ticks_200hz();             /* (a) c2p 176x176 (11 groups x 176 rows) */
+    for (int it = 0; it < N; it++)
+        for (int y = 0; y < 176; y++)
+            c2p4_lut_asm(g_back + (int32_t)y*STW, g_lut, scr + (int32_t)y*DW, 11);
+    out[0] = plat_ticks_200hz() - t0;
+
+    uint32_t t1 = plat_ticks_200hz();             /* (b) aligned masked planar blit, 11x11 grid */
+    for (int it = 0; it < N; it++)
+        for (int cy = 0; cy < 11; cy++) for (int cx = 0; cx < 11; cx++)
+            for (int r = 0; r < 16; r++) {
+                uint16_t m = pmask[r]; uint16_t *d = scr + (cy*16+r)*DW + cx*4; const uint16_t *s = ptile + r*4;
+                d[0]=(uint16_t)((d[0]&~m)|(s[0]&m)); d[1]=(uint16_t)((d[1]&~m)|(s[1]&m));
+                d[2]=(uint16_t)((d[2]&~m)|(s[2]&m)); d[3]=(uint16_t)((d[3]&~m)|(s[3]&m));
+            }
+    out[1] = plat_ticks_200hz() - t1;
+
+    uint32_t t2 = plat_ticks_200hz();             /* (c) offset (x=8) masked planar blit, 10x11 grid */
+    for (int it = 0; it < N; it++)
+        for (int cy = 0; cy < 11; cy++) for (int cx = 0; cx < 10; cx++) {
+            int x = 8 + cx*16, gx = x>>4, sh = x&15;   /* sh = 8; each plane spans groups gx, gx+1 */
+            for (int r = 0; r < 16; r++) {
+                uint16_t m = pmask[r]; uint32_t mm = (uint32_t)m << (16-sh);
+                uint16_t mhi=(uint16_t)(mm>>16), mlo=(uint16_t)mm;
+                uint16_t *d0 = scr + (cy*16+r)*DW + gx*4; const uint16_t *s = ptile + r*4;
+                for (int p=0;p<4;p++){ uint32_t ss=(uint32_t)s[p]<<(16-sh); uint16_t shi=(uint16_t)(ss>>16), slo=(uint16_t)ss;
+                    d0[p]=(uint16_t)((d0[p]&~mhi)|(shi&mhi)); d0[p+4]=(uint16_t)((d0[p+4]&~mlo)|(slo&mlo)); }
+            }
+        }
+    out[2] = plat_ticks_200hz() - t2;
 }
 #endif
 
