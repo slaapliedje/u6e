@@ -40,10 +40,11 @@ int main(int argc, char **argv)
 {
     const char *dir = (argc > 1) ? argv[1] : "refdata/dos/u6";
     const char *out = (argc > 2) ? argv[2] : "build";
-    printf("== mapdump: decode U6 world from %s ==\n", dir);
+    const char *palname = (argc > 3) ? argv[3] : "U6PAL";  /* SE=SEPAL, MD=<tbd> */
+    printf("== mapdump: decode U6-engine world from %s (pal %s) ==\n", dir, palname);
 
     long pn, mn, cn, tn, in;
-    uint8_t *palb = slurp_in(dir, "U6PAL", &pn);
+    uint8_t *palb = slurp_in(dir, palname, &pn);
     uint8_t *mapb = slurp_in(dir, "MAP", &mn);
     uint8_t *chkb = slurp_in(dir, "CHUNKS", &cn);
     uint8_t *mtc  = slurp_in(dir, "MAPTILES.VGA", &tn);

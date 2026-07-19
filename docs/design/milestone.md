@@ -1305,7 +1305,17 @@ Acceptance
 ---
 
 ## M9 — The other two games (goal #1)
-Status: [ ]
+Status: [~] KICKED OFF 2026-07-18 — plan + thesis validated (docs/design/multigame.md). SE and MD
+        are U6-engine games: their `MAP`/`CHUNKS` are byte-identical in size to U6's and DECODE with
+        the UNMODIFIED U6 decoders (host `tools/mapdump`, palette-name parameterized) — the SE render
+        is a recognizable Eodon valley; MD decodes too. Core formats shared (MAP/CHUNKS/TILEINDX/
+        MAPTILES/LZOBJBLK/TILEFLAG/BASETILE/ANIMDATA/MASKTYPE/SCHEDULE). Deltas isolated: `.LZC`
+        containers (talk/look/faces vs U6 library+`.LZD`), per-game palettes (SE `SEPAL`=RGB6 OK; MD
+        palette TBD), tile COUNT (U6 2048 hardcoded), obj_n meanings, and the rule/skill subsystem.
+        Engine is single-title today (pack magic `"U6WT"`, `GameDef.id` unread, compile-time geometry);
+        the survey mapped the top-8 things to parameterize. NEXT: P0 — GameDef{id, asset manifest,
+        world geometry, level policy} + replace the pack magic + geometry-as-data. Full plan/roadmap
+        in docs/design/multigame.md.
 Depends on: M6 (engine), M8 (matrix); benefits from all prior work
 Goal: prove the engine is genuinely multi-game (mostly data + small deltas).
 
