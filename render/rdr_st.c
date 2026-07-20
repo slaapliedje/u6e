@@ -704,6 +704,47 @@ int rdr_pverify(const uint8_t *tmp, int cstride)
     }
     return diff;
 }
+
+/* Phase-4c GATE (planar dimming): the whole point of composing the static layer from PRE-DIMMED planar
+ * tiles (dropping the per-cell chunky-dim + c2p) rests on one identity — a per-pixel darklut COMMUTES
+ * with tile overlay. This proves it byte-for-byte for the base/object transparency asymmetry:
+ *     blit( planar(dim_base(base)) )  then  blit( planar(dim_obj(obj)) )   [planar-dimmed-direct]
+ *   ==  c2p( darklut[ fill(base, 255->0)  overlaid  obj(255 transparent) ] )   [today: chunky dim then c2p]
+ * where dim_base maps 255->0 THEN darklut (opaque base, like fill_tiles), dim_obj preserves 255 THEN
+ * darklut (masked). `dark` is a synthetic 256->256 darkening — commutativity holds for ANY LUT, so this
+ * validates the mechanism the integration will use. 3 tile patterns; returns the mismatched-word count. */
+int rdr_planar_dim_selftest(void)
+{
+    uint8_t dark[256]; for (int i=0;i<256;i++) dark[i] = (uint8_t)((i*3)>>2);   /* darken (any LUT works) */
+    int diff = 0;
+    for (int pat = 0; pat < 3; pat++) {
+        uint8_t base[256], obj[256], comp[256], db[256], dob[256];
+        for (int i = 0; i < 256; i++) {
+            base[i] = (uint8_t)((i*7) & 0x7F);
+            if (pat>=1 && (i%9)==0) base[i] = 255;                  /* holes in the base terrain     */
+            obj[i]  = (uint8_t)((i*13+3) & 0x7F);
+            if ((i%3)!=0) obj[i] = 255;                            /* object is a sparse overlay    */
+            if (pat==2 && i<32) obj[i] = 255;                      /* object top 2 rows transparent */
+        }
+        for (int i = 0; i < 256; i++) {
+            uint8_t b = (base[i]==255)?0:base[i];                  /* fill_tiles: transparent -> 0  */
+            uint8_t v = (obj[i]!=255)?obj[i]:b;                    /* object over base              */
+            comp[i] = dark[v];                                     /* today: dim the composite      */
+            db[i]   = dark[b];                                     /* dim_base: 255->0 then dim (opaque) */
+            dob[i]  = (obj[i]==255)?255:dark[obj[i]];              /* dim_obj: preserve 255 then dim */
+        }
+        uint16_t ref[64], dst[64];
+        for (int r = 0; r < 16; r++) c2p4_lut(comp + r*16, g_lut, ref + r*4, 1);   /* c2p(dim composite) */
+        for (int i = 0; i < 64; i++) dst[i] = 0;
+        planar_tile_t pb, po;
+        rdr_chunky_tile_to_planar(db,  g_lut, &pb);                /* db has no 255 -> opaque (mask all 1) */
+        rdr_chunky_tile_to_planar(dob, g_lut, &po);               /* dob has 255 -> masked                */
+        rdr_blit_planar_masked(dst, 4, &pb, 0, 0);                /* base first (overwrite) */
+        rdr_blit_planar_masked(dst, 4, &po, 0, 0);                /* object over (masked)   */
+        for (int i = 0; i < 64; i++) if (dst[i] != ref[i]) diff++;
+    }
+    return diff;
+}
 #endif
 
 /* Incremental horizontal scroll (render.h): shift the visible screen LEFT by one 16-px group in

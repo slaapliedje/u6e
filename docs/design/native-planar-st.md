@@ -247,5 +247,21 @@ Caveat: native planar activates only under PREDIM lighting, and the ST currently
 the whole milestone is opt-in via `LIGHTSTY.REQ=3`. Making PREDIM the ST default (the capstone that makes
 native planar the shipping ST path) is a deliberate visual decision, pending.
 
-Next: **planar dimming** (a planar darklut / planar-composited static removes the residual ~88 ms per-cell
-c2p in compose → toward ~2 fps). **Phase 3** — Blitter path for the masked blit (STE/Mega).
+**Phase 4c STARTED — planar dimming (toward ~2 fps).** The residual compose cost is the per-cell c2p
+(`rdr_pstatic_cell`, ~88 ms/walk) that converts the chunky-dimmed static (`g_dimmed_map`) to planar,
+plus the chunky edge recompose. The plan: **compose the STATIC layer directly from pre-dimmed planar
+tiles** — drop `g_tmp_map`/`g_dimmed_map`/`dim_cell_into`/`rdr_pstatic_cell` on the ST and maintain only
+`g_pdimmed`, incrementally (planar shift on scroll + per-dirty-cell planar recompose). This rests on ONE
+identity — a per-pixel darklut COMMUTES with tile overlay:
+`blit(dim_base(base)) then blit(dim_obj(obj)) == c2p(darklut[fill(base,255→0) ⊕ obj])`
+— where the base dims after mapping transparent→0 (opaque, mask all-1) and the object preserves 255
+(masked). **Proven byte-for-byte:** `rdr_planar_dim_selftest` (BENCH) = `dim-commute diff=0` across
+opaque/holed-base/edge-transparent-object patterns. Projected: removes the ~88 ms c2p + much of the
+~118 ms chunky edge recompose → compose ~400 ms → frame ≈ 480 ms / **~2 fps**.
+
+Remaining for 4c (Phase-2-scale, byte-verified via a static INV): a `dim_tile_base` variant (255→0 then
+darklut, cached), route `fill_tiles`/`draw_view_objects` to blit planar-dimmed tiles into `g_pdimmed`
+(the static analogue of `draw_cell`'s dynamic planar path), and a planar incremental recompose replacing
+`dim_cell_into`+`rdr_pstatic_cell`. Then drop the chunky static on the ST.
+
+**Phase 3** — Blitter path for the masked blit (STE/Mega).
