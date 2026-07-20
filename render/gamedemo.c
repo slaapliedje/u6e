@@ -1900,7 +1900,8 @@ static const uint8_t  *dim_tile_d(int tile, int Lc);    /* dithered pre-dim (bod
  * incremental static layer is c2p'd per dirty cell. g_pd_valid gates the incremental path (0 => the
  * planar static must be fully rebuilt before shifting). All under HAVE_RDR_ST (ST backend linked). */
 #ifdef HAVE_RDR_ST
-static int g_native_planar = 0;         /* planar compose active this session */
+static int g_planar_allow = 1;          /* master enable (the bench clears it for the chunky baseline) */
+static int g_native_planar = 0;         /* planar compose active THIS frame (recomputed in compose_map) */
 static int g_pd_valid = 0;              /* g_pdimmed is built (else force a full rebuild) */
 static int g_chunky_dyn = 1;            /* keep the chunky dynamic composite (0 = planar-only present path) */
 #ifdef BENCH
@@ -2321,11 +2322,20 @@ static void compose_map(const world_t*w)
     int predim = (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER);
     g_dim_dither = (g_light_style==LSTY_PREDIM_DITHER);
 #ifdef HAVE_RDR_ST
-    g_chunky_dyn = 1;                        /* default: build the chunky dynamic layer (tmp) */
+    /* Native-planar enable (recomputed each frame): master switch + PREDIM + ST backend + single-LUT
+     * (a band raster gives each row its own LUT, which pre-converted planar tiles can't honour). On the
+     * off->on edge or after a palette (LUT) change, force a planar-static rebuild. */
+    { int elig = g_planar_allow && predim && rdr_active_backend()==0 && rdr_native_planar_ok();
+      if(elig){ if(!g_native_planar) g_pd_valid=0;          /* just enabled -> rebuild g_pdimmed        */
+                if(rdr_planar_take_dirty()) g_pd_valid=0;   /* LUT changed (new scene) -> rebuild       */
+                g_native_planar=1; }
+      else      g_native_planar=0; }
+    /* Live composes BOTH: the chunky g_back stays valid for the cursor / full present, and g_ptmp ==
+     * c2p(the chunky map) by INV2, so present_map can present g_ptmp byte-identically but 5.5x faster.
+     * The bench measures the planar-ONLY ceiling by dropping the chunky dynamic composite. */
+    g_chunky_dyn = 1;
 #ifdef BENCH
-    if(g_native_planar && !g_planar_verify) g_chunky_dyn = 0;  /* planar-only present: skip redundant chunky (verify still builds it) */
-#else
-    if(g_native_planar) g_chunky_dyn = 0;   /* production planar-only path */
+    if(g_native_planar && !g_planar_verify) g_chunky_dyn = 0;
 #endif
 #endif
     static uint8_t plight[VT*VT], pvis[VT*VT];
@@ -3311,6 +3321,9 @@ static void present_frame(void)
  * if it overlaps the map. The main loop Vsyncs. */
 static void present_map(void)
 { if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); cursor_erase(); }
+#ifdef HAVE_RDR_ST
+  else if(g_native_planar) rdr_ppresent();   /* clean walk: shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
+#endif
   else rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); }
 
 /* Cheap CURSOR-ONLY present for a bare mouse move: repaint just the old + new cursor
@@ -5882,6 +5895,10 @@ int main(void)
     { static int ls_done=0;
       if(!ls_done){ int32_t rl=0; char *rq=(char*)plat_load_file("LIGHTSTY.REQ",1,&rl);
           if(rq && rl>0 && rq[0]>='0' && rq[0]<='4'){ g_light_style=rq[0]-'0'; g_tmp_valid=0; }
+#ifdef HAVE_RDR_ST
+          { int32_t pl=0; char*pq=(char*)plat_load_file("PLANAR.REQ",1,&pl);   /* '0' = force chunky (A/B control) */
+            if(pq && pl>0 && pq[0]=='0') g_planar_allow=0; }
+#endif
           ls_done=1; } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
@@ -5938,13 +5955,13 @@ int main(void)
          * frame to fully rebuild the planar static layer. */
         int pl_on=1;                                                       /* PLANAR.REQ '0' -> baseline (no planar) */
         { int32_t prl=0; char*prq=(char*)plat_load_file("PLANAR.REQ",1,&prl); if(prq&&prl>0&&prq[0]=='0') pl_on=0; }
-        if(pl_on && (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER)){
-            g_native_planar=1; g_pd_valid=0; g_tmp_valid=0; dbg_num("NATIVE PLANAR on=", 1); }
+        g_planar_allow = pl_on;                                            /* compose_map derives g_native_planar (ST+PREDIM+no-bands) */
+        g_pd_valid=0; g_tmp_valid=0; dbg_num("PLANAR ALLOW=", pl_on);
         /* INV2 verify pass (verify ON, NOT timed): 1 full rebuild + a walk, checking g_ptmp==c2p(tmp)
          * each frame. Kept out of the timed loops below (the c2p check would swamp them). */
-        if(g_native_planar){ int bpx0=(int)w.px;
+        if(pl_on && (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER)){ int bpx0=(int)w.px;
             g_planar_verify=1; g_planar_diff=0; g_planar_frames=0;
-            g_tmp_valid=0; compose_map(&w);                                 /* full rebuild + verify */
+            g_tmp_valid=0; compose_map(&w);                                 /* sets g_native_planar + full rebuild + verify */
             for(int i=0;i<N;i++){ w.px=(uint16_t)((bpx0+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
             w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
 #endif
@@ -6014,6 +6031,20 @@ int main(void)
             while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ' && s[i]!='.') { nm[i]=s[i]; i++; } nm[i]=0;
             if(nm[0]){ music_play_song(nm); g_music_forced=1; }
             dbg_num("music backend (1=MIDI 2=DMA 3=PSG)=", music_active_backend()); } }
+
+#ifdef HAVE_RDR_ST
+    /* headless native-planar capture (2c): AUTOWALK.REQ (byte = step count) walks the avatar east that
+     * many tiles through compose_map + present_map — the native-planar present when PREDIM+ST — so the
+     * capture shows a WALKED frame produced by rdr_ppresent (not the boot full-present). Cursor forced
+     * off so present_map takes the planar branch. Absent in normal play. */
+    { int32_t al=0; uint8_t*aw=(uint8_t*)plat_load_file("AUTOWALK.REQ",1,&al);
+      if(aw && al>0){ int n=aw[0]; if(n<1)n=1; if(n>32)n=32; g_cw=0;
+          present_frame();                              /* establish border + panel + map in g_screen */
+          for(int s=0;s<n;s++){ if(world_try_move(&w,1,0)) step_npcs(&w);
+              compose_map(&w); present_map(); Vsync(); }
+          dbg_num("AUTOWALK steps=", n); dbg_num("AUTOWALK native_planar=", g_native_planar);
+          for(;;) Vsync(); } }   /* HOLD the walked frame (no anim advance) so planar vs chunky A/B is deterministic */
+#endif
 
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */

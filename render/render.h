@@ -128,6 +128,8 @@ void     rdr_pstatic_shift(int dx, int dy);                             /* plana
 void     rdr_pframe_begin(void);                                        /* g_ptmp = g_pdimmed (static) */
 void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit */
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
+int      rdr_native_planar_ok(void);   /* 1 = ST map uses a single LUT (no band raster) -> planar OK */
+int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller must rebuild the planar static */
 
 /* Diagnostic: out[0]=Physbase, [1]=Logbase, [2]=our screen, [3]=EgetShift,
  * [4]=Getrez, [5]=our screen byte size. */

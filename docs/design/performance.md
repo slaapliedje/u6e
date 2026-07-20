@@ -389,5 +389,12 @@ Present **5.5× cheaper**; frame **1.51×**, byte-identical. Mechanism: an incre
 STATIC layer (`g_pdimmed` = planar mirror of `g_dimmed_map`, per-dirty-cell c2p + planar shift), planar
 dynamic blits (`draw_cell`/roofs → `g_ptmp` via a (tile,level) planar cache), and a single shifted
 planar block-copy present. Residual +49 ms compose = the planar-static per-cell c2p on the lit walk
-(~20 dirty cells/frame); dimming DIRECTLY in planar (a later phase) removes even that. Enabled in the
-ST bench so far; the live ST game map present + the Blitter path (STE/Mega) are the next steps.
+(~20 dirty cells/frame); dimming DIRECTLY in planar (a later phase) removes even that.
+
+**Wired LIVE (Phase 2c):** `present_map`'s clean-walk branch uses the planar present in the ST game
+(ST + PREDIM + single-LUT map — band rasters only swap hardware registers, orthogonal to the
+framebuffer). The live path keeps composing chunky too (`g_back` stays valid for the cursor / full
+present), so the live clean-walk frame is 658 + 81 = **739 ms / 1.35 fps** (present 5.5× cheaper); the
+619 ms / 1.62 fps planar-only ceiling needs a planar cursor + hybrid full-present (Phase 4) to drop the
+redundant chunky composite live. Pixel A/B on a real 8 MHz ST (planar vs chunky, same scene) is identical
+bar the debug label. Next: the Blitter path (STE/Mega) + planar sprites/dimming.

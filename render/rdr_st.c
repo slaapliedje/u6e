@@ -166,9 +166,10 @@ void rdr_set_palette(const uint8_t *rgb6, int n) { (void)rgb6; (void)n; }
 
 /* Load the pack's host-quantised low-colour data: pal16 = 16 x {r,g,b} levels (3-bit on ST, 4-bit
  * on STE per g_is_ste; st_reg packs the right register format), lut256 = the 256->16 remap. */
+static void planar_mark_dirty(void);   /* defined with the planar block; LUT change -> planar caches stale */
 void rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256)
 {
-    if (lut256) memcpy(g_lut, lut256, 256);
+    if (lut256){ memcpy(g_lut, lut256, 256); planar_mark_dirty(); }  /* new 256->16 LUT invalidates planar */
     if (pal16) {
         for (int i = 0; i < 16; i++)
             g_stpal[i] = st_reg(pal16[i*3+0], pal16[i*3+1], pal16[i*3+2]);
@@ -275,6 +276,7 @@ void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const
         if (r1 > STH) r1 = STH;
         for (int y = r0; y < r1; y++) g_row_lut[y] = g_band_lut[b];
     }
+    planar_mark_dirty();                             /* the map's row-LUT (g_row_lut[PMAP_TOP]) changed */
     g_nb = nb;
     for (int i = 0; i < 16; i++) g_stpal[i] = g_band_reg[0][i];
     Setpalette(g_stpal);                            /* band 0 = resting palette (XBIOS: supervisor-safe;
@@ -458,6 +460,27 @@ static const planar_tile_t *rdr_planar_get(int32_t key, const uint8_t *chunky, c
     return &g_pcache[slot];
 }
 
+/* LUT change (new scene palette) invalidates the post-LUT planar caches. The dynamic (tile,level)
+ * cache is cleared here; the STATIC layer's staleness is signalled to gamedemo via rdr_planar_take_dirty
+ * (it drives the rebuild through g_pd_valid). Colour CYCLING (rdr_lowcolor_cycle) rotates only the
+ * hardware registers, not g_lut, so the index-based planar bits stay valid — no invalidation there. */
+static int g_planar_dirty = 0;
+static void planar_mark_dirty(void){ g_pcache_ready = 0; g_planar_dirty = 1; }
+int  rdr_planar_take_dirty(void){ int d = g_planar_dirty; g_planar_dirty = 0; return d; }
+
+/* The map content is presented at screen rows PMAP_TOP..PMAP_TOP+159 (== gamedemo MAP_INSET). Native
+ * planar builds tiles with THAT region's 256->16 LUT (g_row_lut[PMAP_TOP]) so it matches the chunky
+ * present exactly — even under a band raster, where the map sits in band 0 (a single LUT) and the OTHER
+ * bands only swap hardware palette REGISTERS per row (Timer-B), which is orthogonal to the framebuffer
+ * indices the planar path writes. Native planar is OK iff the whole map region uses one LUT. */
+#define PMAP_TOP 8
+#define PLANAR_LUT (g_row_lut[PMAP_TOP])
+int  rdr_native_planar_ok(void){
+    const uint8_t *l = g_row_lut[PMAP_TOP];
+    for (int y = PMAP_TOP+1; y < PMAP_TOP+160; y++) if (g_row_lut[y] != l) return 0;  /* map must be one band */
+    return 1;
+}
+
 /* --- Phase 2: planar map buffers + incremental static maintenance + present --- */
 #define PMAP_GROUPS   11                       /* 176 px = 11 groups (== gamedemo TMP_T) */
 #define PMAP_ROWS     176
@@ -468,15 +491,17 @@ static uint16_t g_ptmp   [PMAP_ROWS*PMAP_STRIDE_W];  /* per-frame planar composi
 /* full rebuild: c2p all 176 rows of the (opaque) dimmed chunky map into g_pdimmed (jump/first frame). */
 void rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride)
 {
+    const uint8_t *lut = PLANAR_LUT;
     for (int r = 0; r < PMAP_ROWS; r++)
-        c2p4_lut_asm(dimmed + (int32_t)r*cstride, g_lut, g_pdimmed + (int32_t)r*PMAP_STRIDE_W, PMAP_GROUPS);
+        c2p4_lut_asm(dimmed + (int32_t)r*cstride, lut, g_pdimmed + (int32_t)r*PMAP_STRIDE_W, PMAP_GROUPS);
 }
 /* c2p one 16x16 cell (vx,vy) of the dimmed chunky map into g_pdimmed (group-aligned) — the only
  * per-frame convert on a walk (dirty cells: revealed edge + light-changed), mirroring dim_cell_into. */
 void rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy)
 {
+    const uint8_t *lut = PLANAR_LUT;
     for (int r = 0; r < 16; r++)
-        c2p4_lut_asm(dimmed + (int32_t)(vy*16+r)*cstride + vx*16, g_lut,
+        c2p4_lut_asm(dimmed + (int32_t)(vy*16+r)*cstride + vx*16, lut,
                      g_pdimmed + (int32_t)(vy*16+r)*PMAP_STRIDE_W + vx*4, 1);
 }
 /* planar shift g_pdimmed by (dx,dy) CELLS so new[v]=old[v+(dx,dy)] (mirrors shift_static; the lead
@@ -497,7 +522,7 @@ void rdr_pframe_begin(void) { memcpy(g_ptmp, g_pdimmed, sizeof g_ptmp); }
  * group-aligned, via the (tile,level) planar cache — mirrors draw_cell's masked chunky copy. */
 void rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
 {
-    rdr_blit_planar_masked(g_ptmp, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, g_lut), vx*16, vy*16);
+    rdr_blit_planar_masked(g_ptmp, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, PLANAR_LUT), vx*16, vy*16);
 }
 /* present: shifted planar block-copy of g_ptmp's visible 160x160 span into the screen map region at
  * the +8-px MAP_INSET — writes screen px 8..167 (border cols 0..7 / 168.. preserved). NO c2p, NO
@@ -633,9 +658,9 @@ int rdr_planar_selftest(void)
  * path (incremental static + dynamic blits + present) is byte-identical to today's chunky+c2p. */
 int rdr_pverify(const uint8_t *tmp, int cstride)
 {
-    int diff = 0; uint16_t ref[40];                              /* 10 groups */
+    int diff = 0; uint16_t ref[40]; const uint8_t *lut = PLANAR_LUT;   /* 10 groups; map's row-LUT */
     for (int y = 0; y < 160; y++) {
-        c2p4_lut_asm(tmp + (int32_t)y*cstride, g_lut, ref, 10);
+        c2p4_lut_asm(tmp + (int32_t)y*cstride, lut, ref, 10);
         const uint16_t *g = g_ptmp + (int32_t)y*PMAP_STRIDE_W;
         for (int i = 0; i < 40; i++) if (g[i] != ref[i]) diff++;
     }

@@ -126,6 +126,9 @@ path; STE/Mega/TT get the Blitter speedup for free on top.
 - **Phase 2 (DONE):** divert the ST `draw_cell`/`draw_multi` to planar; a planar static layer
   (`g_pdimmed`); drop the ST c2p present. Byte-verify the planar composite vs c2p(chunky) (INV2,
   in-memory). → `diff=0` over 41 frames; frame 933→619 ms (1.51×), present 444→81 ms. See §8.
+- **Phase 2c (DONE):** wire it into the LIVE ST game (`present_map`), band-raster-safe map LUT,
+  palette-change invalidation. Pixel A/B on a real ST: planar vs chunky identical bar the debug glyph.
+  Live clean-walk 739 ms / 1.35 fps (present 5.5× cheaper). See §8.
 - **Phase 3:** Blitter path for `blit_planar_masked` (STE/Mega/TT), runtime-detected.
 - **Phase 4:** actors as planar sprites; roofs; fields; the full lit scene.
 
@@ -183,8 +186,27 @@ The **present is 5.5× cheaper** (444→81 ms) and the **frame 1.51× faster** (
 The residual +49 ms compose is the planar STATIC c2p maintenance (per-dirty-cell, ~20 cells/frame on a
 lit walk); dimming DIRECTLY in planar (a planar darklut, later phase) would remove even that c2p.
 
-Native planar is enabled only in the ST bench so far (`PLANAR.REQ`/`LIGHTSTY.REQ` toggles); the live
-ST game loop still uses the proven chunky+c2p present. Next: **Phase 2c/live** — flip `g_native_planar`
-on for the ST game map present (gamedemo `present_map`), invalidate the planar cache on palette change
-(`rdr_set_lowcolor`), and validate on a real ST visually; then **Phase 3** (Blitter) / **Phase 4**
-(planar sprites, planar dimming).
+**Phase 2c DONE — wired into the LIVE ST game + pixel-validated (2026-07-19).** `compose_map` now
+enables native planar every frame when eligible — ST backend + PREDIM + the map region is a single LUT
+(`rdr_native_planar_ok`; a band raster only swaps hardware palette REGISTERS per row via Timer-B, which
+is orthogonal to the framebuffer, so planar is fine as long as the map sits in one band — it does, band
+0). `present_map`'s clean-walk branch (no cursor) presents via `rdr_ppresent`. Correctness details:
+- Planar tiles are built with the map's actual row-LUT (`g_row_lut[MAP_INSET]`), so they match the
+  chunky present exactly whether or not a band raster is active.
+- The planar caches are invalidated on any LUT change: `rdr_set_lowcolor` (new scene palette) and
+  `rdr_set_lowcolor_bands` mark dirty; `compose_map` forces a planar-static rebuild (`rdr_planar_take_dirty`
+  → `g_pd_valid=0`). Colour CYCLING rotates only the registers (not the LUT) so it needs no rebuild.
+- The live path keeps composing chunky too (`g_chunky_dyn=1`) so `g_back` stays valid for the cursor,
+  the full present, and bare mouse-moves; `g_ptmp == c2p(the chunky map)` by INV2, so `rdr_ppresent` is
+  byte-identical. (The bench measures the planar-ONLY ceiling by dropping the chunky composite.)
+
+**Validation (real 8 MHz ST via Hatari, `AUTOWALK.REQ` walks 6 tiles then holds the frame):** the map
+renders correctly (throne room, PREDIM-lit, papyrus border + panel intact), `native_planar=1`. A pixel
+A/B of the SAME scene composed planar (`rdr_ppresent`) vs chunky (`PLANAR.REQ=0`, c2p) differs by **124
+px in a 12×14 box** — exactly the `native_planar=1`/`=0` debug glyph; **the map, panel and border are
+pixel-identical**. Live clean-walk frame ≈ 658 ms compose (both paths) + 81 ms present ≈ 739 ms / 1.35 fps
+(present 5.5× cheaper); the bench planar-only ceiling is 619 ms / 1.62 fps.
+
+Next: **Phase 3** (Blitter path for the masked blit — STE/Mega). **Phase 4** — planar sprites (a planar
+cursor + hybrid full-present would let the LIVE walk drop the redundant chunky composite → the 1.62 fps
+ceiling) and **planar dimming** (a planar darklut removes the residual per-cell c2p → toward ~2 fps).
