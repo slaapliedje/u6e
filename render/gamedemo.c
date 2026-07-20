@@ -5932,6 +5932,9 @@ int main(void)
       if(!ls_done){ int32_t rl=0; char *rq=(char*)plat_load_file("LIGHTSTY.REQ",1,&rl);
           if(rq && rl>0 && rq[0]>='0' && rq[0]<='4'){ g_light_style=rq[0]-'0'; g_tmp_valid=0; }
 #ifdef HAVE_RDR_ST
+          else if(rdr_active_backend()==0){ g_light_style=LSTY_PREDIM; g_tmp_valid=0; }  /* ST-shifter default: PREDIM
+                                          * (the low-colour lighting style + the native-planar present path). TT/Falcon
+                                          * keep SMOOTH (per-pixel bilinear, right for 256 colours). */
           { int32_t pl=0; char*pq=(char*)plat_load_file("PLANAR.REQ",1,&pl);   /* '0' = force chunky (A/B control) */
             if(pq && pl>0 && pq[0]=='0') g_planar_allow=0; }
 #endif
