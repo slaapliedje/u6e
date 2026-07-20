@@ -130,6 +130,11 @@ void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy);
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
 int      rdr_native_planar_ok(void);   /* 1 = ST map uses a single LUT (no band raster) -> planar OK */
 int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller must rebuild the planar static */
+/* planar mouse cursor: drawn straight into the planar screen (save-under), for the native-planar path
+ * where the present reads g_ptmp not the chunky backbuffer. curpix = w x h chunky, 255 = transparent. */
+void     rdr_pcursor_show(const uint8_t *curpix, int w, int h, int ox, int oy);
+void     rdr_pcursor_hide(void);        /* restore the pixels under the cursor */
+void     rdr_pcursor_invalidate(void);  /* forget the save-under (after a full present erased it) */
 
 /* Diagnostic: out[0]=Physbase, [1]=Logbase, [2]=our screen, [3]=EgetShift,
  * [4]=Getrez, [5]=our screen byte size. */

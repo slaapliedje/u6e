@@ -2326,7 +2326,7 @@ static void compose_map(const world_t*w)
      * (a band raster gives each row its own LUT, which pre-converted planar tiles can't honour). On the
      * off->on edge or after a palette (LUT) change, force a planar-static rebuild. */
     { int elig = g_planar_allow && predim && rdr_active_backend()==0 && rdr_native_planar_ok();
-      if(elig){ if(!g_native_planar) g_pd_valid=0;          /* just enabled -> rebuild g_pdimmed        */
+      if(elig){ if(!g_native_planar){ g_pd_valid=0; rdr_pcursor_invalidate(); } /* enabled -> rebuild + drop stale cursor save-under */
                 if(rdr_planar_take_dirty()) g_pd_valid=0;   /* LUT changed (new scene) -> rebuild       */
                 g_native_planar=1; }
       else      g_native_planar=0; }
@@ -3312,18 +3312,40 @@ static int g_cur_onx=-1, g_cur_ony=-1;   /* where the cursor is currently shown 
 /* present a frame with the cursor on top, leaving the backbuffer cursor-free so
  * the next compose never has to reason about it. (Full present clears the old
  * cursor position automatically.) */
+#ifdef HAVE_RDR_ST
+/* clamp the cursor's top-left (mouse pos minus hotspot) to the screen — mirrors cursor_draw. Only the
+ * native-planar present paths use it. */
+static void cursor_pos(int lx,int ly,int*ox,int*oy)
+{ int x=lx-g_chx, y=ly-g_chy; if(x<0)x=0; if(y<0)y=0;
+  if(x+g_cw>LW)x=LW-g_cw; if(y+g_ch>LH)y=LH-g_ch; *ox=x; *oy=y; }
+#endif
+
 static void present_frame(void)
-{ if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_doubled(LH); cursor_erase(); }
+{
+#ifdef HAVE_RDR_ST
+  if(g_native_planar){                                    /* map+panel from g_back (valid), cursor planar */
+      rdr_pcursor_invalidate();                           /* the full c2p erases any planar cursor */
+      rdr_present_rect(0,0,LW,LH);                         /* full 1:1 c2p of g_back, no Vsync */
+      if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
+                g_cur_onx=ox; g_cur_ony=oy; }
+      Vsync(); return; }
+#endif
+  if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_doubled(LH); cursor_erase(); }
   else rdr_present_doubled(LH); }
 
 /* present ONLY the map window (movement / tile animation) — ~half the c2p of a full
  * doubled present, since the panel/command-bar are static. The cursor is composited
  * if it overlaps the map. The main loop Vsyncs. */
 static void present_map(void)
-{ if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); cursor_erase(); }
+{
 #ifdef HAVE_RDR_ST
-  else if(g_native_planar) rdr_ppresent();   /* clean walk: shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
+  if(g_native_planar){                                    /* shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
+      rdr_pcursor_hide(); rdr_ppresent();                 /* restore under old cursor, then redraw the map */
+      if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
+                g_cur_onx=ox; g_cur_ony=oy; }
+      return; }
 #endif
+  if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); cursor_erase(); }
   else rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); }
 
 /* Cheap CURSOR-ONLY present for a bare mouse move: repaint just the old + new cursor
@@ -3333,6 +3355,11 @@ static void present_map(void)
 static void present_cursor(void)
 {
     if(!g_cw) return;
+#ifdef HAVE_RDR_ST
+    if(g_native_planar){ rdr_pcursor_hide();                        /* bare move: map unchanged, just move the cursor */
+        int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
+        g_cur_onx=ox; g_cur_ony=oy; return; }
+#endif
     int oldx=g_cur_onx, oldy=g_cur_ony;
     cursor_draw(g_mx,g_my);                                          /* draw at the new pos */
     int nx=g_csx, ny=g_csy;
@@ -6038,8 +6065,8 @@ int main(void)
      * capture shows a WALKED frame produced by rdr_ppresent (not the boot full-present). Cursor forced
      * off so present_map takes the planar branch. Absent in normal play. */
     { int32_t al=0; uint8_t*aw=(uint8_t*)plat_load_file("AUTOWALK.REQ",1,&al);
-      if(aw && al>0){ int n=aw[0]; if(n<1)n=1; if(n>32)n=32; g_cw=0;
-          present_frame();                              /* establish border + panel + map in g_screen */
+      if(aw && al>0){ int n=aw[0]; if(n<1)n=1; if(n>32)n=32; g_mx=100; g_my=50; /* cursor left ON, over the map */
+          present_frame();                              /* establish border + panel + map + cursor in g_screen */
           for(int s=0;s<n;s++){ if(world_try_move(&w,1,0)) step_npcs(&w);
               compose_map(&w); present_map(); Vsync(); }
           dbg_num("AUTOWALK steps=", n); dbg_num("AUTOWALK native_planar=", g_native_planar);

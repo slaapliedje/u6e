@@ -542,6 +542,44 @@ void rdr_ppresent(void)
     }
 }
 
+/* --- Planar mouse cursor (native-planar path) --- The chunky path draws the cursor into g_back then
+ * c2p's it; the native-planar present reads g_ptmp, not g_back, so the cursor must be drawn DIRECTLY
+ * into the planar screen with save-under (the map/panel under it is restored on the next move). The
+ * cursor sprite is chunky (w x h, 255 = transparent) and is coloured through its screen row's LUT.
+ * The cursor is small so per-pixel plane read/write is cheap. */
+#define PCUR_MAX 24
+static uint8_t g_pcur_save[PCUR_MAX*PCUR_MAX];   /* 4-bit colours captured under the cursor */
+static int     g_pcur_x = -1, g_pcur_y, g_pcur_w, g_pcur_h;
+static inline int pget_px(int x, int y){
+    const uint16_t *w = (const uint16_t *)(g_screen + (int32_t)y*ST_ROWBYTES) + (x>>4)*4;
+    int b = 15-(x&15);
+    return ((w[0]>>b)&1) | (((w[1]>>b)&1)<<1) | (((w[2]>>b)&1)<<2) | (((w[3]>>b)&1)<<3);
+}
+static inline void pset_px(int x, int y, int c){
+    uint16_t *w = (uint16_t *)(g_screen + (int32_t)y*ST_ROWBYTES) + (x>>4)*4;
+    uint16_t m = (uint16_t)(1u << (15-(x&15)));
+    w[0]=(c&1)?(uint16_t)(w[0]|m):(uint16_t)(w[0]&~m); w[1]=(c&2)?(uint16_t)(w[1]|m):(uint16_t)(w[1]&~m);
+    w[2]=(c&4)?(uint16_t)(w[2]|m):(uint16_t)(w[2]&~m); w[3]=(c&8)?(uint16_t)(w[3]|m):(uint16_t)(w[3]&~m);
+}
+void rdr_pcursor_hide(void){                      /* restore the screen pixels the cursor overwrote */
+    if (g_pcur_x < 0) return;
+    for (int y = 0; y < g_pcur_h; y++) for (int x = 0; x < g_pcur_w; x++)
+        pset_px(g_pcur_x+x, g_pcur_y+y, g_pcur_save[y*g_pcur_w+x]);
+    g_pcur_x = -1;
+}
+void rdr_pcursor_invalidate(void){ g_pcur_x = -1; }   /* forget the save-under (a full present erased it) */
+void rdr_pcursor_show(const uint8_t *curpix, int w, int h, int ox, int oy){
+    if (w > PCUR_MAX) w = PCUR_MAX;  if (h > PCUR_MAX) h = PCUR_MAX;
+    const uint8_t *lut = g_row_lut[(oy>=0 && oy<STH) ? oy : 0];
+    g_pcur_x = ox; g_pcur_y = oy; g_pcur_w = w; g_pcur_h = h;
+    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++){
+        int px = ox+x, py = oy+y;
+        g_pcur_save[y*w+x] = (uint8_t)pget_px(px, py);          /* save-under */
+        uint8_t c = curpix[y*w+x];
+        if (c != PLANAR_TRANSPARENT) pset_px(px, py, lut[c] & 0x0F);
+    }
+}
+
 #ifdef BENCH
 /* BENCH-only: the intro-bench harness in gamedemo.c splits present into c2p vs output on the TT.
  * The ST present is 1:1 (no letterbox/doubling/flip) — effectively all c2p — so report zeros; the

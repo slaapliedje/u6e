@@ -130,7 +130,10 @@ path; STE/Mega/TT get the Blitter speedup for free on top.
   palette-change invalidation. Pixel A/B on a real ST: planar vs chunky identical bar the debug glyph.
   Live clean-walk 739 ms / 1.35 fps (present 5.5× cheaper). See §8.
 - **Phase 3:** Blitter path for `blit_planar_masked` (STE/Mega/TT), runtime-detected.
-- **Phase 4:** actors as planar sprites; roofs; fields; the full lit scene.
+- **Phase 4a (DONE):** planar mouse cursor (`rdr_pcursor_*`) + planar-aware `present_map`/`present_cursor`/
+  `present_frame`, so native planar applies with the always-on cursor → LIVE ~1.35 fps. Pixel A/B identical.
+- **Phase 4b:** drop the chunky composite on walk frames (→ 1.62 fps live) + planar dimming (→ ~2 fps);
+  actors as standalone planar sprites; the full lit scene.
 
 ## 7. Expected perf + risks
 Expected (plain ST, if the thesis holds): per-frame c2p (444 ms) → a warm-cache planar block-move +
@@ -207,6 +210,24 @@ px in a 12×14 box** — exactly the `native_planar=1`/`=0` debug glyph; **the m
 pixel-identical**. Live clean-walk frame ≈ 658 ms compose (both paths) + 81 ms present ≈ 739 ms / 1.35 fps
 (present 5.5× cheaper); the bench planar-only ceiling is 619 ms / 1.62 fps.
 
-Next: **Phase 3** (Blitter path for the masked blit — STE/Mega). **Phase 4** — planar sprites (a planar
-cursor + hybrid full-present would let the LIVE walk drop the redundant chunky composite → the 1.62 fps
-ceiling) and **planar dimming** (a planar darklut removes the residual per-cell c2p → toward ~2 fps).
+**Phase 4a DONE — planar cursor, so native planar actually APPLIES in real play (2026-07-20).** Crucial
+discovery: the game's mouse cursor (`g_cw`) is set once at init and never cleared, so `present_map` ALWAYS
+took its cursor branch (chunky c2p) — the Phase-2c planar present only fired with the cursor off, i.e.
+never in real play. Fix: a planar mouse cursor drawn straight into the 4-plane screen with save-under
+(`rdr_pcursor_show`/`_hide`/`_invalidate`, per-pixel plane read/write, coloured via the cursor row's LUT).
+All three present paths go planar when native planar is active:
+- `present_map` (walk): `pcursor_hide` → `rdr_ppresent` → `pcursor_show`.
+- `present_cursor` (bare mouse move): `pcursor_hide` → `pcursor_show` (map unchanged).
+- `present_frame` (UI redraw): full 1:1 c2p of `g_back` (still valid, `g_chunky_dyn=1`) → `pcursor_show`.
+Consistency: each path ends having saved-under the new cursor; the on-edge invalidates any stale save-under.
+
+**Validation (real 8 MHz ST, `AUTOWALK` 6 tiles, cursor left ON over the map):** the white arrow renders
+correctly on the planar map; a pixel A/B of the SAME scene planar vs chunky (`PLANAR.REQ=0`) differs by
+136 px = the `native_planar=1`/`=0` debug glyph + a 12-px status-line capture-timing speck — **the map,
+the cursor, the panel and the border are pixel-identical.** So the 5.5×-cheaper present (444→81 ms) now
+applies to actual gameplay: **~1.35 fps live** (compose still both-paths for `g_back` validity).
+
+Next: **Phase 4b** — drop the redundant chunky composite on walk frames (`g_chunky_dyn=0`; needs an audit
+of `g_back` readers + a hybrid `present_frame` that takes the map from planar) → the **1.62 fps** ceiling
+live; and **planar dimming** (a planar darklut removes the residual per-cell c2p → toward ~2 fps).
+**Phase 3** — Blitter path for the masked blit (STE/Mega), the Blitter's actual strength.
