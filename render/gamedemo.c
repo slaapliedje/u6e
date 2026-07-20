@@ -218,6 +218,9 @@ static int            g_dm_valid=0;
  * band redraw composes only band cells byte-identically (multi-tile bleed into the band lands;
  * everything else is rejected per-cell). */
 static int            g_clip_x0=0,g_clip_y0=0,g_clip_x1=VT,g_clip_y1=VT;
+static const uint8_t *g_pd_objgate=0;   /* incremental static-object pass: if set, a per-cell dirty mask —
+                                         * draw_cell composites ONLY dirty cells (clean cells keep their
+                                         * already-shifted object pixels). NULL = draw every cell. */
 static uint8_t        g_indoor[1024*1024/8];  /* bitmap: tile is INDOOR (under a roof) -> low ambient (U6WI) */
 static int            tile_is_indoor(int x,int y){ int32_t i=(int32_t)y*1024+x; return (g_indoor[i>>3]>>(i&7))&1; }
 static const uint8_t *g_rtiles;               /* roof tileset (n*256, 255=transparent), points into pak (U6WK) */
@@ -1923,6 +1926,7 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
 {
     if(cvx<0||cvy<0||cvx>=VT||cvy>=VT||tile<0||tile>=2048) return;
     if(cvx<g_clip_x0||cvx>=g_clip_x1||cvy<g_clip_y0||cvy>=g_clip_y1) return;  /* band clip (incremental recompose) */
+    if(g_pd_objgate && !g_pd_objgate[cvy*VT+cvx]) return;   /* incremental static objects: skip already-shifted clean cells */
     if(pass>=0 && ((g_tflags[tile]>>4)&1)!=pass) return;   /* tile belongs to other pass */
     const uint8_t*src;
     if(g_predim){ int cc=cvy*VT+cvx;                       /* dim-at-draw: pre-dimmed variant for this cell */
@@ -2185,7 +2189,16 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
                 const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive) continue;
                 int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1);
                 int32_t vy=((int32_t)o->y-top )&(U6_SURFACE_TILES-1);
-                if(vx<=VT&&vy<=VT) draw_multi(tmp,T,(int)vx,(int)vy,obj_tile(o),pass);
+                if(vx>VT||vy>VT) continue;
+                if(g_pd_objgate){                              /* incremental static: skip if the <=2x2 footprint is all-clean */
+                    int ix=(int)vx, iy=(int)vy;                /* anchor + left/above cells (draw_cell re-gates each anyway) */
+                    int hit = (ix<VT&&iy<VT&&g_pd_objgate[iy*VT+ix])
+                            ||(ix>0 &&iy<VT&&g_pd_objgate[iy*VT+ix-1])
+                            ||(ix<VT&&iy>0 &&g_pd_objgate[(iy-1)*VT+ix])
+                            ||(ix>0 &&iy>0 &&g_pd_objgate[(iy-1)*VT+ix-1]);
+                    if(!hit) continue;
+                }
+                draw_multi(tmp,T,(int)vx,(int)vy,obj_tile(o),pass);
             }
             if(bx==bx1) break;
         }
@@ -2223,6 +2236,7 @@ static void build_static(const world_t*w){
  * On a scroll only the DIRTY cells' base is re-blitted + all objects redrawn once (see predim_compose_
  * static). g_pd_light is this path's own per-cell last-light dirty tracker (independent of g_dm_light). */
 static uint8_t g_pd_light[VT*VT];
+static uint8_t g_pd_dirty[VT*VT];       /* incremental scroll: 1 = cell's base was re-blitted this frame -> its objects must re-composite */
 #endif
 /* recompose ONE band of cells into the scrolled g_tmp_map. The cell clip makes the object
  * redraw byte-identical: every object's footprint cell that lands in the band is drawn (in
@@ -2331,7 +2345,9 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
              * at the same light = identical, so g_pdimmed stays byte-correct (INV2=0). */
             { int32_t left=w->px-VT/2, top=w->py-VT/2;
               for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
-                  if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_pd_light[cc]){   /* revealed OR light changed */
+                  int d = in_lead_band(vx,vy,dx,dy) || light[cc]!=g_pd_light[cc];  /* revealed OR light changed */
+                  g_pd_dirty[cc]=(uint8_t)d;
+                  if(d){
                       fill_tiles(w,left,top,vx,vy,vx+1,vy+1);  /* dimmed base -> g_pdimmed */
                       g_pd_light[cc]=light[cc];
 #ifdef BENCH
@@ -2339,7 +2355,13 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
 #endif
                   }
               }
-              draw_view_objects(g_tmp_map,TMP_T,left,top,0);  /* all lower objects -> g_pdimmed (once) */
+              /* the shift already panned terrain+objects; only DIRTY cells (base re-blitted) need their
+               * objects re-composited. Gate draw_cell to those cells: iterate ALL objects (so a multi-tile
+               * object straddling clean/dirty still redraws its dirty cells) but write only dirty cells,
+               * preserving z-order there. Clean cells keep their shifted object pixels (INV2 proves it). */
+              g_pd_objgate=g_pd_dirty;
+              draw_view_objects(g_tmp_map,TMP_T,left,top,0);  /* lower objects -> g_pdimmed (dirty cells only) */
+              g_pd_objgate=0;
             }
             SUB_ADD(g_ph0_redim);
         } else {                                               /* planar full rebuild -> g_pdimmed */
@@ -6079,6 +6101,13 @@ int main(void)
         { int32_t lrl=0; char *lrq=(char*)plat_load_file("LIGHTSTY.REQ",1,&lrl);
           if(lrq && lrl>0 && lrq[0]>='0' && lrq[0]<='4'){ g_light_style=lrq[0]-'0';
               dbg_num("LIGHT STYLE=", g_light_style); } }
+        /* STARTMIN.REQ (decimal minute-of-day 0..1439) forces the game clock to exercise NIGHT lighting —
+         * the scattered light-dirty cells that the incremental static-object gate must handle (uniform day
+         * light only dirties the lead band). g_pd_valid=0 below forces a fresh first frame. */
+        { int32_t sml=0; char *smq=(char*)plat_load_file("STARTMIN.REQ",1,&sml);
+          if(smq && sml>0){ int m=0,i=0; while(i<sml && smq[i]>='0'&&smq[i]<='9'){ m=m*10+(smq[i]-'0'); i++; }
+              if(m>=0 && m<1440){ g_start_min=m; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+                  dbg_num("START MIN=", g_start_min); } } }
 #ifdef HAVE_RDR_ST
         /* Native-planar (PREDIM only): compose in planar + present with no c2p. Enabled here in the ST
          * bench to measure the frame + verify INV2 (g_ptmp == c2p(tmp)); g_pd_valid=0 forces the first

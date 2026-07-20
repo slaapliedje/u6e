@@ -447,3 +447,30 @@ Two Blitter targets, measured on an emulated STE (8 MHz + BLiTTER; `make bench-s
 `PRESENT selftest diff=0` (byte-identical incl. borders), live STE shot clean (map/panel/border, raster
 intact). **present 81 → 11 ms (7×), STE 2.37 → 2.83 fps (+19%);** the plain ST (no Blitter) is unchanged.
 The Blitter can't touch the compose dim (LUT) — the ST floor stays 2.38 fps; the STE/Mega ceiling is now ~2.83.
+
+## 2026-07-20 — incremental static-object draw: compose 341 → 272 ms (both machines)
+Profiling the plain-ST scroll compose (`--conout 2` to capture the sub-phases) put the fat in one place:
+`ph0 re-dim dirty = 121 ms`, of which the ~20 dirty base fills are ~1 ms — the rest was `draw_view_objects`
+redrawing **ALL ~100+ lower objects into `g_pdimmed` every scroll frame**, even though `rdr_pstatic_shift`
+already panned the whole static layer (terrain + tile-aligned static objects) by one tile. Only the cells
+whose base was re-blitted (the newly-revealed lead band + any light-changed cells) actually need their
+objects re-composited.
+
+Fix: a per-cell dirty mask (`g_pd_dirty`) + a gate (`g_pd_objgate`) in `draw_cell` — during the incremental
+scroll's object pass, `draw_cell` composites ONLY dirty cells; clean cells keep their already-shifted object
+pixels. Iterating ALL objects (with a cheap per-object footprint skip; objects are ≤2×2) keeps a multi-tile
+object straddling clean/dirty correct, and confining WRITES to dirty cells preserves z-order there. No
+hardware needed — helps every machine. (Hardware fine-scroll was considered and **rejected**: HSCROLL
+`$FF8264` is real + ST-Low-compatible, but it only saves the shift + present, not the object *compositing*,
+and is STE-only.)
+
+| phase | before | after |
+|-------|-------:|------:|
+| ph0 re-dim dirty | 121 ms | 51 ms |
+| **scroll compose** | 341 ms | **272 ms** |
+
+Byte-verified `INV2 diff=0` by day (uniform light → lead band only) AND at night (`STARTMIN.REQ=180` →
+scattered light-dirty cells), plus a clean live plain-ST shot. **Plain ST 2.38 → 2.83 fps (+19%); STE (with
+the Blitter present) 2.83 → 3.56 fps (+26%)** — so the STE is 2.37 → 3.56 fps (+50%) across the two sessions.
+Remaining: `ph1 actors+fg` (~90 ms) is the dynamic layer, redrawn every frame (actors move; fg draws over
+them for z-order) — harder to incrementalize; and the plain-ST 81 ms CPU present.
