@@ -134,7 +134,8 @@ path; STE/Mega/TT get the Blitter speedup for free on top.
   `present_frame`, so native planar applies with the always-on cursor → LIVE ~1.35 fps. Pixel A/B identical.
 - **Phase 4b (DONE):** drop the chunky composite on walk frames (`g_chunky_dyn=0`) + hybrid
   `present_frame` → **1.62 fps live**, pixel A/B identical. Caveat: PREDIM-only, ST defaults to SMOOTH.
-- **Phase 4c:** planar dimming (→ ~2 fps); actors as standalone planar sprites; the full lit scene.
+- **Phase 4c (DONE):** planar dimming — compose the static layer directly from pre-dimmed planar tiles,
+  drop the whole chunky static. → **2.38 fps live**, pixel A/B identical. The 2 fps goal is cleared.
 
 ## 7. Expected perf + risks
 Expected (plain ST, if the thesis holds): per-frame c2p (444 ms) → a warm-cache planar block-move +
@@ -259,9 +260,25 @@ identity — a per-pixel darklut COMMUTES with tile overlay:
 opaque/holed-base/edge-transparent-object patterns. Projected: removes the ~88 ms c2p + much of the
 ~118 ms chunky edge recompose → compose ~400 ms → frame ≈ 480 ms / **~2 fps**.
 
-Remaining for 4c (Phase-2-scale, byte-verified via a static INV): a `dim_tile_base` variant (255→0 then
-darklut, cached), route `fill_tiles`/`draw_view_objects` to blit planar-dimmed tiles into `g_pdimmed`
-(the static analogue of `draw_cell`'s dynamic planar path), and a planar incremental recompose replacing
-`dim_cell_into`+`rdr_pstatic_cell`. Then drop the chunky static on the ST.
+**Phase 4c DONE — planar dimming: 2.38 fps live, byte-verified (2026-07-20). The 2 fps goal is cleared.**
+The ST STATIC layer is now composed DIRECTLY from pre-dimmed planar tiles into `g_pdimmed` — no chunky
+`g_tmp_map`/`g_dimmed_map`, no `dim_cell_into`, no per-cell c2p. Pieces:
+- `dim_tile_base` (255→0 then darklut, cached, matches `dim_cell_into` for base pixels) + `rdr_pstatic_blit`
+  (planar tile → `g_pdimmed`); `fill_tiles`/`draw_cell` blit planar-dimmed when `g_planar_static` is set.
+- `predim_compose_static` split in two: the PLANAR-DIRECT path (its own dirty tracker `g_pd_light`) builds
+  `g_pdimmed`; the chunky path runs ONLY for TT/Falcon or the native-planar VERIFY pass (INV2's `tmp`).
+- Incremental scroll: `rdr_pstatic_shift(g_pdimmed)` + re-blit the DIRTY cells' base + redraw ALL objects
+  ONCE. (Re-composing objects per dirty cell was 5× costlier — `draw_view_objects` is O(objects) — so it is
+  hoisted out of the cell loop; non-dirty cells keep their shifted base and get identical object pixels.)
 
-**Phase 3** — Blitter path for the masked blit (STE/Mega).
+The win beat the projection because it drops the ENTIRE chunky static maintenance (edge recompose + dim +
+c2p), not just the c2p: **compose 538 → 339 ms, frame 619 → 420 ms, 1.62 → 2.38 fps.** Proven byte-for-byte
+— `PLANAR static-direct diff=0` (full-rebuild INV, real tiles/objects/lighting), `INV2 diff=0` across the
+walk, `dim-commute diff=0`; and a pixel A/B on a real 8 MHz ST (planar-direct vs chunky, same scene) differs
+by only the 124-px `native_planar=1`/`=0` debug glyph — **map, panel, border pixel-identical.**
+
+Native-planar milestone COMPLETE: plain 8 MHz ST **1.07 → 2.38 fps** (2.2×), byte/pixel-verified at every
+step, shipping as the ST default.
+
+**Phase 3 (future)** — Blitter path for the masked blit (STE/Mega): free speedup on top for machines with
+a Blitter. Also: actors as standalone planar sprites; the full lit scene.

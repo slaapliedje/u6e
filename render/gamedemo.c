@@ -2216,6 +2216,14 @@ static void build_static(const world_t*w){
     fill_tiles(w,left,top,0,0,VT,VT);
     draw_view_objects(g_tmp_map,TMP_T,left,top,0);
 }
+#ifdef HAVE_RDR_ST
+/* Phase-4c: the native-planar STATIC layer is composed DIRECTLY from pre-dimmed planar tiles into
+ * g_pdimmed (fill_tiles blits the dimmed base, draw_view_objects->draw_cell the dimmed objects, both
+ * when g_planar_static+g_predim are set) — no chunky g_tmp_map/g_dimmed_map, no dim_cell_into, no c2p.
+ * On a scroll only the DIRTY cells' base is re-blitted + all objects redrawn once (see predim_compose_
+ * static). g_pd_light is this path's own per-cell last-light dirty tracker (independent of g_dm_light). */
+static uint8_t g_pd_light[VT*VT];
+#endif
 /* recompose ONE band of cells into the scrolled g_tmp_map. The cell clip makes the object
  * redraw byte-identical: every object's footprint cell that lands in the band is drawn (in
  * full index order), all other cells rejected — so multi-tile bleed INTO the band lands and
@@ -2304,41 +2312,64 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;         /* wrap to shortest signed delta */
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
     if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
+    int can_scroll = (g_tmp_valid && dx>=-1&&dx<=1 && dy>=-1&&dy<=1 && (dx||dy));
 #ifdef BENCH
     uint32_t subt;
 #endif
-    if(g_dm_valid && g_tmp_valid && dx>=-1&&dx<=1 && dy>=-1&&dy<=1 && (dx||dy)){
-        SUB_T(); scroll_static(w,dx,dy); mark_view_anim(w); SUB_ADD(g_ph0_scroll);  /* undimmed cache (mark_view_anim ~8ms) */
-        SUB_T();
-        shift_buf(g_dimmed_map,TMP_T,16*dx,16*dy);             /* dimmed cache: shift in lockstep */
-        shift_buf(g_dm_light,VT,dx,dy);                        /* last-light: shift in lockstep */
 #ifdef HAVE_RDR_ST
-        if(g_native_planar && g_pd_valid) rdr_pstatic_shift(dx,dy); /* planar mirror: shift in lockstep */
-#endif
-        SUB_ADD(g_ph0_shift);
-        SUB_T();
-        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
-            if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_dm_light[cc]){   /* revealed OR light changed */
-                dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc];
-#ifdef HAVE_RDR_ST
-                if(g_native_planar && g_pd_valid) rdr_pstatic_cell(g_dimmed_map,TMP_T,vx,vy); /* c2p dirty cell -> g_pdimmed */
-#endif
+    /* PLANAR-DIRECT static -> g_pdimmed (Phase 4c): compose the dimmed static straight from planar tiles,
+     * NO chunky dim, NO c2p. Own dirty tracker g_pd_light so it never interferes with the chunky verify. */
+    if(g_native_planar){
+        g_planar_static=1; g_predim=1; g_predim_light=light; g_dim_dither=dither;
+        if(can_scroll && g_pd_valid){
+            SUB_T(); mark_view_anim(w); SUB_ADD(g_ph0_scroll);
+            SUB_T(); rdr_pstatic_shift(dx,dy); shift_buf(g_pd_light,VT,dx,dy); SUB_ADD(g_ph0_shift);
+            SUB_T();
+            /* re-blit only the DIRTY cells' base (cheap), then redraw ALL objects ONCE (not per-cell —
+             * draw_view_objects is O(objects); calling it per dirty cell was ~5x costlier than the c2p).
+             * Non-dirty cells keep their shifted base (light unchanged) and get their objects re-blitted
+             * at the same light = identical, so g_pdimmed stays byte-correct (INV2=0). */
+            { int32_t left=w->px-VT/2, top=w->py-VT/2;
+              for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+                  if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_pd_light[cc]){   /* revealed OR light changed */
+                      fill_tiles(w,left,top,vx,vy,vx+1,vy+1);  /* dimmed base -> g_pdimmed */
+                      g_pd_light[cc]=light[cc];
 #ifdef BENCH
-                g_ph0_dirty++;
+                      g_ph0_dirty++;
 #endif
+                  }
+              }
+              draw_view_objects(g_tmp_map,TMP_T,left,top,0);  /* all lower objects -> g_pdimmed (once) */
             }
+            SUB_ADD(g_ph0_redim);
+        } else {                                               /* planar full rebuild -> g_pdimmed */
+            build_static(w);
+            for(int i=0;i<VT*VT;i++) g_pd_light[i]=light[i];
+            g_pd_valid=1;
         }
-        SUB_ADD(g_ph0_redim);
-#ifdef HAVE_RDR_ST
-        if(g_native_planar && !g_pd_valid){ rdr_pstatic_rebuild(g_dimmed_map,TMP_T); g_pd_valid=1; } /* first planar frame after enable */
+        g_planar_static=0; g_predim=0;
+    }
+    /* CHUNKY static -> g_dimmed_map: TT/Falcon, or the native-planar VERIFY pass (INV2's tmp reference). */
+    if(!g_native_planar || g_chunky_dyn)
 #endif
-    } else {                                                   /* full rebuild */
-        build_static(w);                                       /* undimmed cache: base tiles + lower objects */
-        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
-            dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
-#ifdef HAVE_RDR_ST
-        if(g_native_planar){ rdr_pstatic_rebuild(g_dimmed_map,TMP_T); g_pd_valid=1; } /* planar static: full c2p */
-#endif
+    {
+        if(can_scroll && g_dm_valid){
+            SUB_T(); scroll_static(w,dx,dy); mark_view_anim(w); SUB_ADD(g_ph0_scroll);
+            SUB_T();
+            shift_buf(g_dimmed_map,TMP_T,16*dx,16*dy);          /* dimmed cache: shift in lockstep */
+            shift_buf(g_dm_light,VT,dx,dy);                     /* last-light: shift in lockstep     */
+            SUB_ADD(g_ph0_shift);
+            SUB_T();
+            for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+                if(in_lead_band(vx,vy,dx,dy) || light[cc]!=g_dm_light[cc]){
+                    dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+            }
+            SUB_ADD(g_ph0_redim);
+        } else {                                               /* full rebuild */
+            build_static(w);
+            for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+                dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+        }
     }
     g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1; g_dm_valid=1;
 }

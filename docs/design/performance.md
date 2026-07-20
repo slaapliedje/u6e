@@ -408,3 +408,22 @@ compose is the ~88 ms planar-static per-cell c2p on the lit walk; **planar dimmi
 layer in planar so it needs no c2p) is the last step toward ~2 fps. NOTE: native planar is PREDIM-only and
 the ST defaults to SMOOTH, so it's opt-in (`LIGHTSTY.REQ=3`) until PREDIM becomes the ST default. Also:
 the Blitter path (STE/Mega).
+
+## 2026-07-20 — planar dimming (Phase 4c): compose 538 → 339 ms, frame → 420 ms / 2.38 fps (2 fps cleared)
+The last residual in the planar compose was the per-cell **c2p** (`rdr_pstatic_cell`, ~88 ms/walk) that
+converted the chunky-dimmed static to planar, plus the chunky edge recompose (~118 ms). Phase 4c composes
+the STATIC layer DIRECTLY from pre-dimmed planar tiles into `g_pdimmed` — `dim_tile_base` (255→0 then
+darklut) for the opaque base + `dim_tile` for masked objects, blitted via `rdr_pstatic_blit`; no chunky
+`g_tmp_map`/`g_dimmed_map`, no `dim_cell_into`, no c2p. Rests on darklut COMMUTING with tile overlay
+(`blit(dim base)+blit(dim obj) == c2p(dim(base⊕obj))`, proven). On a scroll only the DIRTY cells' base is
+re-blitted + all objects redrawn ONCE (per-cell `draw_view_objects` was 5× costlier — O(objects)).
+
+| path | compose | present | frame | **fps** |
+|------|--------:|--------:|------:|--------:|
+| Phase 4b (planar + c2p static) | 538 ms | 81 ms | 619 ms | 1.62 |
+| **Phase 4c (planar-dimmed static)** | **339 ms** | 81 ms | **420 ms** | **2.38** |
+
+It beat the ~2 fps projection because it drops the WHOLE chunky static maintenance, not just the c2p.
+Byte-verified: `PLANAR static-direct diff=0` (full-rebuild INV), `INV2 diff=0` (walk), `dim-commute diff=0`;
+a pixel A/B on a real 8 MHz ST differs by only the debug glyph. **Native-planar milestone complete: plain
+ST 1.07 → 2.38 fps (2.2×), shipping as the ST default.** Remaining headroom: the Blitter path (STE/Mega).
