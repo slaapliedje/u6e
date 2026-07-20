@@ -126,7 +126,8 @@ void     rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride);       /* c2p a
 void     rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy); /* c2p one dirty cell */
 void     rdr_pstatic_shift(int dx, int dy);                             /* planar shift g_pdimmed (cells) */
 void     rdr_pframe_begin(void);                                        /* g_ptmp = g_pdimmed (static) */
-void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit */
+void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit -> g_ptmp */
+void     rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar static blit -> g_pdimmed (4c) */
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
 int      rdr_native_planar_ok(void);   /* 1 = ST map uses a single LUT (no band raster) -> planar OK */
 int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller must rebuild the planar static */

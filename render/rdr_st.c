@@ -524,6 +524,13 @@ void rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
 {
     rdr_blit_planar_masked(g_ptmp, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, PLANAR_LUT), vx*16, vy*16);
 }
+/* Phase 4c: blit a pre-dimmed planar tile into the STATIC layer g_pdimmed at cell (vx,vy) — composes the
+ * static layer directly from planar dimmed tiles (opaque base + masked objects), replacing the chunky
+ * dim + per-cell c2p. Same masked blit; opaque base tiles (no 255) get mask all-1 -> full overwrite. */
+void rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
+{
+    rdr_blit_planar_masked(g_pdimmed, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, PLANAR_LUT), vx*16, vy*16);
+}
 /* present: shifted planar block-copy of g_ptmp's visible 160x160 span into the screen map region at
  * the +8-px MAP_INSET — writes screen px 8..167 (border cols 0..7 / 168.. preserved). NO c2p, NO
  * Vsync (caller batches). Per screen group g the +8 shift splits each src group across two:
@@ -702,6 +709,17 @@ int rdr_pverify(const uint8_t *tmp, int cstride)
         const uint16_t *g = g_ptmp + (int32_t)y*PMAP_STRIDE_W;
         for (int i = 0; i < 40; i++) if (g[i] != ref[i]) diff++;
     }
+    return diff;
+}
+
+/* Phase-4c INV (static): save=1 snapshots g_pdimmed; save=0 returns the plane-word count where g_pdimmed
+ * now differs from the snapshot. Used to prove the planar-DIRECT static build == the chunky-dim + c2p one. */
+static uint16_t g_psnap[PMAP_ROWS*PMAP_STRIDE_W];
+int rdr_pstatic_snapshot_and_diff(int save)
+{
+    if (save){ memcpy(g_psnap, g_pdimmed, sizeof g_psnap); return 0; }
+    int diff = 0;
+    for (int i = 0; i < PMAP_ROWS*PMAP_STRIDE_W; i++) if (g_pdimmed[i] != g_psnap[i]) diff++;
     return diff;
 }
 

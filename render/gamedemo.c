@@ -1902,6 +1902,7 @@ static const uint8_t  *dim_tile_d(int tile, int Lc);    /* dithered pre-dim (bod
 #ifdef HAVE_RDR_ST
 static int g_planar_allow = 1;          /* master enable (the bench clears it for the chunky baseline) */
 static int g_native_planar = 0;         /* planar compose active THIS frame (recomputed in compose_map) */
+static int g_planar_static = 0;         /* Phase 4c: STATIC compose targets g_pdimmed (planar-dimmed-direct) */
 static int g_pd_valid = 0;              /* g_pdimmed is built (else force a full rebuild) */
 static int g_chunky_dyn = 1;            /* keep the chunky dynamic composite (0 = planar-only present path) */
 #ifdef BENCH
@@ -1910,6 +1911,7 @@ static int g_planar_verify = 0;                      /* gate the INV2 c2p check 
 #endif
 #else
 #define g_chunky_dyn 1                  /* non-ST builds always composite chunky */
+#define g_planar_static 0
 #endif
 
 /* blit one 16x16 tile into the compose buffer at view cell (cvx,cvy),
@@ -1927,14 +1929,16 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
         int Lc=g_predim_vis[cc]?g_predim_light[cc]:0;      /* full 0..255 cell light */
         src = g_dim_dither ? dim_tile_d(tile,Lc) : dim_tile(tile,Lc>>4);
 #ifdef HAVE_RDR_ST
-        if(g_native_planar){                               /* mirror this dynamic cell into g_ptmp (planar) */
+        if(g_native_planar){                               /* blit this dimmed cell planar (masked) */
             int32_t pk = g_dim_dither ? (0x40000000|((int32_t)tile<<6)|(Lc>>2))   /* == dim_tile_d key */
                                       : (((int32_t)tile<<4)|(Lc>>4));             /* == dim_tile key   */
-            rdr_pdyn_cell(pk, src, cvx, cvy); }
+            if(g_planar_static) rdr_pstatic_blit(pk, src, cvx, cvy); /* static objects -> g_pdimmed (4c) */
+            else                rdr_pdyn_cell   (pk, src, cvx, cvy); /* dynamic -> g_ptmp               */
+        }
 #endif
     }
     else src=g_tileset+(int32_t)tile*256;
-    if(!g_predim || g_chunky_dyn)                          /* planar-only path skips the chunky dynamic copy */
+    if((!g_predim || g_chunky_dyn) && !g_planar_static)    /* planar-static / planar-only skip the chunky copy */
     for(int r=0;r<16;r++){uint8_t*d=tmp+(cvy*16+r)*T+cvx*16;const uint8_t*s=src+r*16;
         for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
 }
@@ -2031,6 +2035,29 @@ static const uint8_t *dim_tile_d(int tile, int Lc){
     }
     return g_dimcache[slot];
 }
+#ifdef HAVE_RDR_ST
+/* BASE-tile pre-dim variant for the native-planar STATIC compose (Phase 4c): like dim_tile/dim_tile_d
+ * but maps transparent (255) -> 0 BEFORE the darklut, exactly as fill_tiles does, so the result is
+ * OPAQUE (no 255) and forms the static layer's foundation. Matches dim_cell_into for base pixels, so
+ * dim_base(base) + dim_obj(obj) == dim(base(+)obj) (rdr_planar_dim_selftest). Distinct key space. */
+static const uint8_t *dim_tile_base(int tile, int Lc, int dither){
+    if(!g_dim_ready){ for(int i=0;i<DIMSLOTS;i++) g_dimkey[i]=-1; g_dim_ready=1; }
+    int key = dither ? (0x60000000|(tile<<6)|(Lc>>2)) : (0x20000000|(tile<<4)|(Lc>>4));
+    int slot=(int)(((unsigned)key*2654435761u)>>23)&(DIMSLOTS-1);
+    g_dim_calls++;
+    if(g_dimkey[slot]!=key){ g_dim_miss++;
+        const uint8_t *src=g_tileset+(int32_t)tile*256; uint8_t *d=g_dimcache[slot];
+        if(!dither){ const uint8_t *lut=g_darklut[Lc>>4];
+            for(int i=0;i<256;i++){ uint8_t v=src[i]; d[i]=lut[(v==TILE_TRANSPARENT)?0:v]; } }   /* 255->0 then dim */
+        else { int k=Lc>>4, f=Lc&15;
+            for(int i=0;i<256;i++){ uint8_t v=(src[i]==TILE_TRANSPARENT)?0:src[i];
+                int lev=k+((g_bayer4[(i>>4)&3][i&3]<f)?1:0); if(lev>NLEV-1)lev=NLEV-1;
+                d[i]=g_darklut[lev][v]; } }
+        g_dimkey[slot]=key;
+    }
+    return g_dimcache[slot];
+}
+#endif
 #define LIGHT_INDOOR_AMB 24       /* indoor ambient AT NIGHT (torch-lit only); by DAY interiors are full daylight */
 #define LIGHT_NIGHT_AMB  56       /* outdoor night ambient (moonlight)                   */
 static int light_of(int tile){ return (tile>=0&&tile<2048)?(g_tflags[tile]&0x03):0; } /* tflag2 bits0-1 */
@@ -2170,6 +2197,14 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
 static void fill_tiles(const world_t*w,int32_t left,int32_t top,int cx0,int cy0,int cx1,int cy1){
     for(int vy=cy0;vy<cy1;vy++)for(int vx=cx0;vx<cx1;vx++){
         int tile=anim_tile(world_tile(w,left+vx,top+vy));
+#ifdef HAVE_RDR_ST
+        if(g_planar_static){                                       /* 4c: base -> g_pdimmed (planar dimmed, opaque) */
+            int cc=vy*VT+vx; int Lc=g_predim_vis[cc]?g_predim_light[cc]:0;
+            const uint8_t*bs=dim_tile_base(tile,Lc,g_dim_dither);
+            int32_t pk = g_dim_dither ? (0x50000000|((int32_t)tile<<6)|(Lc>>2))   /* base planar-cache key (distinct */
+                                      : (0x10000000|((int32_t)tile<<4)|(Lc>>4));  /* from objects/roofs/dither)     */
+            rdr_pstatic_blit(pk, bs, vx, vy); continue; }
+#endif
         const uint8_t*src=g_tileset+(int32_t)tile*256;
         for(int r=0;r<16;r++){uint8_t*d=g_tmp_map+(vy*16+r)*TMP_T+vx*16;const uint8_t*s=src+r*16;
             for(int c=0;c<16;c++){ uint8_t v=s[c]; d[c]=(v==TILE_TRANSPARENT)?0:v; }}
@@ -2509,6 +2544,28 @@ static void compose_map(const world_t*w)
     }
     PH_END(3);
 }
+
+#if defined(BENCH) && defined(HAVE_RDR_ST)
+/* Phase-4c INV (static full rebuild): prove the planar-DIRECT static build (dim tiles blitted straight
+ * into g_pdimmed via fill_tiles/draw_cell) is byte-identical to today's chunky dim (dim_cell_into ->
+ * g_dimmed_map) then c2p (rdr_pstatic_rebuild). Returns the mismatched plane-word count (0 = proven). */
+static int planar_static_inv(const world_t*w){
+    static uint8_t plight[VT*VT], pvis[VT*VT];
+    compute_predim_light(w, plight, pvis);
+    g_predim_light=plight; g_predim_vis=pvis;
+    int dither=(g_light_style==LSTY_PREDIM_DITHER), sd=g_dim_dither; g_dim_dither=dither;
+    /* (A) planar-direct static -> g_pdimmed, then snapshot it */
+    g_planar_static=1; g_predim=1; build_static(w); g_planar_static=0; g_predim=0;
+    extern int rdr_pstatic_snapshot_and_diff(int);
+    rdr_pstatic_snapshot_and_diff(1);
+    /* (B) chunky reference: undimmed g_tmp_map -> dim all cells -> g_dimmed_map -> c2p -> g_pdimmed */
+    build_static(w);
+    for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++) dim_cell_into(vx,vy,plight[vy*VT+vx],dither);
+    rdr_pstatic_rebuild(g_dimmed_map,TMP_T);
+    g_dim_dither=sd;
+    return rdr_pstatic_snapshot_and_diff(0);   /* diff c2p-ref (now in g_pdimmed) vs planar-direct snapshot */
+}
+#endif
 
 /* blit a 16x16 tile to (sx,sy); transp skips index 255 (transparent) */
 static void blit_tile(int sx,int sy,int tile,int transp)
@@ -6056,6 +6113,7 @@ int main(void)
           dbg_num("PLANAR blit-vs-c2p diff=", rdr_planar_selftest()); }   /* 0 = native-planar path proven */
         { extern int rdr_planar_dim_selftest(void);                 /* Phase 4c: dim(base)+dim(obj) planar == c2p(dim composite) */
           dbg_num("PLANAR dim-commute diff=", rdr_planar_dim_selftest()); }   /* 0 = planar-dimming mechanism proven */
+        dbg_num("PLANAR static-direct diff=", planar_static_inv(&w));  /* 4c: planar-direct static build == chunky dim + c2p */
         { extern void rdr_planar_microbench(uint32_t*,int); uint32_t pm[3]; rdr_planar_microbench(pm,N);  /* Phase-0 */
           dbg_num("PLANAR c2p 176^2 ms=",   (int)(pm[0]*5/N));      /* today's present cost                */
           dbg_num("PLANAR blit aligned ms=",(int)(pm[1]*5/N));      /* masked planar blit, group-aligned  */
