@@ -2330,12 +2330,14 @@ static void compose_map(const world_t*w)
                 if(rdr_planar_take_dirty()) g_pd_valid=0;   /* LUT changed (new scene) -> rebuild       */
                 g_native_planar=1; }
       else      g_native_planar=0; }
-    /* Live composes BOTH: the chunky g_back stays valid for the cursor / full present, and g_ptmp ==
-     * c2p(the chunky map) by INV2, so present_map can present g_ptmp byte-identically but 5.5x faster.
-     * The bench measures the planar-ONLY ceiling by dropping the chunky dynamic composite. */
-    g_chunky_dyn = 1;
+    /* Phase 4b: planar-only. The chunky DYNAMIC composite (actors/fg/roofs into tmp, ph0 copy, ph3
+     * memcpy into g_back) is dropped — g_back's inner-map region (rows 8..167) goes stale, but every
+     * gameplay present of it is planar now (present_map/present_cursor via g_ptmp/g_screen, present_frame
+     * overlays rdr_ppresent after its panel c2p). The chunky STATIC layer (g_dimmed_map) is still built
+     * — it feeds g_pdimmed. Saves ~120 ms/frame vs composing both. BENCH verify still builds chunky tmp. */
+    g_chunky_dyn = g_native_planar ? 0 : 1;
 #ifdef BENCH
-    if(g_native_planar && !g_planar_verify) g_chunky_dyn = 0;
+    if(g_native_planar && g_planar_verify) g_chunky_dyn = 1;   /* INV2 verify compares g_ptmp vs c2p(tmp) */
 #endif
 #endif
     static uint8_t plight[VT*VT], pvis[VT*VT];
@@ -3323,9 +3325,10 @@ static void cursor_pos(int lx,int ly,int*ox,int*oy)
 static void present_frame(void)
 {
 #ifdef HAVE_RDR_ST
-  if(g_native_planar){                                    /* map+panel from g_back (valid), cursor planar */
+  if(g_native_planar){                                    /* panel from g_back, inner map from planar */
       rdr_pcursor_invalidate();                           /* the full c2p erases any planar cursor */
-      rdr_present_rect(0,0,LW,LH);                         /* full 1:1 c2p of g_back, no Vsync */
+      rdr_present_rect(0,0,LW,LH);                         /* full 1:1 c2p of g_back (inner map stale), no Vsync */
+      rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       Vsync(); return; }
@@ -3391,6 +3394,12 @@ static void dump_shot(void)
     for(int y=0;y<H;y++) plat_fwrite(f, ROW(y), W);             /* 320 bytes/row */
     plat_fclose(f);
     Cconws("SHOT.DAT written (320x200 indexed + palette)\r\n");
+#ifdef HAVE_RDR_ST
+    /* CAVEAT: under native planar (ST + PREDIM) g_chunky_dyn=0 leaves g_back's inner map STALE — the
+     * displayed map lives in the planar screen, not here. The pixel-perfect SHOT rig is Falcon-only
+     * (native planar never activates there); for ST pixel dumps use SMOOTH lighting or the AVI capture. */
+    if(g_native_planar) Cconws("  (WARNING: native-planar active — inner map is STALE in this dump)\r\n");
+#endif
 }
 
 /* Colour cycling: rotate the CLUT ranges by `g_cyc_phase` and re-upload the palette.
@@ -6069,6 +6078,7 @@ int main(void)
           present_frame();                              /* establish border + panel + map + cursor in g_screen */
           for(int s=0;s<n;s++){ if(world_try_move(&w,1,0)) step_npcs(&w);
               compose_map(&w); present_map(); Vsync(); }
+          present_frame();                              /* exercise the planar-only present_frame hybrid too */
           dbg_num("AUTOWALK steps=", n); dbg_num("AUTOWALK native_planar=", g_native_planar);
           for(;;) Vsync(); } }   /* HOLD the walked frame (no anim advance) so planar vs chunky A/B is deterministic */
 #endif

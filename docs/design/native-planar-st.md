@@ -132,8 +132,9 @@ path; STE/Mega/TT get the Blitter speedup for free on top.
 - **Phase 3:** Blitter path for `blit_planar_masked` (STE/Mega/TT), runtime-detected.
 - **Phase 4a (DONE):** planar mouse cursor (`rdr_pcursor_*`) + planar-aware `present_map`/`present_cursor`/
   `present_frame`, so native planar applies with the always-on cursor → LIVE ~1.35 fps. Pixel A/B identical.
-- **Phase 4b:** drop the chunky composite on walk frames (→ 1.62 fps live) + planar dimming (→ ~2 fps);
-  actors as standalone planar sprites; the full lit scene.
+- **Phase 4b (DONE):** drop the chunky composite on walk frames (`g_chunky_dyn=0`) + hybrid
+  `present_frame` → **1.62 fps live**, pixel A/B identical. Caveat: PREDIM-only, ST defaults to SMOOTH.
+- **Phase 4c:** planar dimming (→ ~2 fps); actors as standalone planar sprites; the full lit scene.
 
 ## 7. Expected perf + risks
 Expected (plain ST, if the thesis holds): per-frame c2p (444 ms) → a warm-cache planar block-move +
@@ -227,7 +228,24 @@ correctly on the planar map; a pixel A/B of the SAME scene planar vs chunky (`PL
 the cursor, the panel and the border are pixel-identical.** So the 5.5×-cheaper present (444→81 ms) now
 applies to actual gameplay: **~1.35 fps live** (compose still both-paths for `g_back` validity).
 
-Next: **Phase 4b** — drop the redundant chunky composite on walk frames (`g_chunky_dyn=0`; needs an audit
-of `g_back` readers + a hybrid `present_frame` that takes the map from planar) → the **1.62 fps** ceiling
-live; and **planar dimming** (a planar darklut removes the residual per-cell c2p → toward ~2 fps).
-**Phase 3** — Blitter path for the masked blit (STE/Mega), the Blitter's actual strength.
+**Phase 4b DONE — dropped the redundant chunky composite on walk frames → 1.62 fps live (2026-07-20).**
+`g_chunky_dyn=0` in production now: the chunky DYNAMIC composite (actors/fg/roofs into `tmp`, the ph0
+`tmp` copy, the ph3 `g_back` memcpy) is skipped, so `g_back`'s inner-map region (rows 8..167) goes stale —
+but every gameplay present of it is planar. Audit of `g_back` inner-map readers: `present_map`/
+`present_cursor` read the planar screen (fine); `present_frame` now overlays `rdr_ppresent` AFTER its
+panel c2p (map from planar, panel from `g_back`); the modal views (`overview`/Peer/Wizard-Eye, `book_view`)
+present via `rdr_present_doubled` and write their OWN `g_back` content (self-contained); `dump_shot`
+(SHOT.REQ) is Falcon-only (native planar never activates there) + warns on the ST edge case. The chunky
+STATIC layer (`g_dimmed_map`) is still built — it feeds `g_pdimmed`.
+
+Result: **live walk = 538 ms compose + 81 ms present = 619 ms / 1.62 fps** (was 739 / 1.35), the bench
+planar-only ceiling now realized in the game. Pixel A/B on a real ST (planar vs chunky, cursor on, incl.
+the hybrid `present_frame`): 136 px = the debug glyph + a cross-run NPC/timing speck — **map, cursor,
+panel, border pixel-identical**.
+
+Caveat: native planar activates only under PREDIM lighting, and the ST currently defaults to SMOOTH — so
+the whole milestone is opt-in via `LIGHTSTY.REQ=3`. Making PREDIM the ST default (the capstone that makes
+native planar the shipping ST path) is a deliberate visual decision, pending.
+
+Next: **planar dimming** (a planar darklut / planar-composited static removes the residual ~88 ms per-cell
+c2p in compose → toward ~2 fps). **Phase 3** — Blitter path for the masked blit (STE/Mega).

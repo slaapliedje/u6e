@@ -396,8 +396,15 @@ single-LUT map — band rasters only swap hardware registers, orthogonal to the 
 was REQUIRED for this to apply at all: the game's mouse cursor is always on, so `present_map` always
 took its cursor branch (chunky c2p) — the planar present was dormant. A planar mouse cursor (drawn into
 the 4-plane screen with save-under) + planar-aware `present_map`/`present_cursor`/`present_frame` fixed
-it. The live path still composes chunky too (`g_back` valid for the full present), so the live walk is
-658 + 81 = **739 ms / 1.35 fps** (present 5.5× cheaper). Pixel A/B on a real 8 MHz ST (planar vs chunky,
-same scene, cursor on) is identical bar the debug label. The 619 ms / 1.62 fps planar-only ceiling needs
-dropping the redundant chunky composite on walk frames (`g_chunky_dyn=0` + a hybrid full-present, 4b).
-Next: 4b + planar dimming (→ ~2 fps) and the Blitter path (STE/Mega).
+it. Pixel A/B on a real 8 MHz ST (planar vs chunky, same scene, cursor on) is identical bar the debug label.
+
+**Phase 4b — dropped the chunky composite on walk frames → 1.62 fps live.** `g_chunky_dyn=0` in
+production skips the chunky DYNAMIC composite (actors/fg/roofs → `tmp`, the ph0 `tmp` copy, the ph3
+`g_back` memcpy); `g_back`'s inner map goes stale but every gameplay present of it is planar
+(`present_frame` now overlays `rdr_ppresent` after its panel c2p; modal views write their own `g_back`).
+Live walk drops from 739 to **538 + 81 = 619 ms / 1.62 fps** — the bench planar-only ceiling, now realized
+in the game. Pixel A/B (incl. the hybrid `present_frame`) identical bar the debug glyph. The residual
+compose is the ~88 ms planar-static per-cell c2p on the lit walk; **planar dimming** (compose the static
+layer in planar so it needs no c2p) is the last step toward ~2 fps. NOTE: native planar is PREDIM-only and
+the ST defaults to SMOOTH, so it's opt-in (`LIGHTSTY.REQ=3`) until PREDIM becomes the ST default. Also:
+the Blitter path (STE/Mega).
