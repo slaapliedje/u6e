@@ -23,6 +23,7 @@ void platform_detect(platform_caps_t *caps)
     caps->video          = VIDEO_UNKNOWN;
     caps->cpu            = 0;            /* 68000 */
     caps->has_fpu        = false;
+    caps->has_blitter    = false;
     caps->has_cookiejar  = false;
 
     /* GEMDOS version: major in low byte, minor in high byte.
@@ -65,6 +66,22 @@ void platform_detect(platform_caps_t *caps)
     if (Getcookie(C__FPU, &val) == C_FOUND) {
         caps->has_cookiejar = true;
         caps->has_fpu = (val != 0);
+    }
+
+    /* BLiTTER — the STE, Mega STE, TT and Falcon all ship the chip; a plain ST reports it only
+     * if it's a Blitter-equipped Mega ST. Detect via Blitmode(-1) (XBIOS 64): passing -1 reads the
+     * config without changing it; bit 1 of the result = "hardware present". Blitmode has existed
+     * since TOS 1.02 (the Mega ST's ROM) and in EmuTOS, so it is safe on any machine that could
+     * carry a Blitter; the pre-1.02 520/1040 ST has no Blitter anyway. Only /render's ST-shifter
+     * backend uses this (TT/Falcon composite through their own backends). */
+    switch (caps->machine) {
+    case MACHINE_STE: case MACHINE_MEGASTE:
+    case MACHINE_TT:  case MACHINE_FALCON:
+        caps->has_blitter = true;                       /* always present on these */
+        break;
+    default:                                            /* ST: optional Mega ST Blitter */
+        caps->has_blitter = ((Blitmode(-1) & 2) != 0);  /* XBIOS 64, bit1 = chip present */
+        break;
     }
 }
 

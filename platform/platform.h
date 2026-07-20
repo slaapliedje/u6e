@@ -40,6 +40,7 @@ typedef struct {
     video_class_t video;
     int           cpu;            /* 0/10/20/30/40/60  => 68000…68060      */
     bool          has_fpu;        /* we never depend on it; informational  */
+    bool          has_blitter;    /* BLiTTER chip present (STE/Mega/TT; opt on Mega ST) */
     bool          has_cookiejar;  /* false on pre-1.06 ST => assume base ST */
     uint16_t      gemdos_version; /* raw Sversion(): major=lo, minor=hi byte */
     bool          has_mxalloc;    /* GEMDOS >= 0.19 (gates Mxalloc in M1)   */

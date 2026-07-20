@@ -69,6 +69,7 @@ static void report_hardware(const platform_caps_t *c)
     put("video   : "); put(platform_video_name(c->video)); nl();
     put("cpu     : "); put_cpu(c->cpu); nl();
     put("fpu     : "); put(c->has_fpu ? "present" : "none (not used)"); nl();
+    put("blitter : "); put(c->has_blitter ? "present" : "none (CPU blit)"); nl();
     put("cookies : "); put(c->has_cookiejar ? "present" : "absent (base ST)"); nl();
     put("gemdos  : "); put_hex32(c->gemdos_version); nl();
     put("mxalloc : "); put(c->has_mxalloc ? "yes" : "no (Malloc fallback)"); nl();

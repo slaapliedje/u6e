@@ -46,6 +46,11 @@ static uint8_t  *g_back;              /* chunky 8-bit backbuffer               *
 static uint8_t  *g_screen2;           /* planar screen B (double-buffer flip)  */
 static uint8_t  *g_vis;               /* currently DISPLAYED buffer            */
 static int       g_flip;              /* double-buffer (tear-free) mode active */
+static int       g_has_blitter;       /* Phase 3: BLiTTER present (from caps) -> masked-blit path */
+static int       g_blit_compose;      /* use the Blitter in the live compose? default OFF (measured a wash:
+                                       * the masked blit is a few ms of the ~400ms compose, dim dominates) */
+static int       g_blit_present;      /* use the Blitter for the present? default ON where present (the
+                                       * present is a big shifted block-copy the Blitter is built for) */
 
 static uint16_t  g_stpal[16];         /* ST/STE hardware palette words (packed by st_reg)      */
 static uint8_t   g_lut[256];          /* active 256->16 remap (from U6WW)      */
@@ -108,7 +113,8 @@ static void c2p4_lut(const uint8_t *src, const uint8_t *lut, uint16_t *dst, int 
 
 bool rdr_init(const platform_caps_t *caps)
 {
-    (void)caps;
+    g_has_blitter = caps && caps->has_blitter;   /* Phase 3: gate the Blitter masked-blit path */
+    g_blit_present = g_has_blitter;              /* Blitter present is a clear win; on by default when present */
 
     /* Backbuffer prefers the fast pool (Alt-RAM if present, e.g. an accelerated ST); on a
      * base ST plat_alloc_fast falls back to ST-RAM. g_screen MUST be chip (shifter DMA). */
@@ -390,13 +396,16 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
  * and rdr_pverify (Phase 2, BENCH: g_ptmp == c2p(the chunky composite)). */
 
 #define PLANAR_TRANSPARENT 255          /* == gamedemo TILE_TRANSPARENT (not visible from here) */
-typedef struct { uint16_t planar[64]; uint16_t mask[16]; } planar_tile_t;
+typedef struct { uint16_t planar[64]; uint16_t mask[16]; uint16_t opaque; } planar_tile_t;
+/* opaque = every mask word is 0xFFFF (no transparent pixel) -> the masked blit degenerates to a plain
+ * copy. The Blitter path uses it to do a 1-pass copy for base terrain instead of the 2-pass cookie-cut. */
 
 /* Convert a 256-byte chunky 16x16 tile (index; 255 = transparent) to planar (128 B) + 1bpp mask
  * (32 B), remapping opaque indices through the 256->16 lut EXACTLY as c2p4_lut (pixel 0 -> bit 15);
  * transparent pixels set mask bit 0. Feed it the already-dimmed chunky tile for a planar dim variant. */
 static void rdr_chunky_tile_to_planar(const uint8_t *chunky, const uint8_t *lut, planar_tile_t *out)
 {
+    uint16_t allm = 0xFFFF;                                  /* AND of every mask word */
     for (int r = 0; r < 16; r++) {
         uint16_t p0=0,p1=0,p2=0,p3=0,m=0;
         const uint8_t *s = chunky + r*16;
@@ -408,8 +417,9 @@ static void rdr_chunky_tile_to_planar(const uint8_t *chunky, const uint8_t *lut,
             m =(uint16_t)((m<<1)|(unsigned)op);
         }
         out->planar[r*4]=p0; out->planar[r*4+1]=p1; out->planar[r*4+2]=p2; out->planar[r*4+3]=p3;
-        out->mask[r]=m;
+        out->mask[r]=m; allm=(uint16_t)(allm & m);
     }
+    out->opaque = (uint16_t)(allm == 0xFFFF);               /* fully opaque -> Blitter can 1-pass copy */
 }
 
 /* The one hot primitive: place a 16x16 planar tile into the 4-plane destination at pixel (x,y).
@@ -445,9 +455,127 @@ static void rdr_blit_planar_masked(uint16_t *dst, int dstride_w, const planar_ti
     }
 }
 
+/* ================= BLiTTER-accelerated masked blit (Phase 3, docs/design/native-planar-st.md) =====
+ * The STE / Mega ST(E) / TT carry the Atari BLiTTER — a DMA engine that computes dst = OP(src,dst) a
+ * word at a time with per-column endmasks and independent src/dst X/Y increments. It runs the SAME
+ * masked planar blit as rdr_blit_planar_masked, but off the CPU and at bus speed. On the plain 8 MHz
+ * ST (no Blitter) the CPU path (2.38 fps) stands; where a Blitter exists this offloads the compose.
+ *
+ * The register file ($FFFF8A00..$8A3D) is in the supervisor-only I/O area, so the whole tile queue is
+ * drained in ONE Supexec (XBIOS 38) per layer — amortising the trap over every tile, not per blit.
+ *
+ * Cookie-cut (transparent tile) = 2 passes, exactly d=(d&~m)|(s&m):
+ *   Pass A  OP=4 ((NOT src) AND dst)  src=mask  -> dst &= ~mask   (punch the hole)
+ *   Pass B  OP=7 (src OR dst)         src=data  -> dst |= data    (data is pre-masked: transparent=0)
+ * The mask is a single plane; feeding it with src-X-increment 0 replays the same mask word across all
+ * four dst planes of a group, so no "fat mask" is needed. An OPAQUE tile (pt->opaque, no transparent
+ * pixel) collapses to a 1-pass copy (OP=3). Group-aligned only (the production compose case); the
+ * shifted 8-px inset stays on the CPU (BENCH/verify only).
+ *
+ * HOP=2 selects "source" (halftone ignored). HOG mode (CTRL bit6) lets the Blitter own the bus until a
+ * tile finishes — a <=128-word burst (<=1 scanline), between which the Timer-B band raster is serviced,
+ * so palette splits keep landing at their (deliberately quiet) rows. Every Blitter-touched buffer is
+ * static BSS = ST-RAM on any ST/STE (Blitter-reachable); this backend never runs on a TT/Falcon with
+ * Alt-RAM. Correctness is gated byte-for-byte against the CPU blit by rdr_blitter_selftest (BENCH). */
+int  rdr_blitter_ok(void) { return g_has_blitter; }
+/* Enable/disable the Blitter in the LIVE compose (rdr_pdyn_cell/rdr_pstatic_blit). OFF by default —
+ * measured a wash on the STE (the masked blit is a few ms of the ~400ms compose), so the shipping
+ * game keeps the CPU compose. The bench flips it on to measure; BLITTER.REQ '0' flips it back for A/B.
+ * The selftest/microbench call the Blitter primitive directly and are gated only by g_has_blitter. */
+void rdr_force_blitter(int on) { g_blit_compose = on ? 1 : 0; }
+void rdr_force_blit_present(int on) { g_blit_present = on ? 1 : 0; }   /* BENCH A/B: Blitter present on/off */
+
+#define BLT_SRC_XINC    (*(volatile int16_t  *)0xFFFF8A20UL)
+#define BLT_SRC_YINC    (*(volatile int16_t  *)0xFFFF8A22UL)
+#define BLT_SRC_ADDR    (*(volatile uint32_t *)0xFFFF8A24UL)
+#define BLT_ENDMASK1    (*(volatile uint16_t *)0xFFFF8A28UL)
+#define BLT_ENDMASK2    (*(volatile uint16_t *)0xFFFF8A2AUL)
+#define BLT_ENDMASK3    (*(volatile uint16_t *)0xFFFF8A2CUL)
+#define BLT_DST_XINC    (*(volatile int16_t  *)0xFFFF8A2EUL)
+#define BLT_DST_YINC    (*(volatile int16_t  *)0xFFFF8A30UL)
+#define BLT_DST_ADDR    (*(volatile uint32_t *)0xFFFF8A32UL)
+#define BLT_XCOUNT      (*(volatile uint16_t *)0xFFFF8A36UL)
+#define BLT_YCOUNT      (*(volatile uint16_t *)0xFFFF8A38UL)
+#define BLT_HOP         (*(volatile uint8_t  *)0xFFFF8A3AUL)
+#define BLT_OP          (*(volatile uint8_t  *)0xFFFF8A3BUL)
+#define BLT_CTRL        (*(volatile uint8_t  *)0xFFFF8A3CUL)
+#define BLT_SKEW        (*(volatile uint8_t  *)0xFFFF8A3DUL)
+#define BLT_START       0xC0            /* BUSY(bit7) | HOG(bit6); smudge=0, line#=0 */
+
+/* one queued group-aligned masked tile blit. dst = the group-origin word (dst buffer + y*stride + gx*4);
+ * dyinc_b = per-row dst byte advance = stride_w*2 - 6 (3 plane steps of +2 already made in-row); tile =
+ * index into the per-flush arena. The tile PIXELS are NOT referenced from the planar cache (whose
+ * direct-mapped slots can be evicted by a later rdr_planar_get before this job drains) — instead each
+ * DISTINCT tile is interned once into g_bltq_tiles and jobs reference it by index, so many cells sharing
+ * a tile cost one copy, not one per cell. */
+typedef struct { uint16_t *dst; int16_t dyinc_b; uint16_t opaque; int16_t tile; } blt_job_t;
+#define BLT_QUEUE_MAX 512                           /* max queued placements per flush */
+#define BLT_TILES_MAX 256                           /* max DISTINCT tiles per flush (arena) */
+static blt_job_t     g_bltq[BLT_QUEUE_MAX];
+static planar_tile_t g_bltq_tiles[BLT_TILES_MAX];   /* per-flush interned tile copies (eviction-proof) */
+static int32_t       g_bltq_tkey[BLT_TILES_MAX];    /* their keys (intern lookup) */
+static int           g_bltn, g_bltq_ntiles;
+
+/* run one Blitter pass to completion. HOG mode: the CTRL write halts the CPU on its next bus access
+ * until the blit finishes, so the poll reads BUSY=0 on the first try (and covers non-HOG too). */
+static inline void blt_run(void){ BLT_CTRL = BLT_START; while (BLT_CTRL & 0x80) { } }
+
+/* SUPERVISOR (Supexec target): drain the queued tile blits. Common registers are set once; each tile is
+ * a 1-pass copy (opaque) or a 2-pass cookie-cut. XCOUNT is the per-row reload (untouched by the Blitter);
+ * YCOUNT counts down to 0, so it is reloaded before every pass. */
+static long blitter_drain(void)
+{
+    BLT_HOP = 2;                                            /* HOP=source (halftone unused) */
+    BLT_ENDMASK1 = BLT_ENDMASK2 = BLT_ENDMASK3 = 0xFFFF;    /* 4 full words wide, no column masking */
+    BLT_SKEW = 0;                                           /* group-aligned: no skew / FXSR / NFSR */
+    BLT_XCOUNT = 4;                                         /* 4 plane words / row */
+    BLT_DST_XINC = 2;
+    for (int i = 0; i < g_bltn; i++) {
+        blt_job_t *j = &g_bltq[i];
+        const planar_tile_t *pt = &g_bltq_tiles[j->tile];
+        uint32_t dst = (uint32_t)(uintptr_t)j->dst;
+        BLT_DST_YINC = j->dyinc_b;
+        if (j->opaque) {                                    /* 1-pass straight copy: dst = src */
+            BLT_OP = 3;
+            BLT_SRC_XINC = 2; BLT_SRC_YINC = 2; BLT_SRC_ADDR = (uint32_t)(uintptr_t)pt->planar;
+            BLT_DST_ADDR = dst; BLT_YCOUNT = 16; blt_run();
+        } else {                                            /* 2-pass cookie-cut */
+            BLT_OP = 4;                                      /* A: dst &= ~mask (src-X-inc 0 = mask spans 4 planes) */
+            BLT_SRC_XINC = 0; BLT_SRC_YINC = 2; BLT_SRC_ADDR = (uint32_t)(uintptr_t)pt->mask;
+            BLT_DST_ADDR = dst; BLT_YCOUNT = 16; blt_run();
+            BLT_OP = 7;                                      /* B: dst |= data (pre-masked) */
+            BLT_SRC_XINC = 2; BLT_SRC_YINC = 2; BLT_SRC_ADDR = (uint32_t)(uintptr_t)pt->planar;
+            BLT_DST_ADDR = dst; BLT_YCOUNT = 16; blt_run();
+        }
+    }
+    return 0;
+}
+
+static void blitter_flush(void);   /* fwd: enqueue auto-flushes when the queue/arena fills */
+
+/* enqueue a group-aligned masked tile blit into `dst` (stride_w words/row) at pixel (x,y), x&15 == 0.
+ * `key` identifies the tile; it is interned into the per-flush arena so N cells sharing a tile cost ONE
+ * copy (not N). A full queue or arena auto-flushes first (order preserved -> still correct). */
+static void blitter_enqueue(uint16_t *dst, int stride_w, int32_t key, const planar_tile_t *pt, int x, int y)
+{
+    if (g_bltn >= BLT_QUEUE_MAX || g_bltq_ntiles >= BLT_TILES_MAX) blitter_flush();
+    int ti = -1;                                           /* intern: reuse this flush's copy if seen */
+    for (int i = 0; i < g_bltq_ntiles; i++) if (g_bltq_tkey[i] == key) { ti = i; break; }
+    if (ti < 0) { ti = g_bltq_ntiles++; g_bltq_tiles[ti] = *pt; g_bltq_tkey[ti] = key; }  /* new: copy once */
+    blt_job_t *j = &g_bltq[g_bltn++];
+    j->dst     = dst + (int32_t)y*stride_w + (x>>4)*4;
+    j->dyinc_b = (int16_t)(stride_w*2 - 6);
+    j->opaque  = pt->opaque;
+    j->tile    = (int16_t)ti;
+}
+
+/* flush the queue: ONE Supexec (trap to supervisor) drains every queued blit through the Blitter, then
+ * resets the queue AND the per-flush tile arena. */
+static void blitter_flush(void){ if (g_bltn){ (void)Supexec(blitter_drain); g_bltn = 0; g_bltq_ntiles = 0; } }
+
 /* Planar tile/mask cache — the planar analogue of gamedemo's g_dimcache: a (tile,level) key maps to
  * a cached planar_tile_t, built once from the (already-dimmed) chunky source, reused every frame.
- * Direct-mapped, same Knuth hash. 512x160 B = 80 KB. */
+ * Direct-mapped, same Knuth hash. 512x162 B = 81 KB. */
 #define PLANAR_SLOTS 512
 static planar_tile_t g_pcache[PLANAR_SLOTS];
 static int32_t       g_pkey[PLANAR_SLOTS];
@@ -491,6 +619,7 @@ static uint16_t g_ptmp   [PMAP_ROWS*PMAP_STRIDE_W];  /* per-frame planar composi
 /* full rebuild: c2p all 176 rows of the (opaque) dimmed chunky map into g_pdimmed (jump/first frame). */
 void rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride)
 {
+    blitter_flush();                            /* drain any queued static blits before overwriting g_pdimmed */
     const uint8_t *lut = PLANAR_LUT;
     for (int r = 0; r < PMAP_ROWS; r++)
         c2p4_lut_asm(dimmed + (int32_t)r*cstride, lut, g_pdimmed + (int32_t)r*PMAP_STRIDE_W, PMAP_GROUPS);
@@ -499,6 +628,7 @@ void rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride)
  * per-frame convert on a walk (dirty cells: revealed edge + light-changed), mirroring dim_cell_into. */
 void rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy)
 {
+    blitter_flush();                            /* drain queued static blits before touching g_pdimmed */
     const uint8_t *lut = PLANAR_LUT;
     for (int r = 0; r < 16; r++)
         c2p4_lut_asm(dimmed + (int32_t)(vy*16+r)*cstride + vx*16, lut,
@@ -508,6 +638,7 @@ void rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy)
  * band is left stale -> refreshed by the dirty-cell rdr_pstatic_cell). Whole-group units = bit-exact. */
 void rdr_pstatic_shift(int dx, int dy)
 {
+    blitter_flush();                            /* drain queued static blits before shifting g_pdimmed */
     int sx = dx*4, sy = dy*16;                                     /* words, rows */
     int x0 = sx>0?0:-sx, ww = PMAP_STRIDE_W-(sx<0?-sx:sx); if (ww<=0) return;
     int hh = PMAP_ROWS-(sy<0?-sy:sy); if (hh<=0) return;
@@ -516,37 +647,87 @@ void rdr_pstatic_shift(int dx, int dy)
     else     { for (int ny=PMAP_ROWS-1; ny>=-sy; ny--)
                  memmove(&g_pdimmed[ny*PMAP_STRIDE_W+x0], &g_pdimmed[(ny+sy)*PMAP_STRIDE_W+x0+sx], (size_t)ww*2); }
 }
-/* begin the frame's planar composite: g_ptmp = the static layer (mirrors memcpy(tmp,g_dimmed_map)). */
-void rdr_pframe_begin(void) { memcpy(g_ptmp, g_pdimmed, sizeof g_ptmp); }
+/* begin the frame's planar composite: g_ptmp = the static layer (mirrors memcpy(tmp,g_dimmed_map)). Any
+ * queued STATIC blits (rdr_pstatic_blit -> g_pdimmed) are drained first so the copy sees the final layer. */
+void rdr_pframe_begin(void) { blitter_flush(); memcpy(g_ptmp, g_pdimmed, sizeof g_ptmp); }
+/* end the frame's planar composite: drain the queued DYNAMIC blits (rdr_pdyn_cell -> g_ptmp) so g_ptmp is
+ * complete before the caller reads it (present / INV2 verify). No-op on the CPU (non-Blitter) path. */
+void rdr_pframe_end(void) { blitter_flush(); }
 /* blit a dynamic cell (dimmed chunky tile, 255=transparent) into g_ptmp at view cell (vx,vy),
- * group-aligned, via the (tile,level) planar cache — mirrors draw_cell's masked chunky copy. */
+ * group-aligned, via the (tile,level) planar cache — mirrors draw_cell's masked chunky copy. With a
+ * Blitter it enqueues the tile (drained by rdr_pframe_end via one Supexec); else it blits on the CPU. */
 void rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
 {
-    rdr_blit_planar_masked(g_ptmp, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, PLANAR_LUT), vx*16, vy*16);
+    const planar_tile_t *pt = rdr_planar_get(key, dimmed_tile, PLANAR_LUT);   /* cache build: user mode */
+    if (g_has_blitter && g_blit_compose) blitter_enqueue(g_ptmp, PMAP_STRIDE_W, key, pt, vx*16, vy*16);
+    else                                 rdr_blit_planar_masked(g_ptmp, PMAP_STRIDE_W, pt, vx*16, vy*16);
 }
 /* Phase 4c: blit a pre-dimmed planar tile into the STATIC layer g_pdimmed at cell (vx,vy) — composes the
  * static layer directly from planar dimmed tiles (opaque base + masked objects), replacing the chunky
- * dim + per-cell c2p. Same masked blit; opaque base tiles (no 255) get mask all-1 -> full overwrite. */
+ * dim + per-cell c2p. Same masked blit; opaque base tiles (no 255) get mask all-1 -> full overwrite.
+ * Enqueues to the Blitter (drained by rdr_pframe_begin) when present; else CPU. */
 void rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
 {
-    rdr_blit_planar_masked(g_pdimmed, PMAP_STRIDE_W, rdr_planar_get(key, dimmed_tile, PLANAR_LUT), vx*16, vy*16);
+    const planar_tile_t *pt = rdr_planar_get(key, dimmed_tile, PLANAR_LUT);
+    if (g_has_blitter && g_blit_compose) blitter_enqueue(g_pdimmed, PMAP_STRIDE_W, key, pt, vx*16, vy*16);
+    else                                 rdr_blit_planar_masked(g_pdimmed, PMAP_STRIDE_W, pt, vx*16, vy*16);
 }
-/* present: shifted planar block-copy of g_ptmp's visible 160x160 span into the screen map region at
- * the +8-px MAP_INSET — writes screen px 8..167 (border cols 0..7 / 168.. preserved). NO c2p, NO
- * Vsync (caller batches). Per screen group g the +8 shift splits each src group across two:
+/* present CORE (CPU): shifted planar block-copy of g_ptmp's visible 160x160 span into `scr`'s map region
+ * at the +8-px MAP_INSET — writes screen px 8..167 (border cols 0..7 / 168.. preserved). Per screen group
+ * g the +8 shift splits each src group across two:
  *   screen[g] = (src[g-1]_lo8 << 8) | (src[g]_hi8);  grp 0 low-half only, grp 10 high-half only. */
-void rdr_ppresent(void)
+static void ppresent_cpu(uint8_t *scr)
 {
     for (int y = 0; y < 160; y++) {
-        const uint16_t *s = g_ptmp + (int32_t)y*PMAP_STRIDE_W;               /* src groups 0..9 */
-        uint16_t *d = (uint16_t *)(g_screen + (int32_t)(8+y)*ST_ROWBYTES);   /* screen row (group 0) */
+        const uint16_t *s = g_ptmp + (int32_t)y*PMAP_STRIDE_W;             /* src groups 0..9 */
+        uint16_t *d = (uint16_t *)(scr + (int32_t)(8+y)*ST_ROWBYTES);      /* screen row (group 0) */
         for (int p = 0; p < 4; p++) {
-            d[p] = (uint16_t)((d[p] & 0xFF00) | (s[p] >> 8));                 /* grp 0: low half (px 8..15) */
+            d[p] = (uint16_t)((d[p] & 0xFF00) | (s[p] >> 8));               /* grp 0: low half (px 8..15) */
             for (int g = 1; g <= 9; g++)
                 d[g*4+p] = (uint16_t)(((s[(g-1)*4+p] & 0x00FF) << 8) | (s[g*4+p] >> 8));
             d[10*4+p] = (uint16_t)((d[10*4+p] & 0x00FF) | ((s[9*4+p] & 0x00FF) << 8)); /* grp 10: high half */
         }
     }
+}
+
+/* present CORE (BLiTTER): the same +8-px shifted planar copy, but off the CPU — the single biggest fixed
+ * cost per frame (the CPU version is ~81 ms). The +8 shift == a RIGHT shift of the source by one byte
+ * (skew 8). Interleaved planes force ONE blit per plane (source stride skips the other 3 planes): each
+ * plane's 10 source words (groups 0..9) spread across 11 dest words (screen groups 0..10). NFSR makes the
+ * 11th dest word consume no fresh source (only 10 exist); the shifter's garbage top/bottom byte at the
+ * map edges is masked out by endmask1=$00FF (grp 0 keeps border px 0..7) / endmask3=$FF00 (grp 10 keeps
+ * border px 168..). HOP=source, OP=replace. Group-aligned dest, so no dest skew. Supervisor (Supexec). */
+static uint8_t *g_ppresent_dst;                 /* screen base for the Blitter present (Supexec reads it) */
+/* Row-band the present so each HOG blit holds the bus < 1 scanline: a full 160-row plane blit would HOG
+ * ~2 ms (~30 lines), starving the Timer-B band raster (delayed palette split = visible panel glitch). At
+ * PBAND=4 rows (44 words ~ <1 line) the CPU regains the bus between bands and services the raster on time.
+ * Skew is per-row, so banding rows is bit-exact vs the full blit. 160 = 40 bands x 4 rows exactly. */
+#define PBAND 4
+static long ppresent_blitter_super(void)
+{
+    BLT_HOP = 2; BLT_OP = 3;                                   /* HOP=source, OP=src (replace) */
+    BLT_ENDMASK1 = 0x00FF; BLT_ENDMASK2 = 0xFFFF; BLT_ENDMASK3 = 0xFF00;  /* keep border bytes at grp 0/10 */
+    BLT_SKEW = (uint8_t)(0x40 | 8);                            /* NFSR (bit6) + skew 8 (right shift 1 byte) */
+    BLT_SRC_XINC = 8; BLT_SRC_YINC = 16;                       /* src: 10 words/row, stride 88 B => 9*8+16 */
+    BLT_DST_XINC = 8; BLT_DST_YINC = 80;                       /* dst: 11 words/row, stride 160 B => 10*8+80 */
+    BLT_XCOUNT = 11;
+    for (int y = 0; y < 160; y += PBAND) {
+        for (int p = 0; p < 4; p++) {                          /* one blit per bitplane per band */
+            BLT_SRC_ADDR = (uint32_t)(uintptr_t)((uint8_t *)g_ptmp + (int32_t)y*(PMAP_STRIDE_W*2) + p*2);
+            BLT_DST_ADDR = (uint32_t)(uintptr_t)(g_ppresent_dst + (int32_t)(8+y)*ST_ROWBYTES + p*2);
+            BLT_YCOUNT = PBAND;
+            blt_run();                                         /* short HOG: raster serviced between bands */
+        }
+    }
+    return 0;
+}
+
+/* present (render.h): NO c2p, NO Vsync (caller batches). Uses the Blitter when present + enabled, else CPU. */
+void rdr_ppresent(void)
+{
+    blitter_flush();                            /* defensive: drain any pending dynamic blits into g_ptmp */
+    if (g_has_blitter && g_blit_present) { g_ppresent_dst = g_screen; (void)Supexec(ppresent_blitter_super); }
+    else                                   ppresent_cpu(g_screen);
 }
 
 /* --- Planar mouse cursor (native-planar path) --- The chunky path draws the cursor into g_back then
@@ -703,6 +884,7 @@ int rdr_planar_selftest(void)
  * path (incremental static + dynamic blits + present) is byte-identical to today's chunky+c2p. */
 int rdr_pverify(const uint8_t *tmp, int cstride)
 {
+    blitter_flush();                            /* ensure g_ptmp is complete before comparing (Blitter path) */
     int diff = 0; uint16_t ref[40]; const uint8_t *lut = PLANAR_LUT;   /* 10 groups; map's row-LUT */
     for (int y = 0; y < 160; y++) {
         c2p4_lut_asm(tmp + (int32_t)y*cstride, lut, ref, 10);
@@ -717,6 +899,7 @@ int rdr_pverify(const uint8_t *tmp, int cstride)
 static uint16_t g_psnap[PMAP_ROWS*PMAP_STRIDE_W];
 int rdr_pstatic_snapshot_and_diff(int save)
 {
+    blitter_flush();                            /* ensure the planar-direct static build is applied first */
     if (save){ memcpy(g_psnap, g_pdimmed, sizeof g_psnap); return 0; }
     int diff = 0;
     for (int i = 0; i < PMAP_ROWS*PMAP_STRIDE_W; i++) if (g_pdimmed[i] != g_psnap[i]) diff++;
@@ -762,6 +945,94 @@ int rdr_planar_dim_selftest(void)
         for (int i = 0; i < 64; i++) if (dst[i] != ref[i]) diff++;
     }
     return diff;
+}
+
+/* Phase-3 GATE: the BLiTTER masked blit must be byte-identical to the CPU rdr_blit_planar_masked. For
+ * each tile pattern (opaque / sparse-transparent / edge-transparent / dim-remap) over an opaque
+ * background, blit group-aligned into two 2-group-wide buffers — one via the CPU, one via the Blitter
+ * queue — and diff. Group 1 (never touched) also proves the Blitter honours the stride and does not
+ * scribble the neighbour. Buffers are static (ST-RAM, Blitter-reachable). Returns the mismatched
+ * plane-word count (0 = identical); guard the call with rdr_blitter_ok(). */
+int rdr_blitter_selftest(void)
+{
+    static uint16_t cpu[16*8], blt[16*8];
+    int diff = 0;
+    for (int pat = 0; pat < 4; pat++) {
+        uint8_t ct[256], bg[32*16];
+        for (int i = 0; i < 256; i++) {
+            uint8_t v = (uint8_t)((i*11 + pat*3) & 0x0F);              /* opaque base index 0..15 */
+            if (pat==1 && (i%5)==0)                    v = 255;        /* sparse transparency      */
+            if (pat==2 && (((i&15)<2) || ((i>>4)<2)))  v = 255;        /* left/top 2px transparent */
+            if (pat==3)                                v = (uint8_t)((v*5+1) & 0x0F); /* dim-remap stand-in */
+            ct[i] = v;
+        }
+        for (int i = 0; i < 32*16; i++) bg[i] = (uint8_t)((i*7) & 0x0F);   /* opaque background */
+        const planar_tile_t *pt = rdr_planar_get((int32_t)(0x3000 | pat), ct, g_lut);
+        for (int r = 0; r < 16; r++){ c2p4_lut(bg + r*32, g_lut, cpu + r*8, 2);   /* both start = c2p(bg) */
+                                      c2p4_lut(bg + r*32, g_lut, blt + r*8, 2); }
+        rdr_blit_planar_masked(cpu, 8, pt, 0, 0);                     /* CPU reference */
+        g_bltn = g_bltq_ntiles = 0;
+        blitter_enqueue(blt, 8, (int32_t)(0x3000|pat), pt, 0, 0); blitter_flush();  /* Blitter path */
+        for (int i = 0; i < 16*8; i++) if (cpu[i] != blt[i]) diff++;
+    }
+    return diff;
+}
+
+/* Phase-3 microbench: time the CPU vs the Blitter over the same 11x11 grid of group-aligned masked tile
+ * blits (a full map-window compose), N iters. out[0]=CPU 200Hz ticks, out[1]=Blitter (INCLUDING the
+ * per-iter queue build + one Supexec). Uses one masked tile (the 2-pass cookie-cut = the realistic
+ * dynamic-cell cost). Writes into g_screen (bench: contents don't matter). Requires a Blitter. */
+void rdr_blitter_microbench(uint32_t out[2], int N)
+{
+    static uint8_t ctile[256];
+    for (int i = 0; i < 256; i++) ctile[i] = (uint8_t)((i * 7) & 0x0F);
+    ctile[3] = 255; ctile[200] = 255;                                 /* transparent -> 2-pass path */
+    static planar_tile_t bt; rdr_chunky_tile_to_planar(ctile, g_lut, &bt);
+    const int DW = ST_ROWBYTES/2;                                     /* 80 words/row */
+    uint16_t *scr = (uint16_t *)g_screen;
+
+    uint32_t t0 = plat_ticks_200hz();                                 /* (a) CPU masked blit, 11x11 grid */
+    for (int it = 0; it < N; it++)
+        for (int cy = 0; cy < 11; cy++) for (int cx = 0; cx < 11; cx++)
+            rdr_blit_planar_masked(scr, DW, &bt, cx*16, cy*16);
+    out[0] = plat_ticks_200hz() - t0;
+
+    uint32_t t1 = plat_ticks_200hz();                                 /* (b) Blitter masked blit, same grid */
+    for (int it = 0; it < N; it++){
+        g_bltn = g_bltq_ntiles = 0;
+        for (int cy = 0; cy < 11; cy++) for (int cx = 0; cx < 11; cx++)
+            blitter_enqueue(scr, DW, (int32_t)cx, &bt, cx*16, cy*16);  /* 11 distinct keys -> ~11 tile copies */
+        blitter_flush();
+    }
+    out[1] = plat_ticks_200hz() - t1;
+}
+
+/* Phase-3 present GATE: the BLiTTER present must be byte-identical to the CPU present (ppresent_cpu),
+ * INCLUDING the preserved border bytes. Fill g_ptmp with a pseudo-random pattern + two scratch screens
+ * with a border sentinel, present each way, diff all 32000 bytes (0 = identical). Requires a Blitter. */
+int rdr_present_selftest(void)
+{
+    static uint8_t sa[ST_SCREEN_BYTES], sb[ST_SCREEN_BYTES];
+    for (int i = 0; i < PMAP_ROWS*PMAP_STRIDE_W; i++)
+        g_ptmp[i] = (uint16_t)(((uint32_t)i * 2654435761u) >> 15);          /* arbitrary planar content */
+    for (int i = 0; i < ST_SCREEN_BYTES; i++) { uint8_t v=(uint8_t)(i*7+1); sa[i]=v; sb[i]=v; }  /* border sentinel */
+    ppresent_cpu(sa);                                                       /* CPU reference */
+    g_ppresent_dst = sb; (void)Supexec(ppresent_blitter_super);            /* Blitter */
+    int diff = 0; for (int i = 0; i < ST_SCREEN_BYTES; i++) if (sa[i] != sb[i]) diff++;
+    return diff;
+}
+
+/* Phase-3 present microbench: CPU vs Blitter present, N iters into g_screen. out[0]=CPU ticks, out[1]=Blitter. */
+void rdr_present_microbench(uint32_t out[2], int N)
+{
+    for (int i = 0; i < PMAP_ROWS*PMAP_STRIDE_W; i++) g_ptmp[i] = (uint16_t)(((uint32_t)i*40503u)>>3);
+    uint32_t t0 = plat_ticks_200hz();
+    for (int it = 0; it < N; it++) ppresent_cpu(g_screen);
+    out[0] = plat_ticks_200hz() - t0;
+    uint32_t t1 = plat_ticks_200hz();
+    g_ppresent_dst = g_screen;
+    for (int it = 0; it < N; it++) (void)Supexec(ppresent_blitter_super);
+    out[1] = plat_ticks_200hz() - t1;
 }
 #endif
 

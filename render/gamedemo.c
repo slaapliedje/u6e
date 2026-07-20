@@ -2506,6 +2506,9 @@ static void compose_map(const world_t*w)
     PH_BEGIN();
     int span=MAPSZ-2*MAP_INSET;                     /* 160 = 10 whole tiles */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
+#ifdef HAVE_RDR_ST
+        if(g_native_planar) rdr_pframe_end();       /* Blitter: drain this frame's queued dynamic tile blits into g_ptmp */
+#endif
 #if defined(BENCH) && defined(HAVE_RDR_ST)
         if(g_native_planar && g_planar_verify){ extern int rdr_pverify(const uint8_t*,int); /* INV2: g_ptmp == c2p(tmp) */
             g_planar_diff += (uint32_t)rdr_pverify(tmp,T); g_planar_frames++; }
@@ -6083,6 +6086,13 @@ int main(void)
         int pl_on=1;                                                       /* PLANAR.REQ '0' -> baseline (no planar) */
         { int32_t prl=0; char*prq=(char*)plat_load_file("PLANAR.REQ",1,&prl); if(prq&&prl>0&&prq[0]=='0') pl_on=0; }
         g_planar_allow = pl_on;                                            /* compose_map derives g_native_planar (ST+PREDIM+no-bands) */
+        /* The Blitter compose path is OFF in the shipping game (measured a wash). The BENCH turns it ON
+         * where a Blitter exists so bench-ste measures it; BLITTER.REQ '0' forces it back to CPU for a
+         * clean A/B on the SAME machine. (The primitive selftest/microbench run regardless.) */
+        { extern int rdr_blitter_ok(void); extern void rdr_force_blitter(int);
+          if(rdr_blitter_ok()) rdr_force_blitter(1);
+          int32_t brl=0; char*brq=(char*)plat_load_file("BLITTER.REQ",1,&brl);
+          if(brq&&brl>0&&brq[0]=='0'){ rdr_force_blitter(0); dbg_num("BLITTER compose forced OFF=",1); } }
         g_pd_valid=0; g_tmp_valid=0; dbg_num("PLANAR ALLOW=", pl_on);
         /* INV2 verify pass (verify ON, NOT timed): 1 full rebuild + a walk, checking g_ptmp==c2p(tmp)
          * each frame. Kept out of the timed loops below (the c2p check would swamp them). */
@@ -6112,8 +6122,28 @@ int main(void)
         for (int i=0;i<N;i++) rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); /* map window, doubled */
         uint32_t t2=plat_ticks_200hz();
         rdr_shutdown();
-        uint32_t r[9]={ (t1-t0),(tf1-tf0),(t2-t1),0,(uint32_t)N,      /* [0]=scroll compose, [1]=full compose, [2]=present */
-                        g_phase[0],g_phase[1],g_phase[2],g_phase[3] };/* [5..8]=scroll ph0..ph3 (summed over N) */
+        /* Phase-3 Blitter probe (BENCH.BIN [9..12]): byte-identical selftest diff, present/absent flag,
+         * and the CPU-vs-Blitter masked-blit microbench (11x11 grid, N iters). 0 diff = the Blitter blit
+         * is byte-identical to the CPU rdr_blit_planar_masked. Absent on a no-Blitter ST (bl_ok=0). */
+        uint32_t bl_diff=0, bl_ok=0, bl_cpu=0, bl_blt=0, pr_diff=0, pr_cpu=0, pr_blt=0;
+#ifdef HAVE_RDR_ST
+        { extern int rdr_blitter_ok(void); bl_ok=(uint32_t)rdr_blitter_ok();
+          if(bl_ok){ extern int rdr_blitter_selftest(void); extern void rdr_blitter_microbench(uint32_t*,int);
+                     uint32_t bm[2]; bl_diff=(uint32_t)rdr_blitter_selftest(); rdr_blitter_microbench(bm,N);
+                     bl_cpu=bm[0]; bl_blt=bm[1];
+                     extern int rdr_present_selftest(void); extern void rdr_present_microbench(uint32_t*,int);
+                     uint32_t pm[2]; pr_diff=(uint32_t)rdr_present_selftest(); rdr_present_microbench(pm,N);
+                     pr_cpu=pm[0]; pr_blt=pm[1]; } }
+#endif
+        uint32_t inv2=0; uint32_t inv2f=0;
+#ifdef HAVE_RDR_ST
+        inv2=g_planar_diff; inv2f=g_planar_frames;                    /* INV2: g_ptmp == c2p(tmp) over the verify walk */
+#endif
+        uint32_t r[18]={ (t1-t0),(tf1-tf0),(t2-t1),0,(uint32_t)N,     /* [0]=scroll compose, [1]=full compose, [2]=present */
+                        g_phase[0],g_phase[1],g_phase[2],g_phase[3],  /* [5..8]=scroll ph0..ph3 (summed over N) */
+                        bl_diff,bl_ok,bl_cpu,bl_blt,                  /* [9]=blit-vs-cpu diff [10]=blitter? [11]=cpu ticks [12]=blitter ticks */
+                        inv2,inv2f,                                   /* [13]=INV2 planar-vs-c2p diff [14]=verified frames */
+                        pr_diff,pr_cpu,pr_blt };                      /* [15]=present-vs-cpu diff [16]=cpu present ticks [17]=blitter present ticks */
         plat_file bf=plat_fcreate("BENCH.BIN");
         if (bf!=PLAT_BADFILE){ plat_fwrite(bf,r,(int32_t)sizeof r); plat_fclose(bf);}
         dbg_num("FULL  compose   ms=", (int)((tf1-tf0)*5/N));
@@ -6149,6 +6179,12 @@ int main(void)
           dbg_num("PLANAR c2p 176^2 ms=",   (int)(pm[0]*5/N));      /* today's present cost                */
           dbg_num("PLANAR blit aligned ms=",(int)(pm[1]*5/N));      /* masked planar blit, group-aligned  */
           dbg_num("PLANAR blit inset ms=",  (int)(pm[2]*5/N)); }    /* masked planar blit at the 8px inset */
+        dbg_num("BLITTER present=", (int)bl_ok);                    /* Phase 3: BLiTTER masked blit (STE/Mega/TT) */
+        if(bl_ok){
+            dbg_num("BLITTER blit-vs-cpu diff=", (int)bl_diff);     /* 0 = Blitter byte-identical to CPU blit */
+            dbg_num("BLITTER cpu  11^2 blit ms=", (int)(bl_cpu*5/N)); /* CPU masked blit, 11x11 grid        */
+            dbg_num("BLITTER blit 11^2 blit ms=", (int)(bl_blt*5/N)); /* Blitter, same grid (incl 1 Supexec) */
+        }
 #endif
         Cconws("bench done\r\n"); return 0; }
 #endif

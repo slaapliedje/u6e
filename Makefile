@@ -470,7 +470,7 @@ bench: world $(BUILD)/bench.prg
 	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
 	          --fast-forward on --run-vbls 9000 </dev/null >/dev/null 2>&1 || true
-	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
 
 # ---- Falcon frame bench: the SAME harness as `bench`, but the Falcon VIDEL backend (rdr_falcon.c,
 # 16-bit truecolor present = NO c2p) on a 68030 @ 16 MHz. Confirms the Falcon frame rate.
@@ -482,7 +482,7 @@ bench-falcon: world $(BUILD)/benchf.prg $(BUILD)/NEWDESK.INF
 	-$(HATARI) --machine falcon --fast-boot on --monitor vga \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\BENCHF.PRG' \
 	          --fast-forward on --run-vbls 12000 </dev/null >/dev/null 2>&1 || true
-	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "Falcon (68030) SCROLL compose: %.1f ms   present: %.1f ms   => frame %.1f ms = %.2f fps (n=%d)\n", $$1*5.0/n, $$3*5.0/n, $$1*5.0/n+$$3*5.0/n, 1000.0/($$1*5.0/n+$$3*5.0/n), n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "Falcon (68030) SCROLL compose: %.1f ms   present: %.1f ms   => frame %.1f ms = %.2f fps (n=%d)\n", $$1*5.0/n, $$3*5.0/n, $$1*5.0/n+$$3*5.0/n, 1000.0/($$1*5.0/n+$$3*5.0/n), n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
 
 # ---- ST frame bench: the SAME harness as `bench`, but the ST backend (rdr_st.c, 4-plane C c2p)
 # on a real 8 MHz 68000 (`--machine st`), so we measure the ACTUAL ST cost the TT bench can't.
@@ -496,12 +496,27 @@ $(BUILD)/benchst.prg: $(BENCH_ST_SRC)
 	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DBENCH -DHAVE_RDR_ST -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_benchst/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour bench)"
+# BLIT=1 adds Hatari's --blitter on so a plain-ST run emulates a Blitter-equipped Mega ST (8 MHz +
+# Blitter), isolating the Blitter win at the SAME CPU speed as the no-Blitter bench-st baseline.
+BLIT ?=
+BLIT_FLAG := $(if $(filter 1 on yes,$(BLIT)),--blitter on,)
 bench-st: gamedata-st $(BUILD)/benchst.prg
 	rm -f $(BUILD)/BENCH.BIN
-	$(HATARI) --machine st --memsize 4 --monitor rgb \
+	$(HATARI) --machine st $(BLIT_FLAG) --memsize 4 --monitor rgb \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\benchst.prg' \
 	          --fast-forward on --run-vbls 20000 </dev/null >/dev/null 2>&1 || true
-	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0){ printf "ST (8MHz 68000)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; printf "  scroll phases  ph0 static: %.1f  ph1 actors+fg: %.1f  ph2 light+vis: %.1f  ph3 composite: %.1f ms\n", $$6*5.0/n, $$7*5.0/n, $$8*5.0/n, $$9*5.0/n; } else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0){ printf "ST (8MHz 68000)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; printf "  scroll phases  ph0 static: %.1f  ph1 actors+fg: %.1f  ph2 light+vis: %.1f  ph3 composite: %.1f ms\n", $$6*5.0/n, $$7*5.0/n, $$8*5.0/n, $$9*5.0/n; if($$11>0) printf "  BLITTER  selftest diff: %d   masked blit 11x11 grid: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$10, $$12*5.0/n, $$13*5.0/n, ($$13>0?$$12/$$13:0); else print "  BLITTER  absent (CPU blit path; add BLIT=1 to emulate a Mega ST Blitter)"; if($$15>0) printf "  NATIVE-PLANAR INV2 (g_ptmp vs c2p): diff %d over %d frames\n", $$14, $$15; if($$11>0) printf "  PRESENT  selftest diff: %d   present: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$16, $$17*5.0/n, $$18*5.0/n, ($$18>0?$$17/$$18:0); } else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+
+# ---- STE frame bench: same benchst.prg (pure 68000) on an emulated STE, which HAS a Blitter built in.
+# This is the real Phase-3 target: 8 MHz 68000 + Blitter. The BENCH harness auto-detects the Blitter
+# (rdr_blitter_ok) and reports the CPU-vs-Blitter masked-blit microbench + the byte-identical selftest.
+.PHONY: bench-ste
+bench-ste: gamedata-st $(BUILD)/benchst.prg
+	rm -f $(BUILD)/BENCH.BIN
+	$(HATARI) --machine ste --memsize 4 --monitor rgb \
+	          --tos '$(TOS_STE)' --harddrive $(BUILD) --auto 'c:\benchst.prg' \
+	          --fast-forward on --run-vbls 20000 </dev/null >/dev/null 2>&1 || true
+	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0){ printf "STE (8MHz 68000 + Blitter)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; printf "  scroll phases  ph0 static: %.1f  ph1 actors+fg: %.1f  ph2 light+vis: %.1f  ph3 composite: %.1f ms\n", $$6*5.0/n, $$7*5.0/n, $$8*5.0/n, $$9*5.0/n; if($$11>0) printf "  BLITTER  selftest diff: %d   masked blit 11x11 grid: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$10, $$12*5.0/n, $$13*5.0/n, ($$13>0?$$12/$$13:0); else print "  BLITTER  NOT DETECTED (expected on STE!)"; if($$15>0) printf "  NATIVE-PLANAR INV2 (g_ptmp vs c2p): diff %d over %d frames\n", $$14, $$15; if($$11>0) printf "  PRESENT  selftest diff: %d   present: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$16, $$17*5.0/n, $$18*5.0/n, ($$18>0?$$17/$$18:0); } else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
 
 # ---- M10 OPL2 synth throughput probe: measure how many mono samples/sec the software FM synth
 # can render on each machine (all 9 voices sounding), to decide real-time synth vs host pre-rendered
@@ -518,7 +533,7 @@ sbench: $(BUILD)/bench.prg
 	  eval $(HATARI) $$args --harddrive $(BUILD) --auto 'c:\\bench.prg' \
 	       --fast-boot on --fast-forward on --run-vbls 6000 </dev/null >/dev/null 2>&1 || true; \
 	  printf "%-4s: " $$m; \
-	  od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{if($$3>0) printf "%d samples/sec (%d samples in %d ticks) vs DMA rate %d => %.1fx realtime headroom\n",$$3,$$1,$$2,$$4,$$3/$$4.0; else print "no BENCH.BIN"}'; \
+	  od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{if($$3>0) printf "%d samples/sec (%d samples in %d ticks) vs DMA rate %d => %.1fx realtime headroom\n",$$3,$$1,$$2,$$4,$$3/$$4.0; else print "no BENCH.BIN"}'; \
 	done
 	@rm -f $(BUILD)/SBENCH.REQ
 
@@ -534,7 +549,7 @@ bench-intro: world $(BUILD)/bench.prg
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
 	          --fast-boot on --fast-forward on --run-vbls 6000 </dev/null >/dev/null 2>&1 || true
 	-pkill -9 hatari 2>/dev/null; rm -f $(BUILD)/IBENCH.REQ
-	@od -An -tu4 --endian=big -w64 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{hn=$$4; pn=$$8; \
+	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{hn=$$4; pn=$$8; \
 	  if(hn>0){ printf "HOLD (n=%d): compose %.1f  c2p+dbl %.1f  output %.1f  => %.1f ms/frame (%.1f fps)\n", \
 	    hn, $$1*5.0/hn, $$2*5.0/hn, $$3*5.0/hn, ($$1+$$2+$$3)*5.0/hn, 1000.0/(($$1+$$2+$$3)*5.0/hn+0.001) } \
 	  if(pn>0){ printf "PAN  (n=%d): compose %.1f  c2p+dbl %.1f  output %.1f  => %.1f ms/frame (%.1f fps)\n", \

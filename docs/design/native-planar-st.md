@@ -280,5 +280,29 @@ by only the 124-px `native_planar=1`/`=0` debug glyph — **map, panel, border p
 Native-planar milestone COMPLETE: plain 8 MHz ST **1.07 → 2.38 fps** (2.2×), byte/pixel-verified at every
 step, shipping as the ST default.
 
-**Phase 3 (future)** — Blitter path for the masked blit (STE/Mega): free speedup on top for machines with
-a Blitter. Also: actors as standalone planar sprites; the full lit scene.
+**Phase 3 DONE — Blitter (STE/Mega ST(E), 2026-07-20). The masked blit was a red herring; the PRESENT was
+the prize.** The Atari BLiTTER ($FFFF8A00, supervisor via Supexec) runs the same ops off the CPU at bus
+speed. Detection: `platform_caps.has_blitter` (STE/Mega/TT/Falcon by `_MCH`; a Blitter-equipped Mega ST via
+`Blitmode(-1)&2`, XBIOS 64). Two things were tried:
+
+- **Masked-blit cookie-cut (compose).** 2 passes = `dst&=~mask` (OP=4, src=mask, src-X-inc 0 replays the
+  mask across all 4 planes — no fat mask) then `dst|=data` (OP=7, data pre-masked); opaque tiles collapse to
+  a 1-pass copy (OP=3). Queue of tile blits drained in ONE Supexec per layer; tiles INTERNED into a per-flush
+  arena (the direct-mapped planar cache evicts within a frame, so a job can't hold a cache pointer). Proven
+  byte-identical (`BLITTER blit-vs-cpu diff=0`), ~1.2–2× on the primitive. **But a wash in the compose**
+  (clean STE A/B: full compose 410→395 ms, scroll 342↔344 ms) — the masked blit is only a few ms of the
+  ~340 ms compose; the per-pixel darklut DIM dominates and the Blitter can't do table lookups. **Gated OFF**
+  in the shipping game (`g_blit_compose`).
+- **Present (the win).** `rdr_ppresent`'s +8-px shifted planar block-copy IS what the Blitter's skew is for.
+  The +8 == a right shift by one byte (skew 8); interleaved planes force ONE blit per plane (source stride
+  skips the other 3); each plane's 10 source words spread across 11 dest words with NFSR (only 10 source
+  words exist) and the shifter's garbage edge byte masked out by endmask1=$00FF / endmask3=$FF00 (border px
+  0..7 / 168.. preserved). Row-banded (PBAND=4 rows) so each HOG holds the bus < 1 scanline → the Timer-B
+  band raster keeps its palette splits. Proven byte-identical incl. borders (`PRESENT selftest diff=0`),
+  live-verified on an emulated STE (map/panel/border clean, raster intact). **present 81 → 11 ms (7×),
+  frame 423 → 354 ms, STE 2.37 → 2.83 fps (+19%).** On by default where a Blitter exists (`g_blit_present`);
+  the plain 8 MHz ST (no Blitter) keeps the CPU present at 2.37 fps, unchanged.
+
+Bench: `make bench-ste` (or `make bench-st BLIT=1` for a Mega-ST Blitter on 8 MHz); `BLITTER.REQ 0` forces
+CPU compose for A/B. **Future** — Blitter for the compose DIM is impossible (LUT); actors as standalone
+planar sprites; a Blitter `rdr_pframe_begin` memcpy is marginal (~2 ms).

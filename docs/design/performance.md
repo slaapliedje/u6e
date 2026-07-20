@@ -427,3 +427,23 @@ It beat the ~2 fps projection because it drops the WHOLE chunky static maintenan
 Byte-verified: `PLANAR static-direct diff=0` (full-rebuild INV), `INV2 diff=0` (walk), `dim-commute diff=0`;
 a pixel A/B on a real 8 MHz ST differs by only the debug glyph. **Native-planar milestone complete: plain
 ST 1.07 → 2.38 fps (2.2×), shipping as the ST default.** Remaining headroom: the Blitter path (STE/Mega).
+
+## 2026-07-20 — Phase 3 Blitter: the PRESENT, not the blit (STE/Mega 2.37 → 2.83 fps)
+Two Blitter targets, measured on an emulated STE (8 MHz + BLiTTER; `make bench-ste`):
+
+- **Masked blit in the compose — a WASH.** The cookie-cut masked blit is ~1.2–2× faster as a primitive
+  (`BLITTER blit-vs-cpu diff=0`), but the compose A/B is flat (full 410→395 ms, scroll 342↔344 ms): the
+  blit is only a few ms of the ~340 ms compose — the **per-pixel darklut dim dominates**, and the Blitter
+  can't do LUTs. Left in but **gated OFF** (`g_blit_compose`), so the walking path never pays for it.
+- **The present — the win.** `rdr_ppresent`'s +8-px shifted planar copy is exactly a Blitter skew-8 (right
+  shift 1 byte), one blit per plane, edge endmasks preserving the border; row-banded (4 rows) so each HOG
+  stays < 1 scanline and the Timer-B raster keeps its splits.
+
+| config | compose | present | frame | **fps** |
+|--------|--------:|--------:|------:|--------:|
+| plain 8 MHz ST (no Blitter) | 341 ms | 82 ms | 423 ms | 2.37 |
+| **STE (Blitter present)**   | 342 ms | **11 ms** | **354 ms** | **2.83** |
+
+`PRESENT selftest diff=0` (byte-identical incl. borders), live STE shot clean (map/panel/border, raster
+intact). **present 81 → 11 ms (7×), STE 2.37 → 2.83 fps (+19%);** the plain ST (no Blitter) is unchanged.
+The Blitter can't touch the compose dim (LUT) — the ST floor stays 2.38 fps; the STE/Mega ceiling is now ~2.83.
