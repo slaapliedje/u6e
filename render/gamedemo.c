@@ -1809,6 +1809,22 @@ static int npc_sit_tile(int i)
     return -1;
 }
 
+/* npc_sit_tile does two obj_idx_at() chair/throne searches — pure in the actor's (x,y) + the (static)
+ * furniture under it. It was ~30 ms/frame at the render rate (once per drawn actor EVERY frame); memoize
+ * it per actor, keyed on position, so a stationary NPC pays the search once, not every frame. Recomputes
+ * when the actor moves (the only thing that changes the answer under normal play). */
+static int16_t  g_sit_cache[U6_MAX_ACTORS];
+static uint16_t g_sit_cx[U6_MAX_ACTORS], g_sit_cy[U6_MAX_ACTORS];
+static uint8_t  g_sit_ready;
+static int npc_sit_tile_c(int i)
+{
+    if(!g_sit_ready){ for(int k=0;k<U6_MAX_ACTORS;k++) g_sit_cx[k]=0xFFFF; g_sit_ready=1; }  /* 0xFFFF: force first miss */
+    if(g_sit_cx[i]==g_actx[i] && g_sit_cy[i]==g_acty[i]) return g_sit_cache[i];
+    int v=npc_sit_tile(i);
+    g_sit_cache[i]=(int16_t)v; g_sit_cx[i]=g_actx[i]; g_sit_cy[i]=g_acty[i];
+    return v;
+}
+
 /* the tile to draw for actor i: a directional facing+gait frame for humanoids,
  * else the saved appearance. While walking, cycle the two walk frames (per-dir
  * frames 1,2 for 4-frame humanoids); standing uses frame 0. A seated NPC (on a
@@ -1817,7 +1833,7 @@ static int npc_tile(int i)
 {
     int tpd=g_atpd[i];
     if(tpd<2) return g_atile[i];
-    int st=npc_sit_tile(i); if(st>=0) return st;            /* seated NPC (e.g. Lord British) */
+    int st=npc_sit_tile_c(i); if(st>=0) return st;         /* seated NPC (e.g. Lord British) — cached search */
     int wf;
     if(!g_amoved[i])    wf=0;                    /* stand */
     else if(tpd>=4)     wf=1+(g_walkf[i]&1);     /* walk frames 1,2 (avoid stand 0 / special 3) */
@@ -2316,6 +2332,7 @@ static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
  * + emitters that crossed the edge). Otherwise (first frame / jump / style switch): full rebuild. */
 #ifdef BENCH
 uint32_t g_ph0_scroll, g_ph0_shift, g_ph0_redim, g_ph0_dirty, g_ph0_copy;   /* sub-phase ticks + dirty count */
+uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw count */
 #define SUB_T() (subt=plat_ticks_200hz())
 #define SUB_ADD(acc) ((acc)+=plat_ticks_200hz()-subt)
 #else
@@ -2466,6 +2483,7 @@ static void compose_map(const world_t*w)
      * objects (in g_tmp_map) -> actors + avatar -> TOP-pass (foreground) objects. The
      * Foreground decision is PER TILE in draw_multi, so a throne's seat (non-fg, in the static
      * layer) is behind a seated NPC while its front (fg, drawn now) is over him. */
+    SUB_T();
     for(int i=0;i<g_nfields;i++){                     /* field tiles UNDER actors (§5a) */
         int32_t vx=((int32_t)g_fields[i].x-left)&(U6_SURFACE_TILES-1);
         int32_t vy=((int32_t)g_fields[i].y-top )&(U6_SURFACE_TILES-1);
@@ -2477,13 +2495,18 @@ static void compose_map(const world_t*w)
         int ax,ay; if(!actor_pos(i,&ax,&ay)) continue;
         int32_t vx=((int32_t)ax-left)&(U6_SURFACE_TILES-1);
         int32_t vy=((int32_t)ay-top )&(U6_SURFACE_TILES-1);
-        if(vx<=VT&&vy<=VT) draw_multi(tmp,T,(int)vx,(int)vy,anim_tile(npc_tile(i)),-1); /* <=VT: a multi-tile
+        if(vx<=VT&&vy<=VT){
+#ifdef BENCH
+        g_ph1_nact++;
+#endif
+        draw_multi(tmp,T,(int)vx,(int)vy,anim_tile(npc_tile(i)),-1);} /* <=VT: a multi-tile
                                               NPC anchored 1 cell off the right/bottom edge bleeds in (see
                                               draw_view_objects); draw_multi clips the off-view anchor */
     }
     { int at=g_basetile?(g_basetile[410*2]|(g_basetile[410*2+1]<<8)):0;   /* avatar at centre (obj_n 410) */
       if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,-1); }
-    draw_view_objects(tmp,T,left,top,1);             /* foreground (pass 1) objects */
+    SUB_ADD(g_ph1_actors);
+    SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     PH_END(1);
     PH_BEGIN();
     /* Blit terrain shifted in by INSET px so the outer ring stays PAPYRUS (from
@@ -6140,6 +6163,7 @@ int main(void)
         compose_map(&w);                                    /* prime the cache */
         g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0;      /* isolate the scroll phases */
         g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_dirty=g_ph0_copy=0; /* isolate the ph0 sub-phases */
+        g_ph1_actors=g_ph1_fg=g_ph1_nact=0;
         uint32_t t0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ w.px=(uint16_t)((basepx+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
         uint32_t t1=plat_ticks_200hz();
@@ -6184,6 +6208,13 @@ int main(void)
         dbg_num("    ph0 copy->tmp ms=", (int)(g_ph0_copy*5/N));       /* g_dimmed_map -> tmp       */
         dbg_num("    ph0 dirty cells/frm=", (int)(g_ph0_dirty/N));     /* avg re-dimmed cells      */
         dbg_num("  scroll ph1 actors+fg ms=", (int)(g_phase[1]*5/N));
+        dbg_num("    ph1 fields+actors ms=", (int)(g_ph1_actors*5/N));   /* 256-actor loop + avatar */
+        dbg_num("    ph1 foreground obj ms=", (int)(g_ph1_fg*5/N));      /* draw_view_objects pass 1 */
+        dbg_num("    ph1 actors drawn/frm=", (int)(g_ph1_nact/N));
+        /* SITCACHE gate: the sit-tile memoization must be byte-identical to the uncached search (INV2 can't
+         * see it — both compose paths use npc_tile). At the bench's stable positions, cached==uncached => 0. */
+        { int sm=0; for(int i=0;i<U6_MAX_ACTORS;i++) if(g_sit_cx[i]!=0xFFFF && g_sit_cache[i]!=(int16_t)npc_sit_tile(i)) sm++;
+          dbg_num("SITCACHE mismatch=", sm); }
         dbg_num("  scroll ph2 light+vis ms=", (int)(g_phase[2]*5/N));
         dbg_num("  scroll ph3 composite ms=", (int)(g_phase[3]*5/N));
         dbg_num("present map doubled ms=", (int)((t2-t1)*5/N));

@@ -474,3 +474,24 @@ scattered light-dirty cells), plus a clean live plain-ST shot. **Plain ST 2.38 �
 the Blitter present) 2.83 → 3.56 fps (+26%)** — so the STE is 2.37 → 3.56 fps (+50%) across the two sessions.
 Remaining: `ph1 actors+fg` (~90 ms) is the dynamic layer, redrawn every frame (actors move; fg draws over
 them for z-order) — harder to incrementalize; and the plain-ST 81 ms CPU present.
+
+## 2026-07-22 — ph1 actor sit-cache: compose 272 → 241 ms (both machines)
+Sub-profiled `ph1` (new `g_ph1_actors`/`g_ph1_fg` timers, `--conout 2`): **55 ms fields+actors / 36 ms
+foreground**. A bisect of the 55 ms (only 7 actors in view!) put 32 ms in `npc_tile` → `npc_sit_tile`, not
+the blit (16 ms) — it ran two `obj_idx_at()` chair/throne searches PER DRAWN ACTOR EVERY render frame, to
+decide if the NPC is seated (Lord British on his throne). That answer only changes when the actor moves.
+
+Fix: memoize `npc_sit_tile` per actor keyed on its `(x,y)` (`npc_sit_tile_c`) — a stationary NPC pays the
+search once, not every frame; recomputes when it moves. INV2 can't see this (both compose paths call the
+same `npc_tile`), so a dedicated bench gate `SITCACHE mismatch=0` proves the cache is byte-identical to the
+uncached search, + a live shot (scene/NPCs correct).
+
+| ph1 sub-phase | before | after |
+|---|--:|--:|
+| fields+actors | 55 ms | **24 ms** |
+| scroll compose | 272 ms | **241 ms** |
+
+**Plain ST 2.83 → 3.11 fps; STE 3.56 → 4.02 fps** — so across three sessions the STE is **2.37 → 4.02 fps
+(+70%)**, the plain ST 2.38 → 3.11 (+31%). Remaining ph1: `foreground objects` (36 ms) and the actor blits
+(16 ms) are the full-`g_ptmp`-rebuild tax — reducing them needs an incremental dynamic layer (shift g_ptmp +
+sprite save-under), a bigger restructure. Plus the plain-ST 81 ms CPU present (Blitter-solved on STE).
