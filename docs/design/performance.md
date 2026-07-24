@@ -548,6 +548,25 @@ object's footprint) plus any light-changed cell — no shift, no band. The dynam
 | ↳ ph0 static | ~330 ms | 92 ms (11 dirty cells) |
 | ↳ ph1 dynamic | ~40 ms | 40 ms |
 
-The chunky path (TT/Falcon + the INV2 reference) keeps the full idle rebuild — no regression there. Remaining
-idle floor (211 ms): `compute_predim_light` (per-frame LOS/globes, cacheable on idle) + the 40 ms ph1 dynamic
-+ the `g_ptmp=g_pdimmed` copy — the next levers.
+The chunky path (TT/Falcon + the INV2 reference) keeps the full idle rebuild — no regression there.
+
+## 2026-07-24 — idle light cache: idle compose 211 → 134 ms
+Timing `compute_predim_light` (per-cell LOS flood + light globes, run before ph0 and untimed by the phase
+split) showed it is **~77 ms every frame** — the single biggest per-frame cost, on scroll AND idle. On an idle
+anim tick it is INVARIANT: LOS depends on walls/position (avatar fixed), globes on emitter positions (nothing
+moves on an anim tick — U6 is turn-based, and the game clock only advances on turns). So cache it: gated on the
+same `g_idle_allow` anim-tick flag, the idle path reuses the last `plight`/`pvis`; every move/action recomputes.
+
+Object emitters resolve through `obj_tile` (anim-aware), so a flickering-emission emitter *could* drift — a bench
+**IDLE-LIGHT drift** check recomputes fresh vs cached over the idle walk (animation advancing): **drift 0**, so
+light is provably invariant across animation. (INV2 can't see this — both compose paths share `plight` — so the
+drift check is its own gate.)
+
+| idle sub-phase | before | after |
+|---|--:|--:|
+| compute_predim_light | 77 ms | **0 (cached)** |
+| idle compose | 211 ms | **134 ms** |
+
+**Idle compose across the session: 372 → 211 → 134 ms (2.8×).** With the present, standing still goes ~2.2 →
+~4.6 fps (ST) / ~6.9 fps (STE). Remaining idle floor (134 ms): ph0 static 92 ms (the `g_ptmp=g_pdimmed` copy +
+the mark/scan passes over 11 dirty cells) + ph1 dynamic 40 ms — both need the persistent-`g_ptmp` dynamic layer.

@@ -2456,6 +2456,8 @@ static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
  * + emitters that crossed the edge). Otherwise (first frame / jump / style switch): full rebuild. */
 #ifdef BENCH
 uint32_t g_ph0_scroll, g_ph0_shift, g_ph0_redim, g_ph0_dirty, g_ph0_copy;   /* sub-phase ticks + dirty count */
+uint32_t g_ph_light;   /* compute_predim_light ticks (untimed by the ph0..ph3 phases) */
+uint32_t g_idle_light_drift;   /* idle-light cache proof: cached plight/pvis vs freshly computed (0 = invariant) */
 uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw count */
 #define SUB_T() (subt=plat_ticks_200hz())
 #define SUB_ADD(acc) ((acc)+=plat_ticks_200hz()-subt)
@@ -2580,7 +2582,27 @@ static void compose_map(const world_t*w)
 #endif
     static uint8_t plight[VT*VT], pvis[VT*VT];
     if(predim){
-        compute_predim_light(w,plight,pvis);
+        /* compute_predim_light (per-cell LOS + light globes) is ~77 ms — the biggest single per-frame cost.
+         * On an idle anim tick the avatar is fixed and U6 is turn-based, so light+visibility are INVARIANT
+         * (LOS depends on walls/position; globes on emitter positions — none move on an anim tick). Reuse the
+         * cached plight/pvis; every move/action recomputes (g_idle_allow=0). Object emitters resolve through
+         * obj_tile (anim-aware), so a flickering-emission emitter *could* drift — the bench IDLE-LIGHT drift
+         * check (fresh vs cached, verify pass only) guards that it does not. */
+        if(!g_idle_allow){
+#ifdef BENCH
+            { extern uint32_t g_ph_light; uint32_t lt=plat_ticks_200hz();
+              compute_predim_light(w,plight,pvis); g_ph_light+=plat_ticks_200hz()-lt; }
+#else
+            compute_predim_light(w,plight,pvis);
+#endif
+        }
+#ifdef BENCH
+        else if(g_planar_verify){                       /* idle: prove cached light == freshly computed */
+            extern uint32_t g_idle_light_drift; static uint8_t fl[VT*VT],fv[VT*VT];
+            compute_predim_light(w,fl,fv);
+            for(int i=0;i<VT*VT;i++) if(fl[i]!=plight[i]||fv[i]!=pvis[i]) g_idle_light_drift++;
+        }
+#endif
         g_predim_light=plight; g_predim_vis=pvis;   /* g_predim armed AFTER the static build (for ph1 actors) */
     }
     /* --- STATIC layer (tiles + lower-pass objects): incremental scroll on a 1-tile walk --- */
@@ -6290,7 +6312,9 @@ int main(void)
              * idle-incremental static is byte-identical to a full rebuild — the idle path's correctness gate
              * (the scroll walk above never exercises dx=dy=0). */
             w.px=(uint16_t)bpx0; compose_map(&w);
+            g_idle_light_drift=0;
             g_idle_allow=1; for(int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); } g_idle_allow=0;
+            dbg_num("IDLE-LIGHT cache drift=", (int)g_idle_light_drift);   /* 0 = cached light == fresh */
             w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
         /* FG-INDEX proof: sparse g_fgbkt pass-1 == full g_obkt pass-1, across the scroll walk (0 = complete). */
         { uint32_t fgd=0; int bpx0=(int)w.px;
@@ -6320,7 +6344,7 @@ int main(void)
          * every ~33 ms anim tick with dx=dy=0 (avatar not moving) — which falls through can_scroll to a full
          * build_static today. This is the most common real-gameplay frame (watching water/torches/NPCs). */
         compose_map(&w);                                   /* prime at fixed view */
-        g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0; g_ph0_dirty=0;   /* isolate idle phases */
+        g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0; g_ph0_dirty=0; g_ph_light=0;   /* isolate idle phases */
         g_idle_allow=1;
         uint32_t ti0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); }   /* advance animation, view unchanged */
@@ -6328,6 +6352,7 @@ int main(void)
         g_idle_allow=0;
         uint32_t idle_ms=(ti1-ti0)*5/N;
         uint32_t idle_ph0=g_phase[0]*5/N, idle_ph1=g_phase[1]*5/N, idle_dirty=g_ph0_dirty/N;
+        uint32_t idle_light=g_ph_light*5/N;
 #ifdef HAVE_RDR_ST
         if(g_native_planar) for (int i=0;i<N;i++) rdr_ppresent();      /* shifted planar copy (no c2p) */
         else
@@ -6364,6 +6389,7 @@ int main(void)
         dbg_num("IDLE   compose  ms=", (int)idle_ms);   /* fixed view + animation: the standing-still frame */
         dbg_num("  idle ph0 static ms=", (int)idle_ph0);
         dbg_num("  idle ph1 dynamic ms=", (int)idle_ph1);
+        dbg_num("  idle light+vis ms=", (int)idle_light);   /* compute_predim_light (untimed by ph0..ph3) */
         dbg_num("  idle dirty cells/frm=", (int)idle_dirty);
         dbg_num("  scroll ph0 static ms=", (int)(g_phase[0]*5/N));   /* incremental static layer */
         dbg_num("    ph0 scroll(undim) ms=", (int)(g_ph0_scroll*5/N)); /* scroll_static+mark_view_anim */
