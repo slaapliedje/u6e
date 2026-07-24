@@ -2589,15 +2589,17 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
 #endif
                   }
               }
+              SUB_ADD(g_ph0_redim);          /* fill_tiles loop (dirty base -> g_pdimmed) */
               /* the shift already panned terrain+objects; only DIRTY cells (base re-blitted) need their
                * objects re-composited. Gate draw_cell to those cells: iterate ALL objects (so a multi-tile
                * object straddling clean/dirty still redraws its dirty cells) but write only dirty cells,
                * preserving z-order there. Clean cells keep their shifted object pixels (INV2 proves it). */
+              SUB_T();                        /* time the pass-0 object scan separately (g_ph0_shift is 0 on idle) */
               g_pd_objgate=g_pd_dirty;
               draw_view_objects(g_tmp_map,TMP_T,left,top,0);  /* lower objects -> g_pdimmed (dirty cells only) */
               g_pd_objgate=0;
+              SUB_ADD(g_ph0_shift);
             }
-            SUB_ADD(g_ph0_redim);
         } else {                                               /* planar full rebuild -> g_pdimmed */
             build_static(w);
             for(int i=0;i<VT*VT;i++) g_pd_light[i]=light[i];
@@ -6434,6 +6436,10 @@ int main(void)
         g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0; g_ph0_dirty=0; g_ph_light=0;   /* isolate idle phases */
         g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_copy=0;
         g_ph1_actors=g_ph1_fg=0;
+        { extern uint32_t g_dim_calls, g_dim_miss; g_dim_calls=g_dim_miss=0; }
+#ifdef HAVE_RDR_ST
+        { extern uint32_t g_pcache_calls, g_pcache_miss; g_pcache_calls=g_pcache_miss=0; }
+#endif
         g_idle_allow=1;
         uint32_t ti0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); }   /* advance animation, view unchanged */
@@ -6442,6 +6448,11 @@ int main(void)
         uint32_t idle_ms=(ti1-ti0)*5/N;
         uint32_t idle_ph0=g_phase[0]*5/N, idle_ph1=g_phase[1]*5/N, idle_dirty=g_ph0_dirty/N;
         uint32_t idle_light=g_ph_light*5/N;
+        uint32_t idle_dimmiss=0, idle_pmiss=0;
+        { extern uint32_t g_dim_miss; idle_dimmiss=g_dim_miss/N; }
+#ifdef HAVE_RDR_ST
+        { extern uint32_t g_pcache_miss; idle_pmiss=g_pcache_miss/N; }
+#endif
         uint32_t tp1=plat_ticks_200hz();   /* present timer starts HERE (after the idle loop above) */
 #ifdef HAVE_RDR_ST
         if(g_native_planar) for (int i=0;i<N;i++) rdr_ppresent();      /* shifted planar copy (no c2p) */
@@ -6484,7 +6495,10 @@ int main(void)
         dbg_num("  idle ph1 dynamic ms=", (int)idle_ph1);
         dbg_num("  idle light+vis ms=", (int)idle_light);   /* compute_predim_light (untimed by ph0..ph3) */
         dbg_num("  idle ph0 mark ms=", (int)(g_ph0_scroll*5/N));        /* mark_view_anim + mark_anim_cells */
-        dbg_num("  idle ph0 dirty-recompose ms=", (int)(g_ph0_redim*5/N)); /* fill_tiles + pass-0 for dirty cells */
+        dbg_num("  idle ph0 fill dirty ms=", (int)(g_ph0_redim*5/N));    /* fill_tiles for the 11 dirty cells */
+        dbg_num("  idle ph0 pass0 scan ms=", (int)(g_ph0_shift*5/N));    /* draw_view_objects pass-0 (77-obj scan) */
+        dbg_num("  idle dim_tile MISS/frm=", (int)idle_dimmiss);          /* regen: dithered dim per animated frame */
+        dbg_num("  idle planar MISS/frm=", (int)idle_pmiss);             /* regen: c2p per animated frame */
         dbg_num("  idle ph0 copy(g_ptmp) ms=", (int)(g_ph0_copy*5/N));   /* rdr_pframe_begin full copy */
         dbg_num("  idle dirty cells/frm=", (int)idle_dirty);
         dbg_num("  scroll ph0 static ms=", (int)(g_phase[0]*5/N));   /* incremental static layer */

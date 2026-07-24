@@ -622,3 +622,12 @@ Zero added BSS, scroll path untouched.
 **Idle compose across the session: 372 → 211 → 134 → 107 ms.** Standing still: ST ~4.9 → ~5.6 fps, STE ~6.9 →
 ~8.5 fps. Remaining idle floor (107 ms): dirty-recompose 53 ms (animation regen — inherent) + ph1 40 ms + copy
 9 ms (the last two = the idle-only persistent-`g_ptmp` restructure, deferred: needs a bespoke patch-vs-full gate).
+
+### Idle dirty-recompose (53 ms) is a FLOOR, not a missed win (measured)
+Split it: **fill 24 ms** (the 11 animated cells' base, ~2.2 ms/cell) + **pass-0 28 ms** (~9 ms scanning 77 objects
++ ~19 ms redrawing the animated objects in those cells). Crucially the dim/planar caches **HIT** — only 2 dim /
+3 planar misses per frame — because the animation frames *cycle*, so it is NOT regeneration/thrash. ~43 ms is
+genuine per-tick work: animation requires redrawing those cells' base+objects. The only reducible slice is the
+~9 ms pass-0 object scan, and it can't be narrowed to a sparse animated-object index (a static item on an
+animated tile must still redraw when the tile's frame changes) — it'd need a cached per-idle-view object list
+for ~9 ms (idle 107 → ~98). Low ROI; treated as the floor.
