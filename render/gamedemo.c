@@ -239,6 +239,10 @@ static int            g_clip_x0=0,g_clip_y0=0,g_clip_x1=VT,g_clip_y1=VT;
 static const uint8_t *g_pd_objgate=0;   /* incremental static-object pass: if set, a per-cell dirty mask —
                                          * draw_cell composites ONLY dirty cells (clean cells keep their
                                          * already-shifted object pixels). NULL = draw every cell. */
+static const uint8_t *g_pd_dyngate=0;   /* idle persistent-g_ptmp: if set, a per-cell DYNAMIC-dirty mask that
+                                         * gates ONLY the planar dynamic blit (rdr_pdyn_cell -> g_ptmp) — the
+                                         * chunky copy stays full so the INV2 verify still sees a whole tmp.
+                                         * NULL = blit every cell (the full-copy path). See compose_map idle. */
 static uint8_t        g_indoor[1024*1024/8];  /* bitmap: tile is INDOOR (under a roof) -> low ambient (U6WI) */
 static int            tile_is_indoor(int x,int y){ int32_t i=(int32_t)y*1024+x; return (g_indoor[i>>3]>>(i&7))&1; }
 static const uint8_t *g_rtiles;               /* roof tileset (n*256, 255=transparent), points into pak (U6WK) */
@@ -2047,7 +2051,8 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
             int32_t pk = g_dim_dither ? (0x40000000|((int32_t)tile<<6)|(Lc>>2))   /* == dim_tile_d key */
                                       : (((int32_t)tile<<4)|(Lc>>4));             /* == dim_tile key   */
             if(g_planar_static) rdr_pstatic_blit(pk, src, cvx, cvy); /* static objects -> g_pdimmed (4c) */
-            else              {  rdr_pdyn_cell   (pk, src, cvx, cvy); /* dynamic -> g_ptmp               */
+            else if(!g_pd_dyngate || g_pd_dyngate[cvy*VT+cvx]){      /* dynamic -> g_ptmp (idle: only dirty cells) */
+                                 rdr_pdyn_cell   (pk, src, cvx, cvy);
 #ifdef BENCH
                                  if(pass==1) g_fg_blit++;
 #endif
@@ -2397,6 +2402,13 @@ static uint8_t g_pd_dirty[VT*VT];       /* incremental scroll: 1 = cell's base w
 static uint8_t g_pd_anim[VT*VT];        /* idle recompose: 1 = cell's STATIC content (base tile or a lower object) is frame-animated */
 static int     g_pd_anim_valid;         /* g_pd_anim is current for THIS view (idle frames reuse it; cleared on scroll/rebuild) */
 static int     g_pd_has_anim;           /* any cell in g_pd_anim set -> keep g_view_has_anim armed while idle */
+/* Persistent g_ptmp (idle): the dynamic-dirty patch mask + the flag that arms the idle patch this frame. */
+static uint8_t g_dyn_anim[VT*VT];       /* 1 = cell covered by an animated ACTOR/AVATAR/FIELD (the dynamic layer) */
+static uint8_t g_pd_dyn[VT*VT];         /* per-frame dynamic patch set D = g_pd_dirty | g_dyn_anim (restore + gated redraw) */
+static int     g_pd_idle_patch;         /* set in predim_compose_static: this frame took the idle-incremental path */
+#ifdef BENCH
+uint32_t       g_dyn_cells;             /* |D| accumulated over the idle bench run (restore/redraw footprint) */
+#endif
 /* Mark every view cell whose STATIC content animates, for the idle (dx=dy=0) incremental recompose: an
  * animated base tile (ANIMDATA) or the footprint of an animated object (objanim fire/flame OR an ANIMDATA
  * object tile). Over-marking is harmless (the cell just re-composites; pass-0 still gates foreground out);
@@ -2423,6 +2435,41 @@ static void mark_anim_cells(const world_t*w,int32_t left,int32_t top){
                 if(ox>=0&&ox<VT&&oy>=0&&oy<VT) g_pd_anim[oy*VT+ox]=1;
         }
         if(bx==bx1)break; } if(by==by1)break; }
+}
+/* Persistent g_ptmp (idle): mark cells covered by an animated DYNAMIC element. The animated OBJECT
+ * footprints (lower AND foreground) are ALREADY in g_pd_dirty (via mark_anim_cells over g_obkt), so this
+ * only adds the dynamic elements NOT in g_obkt — actors, the avatar, and fields — whose drawn pixels cycle
+ * with animation. On an idle tick these are position-FIXED (turn-based; g_idle_allow), so only ANIMDATA-
+ * cycling frames change them. Over-marking is safe (an extra cell just restores+redraws to the same bytes);
+ * a MISS would freeze/smear that element, so the whole <=2x2 footprint of an animated actor is marked. */
+static void mark_dyn_anim(const world_t*w,int32_t left,int32_t top){
+    (void)w;
+    for(int i=0;i<VT*VT;i++) g_dyn_anim[i]=0;
+    for(int i=0;i<g_nfields;i++){                               /* fields: single cell, anim_tile-resolved */
+        int ft=g_fields[i].tile; if(!(ft>=0&&ft<2048&&g_anim_idx[ft]>=0)) continue;
+        int vx=((int)g_fields[i].x-(int)left)&(U6_SURFACE_TILES-1);
+        int vy=((int)g_fields[i].y-(int)top )&(U6_SURFACE_TILES-1);
+        if(vx<VT&&vy<VT) g_dyn_anim[vy*VT+vx]=1;
+    }
+    for(int i=0;i<U6_MAX_ACTORS;i++){                           /* actors: draw_multi <=2x2 footprint */
+        if(i==1||g_ainvis[i]) continue;
+        int ax,ay; if(!actor_pos(i,&ax,&ay)) continue;
+        int base=npc_tile(i); if(!(base>=0&&base<2048&&g_anim_idx[base]>=0)) continue; /* only cycling actors change on idle */
+        int dt=anim_tile(base);                                  /* dblw/dblh come from the drawn (resolved) tile */
+        int vx=((int)ax-(int)left)&(U6_SURFACE_TILES-1);
+        int vy=((int)ay-(int)top )&(U6_SURFACE_TILES-1);
+        if(vx>VT||vy>VT) continue;
+        int f=(dt>=0&&dt<2048)?g_tflags[dt]:0;
+        for(int oy=(f&0x40)?vy-1:vy; oy<=vy; oy++)
+          for(int ox=(f&0x80)?vx-1:vx; ox<=vx; ox++)
+            if(ox>=0&&ox<VT&&oy>=0&&oy<VT) g_dyn_anim[oy*VT+ox]=1;
+    }
+    { int at=g_basetile?(g_basetile[410*2]|(g_basetile[410*2+1]<<8)):0;   /* avatar (obj 410) at view centre */
+      if(at>0&&at<2048&&g_anim_idx[at]>=0){                    /* anchor drawn RAW, but extras cycle -> over-mark safely */
+        int f=g_tflags[at];
+        for(int oy=(f&0x40)?VT/2-1:VT/2; oy<=VT/2; oy++)
+          for(int ox=(f&0x80)?VT/2-1:VT/2; ox<=VT/2; ox++) g_dyn_anim[oy*VT+ox]=1;
+      } }
 }
 #endif
 /* recompose ONE band of cells into the scrolled g_tmp_map. The cell clip makes the object
@@ -2551,6 +2598,7 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
      * NO chunky dim, NO c2p. Own dirty tracker g_pd_light so it never interferes with the chunky verify. */
     if(g_native_planar){
         g_planar_static=1; g_predim=1; g_predim_light=light; g_dim_dither=dither;
+        g_pd_idle_patch = (can_idle && g_pd_valid);        /* idle-incremental -> compose_map patches g_ptmp instead of a full copy */
         if(!can_idle) g_pd_anim_valid=0;                  /* view changed -> the cached anim-cell set is stale */
         if((can_scroll||can_idle) && g_pd_valid){
             int32_t left0=w->px-VT/2, top0=w->py-VT/2;
@@ -2561,6 +2609,7 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
                  * pass is then redundant; g_pd_has_anim keeps the per-tick refresh armed). */
                 if(!g_pd_anim_valid){
                     mark_anim_cells(w,left0,top0);
+                    mark_dyn_anim (w,left0,top0);   /* persistent g_ptmp: cache the animated actor/avatar/field mask too */
                     g_pd_has_anim=0; for(int i=0;i<VT*VT;i++) if(g_pd_anim[i]){ g_pd_has_anim=1; break; }
                     g_pd_anim_valid=1;
                 }
@@ -2699,7 +2748,27 @@ static void compose_map(const world_t*w)
         predim_compose_static(w,plight,g_dim_dither);
         SUB_T(); if(g_chunky_dyn) memcpy(tmp,g_dimmed_map,sizeof tmp); SUB_ADD(g_ph0_copy);   /* dimmed static -> compose buffer (skipped when planar-only) */
 #ifdef HAVE_RDR_ST
-        SUB_T(); if(g_native_planar) rdr_pframe_begin(); SUB_ADD(g_ph0_copy);  /* planar g_ptmp = static layer (the full copy) */
+        /* planar g_ptmp = static layer. IDLE (persistent g_ptmp): g_ptmp already holds last frame's whole
+         * composite; instead of the full g_pdimmed->g_ptmp copy + a full ph1 redraw, restore ONLY the
+         * dynamic-dirty cells (D = static-changed g_pd_dirty | animated actor/avatar/field g_dyn_anim) and
+         * gate ph1 to D. Clean cells keep their persistent pixels (static + dynamic both unchanged). The
+         * INV2 verify still compares the whole g_ptmp to a full-rebuilt c2p(tmp), so a stale cell is caught. */
+        SUB_T();
+        if(g_native_planar){
+            if(g_pd_idle_patch){
+                /* g_dyn_anim (animated actor/avatar/field cells) is cached per idle-entry in predim_compose_static */
+                for(int i=0;i<VT*VT;i++) g_pd_dyn[i] = (uint8_t)(g_pd_dirty[i] | g_dyn_anim[i]);
+                rdr_ptmp_restore(g_pd_dyn);          /* restore D cells g_pdimmed -> g_ptmp (partial) */
+                g_pd_dyngate = g_pd_dyn;              /* gate the ph1 planar redraw to D */
+#ifdef BENCH
+                { uint32_t n=0; for(int i=0;i<VT*VT;i++) n+=g_pd_dyn[i]; g_dyn_cells+=n; }
+#endif
+            } else {
+                rdr_pframe_begin();                  /* scroll/action/first: full copy, ungated ph1 */
+                g_pd_dyngate = 0;
+            }
+        }
+        SUB_ADD(g_ph0_copy);
 #endif
     } else {
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;     /* wrap to shortest signed delta */
@@ -2767,10 +2836,12 @@ static void compose_map(const world_t*w)
             for(int r=0;r<16;r++){uint8_t*d=tmp+(vy*16+r)*T+vx*16; const uint8_t*s=src+r*16;
                 for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
 #ifdef HAVE_RDR_ST
-            if(g_native_planar) rdr_pdyn_cell(0x20000000|di, src, vx, vy); /* roof cell -> g_ptmp (planar, undimmed) */
+            if(g_native_planar && (!g_pd_dyngate || g_pd_dyngate[vy*VT+vx]))
+                rdr_pdyn_cell(0x20000000|di, src, vx, vy); /* roof cell -> g_ptmp (planar, undimmed; idle: dirty cells only) */
 #endif
         }
     }
+    g_pd_dyngate = 0;                                /* dynamic passes done — never let the gate leak past ph1/roofs */
     /* lighting overlay: SMOOTH/DITHER/BINARY compute the per-cell field HERE then apply it per pixel;
      * PREDIM already computed it up-front and baked dimming into tmp (dim-at-draw), so it skips this. */
     uint8_t light[VT*VT], vis[VT*VT]; int mnL=255,mxL=0;
@@ -6429,13 +6500,14 @@ int main(void)
         for (int i=0;i<N;i++){ w.px=(uint16_t)((basepx+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
         uint32_t t1=plat_ticks_200hz();
         w.px=(uint16_t)basepx;
+        uint32_t scr_ph0=g_phase[0],scr_ph1=g_phase[1],scr_ph2=g_phase[2],scr_ph3=g_phase[3]; /* snapshot BEFORE the idle loop overwrites g_phase[] */
         /* IDLE compose (view FIXED, animation advancing): the STANDING-STILL cost. The game loop recomposes
          * every ~33 ms anim tick with dx=dy=0 (avatar not moving) — which falls through can_scroll to a full
          * build_static today. This is the most common real-gameplay frame (watching water/torches/NPCs). */
         compose_map(&w);                                   /* prime at fixed view */
         g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0; g_ph0_dirty=0; g_ph_light=0;   /* isolate idle phases */
         g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_copy=0;
-        g_ph1_actors=g_ph1_fg=0;
+        g_ph1_actors=g_ph1_fg=0; g_dyn_cells=0;
         { extern uint32_t g_dim_calls, g_dim_miss; g_dim_calls=g_dim_miss=0; }
 #ifdef HAVE_RDR_ST
         { extern uint32_t g_pcache_calls, g_pcache_miss; g_pcache_calls=g_pcache_miss=0; }
@@ -6479,7 +6551,7 @@ int main(void)
         inv2=g_planar_diff; inv2f=g_planar_frames;                    /* INV2: g_ptmp == c2p(tmp) over the verify walk */
 #endif
         uint32_t r[18]={ (t1-t0),(tf1-tf0),(t2-tp1),0,(uint32_t)N,     /* [0]=scroll compose, [1]=full compose, [2]=present */
-                        g_phase[0],g_phase[1],g_phase[2],g_phase[3],  /* [5..8]=scroll ph0..ph3 (summed over N) */
+                        scr_ph0,scr_ph1,scr_ph2,scr_ph3,              /* [5..8]=scroll ph0..ph3 (snapshot; g_phase[] now holds idle) */
                         bl_diff,bl_ok,bl_cpu,bl_blt,                  /* [9]=blit-vs-cpu diff [10]=blitter? [11]=cpu ticks [12]=blitter ticks */
                         inv2,inv2f,                                   /* [13]=INV2 planar-vs-c2p diff [14]=verified frames */
                         pr_diff,pr_cpu,pr_blt };                      /* [15]=present-vs-cpu diff [16]=cpu present ticks [17]=blitter present ticks */
@@ -6499,8 +6571,9 @@ int main(void)
         dbg_num("  idle ph0 pass0 scan ms=", (int)(g_ph0_shift*5/N));    /* draw_view_objects pass-0 (77-obj scan) */
         dbg_num("  idle dim_tile MISS/frm=", (int)idle_dimmiss);          /* regen: dithered dim per animated frame */
         dbg_num("  idle planar MISS/frm=", (int)idle_pmiss);             /* regen: c2p per animated frame */
-        dbg_num("  idle ph0 copy(g_ptmp) ms=", (int)(g_ph0_copy*5/N));   /* rdr_pframe_begin full copy */
+        dbg_num("  idle ph0 copy(g_ptmp) ms=", (int)(g_ph0_copy*5/N));   /* rdr_ptmp_restore (persistent) or full copy */
         dbg_num("  idle dirty cells/frm=", (int)idle_dirty);
+        dbg_num("  idle DYN patch cells/frm=", (int)(g_dyn_cells/N));      /* |D| restored + gated-redrawn (persistent g_ptmp) */
         dbg_num("  scroll ph0 static ms=", (int)(g_phase[0]*5/N));   /* incremental static layer */
         dbg_num("    ph0 scroll(undim) ms=", (int)(g_ph0_scroll*5/N)); /* scroll_static+mark_view_anim */
         dbg_num("    ph0 shift(dim+lgt) ms=", (int)(g_ph0_shift*5/N)); /* shift_buf x2             */

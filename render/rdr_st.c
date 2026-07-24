@@ -660,6 +660,24 @@ void rdr_pstatic_shift(int dx, int dy)
 /* begin the frame's planar composite: g_ptmp = the static layer (mirrors memcpy(tmp,g_dimmed_map)). Any
  * queued STATIC blits (rdr_pstatic_blit -> g_pdimmed) are drained first so the copy sees the final layer. */
 void rdr_pframe_begin(void) { blitter_flush(); memcpy(g_ptmp, g_pdimmed, sizeof g_ptmp); }
+/* IDLE persistent-g_ptmp restore: instead of the whole-buffer copy above, refresh ONLY the cells flagged in
+ * `dmask` (an 11x11 == PMAP_GROUPS-square view mask, index cy*11+cx) from the static layer g_pdimmed. Each
+ * cell is 16 rows x 4 plane-words (group-aligned). The caller (compose_map, idle path) then redraws the
+ * dynamic layer over just these cells (g_pd_dyngate); clean cells keep last frame's composite bytes. Any
+ * queued STATIC blits (rdr_pstatic_blit -> g_pdimmed) are drained first so the restore sees the final layer. */
+void rdr_ptmp_restore(const uint8_t *dmask)
+{
+    blitter_flush();
+    for (int cy = 0; cy < PMAP_ROWS/16; cy++)
+      for (int cx = 0; cx < PMAP_GROUPS; cx++)
+        if (dmask[cy*PMAP_GROUPS + cx]) {
+            for (int r = 0; r < 16; r++) {
+                int32_t off = (int32_t)(cy*16 + r)*PMAP_STRIDE_W + cx*4;
+                g_ptmp[off+0] = g_pdimmed[off+0]; g_ptmp[off+1] = g_pdimmed[off+1];
+                g_ptmp[off+2] = g_pdimmed[off+2]; g_ptmp[off+3] = g_pdimmed[off+3];
+            }
+        }
+}
 /* end the frame's planar composite: drain the queued DYNAMIC blits (rdr_pdyn_cell -> g_ptmp) so g_ptmp is
  * complete before the caller reads it (present / INV2 verify). No-op on the CPU (non-Blitter) path. */
 void rdr_pframe_end(void) { blitter_flush(); }

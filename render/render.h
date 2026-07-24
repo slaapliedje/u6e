@@ -125,7 +125,8 @@ void     rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x);
 void     rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride);       /* c2p all 176 rows -> g_pdimmed */
 void     rdr_pstatic_cell(const uint8_t *dimmed, int cstride, int vx, int vy); /* c2p one dirty cell */
 void     rdr_pstatic_shift(int dx, int dy);                             /* planar shift g_pdimmed (cells) */
-void     rdr_pframe_begin(void);                                        /* g_ptmp = g_pdimmed (static) */
+void     rdr_pframe_begin(void);                                        /* g_ptmp = g_pdimmed (static), full copy */
+void     rdr_ptmp_restore(const uint8_t *dmask);                        /* idle: g_ptmp[cell]=g_pdimmed[cell] for masked cells only */
 void     rdr_pframe_end(void);                                          /* drain queued dynamic blits -> g_ptmp (Blitter) */
 void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit -> g_ptmp */
 void     rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar static blit -> g_pdimmed (4c) */

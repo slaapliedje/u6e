@@ -631,3 +631,31 @@ genuine per-tick work: animation requires redrawing those cells' base+objects. T
 ~9 ms pass-0 object scan, and it can't be narrowed to a sparse animated-object index (a static item on an
 animated tile must still redraw when the tile's frame changes) — it'd need a cached per-idle-view object list
 for ~9 ms (idle 107 → ~98). Low ROI; treated as the floor.
+
+## 2026-07-24 — idle persistent-g_ptmp: idle compose 107 → 79 ms (−28 ms), INV2 = 0
+The idle floor's last two reducible slices were the **copy 9 ms** (`rdr_pframe_begin`: whole `g_pdimmed`→`g_ptmp`)
++ **ph1 40 ms** (redraw ALL 14 actors + 10 fg objects). On an idle tick U6 is turn-based, so actors don't move —
+only the handful whose sprite ANIMDATA-cycles change, yet we re-copied the whole buffer and re-blitted every
+actor/fg every tick. **Persistent g_ptmp:** keep `g_ptmp` across idle frames and PATCH only the dynamic-dirty
+cells. D = `g_pd_dirty` (static cells `predim_compose_static` just refreshed — already includes every animated
+*object* footprint, lower+fg, via `mark_anim_cells` over `g_obkt`) ∪ `g_dyn_anim` (the animated ACTOR/AVATAR/FIELD
+footprints — the dynamic elements NOT in `g_obkt`, marked by the new `mark_dyn_anim`, cached per idle-entry like
+`g_pd_anim`). Per idle frame: `rdr_ptmp_restore(D)` copies just D's cells `g_pdimmed`→`g_ptmp` (replacing the full
+copy), then ph1 runs gated by `g_pd_dyngate=D` (a planar-ONLY per-cell gate in `draw_cell`/roofs — the chunky copy
+stays full so the verify still builds a whole `tmp`). Clean cells keep last frame's composite bytes (static AND
+dynamic both unchanged there → correct by induction).
+
+**copy 9 → 4 ms, ph1 40 → 16 ms; idle compose 107 → 79 ms (ST) / 107 → 77 ms (STE).** `mark_dyn_anim` is the one
+expensive piece (`npc_tile` runs a seated-NPC search per actor) — cached per idle-entry, it amortises to ~0.
+**INV2 (g_ptmp vs a full-rebuilt c2p(tmp)) = 0 over the idle-verify walk** is the correctness gate here (unlike the
+static-shortcut cases, the persistent g_ptmp shares NO state with the per-frame chunky reference, so a single stale
+cell — an un-marked animated actor, an un-erased footprint — shows as a nonzero diff). Live ST shot clean.
+
+Scroll path is byte-for-byte untouched (`g_pd_idle_patch=0` on any dx/dy → full `rdr_pframe_begin` + ungated ph1);
+scroll compose 193.8 ms unchanged, INV2 = 0 over the scroll frames too. (Also fixed a pre-existing bench mislabel:
+`BENCH.BIN[5..8]` is written after the idle loop, so the Makefile's "scroll phases" line had been printing idle
+`g_phase[]` — now snapshotted before the idle loop overwrites it. True scroll ph1 = 40 ms, idle ph1 = 16 ms.)
+
+**Idle compose across the session: 372 → 211 → 134 → 107 → 79 ms.** Standing still (compose+present): plain ST
+107+70=177 → 79+70=149 ms (~5.6 → ~6.7 fps); STE 107+11=118 → 77+11=88 ms (~8.5 → ~11.4 fps). Remaining idle floor
+(79 ms) = dirty-recompose 53 ms (animation regen — inherent) + restore 4 + ph1 16 + mark/overhead ~6.
