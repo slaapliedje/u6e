@@ -686,19 +686,31 @@ void rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy)
  * at the +8-px MAP_INSET — writes screen px 8..167 (border cols 0..7 / 168.. preserved). Per screen group
  * g the +8 shift splits each src group across two:
  *   screen[g] = (src[g-1]_lo8 << 8) | (src[g]_hi8);  grp 0 low-half only, grp 10 high-half only. */
-static void ppresent_cpu(uint8_t *scr)
+#ifdef BENCH
+static void ppresent_cpu(uint8_t *scr)      /* C reference for rdr_ppresent_selftest (asm ships) */
 {
+    /* Process a whole 4-plane GROUP per step (4 contiguous src words in, 4 contiguous dst words out) instead
+     * of the 4x per-plane array-indexed passes — the same byte-merge (dst = prev_lo<<8 | cur_hi) but with
+     * contiguous movem-friendly access and the previous group's planes carried in registers. Byte-identical
+     * to the old per-plane form (rdr_present_selftest CPU-vs-Blitter stays 0). */
     for (int y = 0; y < 160; y++) {
-        const uint16_t *s = g_ptmp + (int32_t)y*PMAP_STRIDE_W;             /* src groups 0..9 */
+        const uint16_t *s = g_ptmp + (int32_t)y*PMAP_STRIDE_W;             /* src groups 0..9 (4 words each) */
         uint16_t *d = (uint16_t *)(scr + (int32_t)(8+y)*ST_ROWBYTES);      /* screen row (group 0) */
-        for (int p = 0; p < 4; p++) {
-            d[p] = (uint16_t)((d[p] & 0xFF00) | (s[p] >> 8));               /* grp 0: low half (px 8..15) */
-            for (int g = 1; g <= 9; g++)
-                d[g*4+p] = (uint16_t)(((s[(g-1)*4+p] & 0x00FF) << 8) | (s[g*4+p] >> 8));
-            d[10*4+p] = (uint16_t)((d[10*4+p] & 0x00FF) | ((s[9*4+p] & 0x00FF) << 8)); /* grp 10: high half */
+        uint16_t p0=s[0], p1=s[1], p2=s[2], p3=s[3];                       /* group 0 = "prev" */
+        d[0]=(uint16_t)((d[0]&0xFF00)|(p0>>8)); d[1]=(uint16_t)((d[1]&0xFF00)|(p1>>8));
+        d[2]=(uint16_t)((d[2]&0xFF00)|(p2>>8)); d[3]=(uint16_t)((d[3]&0xFF00)|(p3>>8)); /* grp 0: low half */
+        const uint16_t *sg=s+4; uint16_t *dg=d+4;
+        for (int g = 1; g <= 9; g++) {
+            uint16_t c0=sg[0], c1=sg[1], c2=sg[2], c3=sg[3];
+            dg[0]=(uint16_t)((p0<<8)|(c0>>8)); dg[1]=(uint16_t)((p1<<8)|(c1>>8));
+            dg[2]=(uint16_t)((p2<<8)|(c2>>8)); dg[3]=(uint16_t)((p3<<8)|(c3>>8));
+            p0=c0; p1=c1; p2=c2; p3=c3; sg+=4; dg+=4;
         }
+        dg[0]=(uint16_t)((dg[0]&0x00FF)|(p0<<8)); dg[1]=(uint16_t)((dg[1]&0x00FF)|(p1<<8));
+        dg[2]=(uint16_t)((dg[2]&0x00FF)|(p2<<8)); dg[3]=(uint16_t)((dg[3]&0x00FF)|(p3<<8)); /* grp 10: high half */
     }
 }
+#endif /* BENCH (ppresent_cpu reference) */
 
 /* present CORE (BLiTTER): the same +8-px shifted planar copy, but off the CPU — the single biggest fixed
  * cost per frame (the CPU version is ~81 ms). The +8 shift == a RIGHT shift of the source by one byte
@@ -732,12 +744,17 @@ static long ppresent_blitter_super(void)
     return 0;
 }
 
-/* present (render.h): NO c2p, NO Vsync (caller batches). Uses the Blitter when present + enabled, else CPU. */
+/* hand-asm +8px present (render/ppresent_st.s) — byte-identical to ppresent_cpu, ~2.4x faster on the
+ * plain ST (no Blitter). ppresent_cpu is kept as the C reference for rdr_ppresent_selftest. */
+extern void ppresent_st_asm(const uint16_t *src, uint8_t *dst, long src_stride_b, long dst_stride_b, long nrows);
+
+/* present (render.h): NO c2p, NO Vsync (caller batches). Uses the Blitter when present + enabled, else the
+ * hand-asm CPU present. */
 void rdr_ppresent(void)
 {
     blitter_flush();                            /* defensive: drain any pending dynamic blits into g_ptmp */
     if (g_has_blitter && g_blit_present) { g_ppresent_dst = g_screen; (void)Supexec(ppresent_blitter_super); }
-    else                                   ppresent_cpu(g_screen);
+    else ppresent_st_asm(g_ptmp, g_screen + 8*ST_ROWBYTES, PMAP_STRIDE_W*2, ST_ROWBYTES, 160);
 }
 
 /* --- Planar mouse cursor (native-planar path) --- The chunky path draws the cursor into g_back then
@@ -1030,6 +1047,32 @@ int rdr_present_selftest(void)
     g_ppresent_dst = sb; (void)Supexec(ppresent_blitter_super);            /* Blitter */
     int diff = 0; for (int i = 0; i < ST_SCREEN_BYTES; i++) if (sa[i] != sb[i]) diff++;
     return diff;
+}
+
+/* asm present GATE (no Blitter needed — runs on the plain ST too): ppresent_st_asm must be byte-identical to
+ * the C reference ppresent_cpu, INCLUDING the preserved border bytes. 0 = identical. */
+int rdr_ppresent_asm_selftest(void)
+{
+    static uint8_t sa[ST_SCREEN_BYTES], sb[ST_SCREEN_BYTES];
+    for (int i = 0; i < PMAP_ROWS*PMAP_STRIDE_W; i++)
+        g_ptmp[i] = (uint16_t)(((uint32_t)i * 2654435761u) >> 15);
+    for (int i = 0; i < ST_SCREEN_BYTES; i++) { uint8_t v=(uint8_t)(i*7+1); sa[i]=v; sb[i]=v; }  /* border sentinel */
+    ppresent_cpu(sa);                                                       /* C reference */
+    ppresent_st_asm(g_ptmp, sb + 8*ST_ROWBYTES, PMAP_STRIDE_W*2, ST_ROWBYTES, 160);   /* asm */
+    int diff = 0; for (int i = 0; i < ST_SCREEN_BYTES; i++) if (sa[i] != sb[i]) diff++;
+    return diff;
+}
+
+/* asm-vs-C present microbench: N iters each into g_screen. out[0]=C ticks, out[1]=asm. */
+void rdr_ppresent_asm_microbench(uint32_t out[2], int N)
+{
+    for (int i = 0; i < PMAP_ROWS*PMAP_STRIDE_W; i++) g_ptmp[i] = (uint16_t)(((uint32_t)i*40503u)>>3);
+    uint32_t t0 = plat_ticks_200hz();
+    for (int it = 0; it < N; it++) ppresent_cpu(g_screen);
+    out[0] = plat_ticks_200hz() - t0;
+    uint32_t t1 = plat_ticks_200hz();
+    for (int it = 0; it < N; it++) ppresent_st_asm(g_ptmp, g_screen + 8*ST_ROWBYTES, PMAP_STRIDE_W*2, ST_ROWBYTES, 160);
+    out[1] = plat_ticks_200hz() - t1;
 }
 
 /* Phase-3 present microbench: CPU vs Blitter present, N iters into g_screen. out[0]=CPU ticks, out[1]=Blitter. */

@@ -496,7 +496,7 @@ bench-falcon: world $(BUILD)/benchf.prg $(BUILD)/NEWDESK.INF
 # BENCH.BIN is the same 5 u32 [scroll-compose, full-compose, present-c2p, unused, N]. Set
 # START_MIN=<0..1439> to force night (exercises the lighting path); stage LIGHTSTY.REQ ('0'/'1'/'2')
 # in build/ before running to pick SMOOTH/DITHER/BINARY. Uses the slim ST pack (U6ST.PAK).
-BENCH_ST_SRC := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(BENCH_SRC)) render/rdr_st.c render/c2p_st.s
+BENCH_ST_SRC := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(BENCH_SRC)) render/rdr_st.c render/c2p_st.s render/ppresent_st.s
 $(BUILD)/benchst.prg: $(BENCH_ST_SRC)
 	@mkdir -p $(BUILD)/obj_benchst
 	@for s in $^; do o=$(BUILD)/obj_benchst/`echo $$s | tr / _`.o; \
@@ -712,7 +712,7 @@ endef
 # (gamest.prg) and the 68000+card (gamevc.prg) stay separate binaries only because a 68020-codegen
 # image can't run on a 68000 — the SAME render.c dispatcher drives all of them. See docs/design/renderer-unification.md.
 HAVE_ALL := -DHAVE_RDR_ST -DHAVE_RDR_TT -DHAVE_RDR_FALCON -DHAVE_RDR_VCARD
-GAME_SRC_UNI := $(GAME_SRC) render/rdr_st.c render/c2p_st.s render/rdr_falcon.c render/rdr_vcard.c
+GAME_SRC_UNI := $(GAME_SRC) render/rdr_st.c render/c2p_st.s render/ppresent_st.s render/rdr_falcon.c render/rdr_vcard.c
 $(BUILD)/game.prg: $(GAME_SRC_UNI)
 	$(call HYBRID_BUILD,$@,$^,obj_tt,$(HAVE_ALL),-lgem16)
 game: $(BUILD)/game.prg
@@ -729,7 +729,7 @@ game-falcon: $(BUILD)/gamef.prg
 # palette (U6WW). PURE 68000 (NOT the 020 hybrid) — a plain ST/STE has a 68000, so we compile
 # for -m68000 and link the stock 68000 libc. Drops c2p_asm.s (the TT's 8-plane asm); rdr_st uses
 # its own 4-plane c2p — hand-asm c2p_st.s (C reference c2p4_lut kept). 8.3 name for Hatari --auto.
-GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c render/c2p_st.s
+GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c render/c2p_st.s render/ppresent_st.s
 # -DPACK_NAME loads the SLIM pack (U6ST.PAK, front-end art omitted) so it fits a real 4 MB ST.
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st

@@ -592,3 +592,18 @@ paths share `plight`).
 (`world_tile`/`tile_is_indoor`/`blocks_sight` × 121, world-anchored → shiftable) + the LOS flood + wall-expand
 (not shiftable). A shiftable terrain-input cache (ambient/emitter/sight per cell, shift + lead-band like the
 static layer) is the next lever for the world-anchored part; the LOS flood is the floor.
+
+## 2026-07-24 — plain-ST present: hand-asm (render/ppresent_st.s), 82 → 70 ms (bus-bound)
+The +8px-shifted planar present (`ppresent_cpu`, ~82 ms) is the biggest single plain-ST cost (STE Blitter-solved
+at 11 ms). Hand-asm'd it (`ppresent_st_asm`, sibling of `c2p_st.s`): per-plane byte-merge with the previous
+group carried in registers, dbra'd row/group loops. **82 → 70 ms**, byte-identical (`rdr_ppresent_asm_selftest`
+CPU-C vs asm **diff 0**, no Blitter needed so it validates on the plain ST too).
+
+Only ~15% though — a C group-at-a-time rewrite first gave *zero* speedup, and the asm the rest. The present is
+**contended-video-RAM bound, not CPU-compute bound**: it moves ~28 KB (14 KB read `g_ptmp` + 14 KB write screen),
+both in ST-RAM the shifter also reads, so every CPU word access waits on the shifter. The Blitter does the *same*
+28 KB in 11 ms because its DMA has the bus priority the CPU lacks — that 6× gap is the Blitter, not the code, so
+the plain-ST present has little CPU headroom left (70 ms is near the floor). `ppresent_cpu` is kept as the
+`#ifdef BENCH` C reference; the asm ships on every native-planar ST/STE-CPU present.
+
+Plain ST scroll ~3.65 → ~3.8 fps; idle ~4.65 → ~4.9 fps (present is every-frame, so it helps both).

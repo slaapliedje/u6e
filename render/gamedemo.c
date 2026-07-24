@@ -6492,6 +6492,11 @@ int main(void)
             dbg_num("NATIVE PLANAR INV2 diff=", (int)g_planar_diff);   /* 0 = byte-identical over every composed frame */
             dbg_num("NATIVE PLANAR frames  =", (int)g_planar_frames);
             dbg_num("NATIVE PLANAR present ms=", (int)((t2-tp1)*5/N)); }/* rdr_ppresent vs the old 444ms c2p */
+        { extern int rdr_ppresent_asm_selftest(void); extern void rdr_ppresent_asm_microbench(uint32_t*,int);
+          uint32_t pm[2]; int d=rdr_ppresent_asm_selftest(); rdr_ppresent_asm_microbench(pm,N);
+          dbg_num("PRESENT asm-vs-C diff=", d);                          /* 0 = asm byte-identical to ppresent_cpu */
+          dbg_num("  present CPU-C ms=", (int)(pm[0]*5/N));
+          dbg_num("  present CPU-asm ms=", (int)(pm[1]*5/N)); }
 #endif
         { extern uint32_t g_dim_calls, g_dim_miss;
           dbg_num("PREDIM dim_tile calls=", (int)g_dim_calls);
