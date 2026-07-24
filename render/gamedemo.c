@@ -2395,6 +2395,8 @@ static void build_static(const world_t*w){
 static uint8_t g_pd_light[VT*VT];
 static uint8_t g_pd_dirty[VT*VT];       /* incremental scroll: 1 = cell's base was re-blitted this frame -> its objects must re-composite */
 static uint8_t g_pd_anim[VT*VT];        /* idle recompose: 1 = cell's STATIC content (base tile or a lower object) is frame-animated */
+static int     g_pd_anim_valid;         /* g_pd_anim is current for THIS view (idle frames reuse it; cleared on scroll/rebuild) */
+static int     g_pd_has_anim;           /* any cell in g_pd_anim set -> keep g_view_has_anim armed while idle */
 /* Mark every view cell whose STATIC content animates, for the idle (dx=dy=0) incremental recompose: an
  * animated base tile (ANIMDATA) or the footprint of an animated object (objanim fire/flame OR an ANIMDATA
  * object tile). Over-marking is harmless (the cell just re-composites; pass-0 still gates foreground out);
@@ -2549,10 +2551,23 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
      * NO chunky dim, NO c2p. Own dirty tracker g_pd_light so it never interferes with the chunky verify. */
     if(g_native_planar){
         g_planar_static=1; g_predim=1; g_predim_light=light; g_dim_dither=dither;
+        if(!can_idle) g_pd_anim_valid=0;                  /* view changed -> the cached anim-cell set is stale */
         if((can_scroll||can_idle) && g_pd_valid){
             int32_t left0=w->px-VT/2, top0=w->py-VT/2;
-            SUB_T(); mark_view_anim(w);
-            if(can_idle) mark_anim_cells(w,left0,top0);   /* idle: which STATIC cells animate this tick */
+            SUB_T();
+            if(can_idle){
+                /* On an idle tick the view + objects are fixed, so WHICH cells animate is invariant — compute
+                 * mark_anim_cells once and reuse it across idle frames (mark_view_anim's whole-view anim_tile
+                 * pass is then redundant; g_pd_has_anim keeps the per-tick refresh armed). */
+                if(!g_pd_anim_valid){
+                    mark_anim_cells(w,left0,top0);
+                    g_pd_has_anim=0; for(int i=0;i<VT*VT;i++) if(g_pd_anim[i]){ g_pd_has_anim=1; break; }
+                    g_pd_anim_valid=1;
+                }
+                if(g_pd_has_anim) g_view_has_anim=1;
+            } else {
+                mark_view_anim(w);
+            }
             SUB_ADD(g_ph0_scroll);
             SUB_T(); if(can_scroll){ rdr_pstatic_shift(dx,dy); shift_buf(g_pd_light,VT,dx,dy); } SUB_ADD(g_ph0_shift);
             SUB_T();
@@ -2586,7 +2601,7 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
         } else {                                               /* planar full rebuild -> g_pdimmed */
             build_static(w);
             for(int i=0;i<VT*VT;i++) g_pd_light[i]=light[i];
-            g_pd_valid=1;
+            g_pd_valid=1; g_pd_anim_valid=0;                   /* fresh view -> recompute the anim-cell set next idle */
         }
         g_planar_static=0; g_predim=0;
     }
@@ -2682,7 +2697,7 @@ static void compose_map(const world_t*w)
         predim_compose_static(w,plight,g_dim_dither);
         SUB_T(); if(g_chunky_dyn) memcpy(tmp,g_dimmed_map,sizeof tmp); SUB_ADD(g_ph0_copy);   /* dimmed static -> compose buffer (skipped when planar-only) */
 #ifdef HAVE_RDR_ST
-        if(g_native_planar) rdr_pframe_begin();     /* planar composite g_ptmp = the static layer (mirrors the memcpy) */
+        SUB_T(); if(g_native_planar) rdr_pframe_begin(); SUB_ADD(g_ph0_copy);  /* planar g_ptmp = static layer (the full copy) */
 #endif
     } else {
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;     /* wrap to shortest signed delta */
@@ -6417,6 +6432,8 @@ int main(void)
          * build_static today. This is the most common real-gameplay frame (watching water/torches/NPCs). */
         compose_map(&w);                                   /* prime at fixed view */
         g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0; g_ph0_dirty=0; g_ph_light=0;   /* isolate idle phases */
+        g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_copy=0;
+        g_ph1_actors=g_ph1_fg=0;
         g_idle_allow=1;
         uint32_t ti0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); }   /* advance animation, view unchanged */
@@ -6466,6 +6483,9 @@ int main(void)
         dbg_num("  idle ph0 static ms=", (int)idle_ph0);
         dbg_num("  idle ph1 dynamic ms=", (int)idle_ph1);
         dbg_num("  idle light+vis ms=", (int)idle_light);   /* compute_predim_light (untimed by ph0..ph3) */
+        dbg_num("  idle ph0 mark ms=", (int)(g_ph0_scroll*5/N));        /* mark_view_anim + mark_anim_cells */
+        dbg_num("  idle ph0 dirty-recompose ms=", (int)(g_ph0_redim*5/N)); /* fill_tiles + pass-0 for dirty cells */
+        dbg_num("  idle ph0 copy(g_ptmp) ms=", (int)(g_ph0_copy*5/N));   /* rdr_pframe_begin full copy */
         dbg_num("  idle dirty cells/frm=", (int)idle_dirty);
         dbg_num("  scroll ph0 static ms=", (int)(g_phase[0]*5/N));   /* incremental static layer */
         dbg_num("    ph0 scroll(undim) ms=", (int)(g_ph0_scroll*5/N)); /* scroll_static+mark_view_anim */

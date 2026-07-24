@@ -607,3 +607,18 @@ the plain-ST present has little CPU headroom left (70 ms is near the floor). `pp
 `#ifdef BENCH` C reference; the asm ships on every native-planar ST/STE-CPU present.
 
 Plain ST scroll ~3.65 → ~3.8 fps; idle ~4.65 → ~4.9 fps (present is every-frame, so it helps both).
+
+## 2026-07-24 — idle mark cache: idle compose 135 → 107 ms
+Profiling the 134 ms idle floor split ph0 into **mark 29 ms** (`mark_view_anim` + `mark_anim_cells`, two whole-
+view `world_tile` passes) / **dirty-recompose 53 ms** (the ~11 animated cells: their tile changes each tick so
+dim+c2p miss the caches — inherent) / **copy 10 ms** (`g_ptmp=g_pdimmed`) / **ph1 40 ms** (dynamic redraw). On an
+idle tick the view AND objects are fixed (turn-based), so WHICH cells animate is invariant — `mark_anim_cells`
+recomputed the identical set every tick. Cache it (`g_pd_anim` + `g_pd_anim_valid`, cleared on any non-idle
+compose so a scroll/action/door-open recomputes), and drop the now-redundant `mark_view_anim` whole-view pass
+(`g_pd_has_anim` keeps the per-tick refresh armed). **mark 29 → 1 ms, idle compose 135 → 107 ms.** INV2 idle-
+verify = 0 proves the cached set is complete (a missed animated cell would go stale vs the chunky full rebuild).
+Zero added BSS, scroll path untouched.
+
+**Idle compose across the session: 372 → 211 → 134 → 107 ms.** Standing still: ST ~4.9 → ~5.6 fps, STE ~6.9 →
+~8.5 fps. Remaining idle floor (107 ms): dirty-recompose 53 ms (animation regen — inherent) + ph1 40 ms + copy
+9 ms (the last two = the idle-only persistent-`g_ptmp` restructure, deferred: needs a bespoke patch-vs-full gate).
