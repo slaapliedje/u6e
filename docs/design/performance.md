@@ -570,3 +570,25 @@ drift check is its own gate.)
 **Idle compose across the session: 372 → 211 → 134 ms (2.8×).** With the present, standing still goes ~2.2 →
 ~4.6 fps (ST) / ~6.9 fps (STE). Remaining idle floor (134 ms): ph0 static 92 ms (the `g_ptmp=g_pdimmed` copy +
 the mark/scan passes over 11 dirty cells) + ph1 dynamic 40 ms — both need the persistent-`g_ptmp` dynamic layer.
+
+## 2026-07-24 — scroll light: sparse light/sight object index, light+vis 77 → 57 ms
+`compute_predim_light` is ~77 ms/frame; cached on idle but recomputed every scroll frame. Split-timed it:
+**compute_light 33 ms / compute_visibility 44 ms**. Visibility (LOS flood from the view-centre) dominates and
+is *not* shiftable — walls move relative to the fixed centre, so the flood must re-run. But both do a redundant
+full ~77-object bucket scan (~10 ms each) to find the handful of emitters / sight-blockers — the same waste the
+fg-index fixed. Added a sparse `g_lsbkt` index (objects that emit light OR block sight, built once in
+`build_blocked` via `obj_is_lightsight`, complete over ANIMDATA/objanim frames); `compute_light` and
+`compute_visibility` scan it instead of `g_obkt`. Proven complete: a `light_index_selftest` composes the light
+field via sparse vs full scan across the scroll walk — **LS-INDEX diff 0** (INV2 can't see it: both compose
+paths share `plight`).
+
+| | before | after |
+|---|--:|--:|
+| compute_light | 33 ms | **22 ms** |
+| compute_visibility | 44 ms | **34 ms** |
+| scroll compose | 213 ms | **193 ms** |
+
+**Plain ST scroll ~3.4 → ~3.65 fps; STE ~4.5 → ~4.9 fps.** The remaining 57 ms is per-cell terrain lookups
+(`world_tile`/`tile_is_indoor`/`blocks_sight` × 121, world-anchored → shiftable) + the LOS flood + wall-expand
+(not shiftable). A shiftable terrain-input cache (ambient/emitter/sight per cell, shift + lead-band like the
+static layer) is the next lever for the world-anchored part; the LOS flood is the floor.

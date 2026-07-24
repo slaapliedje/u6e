@@ -204,6 +204,12 @@ static uint16_t       g_obkt_idx[MAXWOBJ];
  * via obj_is_fg (complete over multi-tile + ANIMDATA/objanim frames); fg_index_selftest proves == full scan. */
 static uint16_t       g_fgbkt_start[OBKT*OBKT+1];
 static uint16_t       g_fgbkt_idx[MAXWOBJ];
+/* LIGHT/SIGHT-only parallel bucket index: objects that emit light OR block sight. compute_light and
+ * compute_visibility each scan the view's objects every non-cached (scroll) frame to find the handful of
+ * emitters / sight-blockers — ~9 ms per scan. Iterating this sparse subset instead cuts that to the
+ * relevant objects. Built in build_blocked via obj_is_lightsight (complete over ANIMDATA/objanim frames). */
+static uint16_t       g_lsbkt_start[OBKT*OBKT+1];
+static uint16_t       g_lsbkt_idx[MAXWOBJ];
 
 /* Incremental map-scroll: g_tmp_map caches the STATIC compose layer (base tiles + lower-pass
  * objects, no actors/foreground/lighting). On a 1-tile walk it is memmove-scrolled and only the
@@ -1702,6 +1708,7 @@ static int  adjacent_hostile(const world_t*w,int x,int y);  /* CB4 (defined belo
 static void party_attack(int att,int def);                  /* CB4 (defined below) */
 static int  sees_party(const world_t*w,int i);              /* aggro-on-sight: range + LOS (defined below) */
 static int  blocks_sight(int tile);                         /* sight-blocker test (defined below) */
+static int  light_of(int tile);                             /* emitter level 0..3 (defined below) */
 static void fields_tick(const world_t*w);                   /* magic field-tile layer (defined below) */
 static void status_tick(void);                              /* magic status effects (defined below) */
 static void ally_step(const world_t*w,int i);              /* allied-summon AI (defined below) */
@@ -1893,6 +1900,27 @@ static int obj_is_fg(const wobj_t*o){
     return anchor_family_fg(o->tile);                     /* static/ANIMDATA: R = anim_tile(o->tile) family */
 }
 
+/* Light-or-sight classification for g_lsbkt: compute_light/compute_visibility test light_of/blocks_sight on
+ * the object's anim-resolved ANCHOR tile (obj_tile — single-cell, no multi-tile expansion), so we walk the
+ * anchor's whole frame family. Complete: over-including only wastes a per-object flag test; under-including
+ * would drop an emitter/sight-blocker. (light_index_selftest proves the sparse scan == the full scan.) */
+static int tile_is_ls(int t){ return (t>=0&&t<2048) && (light_of(t)>0 || blocks_sight(t)); }
+static int tile_family_ls(int t){                         /* t OR any of its ANIMDATA frames emits/blocks */
+    if(tile_is_ls(t)) return 1;
+    if(t>=0 && t<2048){ int e=g_anim_idx[t];
+        if(e>=0 && g_anim_n[e]>0) for(int f=0;f<g_anim_n[e];f++) if(tile_is_ls((int)g_anim_src[e]+f)) return 1; }
+    return 0;
+}
+static int obj_is_lightsight(const wobj_t*o){
+    int on=o->obj_n;
+    if(on>=0 && on<1024 && g_objanim[on] && g_basetile){  /* objanim frames */
+        int b=g_basetile[on*2]|(g_basetile[on*2+1]<<8);
+        for(int fr=0;fr<g_objanim[on];fr++) if(tile_family_ls(b+fr)) return 1;
+        return 0;
+    }
+    return tile_family_ls(o->tile);
+}
+
 /* Rebuild g_blocked + g_sightblk: per tile, set a bit when an impassable OBJECT
  * (tileflags1 bit1 Impassable | bit2 Wall) sits on it (so world_is_passable stops NPCs/player
  * walking through wall/furniture objects), and a SIGHT bit when a sight-blocking OBJECT
@@ -1929,6 +1957,14 @@ static void build_blocked(void)
     { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_fgbkt_start[b];
       for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_fg(o)) continue;
           int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_fgbkt_idx[cur[b]++]=(uint16_t)i; } }
+    /* LIGHT/SIGHT-only index (same CSR build, filtered by obj_is_lightsight): compute_light/vis scan only these. */
+    for(int b=0;b<=OBKT*OBKT;b++) g_lsbkt_start[b]=0;
+    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_lightsight(o)) continue;
+        int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_lsbkt_start[b+1]++; }
+    for(int b=0;b<OBKT*OBKT;b++) g_lsbkt_start[b+1]=(uint16_t)(g_lsbkt_start[b+1]+g_lsbkt_start[b]);
+    { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_lsbkt_start[b];
+      for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_lightsight(o)) continue;
+          int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_lsbkt_idx[cur[b]++]=(uint16_t)i; } }
 }
 
 /* substitute an animated tile slot for its current frame (animdata.md). The slot
@@ -1988,6 +2024,7 @@ static int g_planar_verify = 0;                      /* gate the INV2 c2p check 
 #ifdef BENCH
 uint32_t g_fg_iter, g_fg_draw, g_fg_blit;      /* pass-1 foreground: objects visited / draw_multi issued / cells actually blitted */
 int g_fg_use_full = 0;                          /* selftest: 1 = pass-1 scans full g_obkt (reference); 0 = sparse g_fgbkt */
+int g_ls_use_full = 0;                          /* selftest: 1 = compute_light/vis scan full g_obkt; 0 = sparse g_lsbkt */
 #endif
 
 /* blit one 16x16 tile into the compose buffer at view cell (cvx,cvy),
@@ -2174,10 +2211,14 @@ static void compute_light(const world_t*w, uint8_t*light_out, int inside){
     for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){              /* terrain emitter globes */
         int e=light_of(world_tile(w,left+vx,top+vy)); if(e>0) add_globe(L,vx,vy,BASE[e],RAD[e]);
     }
-    { int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VT-1)>>4)&(OBKT-1);   /* object emitters (bucket-indexed) */
+    { const uint16_t *ls_s=g_lsbkt_start,*ls_i=g_lsbkt_idx;   /* sparse light/sight index (emitters only, here) */
+#ifdef BENCH
+      if(g_ls_use_full){ ls_s=g_obkt_start; ls_i=g_obkt_idx; }   /* selftest: force full scan */
+#endif
+      int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VT-1)>>4)&(OBKT-1);   /* object emitters (bucket-indexed) */
       int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +VT-1)>>4)&(OBKT-1);
       for(int by=by0;;by=(by+1)&(OBKT-1)){ for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){ int bb=by*OBKT+bx;
-        for(int k=g_obkt_start[bb];k<g_obkt_start[bb+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive) continue;
+        for(int k=ls_s[bb];k<ls_s[bb+1];k++){ const wobj_t*o=&g_wobj[ls_i[k]]; if(!o->alive) continue;
             int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1), vy=((int32_t)o->y-top)&(U6_SURFACE_TILES-1);
             if(vx<VT&&vy<VT){ int e=light_of(obj_tile(o)); if(e>0) add_globe(L,(int)vx,(int)vy,BASE[e],RAD[e]); } }
         if(bx==bx1) break; } if(by==by1) break; } }
@@ -2208,10 +2249,14 @@ static void compute_visibility(const world_t*w, uint8_t*vis){
     uint8_t sb[VT*VT];
     for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++)
         sb[vy*VT+vx]=(uint8_t)blocks_sight(world_tile(w,left+vx,top+vy));
-    { int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VT-1)>>4)&(OBKT-1);   /* sight-blocking objects (bucket-indexed) */
+    { const uint16_t *ls_s=g_lsbkt_start,*ls_i=g_lsbkt_idx;   /* sparse light/sight index (sight-blockers only, here) */
+#ifdef BENCH
+      if(g_ls_use_full){ ls_s=g_obkt_start; ls_i=g_obkt_idx; }   /* selftest: force full scan */
+#endif
+      int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VT-1)>>4)&(OBKT-1);   /* sight-blocking objects (bucket-indexed) */
       int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +VT-1)>>4)&(OBKT-1);
       for(int by=by0;;by=(by+1)&(OBKT-1)){ for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){ int bb=by*OBKT+bx;
-        for(int k=g_obkt_start[bb];k<g_obkt_start[bb+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive) continue;
+        for(int k=ls_s[bb];k<ls_s[bb+1];k++){ const wobj_t*o=&g_wobj[ls_i[k]]; if(!o->alive) continue;
             int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1), vy=((int32_t)o->y-top)&(U6_SURFACE_TILES-1);
             if(vx<VT&&vy<VT && blocks_sight(obj_tile(o))) sb[vy*VT+vx]=1; }
         if(bx==bx1) break; } if(by==by1) break; } }
@@ -2443,12 +2488,33 @@ static int in_lead_band(int vx,int vy,int dx,int dy){
 static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
     int32_t left=w->px-VT/2, top=w->py-VT/2;
     int pin = tile_is_indoor((int)(w->px&(U6_SURFACE_TILES-1)),(int)(w->py&(U6_SURFACE_TILES-1)));
+#ifdef BENCH
+    { extern uint32_t g_ph_clight,g_ph_cvis; uint32_t a=plat_ticks_200hz();
+      compute_light(w,plight,pin); uint32_t b=plat_ticks_200hz();
+      compute_visibility(w,pvis);  uint32_t c=plat_ticks_200hz();
+      g_ph_clight+=b-a; g_ph_cvis+=c-b; }
+#else
     compute_light(w,plight,pin); compute_visibility(w,pvis);
+#endif
     if(!pin && g_nroof>0){ for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
         int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
         if(roof_at(wx,wy)>=0) pvis[vy*VT+vx]=1; } }
     for(int i=0;i<VT*VT;i++) if(!pvis[i]) plight[i]=0;
 }
+#ifdef BENCH
+/* Prove the sparse g_lsbkt index is COMPLETE: compute_predim_light via the sparse light/sight scan must
+ * equal it via the full g_obkt scan. Returns the mismatched (light + vis) cell count (0 = the index drops
+ * no emitter/sight-blocker). Both compose paths share plight, so INV2 can't see this — hence its own gate. */
+static uint32_t light_index_selftest(const world_t*w){
+    static uint8_t la[VT*VT],va[VT*VT],lb[VT*VT],vb[VT*VT];
+    extern uint32_t g_ph_clight,g_ph_cvis; uint32_t sc=g_ph_clight,sv=g_ph_cvis;   /* don't pollute the split timers */
+    g_ls_use_full=1; compute_predim_light(w,la,va);
+    g_ls_use_full=0; compute_predim_light(w,lb,vb);
+    g_ph_clight=sc; g_ph_cvis=sv;
+    uint32_t d=0; for(int i=0;i<VT*VT;i++){ if(la[i]!=lb[i])d++; if(va[i]!=vb[i])d++; }
+    return d;
+}
+#endif
 /* Incremental dimmed rebuild of g_dimmed_map for the current frame. `light` is the per-cell 0..255
  * field (vis already folded in as 0). On a valid 1-tile scroll: shift both the undimmed cache and
  * the dimmed cache + last-light, recompose the newly-revealed edge band in g_tmp_map, then re-dim
@@ -2458,6 +2524,7 @@ static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
 uint32_t g_ph0_scroll, g_ph0_shift, g_ph0_redim, g_ph0_dirty, g_ph0_copy;   /* sub-phase ticks + dirty count */
 uint32_t g_ph_light;   /* compute_predim_light ticks (untimed by the ph0..ph3 phases) */
 uint32_t g_idle_light_drift;   /* idle-light cache proof: cached plight/pvis vs freshly computed (0 = invariant) */
+uint32_t g_ph_clight, g_ph_cvis;   /* compute_light vs compute_visibility split */
 uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw count */
 #define SUB_T() (subt=plat_ticks_200hz())
 #define SUB_ADD(acc) ((acc)+=plat_ticks_200hz()-subt)
@@ -6321,6 +6388,10 @@ int main(void)
           for(int i=0;i<N;i++){ int px=(bpx0+(i&1))&(U6_SURFACE_TILES-1);
               fgd += fg_index_selftest((int32_t)px-VT/2,(int32_t)w.py-VT/2); }
           w.px=(uint16_t)bpx0; dbg_num("FG-INDEX full-vs-sparse diff=", (int)fgd); }
+        /* LIGHT/SIGHT-INDEX proof: sparse g_lsbkt light+vis == full g_obkt light+vis, across the scroll walk. */
+        { uint32_t lsd=0; int bpx0=(int)w.px;
+          for(int i=0;i<N;i++){ w.px=(uint16_t)((bpx0+(i&1))&(U6_SURFACE_TILES-1)); lsd += light_index_selftest(&w); }
+          w.px=(uint16_t)bpx0; dbg_num("LS-INDEX full-vs-sparse diff=", (int)lsd); }
 #endif
         /* FULL-build compose (force a rebuild each time): the no-cache baseline. */
         uint32_t tf0=plat_ticks_200hz();
@@ -6333,6 +6404,7 @@ int main(void)
         g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_dirty=g_ph0_copy=0; /* isolate the ph0 sub-phases */
         g_ph1_actors=g_ph1_fg=g_ph1_nact=0;
         g_fg_iter=g_fg_draw=g_fg_blit=0;
+        g_ph_clight=g_ph_cvis=0;
 #ifdef HAVE_RDR_ST
         { extern uint32_t g_pcache_calls, g_pcache_miss; g_pcache_calls=g_pcache_miss=0; }
 #endif
@@ -6387,6 +6459,9 @@ int main(void)
         if (bf!=PLAT_BADFILE){ plat_fwrite(bf,r,(int32_t)sizeof r); plat_fclose(bf);}
         dbg_num("FULL  compose   ms=", (int)((tf1-tf0)*5/N));
         dbg_num("SCROLL compose  ms=", (int)((t1-t0)*5/N));
+        dbg_num("SCROLL light+vis ms=", (int)((g_ph_clight+g_ph_cvis)*5/N));
+        dbg_num("  scroll compute_light ms=", (int)(g_ph_clight*5/N));
+        dbg_num("  scroll compute_vis  ms=", (int)(g_ph_cvis*5/N));
         dbg_num("IDLE   compose  ms=", (int)idle_ms);   /* fixed view + animation: the standing-still frame */
         dbg_num("  idle ph0 static ms=", (int)idle_ph0);
         dbg_num("  idle ph1 dynamic ms=", (int)idle_ph1);
