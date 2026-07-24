@@ -6353,6 +6353,7 @@ int main(void)
         uint32_t idle_ms=(ti1-ti0)*5/N;
         uint32_t idle_ph0=g_phase[0]*5/N, idle_ph1=g_phase[1]*5/N, idle_dirty=g_ph0_dirty/N;
         uint32_t idle_light=g_ph_light*5/N;
+        uint32_t tp1=plat_ticks_200hz();   /* present timer starts HERE (after the idle loop above) */
 #ifdef HAVE_RDR_ST
         if(g_native_planar) for (int i=0;i<N;i++) rdr_ppresent();      /* shifted planar copy (no c2p) */
         else
@@ -6377,7 +6378,7 @@ int main(void)
 #ifdef HAVE_RDR_ST
         inv2=g_planar_diff; inv2f=g_planar_frames;                    /* INV2: g_ptmp == c2p(tmp) over the verify walk */
 #endif
-        uint32_t r[18]={ (t1-t0),(tf1-tf0),(t2-t1),0,(uint32_t)N,     /* [0]=scroll compose, [1]=full compose, [2]=present */
+        uint32_t r[18]={ (t1-t0),(tf1-tf0),(t2-tp1),0,(uint32_t)N,     /* [0]=scroll compose, [1]=full compose, [2]=present */
                         g_phase[0],g_phase[1],g_phase[2],g_phase[3],  /* [5..8]=scroll ph0..ph3 (summed over N) */
                         bl_diff,bl_ok,bl_cpu,bl_blt,                  /* [9]=blit-vs-cpu diff [10]=blitter? [11]=cpu ticks [12]=blitter ticks */
                         inv2,inv2f,                                   /* [13]=INV2 planar-vs-c2p diff [14]=verified frames */
@@ -6410,12 +6411,12 @@ int main(void)
           dbg_num("SITCACHE mismatch=", sm); }
         dbg_num("  scroll ph2 light+vis ms=", (int)(g_phase[2]*5/N));
         dbg_num("  scroll ph3 composite ms=", (int)(g_phase[3]*5/N));
-        dbg_num("present map doubled ms=", (int)((t2-t1)*5/N));
+        dbg_num("present map doubled ms=", (int)((t2-tp1)*5/N));
 #ifdef HAVE_RDR_ST
         if(g_native_planar){                                          /* Phase-2 GATE: planar == c2p(chunky) */
             dbg_num("NATIVE PLANAR INV2 diff=", (int)g_planar_diff);   /* 0 = byte-identical over every composed frame */
             dbg_num("NATIVE PLANAR frames  =", (int)g_planar_frames);
-            dbg_num("NATIVE PLANAR present ms=", (int)((t2-t1)*5/N)); }/* rdr_ppresent vs the old 444ms c2p */
+            dbg_num("NATIVE PLANAR present ms=", (int)((t2-tp1)*5/N)); }/* rdr_ppresent vs the old 444ms c2p */
 #endif
         { extern uint32_t g_dim_calls, g_dim_miss;
           dbg_num("PREDIM dim_tile calls=", (int)g_dim_calls);
