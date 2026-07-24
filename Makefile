@@ -39,6 +39,13 @@ SELFTEST_PRG := $(BUILD)/selftest$(SUFFIX).prg
 
 # ---- emulator (Hatari) ---------------------------------------------------
 HATARI   ?= hatari
+# Automated test/capture targets (bench*, shot*, check*, m*, read, status, trace, sbench, music-dma …)
+# invoke Hatari as `$(HL) $(HATARI)`: a DUMMY SDL video driver on NO display, so the emulator renders
+# fully offscreen — no window appears on your desktop, nothing steals mouse/keyboard focus, and a stray
+# window can't perturb a captured run. AVI recording + BENCH.BIN + --conout all work headless (the AVI
+# captures Hatari's emulated Atari screen, not the host window). Interactive run-* / music-st|tt keep a
+# real window. Force a visible window for one target with `make <target> HL=`.
+HL       ?= env -u WAYLAND_DISPLAY -u DISPLAY SDL_VIDEODRIVER=dummy
 TOS_DIR  ?= /usr/share/hatari
 # Real per-machine TOS for authentic testing (the ROMs the games shipped against).
 # Override on the command line if your paths differ.
@@ -106,7 +113,7 @@ $(BUILD)/vcardrender.prg: render/vcardrender.c render/render.c render/rdr_vcard.
 vcardrender: $(BUILD)/vcardrender.prg
 # Hatari smoke test (built-in TT VDI: no EdDI, but exercises the vq_extnd path + reports the mode).
 vcardtest-tt: $(BUILD)/vcardtest.prg
-	$(HATARI) --machine tt --tos '$(TOS_TT)' $(TT_FLAGS) --harddrive $(BUILD) --auto 'c:\vcardtest.prg' \
+	$(HL) $(HATARI) --machine tt --tos '$(TOS_TT)' $(TT_FLAGS) --harddrive $(BUILD) --auto 'c:\vcardtest.prg' \
 	          --conout 2 --fast-forward on --run-vbls 1500 2>/dev/null || true
 # ARAnyM + fVDI (real graphics-card driver). Mounts build/ as C:; you provide fVDI + the card mode
 # in your ARAnyM config. Prints the probe via --emutos console or the mounted output.
@@ -121,19 +128,19 @@ check: check-st check-tt
 
 check-st: all
 	@echo "### self-test: ST (ST-RAM fallback path) ###"
-	$(HATARI) --machine st --tos '$(TOS_ST)' $(HATARI_COMMON) \
+	$(HL) $(HATARI) --machine st --tos '$(TOS_ST)' $(HATARI_COMMON) \
 	          --conout 2 --fast-forward on --run-vbls 2500 2>/dev/null
 
 check-tt: $(BUILD)/selftest_020.prg
 	@echo "### self-test: TT (Alt-RAM path) ###"
-	$(HATARI) --machine tt --tos '$(EMUTOS)' $(TT_FLAGS) \
+	$(HL) $(HATARI) --machine tt --tos '$(EMUTOS)' $(TT_FLAGS) \
 	          --harddrive $(BUILD) --auto 'c:\selftest_020.prg' \
 	          --conout 2 --fast-forward on --run-vbls 4000 2>/dev/null
 
 # headless VIDEO capture (for golden-image/video comparison later). Plain
 # --screenshot-dir needs an interactive trigger, so we record an AVI instead.
 shot: all
-	$(HATARI) --machine st --tos '$(EMUTOS)' $(HATARI_COMMON) \
+	$(HL) $(HATARI) --machine st --tos '$(EMUTOS)' $(HATARI_COMMON) \
 	          --fast-forward on --run-vbls 2000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/selftest.avi
 
@@ -297,7 +304,7 @@ music-dma: gamedata $(BUILD)/game.prg $(BUILD)/m2pcm
 	printf '$(DMA_SONG)' > $(BUILD)/SONG.REQ
 	printf '0' > $(BUILD)/MIDI.CFG
 	rm -f $(BUILD)/dma.avi
-	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
+	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
 	          --sound 50066 --avirecord --avi-vcodec png --avi-file $(BUILD)/dma.avi \
 	          --conout 2 --fast-forward on --run-vbls 3500 --harddrive $(BUILD) --auto 'c:\game.prg' 2>&1 | grep -iaE "music backend" || true
 	rm -f $(BUILD)/SONG.REQ $(BUILD)/MIDI.CFG
@@ -467,7 +474,7 @@ $(BUILD)/bench.prg: $(BENCH_SRC)
 # [3]=unused(0), [4]=N. --conout 2 also prints the per-phase compose split (ph0..ph3).
 bench: world $(BUILD)/bench.prg
 	rm -f $(BUILD)/BENCH.BIN
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
 	          --fast-forward on --run-vbls 9000 </dev/null >/dev/null 2>&1 || true
 	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
@@ -479,7 +486,7 @@ $(BUILD)/benchf.prg: $(BENCH_FALCON_SRC)
 	$(call HYBRID_BUILD,$@,$^,obj_benchf,-DBENCH -DHAVE_RDR_FALCON)
 bench-falcon: world $(BUILD)/benchf.prg $(BUILD)/NEWDESK.INF
 	rm -f $(BUILD)/BENCH.BIN
-	-$(HATARI) --machine falcon --fast-boot on --monitor vga \
+	-$(HL) $(HATARI) --machine falcon --fast-boot on --monitor vga \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\BENCHF.PRG' \
 	          --fast-forward on --run-vbls 12000 </dev/null >/dev/null 2>&1 || true
 	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "Falcon (68030) SCROLL compose: %.1f ms   present: %.1f ms   => frame %.1f ms = %.2f fps (n=%d)\n", $$1*5.0/n, $$3*5.0/n, $$1*5.0/n+$$3*5.0/n, 1000.0/($$1*5.0/n+$$3*5.0/n), n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
@@ -502,7 +509,7 @@ BLIT ?=
 BLIT_FLAG := $(if $(filter 1 on yes,$(BLIT)),--blitter on,)
 bench-st: gamedata-st $(BUILD)/benchst.prg
 	rm -f $(BUILD)/BENCH.BIN
-	$(HATARI) --machine st $(BLIT_FLAG) --memsize 4 --monitor rgb \
+	$(HL) $(HATARI) --machine st $(BLIT_FLAG) --memsize 4 --monitor rgb \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\benchst.prg' \
 	          --fast-forward on --run-vbls 20000 </dev/null >/dev/null 2>&1 || true
 	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0){ printf "ST (8MHz 68000)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; printf "  scroll phases  ph0 static: %.1f  ph1 actors+fg: %.1f  ph2 light+vis: %.1f  ph3 composite: %.1f ms\n", $$6*5.0/n, $$7*5.0/n, $$8*5.0/n, $$9*5.0/n; if($$11>0) printf "  BLITTER  selftest diff: %d   masked blit 11x11 grid: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$10, $$12*5.0/n, $$13*5.0/n, ($$13>0?$$12/$$13:0); else print "  BLITTER  absent (CPU blit path; add BLIT=1 to emulate a Mega ST Blitter)"; if($$15>0) printf "  NATIVE-PLANAR INV2 (g_ptmp vs c2p): diff %d over %d frames\n", $$14, $$15; if($$11>0) printf "  PRESENT  selftest diff: %d   present: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$16, $$17*5.0/n, $$18*5.0/n, ($$18>0?$$17/$$18:0); } else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
@@ -513,7 +520,7 @@ bench-st: gamedata-st $(BUILD)/benchst.prg
 .PHONY: bench-ste
 bench-ste: gamedata-st $(BUILD)/benchst.prg
 	rm -f $(BUILD)/BENCH.BIN
-	$(HATARI) --machine ste --memsize 4 --monitor rgb \
+	$(HL) $(HATARI) --machine ste --memsize 4 --monitor rgb \
 	          --tos '$(TOS_STE)' --harddrive $(BUILD) --auto 'c:\benchst.prg' \
 	          --fast-forward on --run-vbls 20000 </dev/null >/dev/null 2>&1 || true
 	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0){ printf "STE (8MHz 68000 + Blitter)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; printf "  scroll phases  ph0 static: %.1f  ph1 actors+fg: %.1f  ph2 light+vis: %.1f  ph3 composite: %.1f ms\n", $$6*5.0/n, $$7*5.0/n, $$8*5.0/n, $$9*5.0/n; if($$11>0) printf "  BLITTER  selftest diff: %d   masked blit 11x11 grid: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$10, $$12*5.0/n, $$13*5.0/n, ($$13>0?$$12/$$13:0); else print "  BLITTER  NOT DETECTED (expected on STE!)"; if($$15>0) printf "  NATIVE-PLANAR INV2 (g_ptmp vs c2p): diff %d over %d frames\n", $$14, $$15; if($$11>0) printf "  PRESENT  selftest diff: %d   present: CPU %.1f ms -> Blitter %.1f ms  (%.2fx)\n", $$16, $$17*5.0/n, $$18*5.0/n, ($$18>0?$$17/$$18:0); } else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
@@ -530,7 +537,7 @@ sbench: $(BUILD)/bench.prg
 	  rm -f $(BUILD)/BENCH.BIN; \
 	  args=""; [ $$m = tt ] && args="--machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)'"; \
 	  [ $$m = ste ] && args="--machine ste --tos '$(TOS_STE)'"; \
-	  eval $(HATARI) $$args --harddrive $(BUILD) --auto 'c:\\bench.prg' \
+	  eval $(HL) $(HATARI) $$args --harddrive $(BUILD) --auto 'c:\\bench.prg' \
 	       --fast-boot on --fast-forward on --run-vbls 6000 </dev/null >/dev/null 2>&1 || true; \
 	  printf "%-4s: " $$m; \
 	  od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{if($$3>0) printf "%d samples/sec (%d samples in %d ticks) vs DMA rate %d => %.1fx realtime headroom\n",$$3,$$1,$$2,$$4,$$3/$$4.0; else print "no BENCH.BIN"}'; \
@@ -545,7 +552,7 @@ sbench: $(BUILD)/bench.prg
 bench-intro: world $(BUILD)/bench.prg
 	rm -f $(BUILD)/BENCH.BIN
 	printf 1 > $(BUILD)/IBENCH.REQ
-	timeout -s KILL 120 env SDL_RENDER_DRIVER=software $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	timeout -s KILL 120 env SDL_RENDER_DRIVER=software $(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
 	          --fast-boot on --fast-forward on --run-vbls 6000 </dev/null >/dev/null 2>&1 || true
 	-pkill -9 hatari 2>/dev/null; rm -f $(BUILD)/IBENCH.REQ
@@ -794,7 +801,7 @@ run-game-falcon: gamedata $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 m5-svm-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
 	rm -f $(BUILD)/gamef.avi $(BUILD)/gamef_screen.png $(BUILD)/SAVE.000   # no template => static render
-	$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 3500 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamef.avi 2>/dev/null || true
@@ -808,7 +815,7 @@ m5-svm-falcon-tc: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
 	rm -f $(BUILD)/gameftc.avi $(BUILD)/gameftc_screen.png $(BUILD)/SAVE.000   # no template => static render
 	printf 'T' > $(BUILD)/VIDEO.CFG                                            # request truecolor present
-	$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 3500 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gameftc.avi 2>/dev/null || true
@@ -824,7 +831,7 @@ shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
 	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot.png $(BUILD)/SAVE.000
 	printf 'x' > $(BUILD)/SHOT.REQ                         # stage the dump sentinel (non-empty: load_file rejects 0-byte)
-	-$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 4000 2>/dev/null
 	@rm -f $(BUILD)/SHOT.REQ                               # un-stage (normal runs don't dump)
@@ -840,7 +847,7 @@ shot-se: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK                     # engine loads PACK_NAME (=U6.PAK)
 	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png $(BUILD)/SAVE.000
 	printf 'x' > $(BUILD)/SHOT.REQ
-	-$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 4000 2>/dev/null
 	@rm -f $(BUILD)/SHOT.REQ
@@ -854,7 +861,7 @@ shot-se-svm: world-se-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK
 	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png $(BUILD)/SAVE.000
 	printf 'x' > $(BUILD)/SHOT.REQ
-	-$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 4000 2>/dev/null
 	@rm -f $(BUILD)/SHOT.REQ
@@ -868,7 +875,7 @@ shot-se-svm: world-se-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # (U6ST.PAK, front-end art omitted) + libs + buffers leave ~900 KB free (see the MEMINFO diagnostic).
 shot-st: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_screen.png
-	-$(HATARI) --machine st --memsize 4 --monitor rgb \
+	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -881,7 +888,7 @@ shot-st: gamedata-st $(BUILD)/gamest.prg
 shot-st-raster: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_raster.png
 	printf 1 > $(BUILD)/RASTER.BIN
-	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
+	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -897,7 +904,7 @@ CONVPAL_ID ?= 0
 shot-st-conv: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_conv.png
 	python3 -c "open('$(BUILD)/CONVPAL.BIN','wb').write(bytes([$(CONVPAL_ID) & 255]))"   # one raw byte = NPC id (0 = nearest)
-	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
+	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -912,7 +919,7 @@ shot-st-conv: gamedata-st $(BUILD)/gamest.prg
 # TOS 2.06 (STE). Compare gamest_ste*.png vs the plain-ST gamest_*.png.
 shot-ste: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_ste.png
-	-$(HATARI) --machine ste --memsize 4 --monitor rgb --fast-boot on \
+	-$(HL) $(HATARI) --machine ste --memsize 4 --monitor rgb --fast-boot on \
 	          --tos '$(TOS_STE)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 8000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -922,7 +929,7 @@ shot-ste: gamedata-st $(BUILD)/gamest.prg
 shot-ste-conv: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_ste_conv.png
 	python3 -c "open('$(BUILD)/CONVPAL.BIN','wb').write(bytes([$(CONVPAL_ID) & 255]))"
-	-$(HATARI) --machine ste --memsize 4 --monitor rgb --conout 2 --fast-boot on \
+	-$(HL) $(HATARI) --machine ste --memsize 4 --monitor rgb --conout 2 --fast-boot on \
 	          --tos '$(TOS_STE)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 8000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -939,7 +946,7 @@ GYPSY_REQ ?= G
 shot-st-gypsy: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_gypsy.png
 	printf '$(GYPSY_REQ)' > $(BUILD)/CHARGEN.REQ            # one byte selects the gypsy chargen sub-screen
-	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
+	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 6000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -957,7 +964,7 @@ FIRE_A ?= 4000
 FIRE_B ?= 4030
 shot-st-fire: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/fire_phase_1.png $(BUILD)/fire_phase_2.png $(BUILD)/fire_st.png $(BUILD)/fire_diff.png
-	-$(HATARI) --machine st --memsize 4 --monitor rgb \
+	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -969,7 +976,7 @@ shot-st-fire: gamedata-st $(BUILD)/gamest.prg
 # headless M5 verify: auto-walk + capture a frame (avatar on the scrolled map)
 m5: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null || true
@@ -986,7 +993,7 @@ newgame: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVE.000
 	printf N > $(BUILD)/CHARGEN.REQ                 # apply the 'Milady' sample character (non-blocking)
 	printf 1 > $(BUILD)/NEWGAME.BIN                 # non-empty: plat_load_file rejects 0-byte sentinels
-	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
+	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null
@@ -1002,7 +1009,7 @@ status: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/status_screen.png $(BUILD)/SAVE.000
 	printf N > $(BUILD)/CHARGEN.REQ                 # apply the 'Milady' sample character
 	printf '\001' > $(BUILD)/STATUS.REQ             # open the status view for actor 1 (the Avatar)
-	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-boot on --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null
@@ -1017,7 +1024,7 @@ status: gamedata $(BUILD)/game.prg
 gypsy-pour: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/pour_frame.png $(BUILD)/SAVE.000
 	printf P > $(BUILD)/CHARGEN.REQ                 # held mid-pour frame (P); use q or D for the others
-	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-boot on --fast-forward on --run-vbls 4000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null
@@ -1031,7 +1038,7 @@ gypsy-pour: gamedata $(BUILD)/game.prg
 read: gamedata $(BUILD)/game.prg
 	rm -f $(BUILD)/game.avi $(BUILD)/read_screen.png $(BUILD)/SAVE.000
 	printf '\000' > $(BUILD)/READ.BIN               # 0 = read the first readable object in the world
-	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
+	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-boot on --fast-forward on --run-vbls 4500 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null
@@ -1046,7 +1053,7 @@ READ_ENTRY ?= 1
 read-st: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/read_st.png
 	python3 -c "open('$(BUILD)/READ.BIN','wb').write(bytes([$(READ_ENTRY) & 255]))"
-	-$(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
+	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb --conout 2 \
 	          --tos '$(TOS_ST)' --harddrive $(BUILD) --auto 'c:\gamest.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamest.avi 2>/dev/null
@@ -1060,7 +1067,7 @@ read-st: gamedata-st $(BUILD)/gamest.prg
 .PHONY: lowcol
 lowcol: gamedata $(BUILD)/game.prg
 	printf 1 > $(BUILD)/LOWCOL.BIN                  # non-empty sentinel (plat_load_file rejects 0-byte)
-	-$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
+	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-boot on --fast-forward on --run-vbls 3000 2>/dev/null | grep LOWCOL
 	rm -f $(BUILD)/LOWCOL.BIN
@@ -1069,7 +1076,7 @@ lowcol: gamedata $(BUILD)/game.prg
 m5-svm: world-svm $(BUILD)/game.prg
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVE.000   # no template => static render (matches ScummVM)
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null || true
@@ -1083,7 +1090,7 @@ save-engine: world-svm $(BUILD)/game.prg
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
 	cp '$(SCUMMVM_SAVE)' $(BUILD)/SAVE.000          # save template for the on-target writer
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVED.000
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 5000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null || true
@@ -1104,7 +1111,7 @@ ANIM_Y ?= 32
 m6-anim: $(BUILD)/mkworld $(BUILD)/game.prg
 	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(ANIM_X) $(ANIM_Y) | grep -E "animdata|start\("
 	rm -f $(BUILD)/SAVE.000 $(BUILD)/game.avi $(BUILD)/anim_phase_1.png $(BUILD)/anim_phase_2.png
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 4000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null || true
@@ -1126,13 +1133,13 @@ m6-npc: $(BUILD)/mkworld $(BUILD)/game.prg
 	rm -f $(BUILD)/SAVE.000
 	printf '\112' > $(BUILD)/NPCWALK.BIN            # turn 74 (mid-walk for NPC 17)
 	rm -f $(BUILD)/game.avi
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
 	          --harddrive $(BUILD) --auto 'c:\game.prg' --fast-forward on --run-vbls 7500 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null || true
 	-ffmpeg -y -i $(BUILD)/game.avi -update 1 $(BUILD)/npc_t74.png 2>/dev/null
 	printf '\114' > $(BUILD)/NPCWALK.BIN            # turn 76 (two steps later)
 	rm -f $(BUILD)/game.avi
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \
 	          --harddrive $(BUILD) --auto 'c:\game.prg' --fast-forward on --run-vbls 7500 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/game.avi 2>/dev/null || true
 	-ffmpeg -y -i $(BUILD)/game.avi -update 1 $(BUILD)/npc_t76.png 2>/dev/null
@@ -1149,7 +1156,7 @@ run-rdemo: pack $(BUILD)/rdemo.prg
 # headless M3 verify: render, capture screen (AVI->frame) + dump backbuffer->PNG
 m3: pack $(BUILD)/rdemo.prg $(BUILD)/raw2png
 	rm -f $(BUILD)/rdemo.avi $(BUILD)/OUT.RAW $(BUILD)/screen.png $(BUILD)/backbuffer.png
-	$(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\rdemo.prg' \
 	          --fast-forward on --run-vbls 3200 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/rdemo.avi 2>/dev/null || true
@@ -1168,7 +1175,7 @@ refshot:
 
 # trace which GEMDOS/XBIOS calls we actually issue (verification aid)
 trace: all
-	$(HATARI) --machine st --tos '$(EMUTOS)' $(HATARI_COMMON) \
+	$(HL) $(HATARI) --machine st --tos '$(EMUTOS)' $(HATARI_COMMON) \
 	          --fast-forward on --run-vbls 2500 \
 	          --trace gemdos,xbios --trace-file $(BUILD)/trace.log 2>/dev/null
 	@echo "wrote $(BUILD)/trace.log"
