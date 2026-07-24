@@ -580,11 +580,21 @@ static void blitter_flush(void){ if (g_bltn){ (void)Supexec(blitter_drain); g_bl
 static planar_tile_t g_pcache[PLANAR_SLOTS];
 static int32_t       g_pkey[PLANAR_SLOTS];
 static int           g_pcache_ready;
+#ifdef BENCH
+uint32_t g_pcache_calls, g_pcache_miss;   /* planar-cache instrumentation */
+#endif
 static const planar_tile_t *rdr_planar_get(int32_t key, const uint8_t *chunky, const uint8_t *lut)
 {
     if (!g_pcache_ready){ for (int i=0;i<PLANAR_SLOTS;i++) g_pkey[i]=-1; g_pcache_ready=1; }
     int slot = (int)(((uint32_t)key * 2654435761u) >> 23) & (PLANAR_SLOTS-1);
-    if (g_pkey[slot] != key){ rdr_chunky_tile_to_planar(chunky, lut, &g_pcache[slot]); g_pkey[slot]=key; }
+#ifdef BENCH
+    g_pcache_calls++;
+#endif
+    if (g_pkey[slot] != key){
+#ifdef BENCH
+        g_pcache_miss++;
+#endif
+        rdr_chunky_tile_to_planar(chunky, lut, &g_pcache[slot]); g_pkey[slot]=key; }
     return &g_pcache[slot];
 }
 

@@ -196,6 +196,14 @@ static uint8_t        g_asleep[256];          /* >0 = actor is asleep for N turn
 #define OBKT 64
 static uint16_t       g_obkt_start[OBKT*OBKT+1];
 static uint16_t       g_obkt_idx[MAXWOBJ];
+/* FOREGROUND-only parallel bucket index: the same CSR layout but containing ONLY objects that can draw a
+ * Foreground (top-pass) tile. The per-frame pass-1 (draw_view_objects pass 1) redraws foreground OVER the
+ * actors every frame; scanning all in-view objects to find the ~handful that are foreground cost ~37 ms
+ * (measured: 77 objects visited, 4 actually blitted, on the cacheless 68000). Iterating this sparse subset
+ * instead cuts that to the foreground objects only. Membership is computed once per object in build_blocked
+ * via obj_is_fg (complete over multi-tile + ANIMDATA/objanim frames); fg_index_selftest proves == full scan. */
+static uint16_t       g_fgbkt_start[OBKT*OBKT+1];
+static uint16_t       g_fgbkt_idx[MAXWOBJ];
 
 /* Incremental map-scroll: g_tmp_map caches the STATIC compose layer (base tiles + lower-pass
  * objects, no actors/foreground/lighting). On a 1-tile walk it is memmove-scrolled and only the
@@ -1849,6 +1857,38 @@ static int actor_pos(int i,int*ax,int*ay)
     *ax=g_actx[i]; *ay=g_acty[i]; return 1;
 }
 
+/* --- Foreground classification for the sparse pass-1 bucket index (g_fgbkt) ---------------------
+ * An object belongs in g_fgbkt iff SOME tile draw_multi could emit for it carries the Foreground flag
+ * (tileflags2 bit4). draw_multi draws the anim-resolved anchor R plus, per R's size bits, R-1/R-2/R-3
+ * (each re-run through anim_tile). R ranges over every frame obj_tile can return (ANIMDATA frames of
+ * o->tile, or the objanim fire/flame frames). We walk that whole family so the index is COMPLETE:
+ * over-including a non-fg object only wastes a draw_multi that draws nothing; under-including would
+ * silently drop a foreground tile. Computed once per object in build_blocked. */
+static int tile_is_fg(int t){ return (t>=0 && t<2048) && ((g_tflags[t]>>4)&1); }
+static int tile_family_fg(int t){                         /* t OR any of its ANIMDATA frames is fg */
+    if(tile_is_fg(t)) return 1;
+    if(t>=0 && t<2048){ int e=g_anim_idx[t];
+        if(e>=0 && g_anim_n[e]>0) for(int f=0;f<g_anim_n[e];f++) if(tile_is_fg((int)g_anim_src[e]+f)) return 1; }
+    return 0;
+}
+static int anchor_family_fg(int R){                       /* anchor R + its multi-tile decrements (as draw_multi) */
+    if(tile_family_fg(R)) return 1;
+    int f=(R>=0&&R<2048)?g_tflags[R]:0;
+    if((f&0x80) && tile_family_fg(R-1)) return 1;         /* dbl-width  -> tile-1 */
+    if((f&0x40) && tile_family_fg(R-2)) return 1;         /* dbl-height -> tile-2 */
+    if((f&0x80)&&(f&0x40) && tile_family_fg(R-3)) return 1; /* corner   -> tile-3 */
+    return 0;
+}
+static int obj_is_fg(const wobj_t*o){
+    int on=o->obj_n;
+    if(on>=0 && on<1024 && g_objanim[on] && g_basetile){  /* objanim (fire/flame): anchor R = base+frame */
+        int b=g_basetile[on*2]|(g_basetile[on*2+1]<<8);
+        for(int fr=0;fr<g_objanim[on];fr++) if(anchor_family_fg(b+fr)) return 1;
+        return 0;                                         /* objanim path never falls through in obj_tile */
+    }
+    return anchor_family_fg(o->tile);                     /* static/ANIMDATA: R = anim_tile(o->tile) family */
+}
+
 /* Rebuild g_blocked + g_sightblk: per tile, set a bit when an impassable OBJECT
  * (tileflags1 bit1 Impassable | bit2 Wall) sits on it (so world_is_passable stops NPCs/player
  * walking through wall/furniture objects), and a SIGHT bit when a sight-blocking OBJECT
@@ -1877,6 +1917,14 @@ static void build_blocked(void)
     { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_obkt_start[b];
       for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
           int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_obkt_idx[cur[b]++]=(uint16_t)i; } }
+    /* FOREGROUND-only index (same CSR build, filtered by obj_is_fg): pass-1 scans only these. */
+    for(int b=0;b<=OBKT*OBKT;b++) g_fgbkt_start[b]=0;
+    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_fg(o)) continue;
+        int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_fgbkt_start[b+1]++; }
+    for(int b=0;b<OBKT*OBKT;b++) g_fgbkt_start[b+1]=(uint16_t)(g_fgbkt_start[b+1]+g_fgbkt_start[b]);
+    { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_fgbkt_start[b];
+      for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_fg(o)) continue;
+          int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_fgbkt_idx[cur[b]++]=(uint16_t)i; } }
 }
 
 /* substitute an animated tile slot for its current frame (animdata.md). The slot
@@ -1933,6 +1981,11 @@ static int g_planar_verify = 0;                      /* gate the INV2 c2p check 
 #define g_planar_static 0
 #endif
 
+#ifdef BENCH
+uint32_t g_fg_iter, g_fg_draw, g_fg_blit;      /* pass-1 foreground: objects visited / draw_multi issued / cells actually blitted */
+int g_fg_use_full = 0;                          /* selftest: 1 = pass-1 scans full g_obkt (reference); 0 = sparse g_fgbkt */
+#endif
+
 /* blit one 16x16 tile into the compose buffer at view cell (cvx,cvy),
  * transparency-aware and clipped to the VTxVT view. `pass` selects the layer
  * (matching Nuvie's drawTopTile): <0 = draw regardless (actors); 0 = LOWER pass,
@@ -1953,7 +2006,11 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
             int32_t pk = g_dim_dither ? (0x40000000|((int32_t)tile<<6)|(Lc>>2))   /* == dim_tile_d key */
                                       : (((int32_t)tile<<4)|(Lc>>4));             /* == dim_tile key   */
             if(g_planar_static) rdr_pstatic_blit(pk, src, cvx, cvy); /* static objects -> g_pdimmed (4c) */
-            else                rdr_pdyn_cell   (pk, src, cvx, cvy); /* dynamic -> g_ptmp               */
+            else              {  rdr_pdyn_cell   (pk, src, cvx, cvy); /* dynamic -> g_ptmp               */
+#ifdef BENCH
+                                 if(pass==1) g_fg_blit++;
+#endif
+            }
         }
 #endif
     }
@@ -2196,16 +2253,26 @@ uint32_t g_phase[4]; static uint32_t g_pht;
  * the off-view anchor, drawing only the in-view bleed. (Without this the edge object vanishes on a
  * fresh build but persists in the scroll cache — the mode==11 dx=-1 mismatch.) */
 static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pass){
+    /* pass 1 (foreground, redrawn every frame OVER actors) scans the sparse foreground-only index; the
+     * lower pass (0) must still visit every object (it draws their non-foreground cells). */
+    const uint16_t *bstart = g_obkt_start, *bidx = g_obkt_idx;
+    if(pass==1){ bstart = g_fgbkt_start; bidx = g_fgbkt_idx; }
+#ifdef BENCH
+    if(pass==1 && g_fg_use_full){ bstart = g_obkt_start; bidx = g_obkt_idx; }  /* selftest: force full scan */
+#endif
     int bx0=((int)left>>4)&(OBKT-1), bx1=(((int)left+VT)>>4)&(OBKT-1);
     int by0=((int)top >>4)&(OBKT-1), by1=(((int)top +VT)>>4)&(OBKT-1);
     for(int by=by0;;by=(by+1)&(OBKT-1)){
         for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){
             int b=by*OBKT+bx;
-            for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){
-                const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive) continue;
+            for(int k=bstart[b];k<bstart[b+1];k++){
+                const wobj_t*o=&g_wobj[bidx[k]]; if(!o->alive) continue;
                 int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1);
                 int32_t vy=((int32_t)o->y-top )&(U6_SURFACE_TILES-1);
                 if(vx>VT||vy>VT) continue;
+#ifdef BENCH
+                if(pass==1) g_fg_iter++;
+#endif
                 if(g_pd_objgate){                              /* incremental static: skip if the <=2x2 footprint is all-clean */
                     int ix=(int)vx, iy=(int)vy;                /* anchor + left/above cells (draw_cell re-gates each anyway) */
                     int hit = (ix<VT&&iy<VT&&g_pd_objgate[iy*VT+ix])
@@ -2214,6 +2281,9 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
                             ||(ix>0 &&iy>0 &&g_pd_objgate[(iy-1)*VT+ix-1]);
                     if(!hit) continue;
                 }
+#ifdef BENCH
+                if(pass==1) g_fg_draw++;
+#endif
                 draw_multi(tmp,T,(int)vx,(int)vy,obj_tile(o),pass);
             }
             if(bx==bx1) break;
@@ -2221,6 +2291,28 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
         if(by==by1) break;
     }
 }
+
+#ifdef BENCH
+/* Prove the sparse foreground index is COMPLETE: pass-1 drawn via g_fgbkt must be byte-identical to pass-1
+ * drawn via the full g_obkt scan. Composes pass-1 (raw tiles, chunky, no planar) onto a zeroed buffer both
+ * ways and returns the mismatched-pixel count (0 = the index drops no foreground tile). Cheap, view-local;
+ * the bench walks it across the scroll positions so the proof covers real motion. */
+static uint32_t fg_index_selftest(int32_t left,int32_t top){
+    static uint8_t A[TMP_T*TMP_T], B[TMP_T*TMP_T];
+    int sv_np=g_native_planar, sv_cd=g_chunky_dyn, sv_pd=g_predim, sv_ps=g_planar_static;
+    const uint8_t *sv_og=g_pd_objgate;
+    int c0=g_clip_x0,c1=g_clip_x1,c2=g_clip_y0,c3=g_clip_y1;
+    g_native_planar=0; g_chunky_dyn=1; g_predim=0; g_planar_static=0; g_pd_objgate=0;
+    g_clip_x0=0; g_clip_y0=0; g_clip_x1=VT; g_clip_y1=VT;
+    for(int i=0;i<TMP_T*TMP_T;i++){ A[i]=0; B[i]=0; }
+    g_fg_use_full=1; draw_view_objects(A,TMP_T,left,top,1);   /* reference: full g_obkt scan */
+    g_fg_use_full=0; draw_view_objects(B,TMP_T,left,top,1);   /* candidate: sparse g_fgbkt   */
+    g_native_planar=sv_np; g_chunky_dyn=sv_cd; g_predim=sv_pd; g_planar_static=sv_ps; g_pd_objgate=sv_og;
+    g_clip_x0=c0; g_clip_x1=c1; g_clip_y0=c2; g_clip_y1=c3;
+    uint32_t d=0; for(int i=0;i<TMP_T*TMP_T;i++) if(A[i]!=B[i]) d++;
+    return d;
+}
+#endif
 
 /* fill base tiles into g_tmp_map for view cells [cx0,cx1) x [cy0,cy1) (255=void -> black) */
 static void fill_tiles(const world_t*w,int32_t left,int32_t top,int cx0,int cy0,int cx1,int cy1){
@@ -6153,6 +6245,11 @@ int main(void)
             g_tmp_valid=0; compose_map(&w);                                 /* sets g_native_planar + full rebuild + verify */
             for(int i=0;i<N;i++){ w.px=(uint16_t)((bpx0+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
             w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
+        /* FG-INDEX proof: sparse g_fgbkt pass-1 == full g_obkt pass-1, across the scroll walk (0 = complete). */
+        { uint32_t fgd=0; int bpx0=(int)w.px;
+          for(int i=0;i<N;i++){ int px=(bpx0+(i&1))&(U6_SURFACE_TILES-1);
+              fgd += fg_index_selftest((int32_t)px-VT/2,(int32_t)w.py-VT/2); }
+          w.px=(uint16_t)bpx0; dbg_num("FG-INDEX full-vs-sparse diff=", (int)fgd); }
 #endif
         /* FULL-build compose (force a rebuild each time): the no-cache baseline. */
         uint32_t tf0=plat_ticks_200hz();
@@ -6164,6 +6261,10 @@ int main(void)
         g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0;      /* isolate the scroll phases */
         g_ph0_scroll=g_ph0_shift=g_ph0_redim=g_ph0_dirty=g_ph0_copy=0; /* isolate the ph0 sub-phases */
         g_ph1_actors=g_ph1_fg=g_ph1_nact=0;
+        g_fg_iter=g_fg_draw=g_fg_blit=0;
+#ifdef HAVE_RDR_ST
+        { extern uint32_t g_pcache_calls, g_pcache_miss; g_pcache_calls=g_pcache_miss=0; }
+#endif
         uint32_t t0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ w.px=(uint16_t)((basepx+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
         uint32_t t1=plat_ticks_200hz();
@@ -6210,6 +6311,9 @@ int main(void)
         dbg_num("  scroll ph1 actors+fg ms=", (int)(g_phase[1]*5/N));
         dbg_num("    ph1 fields+actors ms=", (int)(g_ph1_actors*5/N));   /* 256-actor loop + avatar */
         dbg_num("    ph1 foreground obj ms=", (int)(g_ph1_fg*5/N));      /* draw_view_objects pass 1 */
+        dbg_num("    ph1 fg objs visited/frm=", (int)(g_fg_iter/N));     /* bucket scan breadth */
+        dbg_num("    ph1 fg draw_multi/frm=", (int)(g_fg_draw/N));       /* draw_multi calls */
+        dbg_num("    ph1 fg cells blitted/frm=", (int)(g_fg_blit/N));    /* cells that pass fg gate + actually blit */
         dbg_num("    ph1 actors drawn/frm=", (int)(g_ph1_nact/N));
         /* SITCACHE gate: the sit-tile memoization must be byte-identical to the uncached search (INV2 can't
          * see it — both compose paths use npc_tile). At the bench's stable positions, cached==uncached => 0. */
@@ -6227,6 +6331,11 @@ int main(void)
         { extern uint32_t g_dim_calls, g_dim_miss;
           dbg_num("PREDIM dim_tile calls=", (int)g_dim_calls);
           dbg_num("PREDIM dim_tile MISS =", (int)g_dim_miss); }
+#ifdef HAVE_RDR_ST
+        { extern uint32_t g_pcache_calls, g_pcache_miss;
+          dbg_num("PLANAR pcache calls/scrollrun=", (int)g_pcache_calls);
+          dbg_num("PLANAR pcache MISS/scrollrun =", (int)g_pcache_miss); }
+#endif
 #ifdef HAVE_RDR_ST
         { extern int rdr_c2p_selftest(void);
           dbg_num("c2p asm-vs-C diff wd=", rdr_c2p_selftest()); }   /* 0 = asm byte-identical to c2p4_lut */

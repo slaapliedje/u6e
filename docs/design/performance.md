@@ -495,3 +495,29 @@ uncached search, + a live shot (scene/NPCs correct).
 (+70%)**, the plain ST 2.38 → 3.11 (+31%). Remaining ph1: `foreground objects` (36 ms) and the actor blits
 (16 ms) are the full-`g_ptmp`-rebuild tax — reducing them needs an incremental dynamic layer (shift g_ptmp +
 sprite save-under), a bigger restructure. Plus the plain-ST 81 ms CPU present (Blitter-solved on STE).
+
+## 2026-07-24 — ph1 foreground: sparse fg-only bucket index, scroll compose 241 → 221 ms
+Sub-profiled the 36 ms `foreground` pass (`draw_view_objects` pass 1, redrawn OVER the actors every frame)
+with new counters (`g_fg_iter`/`g_fg_draw`/`g_fg_blit`, planar-cache `g_pcache_miss`, and a `noblit` A/B).
+The finding: pass 1 **visited 77 in-view objects to blit only 4 foreground cells** — it re-scanned the whole
+`g_obkt` bucket set every frame to find the handful of top-pass tiles. The 4 blits themselves are real work
+(~3 ms each on the cacheless 68000; caches hit — planar miss ≈ 3/frame), but the **77-object scan+dispatch
+was ~22 ms of pure waste**. (Both dim and planar caches hit fine, so it was never a c2p/regeneration cost.)
+
+Fix: a second CSR bucket index `g_fgbkt_*` holding ONLY objects that can draw a Foreground tile, built once
+per objects-change in `build_blocked` via `obj_is_fg()` (complete over multi-tile decrements + ANIMDATA/
+objanim frames). Pass 1 scans `g_fgbkt`; the lower pass still scans full `g_obkt` (it draws their non-fg
+cells). Z-order is unchanged (foreground still drawn last), so **INV2 stays 0** — but INV2 can't see a
+*dropped* fg tile (both paths would use the same scan), so a dedicated `fg_index_selftest` composes pass 1
+via full-`g_obkt` vs sparse-`g_fgbkt` across the scroll walk and proves **FG-INDEX diff = 0** (byte-identical).
+
+| ph1 sub-phase | before | after |
+|---|--:|--:|
+| foreground obj | 36 ms | **15 ms** |
+| fg objects scanned/frame | 77 | **5** |
+| scroll compose | 241 ms | **221 ms (ST) / 217 ms (STE)** |
+
+**Plain ST ~3.11 → ~3.31 fps; STE ~4.02 → ~4.39 fps.** The residual 15 ms is the 4 genuine foreground
+masked-blits; cutting those needs the same incremental-dynamic-layer (bake fg into the shifting static layer
++ actor-overlap fix-up) restructure noted above. ph0 static (104 ms) and the plain-ST 81 ms present remain
+the two largest levers.
