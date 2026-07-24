@@ -521,3 +521,33 @@ via full-`g_obkt` vs sparse-`g_fgbkt` across the scroll walk and proves **FG-IND
 masked-blits; cutting those needs the same incremental-dynamic-layer (bake fg into the shifting static layer
 + actor-overlap fix-up) restructure noted above. ph0 static (104 ms) and the plain-ST 81 ms present remain
 the two largest levers.
+
+## 2026-07-24 — IDLE recompose was a FULL rebuild: 372 → 211 ms (the standing-still frame)
+Adding an IDLE bench (view FIXED, animation advancing — the frame the game loop composes every ~33 ms anim
+tick while the avatar stands still) exposed the real prize: **idle frames cost a full `build_static` rebuild
+(372 ms — worse than a scroll)**, because `predim_compose_static`'s `can_scroll` requires `(dx||dy)`, so a
+zero-delta recompose falls straight through to the full-rebuild `else`. Standing still watching water/torches/
+NPCs animate is the *most common* real-gameplay frame, and it was the worst-performing (~2.2 fps on ST).
+
+Fix (planar path only — the shipping ST renderer): a `can_idle` branch (`dx==dy==0`) that recomposes ONLY
+the cells whose STATIC content animates this tick (`mark_anim_cells`: animated base tile OR an animated
+object's footprint) plus any light-changed cell — no shift, no band. The dynamic layer (ph1) still redraws.
+
+**Correctness (two gates):**
+- The idle path is fired ONLY on the animation tick, via a `g_idle_allow` flag the game loop sets around that
+  one compose. U6 is turn-based, so on an anim tick nothing but animation has changed since the last compose.
+  Every action/scroll recompose leaves `g_idle_allow=0` → keeps the full rebuild, so a stationary state change
+  (open a door, pick up an item — which do NOT invalidate the compose cache) still refreshes correctly.
+- INV2 now runs an IDLE verify pass (fixed view + advancing anim): the planar idle-increment vs the chunky
+  FULL rebuild — **diff 0**, proving the incremental idle static is byte-identical to a rebuild. (The scroll
+  walk never exercised `dx==dy==0`, so this is its own gate.)
+
+| idle sub-phase | before | after |
+|---|--:|--:|
+| idle compose (full rebuild → incremental) | 372 ms | **211 ms** |
+| ↳ ph0 static | ~330 ms | 92 ms (11 dirty cells) |
+| ↳ ph1 dynamic | ~40 ms | 40 ms |
+
+The chunky path (TT/Falcon + the INV2 reference) keeps the full idle rebuild — no regression there. Remaining
+idle floor (211 ms): `compute_predim_light` (per-frame LOS/globes, cacheable on idle) + the 40 ms ph1 dynamic
++ the `g_ptmp=g_pdimmed` copy — the next levers.

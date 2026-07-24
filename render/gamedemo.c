@@ -212,6 +212,10 @@ static uint16_t       g_fgbkt_idx[MAXWOBJ];
 #define TMP_T (VT*16)
 static uint8_t        g_tmp_map[TMP_T*TMP_T];
 static int            g_tmp_valid=0, g_tmp_px=-30000, g_tmp_py=-30000;
+static int            g_idle_allow=0;  /* set by the caller ONLY for an animation-tick recompose (view fixed,
+                                        * nothing but animation changed) -> enables the idle-incremental static
+                                        * path. Cleared for every action/scroll compose (which may mutate static
+                                        * tiles) so those keep the full rebuild. See predim_compose_static. */
 /* Incremental PREDIM: g_dimmed_map is the DIMMED static layer (g_tmp_map dimmed by the per-cell
  * light), persisted across frames and memmove-scrolled in lockstep with g_tmp_map. Only cells
  * whose light CHANGED frame-to-frame (the view-anchored avatar globe's moving arc + emitters that
@@ -2345,6 +2349,34 @@ static void build_static(const world_t*w){
  * static). g_pd_light is this path's own per-cell last-light dirty tracker (independent of g_dm_light). */
 static uint8_t g_pd_light[VT*VT];
 static uint8_t g_pd_dirty[VT*VT];       /* incremental scroll: 1 = cell's base was re-blitted this frame -> its objects must re-composite */
+static uint8_t g_pd_anim[VT*VT];        /* idle recompose: 1 = cell's STATIC content (base tile or a lower object) is frame-animated */
+/* Mark every view cell whose STATIC content animates, for the idle (dx=dy=0) incremental recompose: an
+ * animated base tile (ANIMDATA) or the footprint of an animated object (objanim fire/flame OR an ANIMDATA
+ * object tile). Over-marking is harmless (the cell just re-composites; pass-0 still gates foreground out);
+ * under-marking would FREEZE an animation, so we mark the whole <=2x2 footprint of any animated object. */
+static void mark_anim_cells(const world_t*w,int32_t left,int32_t top){
+    for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
+        int t=world_tile(w,left+vx,top+vy);
+        g_pd_anim[vy*VT+vx]=(t>=0&&t<2048&&g_anim_idx[t]>=0)?1:0;
+    }
+    int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VT)>>4)&(OBKT-1);
+    int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +VT)>>4)&(OBKT-1);
+    for(int by=by0;;by=(by+1)&(OBKT-1)){ for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){
+        int b=by*OBKT+bx;
+        for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){
+            const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive) continue;
+            int on=o->obj_n, T=o->tile;
+            int anim=(on>=0&&on<1024&&g_objanim[on]) || (T>=0&&T<2048&&g_anim_idx[T]>=0);
+            if(!anim) continue;
+            int vx=((int)o->x-(int)left)&(U6_SURFACE_TILES-1);
+            int vy=((int)o->y-(int)top )&(U6_SURFACE_TILES-1);
+            int f=(T>=0&&T<2048)?g_tflags[T]:0;
+            for(int oy=(f&0x40)?vy-1:vy; oy<=vy; oy++)          /* <=2x2 footprint (dbl-w left, dbl-h up) */
+              for(int ox=(f&0x80)?vx-1:vx; ox<=vx; ox++)
+                if(ox>=0&&ox<VT&&oy>=0&&oy<VT) g_pd_anim[oy*VT+ox]=1;
+        }
+        if(bx==bx1)break; } if(by==by1)break; }
+}
 #endif
 /* recompose ONE band of cells into the scrolled g_tmp_map. The cell clip makes the object
  * redraw byte-identical: every object's footprint cell that lands in the band is drawn (in
@@ -2436,6 +2468,10 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
     if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
     int can_scroll = (g_tmp_valid && dx>=-1&&dx<=1 && dy>=-1&&dy<=1 && (dx||dy));
+    int can_idle   = (g_tmp_valid && dx==0 && dy==0 && g_idle_allow);  /* view unchanged AND caller guarantees only
+                                                                        * animation changed (anim tick) — never a
+                                                                        * static state change (door/pickup/NPC action,
+                                                                        * which recompose with g_idle_allow=0 -> full) */
 #ifdef BENCH
     uint32_t subt;
 #endif
@@ -2444,17 +2480,22 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
      * NO chunky dim, NO c2p. Own dirty tracker g_pd_light so it never interferes with the chunky verify. */
     if(g_native_planar){
         g_planar_static=1; g_predim=1; g_predim_light=light; g_dim_dither=dither;
-        if(can_scroll && g_pd_valid){
-            SUB_T(); mark_view_anim(w); SUB_ADD(g_ph0_scroll);
-            SUB_T(); rdr_pstatic_shift(dx,dy); shift_buf(g_pd_light,VT,dx,dy); SUB_ADD(g_ph0_shift);
+        if((can_scroll||can_idle) && g_pd_valid){
+            int32_t left0=w->px-VT/2, top0=w->py-VT/2;
+            SUB_T(); mark_view_anim(w);
+            if(can_idle) mark_anim_cells(w,left0,top0);   /* idle: which STATIC cells animate this tick */
+            SUB_ADD(g_ph0_scroll);
+            SUB_T(); if(can_scroll){ rdr_pstatic_shift(dx,dy); shift_buf(g_pd_light,VT,dx,dy); } SUB_ADD(g_ph0_shift);
             SUB_T();
             /* re-blit only the DIRTY cells' base (cheap), then redraw ALL objects ONCE (not per-cell —
              * draw_view_objects is O(objects); calling it per dirty cell was ~5x costlier than the c2p).
              * Non-dirty cells keep their shifted base (light unchanged) and get their objects re-blitted
-             * at the same light = identical, so g_pdimmed stays byte-correct (INV2=0). */
-            { int32_t left=w->px-VT/2, top=w->py-VT/2;
+             * at the same light = identical, so g_pdimmed stays byte-correct (INV2=0). On an IDLE tick
+             * (view unchanged) the dirty set is the animated cells + any light change — no shift, no band. */
+            { int32_t left=left0, top=top0;
               for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
-                  int d = in_lead_band(vx,vy,dx,dy) || light[cc]!=g_pd_light[cc];  /* revealed OR light changed */
+                  int d = in_lead_band(vx,vy,dx,dy) || light[cc]!=g_pd_light[cc]  /* revealed OR light changed */
+                        || (can_idle && g_pd_anim[cc]);                          /* OR animated (idle only) */
                   g_pd_dirty[cc]=(uint8_t)d;
                   if(d){
                       fill_tiles(w,left,top,vx,vy,vx+1,vy+1);  /* dimmed base -> g_pdimmed */
@@ -6244,6 +6285,12 @@ int main(void)
             g_planar_verify=1; g_planar_diff=0; g_planar_frames=0;
             g_tmp_valid=0; compose_map(&w);                                 /* sets g_native_planar + full rebuild + verify */
             for(int i=0;i<N;i++){ w.px=(uint16_t)((bpx0+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
+            /* IDLE verify: view fixed + animation advancing. The planar path idle-increments (only animated
+             * cells recompose); the chunky reference full-rebuilds. INV2 (g_ptmp vs c2p(tmp)) proves the
+             * idle-incremental static is byte-identical to a full rebuild — the idle path's correctness gate
+             * (the scroll walk above never exercises dx=dy=0). */
+            w.px=(uint16_t)bpx0; compose_map(&w);
+            g_idle_allow=1; for(int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); } g_idle_allow=0;
             w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
         /* FG-INDEX proof: sparse g_fgbkt pass-1 == full g_obkt pass-1, across the scroll walk (0 = complete). */
         { uint32_t fgd=0; int bpx0=(int)w.px;
@@ -6269,6 +6316,18 @@ int main(void)
         for (int i=0;i<N;i++){ w.px=(uint16_t)((basepx+(i&1))&(U6_SURFACE_TILES-1)); compose_map(&w); }
         uint32_t t1=plat_ticks_200hz();
         w.px=(uint16_t)basepx;
+        /* IDLE compose (view FIXED, animation advancing): the STANDING-STILL cost. The game loop recomposes
+         * every ~33 ms anim tick with dx=dy=0 (avatar not moving) — which falls through can_scroll to a full
+         * build_static today. This is the most common real-gameplay frame (watching water/torches/NPCs). */
+        compose_map(&w);                                   /* prime at fixed view */
+        g_phase[0]=g_phase[1]=g_phase[2]=g_phase[3]=0; g_ph0_dirty=0;   /* isolate idle phases */
+        g_idle_allow=1;
+        uint32_t ti0=plat_ticks_200hz();
+        for (int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); }   /* advance animation, view unchanged */
+        uint32_t ti1=plat_ticks_200hz();
+        g_idle_allow=0;
+        uint32_t idle_ms=(ti1-ti0)*5/N;
+        uint32_t idle_ph0=g_phase[0]*5/N, idle_ph1=g_phase[1]*5/N, idle_dirty=g_ph0_dirty/N;
 #ifdef HAVE_RDR_ST
         if(g_native_planar) for (int i=0;i<N;i++) rdr_ppresent();      /* shifted planar copy (no c2p) */
         else
@@ -6302,6 +6361,10 @@ int main(void)
         if (bf!=PLAT_BADFILE){ plat_fwrite(bf,r,(int32_t)sizeof r); plat_fclose(bf);}
         dbg_num("FULL  compose   ms=", (int)((tf1-tf0)*5/N));
         dbg_num("SCROLL compose  ms=", (int)((t1-t0)*5/N));
+        dbg_num("IDLE   compose  ms=", (int)idle_ms);   /* fixed view + animation: the standing-still frame */
+        dbg_num("  idle ph0 static ms=", (int)idle_ph0);
+        dbg_num("  idle ph1 dynamic ms=", (int)idle_ph1);
+        dbg_num("  idle dirty cells/frm=", (int)idle_dirty);
         dbg_num("  scroll ph0 static ms=", (int)(g_phase[0]*5/N));   /* incremental static layer */
         dbg_num("    ph0 scroll(undim) ms=", (int)(g_ph0_scroll*5/N)); /* scroll_static+mark_view_anim */
         dbg_num("    ph0 shift(dim+lgt) ms=", (int)(g_ph0_shift*5/N)); /* shift_buf x2             */
@@ -6522,7 +6585,8 @@ int main(void)
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)
          * is actually in view — most scenes have none, so this is free there. */
         if (g_view_has_anim && (uint32_t)(now - last_anim) >= 33){ last_anim = now; g_anim_ctr++;
-            compose_map(&w); draw_border_tiles(); draw_status(&w,ink); anim_redraw=1; }
+            g_idle_allow=1; compose_map(&w); g_idle_allow=0;   /* anim tick: view fixed, only animation changed -> idle-incremental */
+            draw_border_tiles(); draw_status(&w,ink); anim_redraw=1; }
 
         /* colour cycling: rotate the CLUT — no recompose/present needed, the shifter shows the
          * new colours straight away (cheap; runs every scene, even while idle / mouse-moving). */
