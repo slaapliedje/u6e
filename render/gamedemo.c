@@ -2018,7 +2018,6 @@ static int g_pd_valid = 0;              /* g_pdimmed is built (else force a full
 static int g_chunky_dyn = 1;            /* keep the chunky dynamic composite (0 = planar-only present path) */
 #ifdef BENCH
 uint32_t   g_planar_diff = 0, g_planar_frames = 0;   /* INV2: g_ptmp vs c2p(tmp) mismatch accumulator */
-static int g_planar_verify = 0;                      /* gate the INV2 c2p check off during timing runs */
 #endif
 #else
 #define g_chunky_dyn 1                  /* non-ST builds always composite chunky */
@@ -2029,6 +2028,8 @@ static int g_planar_verify = 0;                      /* gate the INV2 c2p check 
 uint32_t g_fg_iter, g_fg_draw, g_fg_blit;      /* pass-1 foreground: objects visited / draw_multi issued / cells actually blitted */
 int g_fg_use_full = 0;                          /* selftest: 1 = pass-1 scans full g_obkt (reference); 0 = sparse g_fgbkt */
 int g_ls_use_full = 0;                          /* selftest: 1 = compute_light/vis scan full g_obkt; 0 = sparse g_lsbkt */
+uint32_t g_dyn_cells;                           /* idle persistent-g_ptmp: |D| accumulated over the idle bench run (0 on non-ST) */
+int g_planar_verify = 0;                        /* gate the INV2/idle-light c2p checks (planar-only; stays 0 on non-ST) */
 #endif
 
 /* blit one 16x16 tile into the compose buffer at view cell (cvx,cvy),
@@ -2353,15 +2354,22 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
  * the bench walks it across the scroll positions so the proof covers real motion. */
 static uint32_t fg_index_selftest(int32_t left,int32_t top){
     static uint8_t A[TMP_T*TMP_T], B[TMP_T*TMP_T];
-    int sv_np=g_native_planar, sv_cd=g_chunky_dyn, sv_pd=g_predim, sv_ps=g_planar_static;
+    int sv_pd=g_predim;
     const uint8_t *sv_og=g_pd_objgate;
     int c0=g_clip_x0,c1=g_clip_x1,c2=g_clip_y0,c3=g_clip_y1;
-    g_native_planar=0; g_chunky_dyn=1; g_predim=0; g_planar_static=0; g_pd_objgate=0;
+#ifdef HAVE_RDR_ST
+    int sv_np=g_native_planar, sv_cd=g_chunky_dyn, sv_ps=g_planar_static;
+    g_native_planar=0; g_chunky_dyn=1; g_planar_static=0;   /* force the chunky path (non-ST is chunky-only already) */
+#endif
+    g_predim=0; g_pd_objgate=0;
     g_clip_x0=0; g_clip_y0=0; g_clip_x1=VT; g_clip_y1=VT;
     for(int i=0;i<TMP_T*TMP_T;i++){ A[i]=0; B[i]=0; }
     g_fg_use_full=1; draw_view_objects(A,TMP_T,left,top,1);   /* reference: full g_obkt scan */
     g_fg_use_full=0; draw_view_objects(B,TMP_T,left,top,1);   /* candidate: sparse g_fgbkt   */
-    g_native_planar=sv_np; g_chunky_dyn=sv_cd; g_predim=sv_pd; g_planar_static=sv_ps; g_pd_objgate=sv_og;
+#ifdef HAVE_RDR_ST
+    g_native_planar=sv_np; g_chunky_dyn=sv_cd; g_planar_static=sv_ps;
+#endif
+    g_predim=sv_pd; g_pd_objgate=sv_og;
     g_clip_x0=c0; g_clip_x1=c1; g_clip_y0=c2; g_clip_y1=c3;
     uint32_t d=0; for(int i=0;i<TMP_T*TMP_T;i++) if(A[i]!=B[i]) d++;
     return d;
@@ -2406,9 +2414,6 @@ static int     g_pd_has_anim;           /* any cell in g_pd_anim set -> keep g_v
 static uint8_t g_dyn_anim[VT*VT];       /* 1 = cell covered by an animated ACTOR/AVATAR/FIELD (the dynamic layer) */
 static uint8_t g_pd_dyn[VT*VT];         /* per-frame dynamic patch set D = g_pd_dirty | g_dyn_anim (restore + gated redraw) */
 static int     g_pd_idle_patch;         /* set in predim_compose_static: this frame took the idle-incremental path */
-#ifdef BENCH
-uint32_t       g_dyn_cells;             /* |D| accumulated over the idle bench run (restore/redraw footprint) */
-#endif
 /* Mark every view cell whose STATIC content animates, for the idle (dx=dy=0) incremental recompose: an
  * animated base tile (ANIMDATA) or the footprint of an animated object (objanim fire/flame OR an ANIMDATA
  * object tile). Over-marking is harmless (the cell just re-composites; pass-0 still gates foreground out);
