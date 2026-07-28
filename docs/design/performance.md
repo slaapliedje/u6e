@@ -760,3 +760,21 @@ is a no-op on TT/Falcon), rendered via the standard `rdr_set_palette(256)` per-s
 directly on the TT. Verified: chargen text + gypsy scene render on TT, gameplay core boots after the streamed
 U6FE frees (256-colour shots), and the ST front-end is unchanged (fast=0 is a no-op there). The TT slim build
 now has the full front-end AND fits a stock 4 MB TT.
+
+## 2026-07-24 — Falcon: default to 16-bit truecolor present — 89 → 27 ms
+The default Falcon present was 8-bit INDEXED (VIDEL planar) via per-row `c2p_span_asm` — chunky→8-plane bit
+manipulation, **89 ms**. But the Falcon also has a 16-bit TRUECOLOR mode whose present is just `tc_span` (8-bit
+index → RGB565 via a 256-entry LUT, NO c2p): **27 ms, a 3.3× win**. Flip the default (VIDEO.CFG='I' forces the
+indexed A/B). Quality is ~VGA-identical: it shows the same 256-colour palette, RGB565 only drops 1 LSB on R and
+B vs the 6-6-6 CLUT (green exact) — imperceptible; if anything truecolor is the higher-fidelity Falcon mode.
+The expand LUT (g_pal16) rebuilds on every rdr_set_palette, and PREDIM bakes lighting into tile INDICES (not
+palette rotations), so the LUT is stable per scene. Falcon truecolor gameplay shot verified clean.
+
+**Falcon frame after the full pass: scroll 103+27 = 130 ms (7.7 fps), idle 50+27 = 77 ms (13 fps)** — from the
+3.58 fps we started at. Final per-target picture (compose+present):
+| target | clock | scroll | idle |
+|---|---|--:|--:|
+| ST shifter | 8 MHz | 264 ms (3.8 fps) | 149 ms (6.7 fps) |
+| STE +Blitter | 8 MHz | 201 ms (5.0 fps) | 88 ms (11.4 fps) |
+| Falcon truecolor | 16 MHz | 130 ms (7.7 fps) | 77 ms (13.0 fps) |
+| TT 256-colour | 32 MHz | 91 ms (11.0 fps) | 70 ms (14.3 fps) |

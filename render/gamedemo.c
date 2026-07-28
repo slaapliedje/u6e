@@ -5186,12 +5186,13 @@ int main(void)
     #define PACK_NAME "U6.PAK"
     #endif
 
-    /* VIDEO.CFG (M8): byte0 'T'/'t' requests the Falcon 16-bit TRUECOLOR present; absent/other =
-     * the indexed default. Read BEFORE rdr_init (which sets the video mode). No-op on the ST
-     * shifter + TT backends (they stay indexed). */
+    /* VIDEO.CFG (M8): the Falcon DEFAULTS to the 16-bit TRUECOLOR present — it skips c2p (present 89 -> 26 ms)
+     * and shows the 256-colour palette directly (RGB565: only R/B drop 1 LSB vs the 6-6-6 CLUT — visually the
+     * same VGA image). byte0 'I'/'i' forces the 8-bit INDEXED CLUT path (6-6-6 exact) for an A/B. Read BEFORE
+     * rdr_init (which sets the video mode). No-op on the ST shifter + TT backends (they stay indexed). */
     {   int32_t vl=0; void *vc=plat_load_file("VIDEO.CFG",1,&vl);
         char vb=(vc&&vl>0)?((const char*)vc)[0]:0;
-        rdr_prefer_truecolor(vb=='T'||vb=='t'); }
+        rdr_prefer_truecolor(vb!='I'&&vb!='i'); }
 
 #ifdef ST_STREAM
     /* ST: STREAM the front-end (menu/intro/chargen) off the hard drive BEFORE the gameplay core
