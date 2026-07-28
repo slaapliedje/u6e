@@ -5202,7 +5202,10 @@ int main(void)
     plat_input_init();
     g_bb=rdr_backbuffer(); g_W=rdr_width();
     {   plat_mark fe_mark = plat_chip_mark();
-        int32_t felen=0; uint8_t *fe=(uint8_t*)plat_load_file("U6FE.PAK",1,&felen);
+        /* U6FE into CHIP (fast=0): plat_chip_reset below frees CHIP, so the front-end pack MUST land there
+         * to be reclaimed. On the ST fast==chip (no alt-RAM) so this is unchanged; on TT it's the fix that
+         * lets the ~1.35 MB U6FE actually free before the gameplay core loads (was fast=1 -> TT-RAM -> leaked). */
+        int32_t felen=0; uint8_t *fe=(uint8_t*)plat_load_file("U6FE.PAK",0,&felen);
         if (fe && felen>2356 && fe[0]=='U'&&fe[1]=='6'&&fe[2]=='F'&&fe[3]=='E'){
             /* U6FE = [4 magic][48 pal][256 lut][2048 font][art]. Activate the game 16 so the
              * front-end renders in colour (the core's U6WW isn't loaded yet). */

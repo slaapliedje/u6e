@@ -749,3 +749,14 @@ the ST-RAM fallback: tiles read slower, so **scroll compose 40→51 ms, idle 20�
 030 cache absorbs most tile reads)**. Even the ST-RAM path is **scroll 102 ms (9.8 fps) / idle 76 ms (13 fps)**;
 a big-RAM TT keeps tiles in fast RAM (40/20). Front-end (intro/chargen) is the one TT-slim gap — needs ST_STREAM
 taught to free TT-RAM, or a 256-colour resident front-end.
+
+## 2026-07-24 — TT-slim front-end restored: stream U6FE into CHIP so it frees on TT
+The TT slim build had dropped the front-end (intro/chargen/menu) because ST_STREAM loaded U6FE with
+`plat_load_file(...,fast=1)` (TT-RAM) but freed it with `plat_chip_reset` (CHIP only) — so on TT the 1.35 MB
+U6FE leaked and the gameplay core OOM'd. Fix: load U6FE with `fast=0` (CHIP) — gamedemo.c ~5205 — so
+plat_chip_reset actually reclaims it (no-op on the ST, where fast==chip). Re-enabled `-DST_STREAM=1` for
+gamett.prg. The front-end art is native 256-colour (the ST merely quantises to 16 per scene; `rdr_set_lowcolor`
+is a no-op on TT/Falcon), rendered via the standard `rdr_set_palette(256)` per-scene path — so it renders
+directly on the TT. Verified: chargen text + gypsy scene render on TT, gameplay core boots after the streamed
+U6FE frees (256-colour shots), and the ST front-end is unchanged (fast=0 is a no-op there). The TT slim build
+now has the full front-end AND fits a stock 4 MB TT.

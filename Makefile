@@ -747,14 +747,12 @@ game-st: $(BUILD)/gamest.prg
 # game.prg, but with the SLIM pack (U6TT.PAK) + front-end STREAMING (ST_STREAM) so it fits a STOCK 4 MB
 # TT. The full U6.PAK (~2.5 MB) overflows the ~2.7 MB TT fast pool once TPA + buffers are taken (the
 # "unknown game magic" OOM), so the flagship game.prg needs a big-RAM TT; this variant is the 4 MB path.
-# NOTE: NOT ST_STREAM — that path loads U6FE into a plat_chip region and frees it with plat_chip_reset,
-# which only reclaims CHIP (ST) RAM; on TT plat_load_file uses FAST (TT) RAM, so U6FE (1.4 MB) would
-# never free and the core pack would OOM. So the TT slim build DROPS the front-end (intro/chargen/menu
-# need resident art the slim pack omits) and boots straight to the baked start — the non-ST_STREAM
-# front-end path is gated on INTRO/CHARGEN/MENU.REQ, so with no .REQ it skips to gameplay. (Restoring the
-# TT front-end needs either ST_STREAM taught to free TT-RAM, or a 256-colour front-end that fits resident.)
+# ST_STREAM: stream the front-end (intro/chargen/menu) from the shared U6FE.PAK, then FREE it before the
+# gameplay core loads — the U6FE load now goes to CHIP RAM (gamedemo.c ~5205, fast=0) so plat_chip_reset
+# actually reclaims it on TT (was fast=1 -> TT-RAM -> leaked, forcing the front-end to be dropped). The
+# front-end art is native 256-colour (the ST merely quantises it to 16), so the TT renders it directly.
 $(BUILD)/gamett.prg: $(GAME_SRC)
-	$(call HYBRID_BUILD,$@,$^,obj_tt_slim,-DHAVE_RDR_TT -DPACK_NAME='"U6TT.PAK"')
+	$(call HYBRID_BUILD,$@,$^,obj_tt_slim,-DHAVE_RDR_TT -DPACK_NAME='"U6TT.PAK"' -DST_STREAM=1)
 game-tt: $(BUILD)/gamett.prg
 
 # SLIM TT world pack (U6TT.PAK): like world-st (MKWORLD_SLIM splits the ~1.35 MB front-end/intro art
