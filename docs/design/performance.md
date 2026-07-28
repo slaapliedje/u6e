@@ -709,3 +709,25 @@ bench and the ST bench (which forces the chunky path). ST native-planar path unt
 TT benefits identically (same chunky path; its bench harness still isn't emitting BENCH.BIN). The remaining
 Falcon cost is the **89 ms VIDEL 8→16-bit present** — now the dominant per-frame cost and the next lever
 (rdr_falcon.c, Falcon-specific).
+
+## 2026-07-24 — TT bench harness: fit the full pack (--ttram 4 → 16), real TT numbers
+`make bench` (TT) had never emitted BENCH.BIN — it aborted with "cannot load asset pack (unknown game magic)".
+Root cause: NOT a timing/TOS issue but OOM — the full 256-colour U6.PAK (~2.5 MB) + TPA overflow a 4 MB TT
+fast pool, so plat_load_file returns NULL, gamedef_for_magic(NULL) fails, and the bench aborts before the
+timed loops. `--ttram 4 → 16` (8 MB is the threshold; ST-RAM left at its larger default — `--memsize 4` also
+fails) + `--run-vbls 9000 → 12000`. This is the [[fast-pool-tight-on-tt]] concern: a real 4 MB TT needs a
+slim/streamed pack; the bench measures COMPUTE, so extra RAM is fine. (The same --ttram 4 limit affects the
+other full-pack TT targets — run-game, the map/read/status dumps — a separate sweep.)
+
+**Real TT numbers (TT030 32 MHz 68030, 256-colour), n=20:** SCROLL compose 40.8 ms, FULL 102.5 ms, IDLE
+compose 20 ms, present (8-bit copy+double) 49.8 ms; CHUNKY-IDLE diff = 0. So **scroll 40.8+49.8 = 90.6 ms
+(11.0 fps), idle 20+49.8 = 69.8 ms (14.3 fps)** — TT is the fastest target: 32 MHz (2× Falcon's 16 MHz) makes
+compose ~2.5× Falcon's, and the 8-bit 256-colour present (49.8 ms) beats Falcon's 89 ms truecolor expand.
+
+### Full per-target picture after the M7 render campaign (compose + present, per frame)
+| target | clock | scroll | idle |
+|---|---|--:|--:|
+| ST shifter | 8 MHz | 264 ms (3.8 fps) | 149 ms (6.7 fps) |
+| STE +Blitter | 8 MHz | 201 ms (5.0 fps) | 88 ms (11.4 fps) |
+| Falcon VIDEL truecolor | 16 MHz | 192 ms (5.2 fps) | 139 ms (7.2 fps) |
+| TT 256-colour | 32 MHz | 91 ms (11.0 fps) | 70 ms (14.3 fps) |

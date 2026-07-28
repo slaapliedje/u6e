@@ -472,12 +472,16 @@ $(BUILD)/bench.prg: $(BENCH_SRC)
 # run the bench headless; BENCH.BIN = 5 big-endian u32 matching gamedemo.c's harness:
 # [0]=SCROLL compose (walking), [1]=FULL compose (no cache), [2]=present map-window (c2p+double),
 # [3]=unused(0), [4]=N. --conout 2 also prints the per-phase compose split (ph0..ph3).
+# --ttram 16 (not 4): the full 256-colour U6.PAK (~2.5 MB) + TPA overflow a 4 MB TT fast pool, so the
+# pack load fails and bench.prg aborts with "unknown game magic" (== NULL pak) BEFORE writing BENCH.BIN.
+# 8 MB is the threshold; 16 gives margin. (A real 4 MB TT needs a slim/streamed pack — a deployment
+# concern, see the fast-pool-tight-on-tt note; the bench measures COMPUTE, so more RAM is fine here.)
 bench: world $(BUILD)/bench.prg
 	rm -f $(BUILD)/BENCH.BIN
-	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	$(HL) $(HATARI) --machine tt --ttram 16 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\bench.prg' \
-	          --fast-forward on --run-vbls 9000 </dev/null >/dev/null 2>&1 || true
-	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN"}' || echo "no BENCH.BIN"
+	          --fast-forward on --run-vbls 12000 </dev/null >/dev/null 2>&1 || true
+	@od -An -tu4 --endian=big -w80 $(BUILD)/BENCH.BIN 2>/dev/null | awk '{n=$$5; if(n>0) printf "TT (32MHz 68030, 256-col)  SCROLL compose: %.1f ms   FULL compose: %.1f ms   present c2p+double: %.1f ms   (per frame, n=%d)\n", $$1*5.0/n, $$2*5.0/n, $$3*5.0/n, n; else print "no BENCH.BIN (TT bench needs --ttram >=8 to fit the full pack)"}' || echo "no BENCH.BIN"
 
 # ---- Falcon frame bench: the SAME harness as `bench`, but the Falcon VIDEL backend (rdr_falcon.c,
 # 16-bit truecolor present = NO c2p) on a 68030 @ 16 MHz. Confirms the Falcon frame rate.
