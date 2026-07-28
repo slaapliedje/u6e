@@ -2022,6 +2022,7 @@ uint32_t   g_planar_diff = 0, g_planar_frames = 0;   /* INV2: g_ptmp vs c2p(tmp)
 #else
 #define g_chunky_dyn 1                  /* non-ST builds always composite chunky */
 #define g_planar_static 0
+#define g_native_planar 0               /* non-ST builds are never native-planar (chunky idle path is always eligible) */
 #endif
 
 #ifdef BENCH
@@ -2399,21 +2400,21 @@ static void build_static(const world_t*w){
     fill_tiles(w,left,top,0,0,VT,VT);
     draw_view_objects(g_tmp_map,TMP_T,left,top,0);
 }
-#ifdef HAVE_RDR_ST
-/* Phase-4c: the native-planar STATIC layer is composed DIRECTLY from pre-dimmed planar tiles into
- * g_pdimmed (fill_tiles blits the dimmed base, draw_view_objects->draw_cell the dimmed objects, both
- * when g_planar_static+g_predim are set) — no chunky g_tmp_map/g_dimmed_map, no dim_cell_into, no c2p.
- * On a scroll only the DIRTY cells' base is re-blitted + all objects redrawn once (see predim_compose_
- * static). g_pd_light is this path's own per-cell last-light dirty tracker (independent of g_dm_light). */
-static uint8_t g_pd_light[VT*VT];
-static uint8_t g_pd_dirty[VT*VT];       /* incremental scroll: 1 = cell's base was re-blitted this frame -> its objects must re-composite */
+/* Incremental-recompose bookkeeping — SHARED by the native-planar (ST) static layer AND the chunky
+ * (TT/Falcon) g_dimmed_map path. g_pd_anim marks cells whose STATIC content animates (the idle dx=dy=0
+ * recompose set); g_pd_dirty is the per-frame re-composite set. Backend-agnostic (masks + a view scan). */
+static uint8_t g_pd_dirty[VT*VT];       /* incremental: 1 = cell's base was re-blitted this frame -> its objects must re-composite */
 static uint8_t g_pd_anim[VT*VT];        /* idle recompose: 1 = cell's STATIC content (base tile or a lower object) is frame-animated */
 static int     g_pd_anim_valid;         /* g_pd_anim is current for THIS view (idle frames reuse it; cleared on scroll/rebuild) */
 static int     g_pd_has_anim;           /* any cell in g_pd_anim set -> keep g_view_has_anim armed while idle */
-/* Persistent g_ptmp (idle): the dynamic-dirty patch mask + the flag that arms the idle patch this frame. */
+#ifdef HAVE_RDR_ST
+/* Persistent g_ptmp + native-planar idle (ST only). g_pd_light is the planar path's own last-light tracker
+ * (the chunky path uses g_dm_light); the rest is the dynamic-dirty patch mask + the arm flag. */
+static uint8_t g_pd_light[VT*VT];
 static uint8_t g_dyn_anim[VT*VT];       /* 1 = cell covered by an animated ACTOR/AVATAR/FIELD (the dynamic layer) */
 static uint8_t g_pd_dyn[VT*VT];         /* per-frame dynamic patch set D = g_pd_dirty | g_dyn_anim (restore + gated redraw) */
 static int     g_pd_idle_patch;         /* set in predim_compose_static: this frame took the idle-incremental path */
+#endif
 /* Mark every view cell whose STATIC content animates, for the idle (dx=dy=0) incremental recompose: an
  * animated base tile (ANIMDATA) or the footprint of an animated object (objanim fire/flame OR an ANIMDATA
  * object tile). Over-marking is harmless (the cell just re-composites; pass-0 still gates foreground out);
@@ -2441,6 +2442,7 @@ static void mark_anim_cells(const world_t*w,int32_t left,int32_t top){
         }
         if(bx==bx1)break; } if(by==by1)break; }
 }
+#ifdef HAVE_RDR_ST
 /* Persistent g_ptmp (idle): mark cells covered by an animated DYNAMIC element. The animated OBJECT
  * footprints (lower AND foreground) are ALREADY in g_pd_dirty (via mark_anim_cells over g_obkt), so this
  * only adds the dynamic elements NOT in g_obkt — actors, the avatar, and fields — whose drawn pixels cycle
@@ -2665,6 +2667,7 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
     if(!g_native_planar || g_chunky_dyn)
 #endif
     {
+        if(!can_idle) g_pd_anim_valid=0;                       /* view changed -> the cached anim-cell set is stale */
         if(can_scroll && g_dm_valid){
             SUB_T(); scroll_static(w,dx,dy); mark_view_anim(w); SUB_ADD(g_ph0_scroll);
             SUB_T();
@@ -2677,14 +2680,73 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
                     dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
             }
             SUB_ADD(g_ph0_redim);
+        } else if(can_idle && g_dm_valid && !g_native_planar){ /* IDLE (dx=dy=0), chunky (TT/Falcon) — see below.
+            * Re-dim ONLY the cells whose STATIC content animates (+ light changes), keeping g_dimmed_map.
+            * Mirrors the ST native-planar idle path but composes chunky. Gated !g_native_planar so the ST
+            * verify pass (g_native_planar=1, g_chunky_dyn=1) keeps the else full-rebuild as the INV2 gold
+            * reference; the chunky idle is validated separately by chunky_idle_selftest. */
+            int32_t left=w->px-VT/2, top=w->py-VT/2;
+            SUB_T();
+            if(!g_pd_anim_valid){ mark_anim_cells(w,left,top);
+                g_pd_has_anim=0; for(int i=0;i<VT*VT;i++) if(g_pd_anim[i]){ g_pd_has_anim=1; break; }
+                g_pd_anim_valid=1; }
+            if(g_pd_has_anim) g_view_has_anim=1;
+            for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+                g_pd_dirty[cc]=(uint8_t)(light[cc]!=g_dm_light[cc] || g_pd_anim[cc]); } /* light change OR animated */
+            SUB_ADD(g_ph0_scroll);
+            SUB_T();                                            /* refresh UNDIMMED g_tmp_map for dirty cells */
+            for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++) if(g_pd_dirty[vy*VT+vx])
+                fill_tiles(w,left,top,vx,vy,vx+1,vy+1);          /* animated base -> g_tmp_map */
+            g_pd_objgate=g_pd_dirty; draw_view_objects(g_tmp_map,TMP_T,left,top,0); g_pd_objgate=0; /* lower objects (dirty cells) */
+            SUB_ADD(g_ph0_redim);
+            SUB_T();
+            for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+                if(g_pd_dirty[cc]){ dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; } }
+            SUB_ADD(g_ph0_shift);
         } else {                                               /* full rebuild */
             build_static(w);
             for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
                 dim_cell_into(vx,vy,light[cc],dither); g_dm_light[cc]=light[cc]; }
+            g_pd_anim_valid=0;                                  /* fresh view -> recompute the anim-cell set next idle */
         }
     }
     g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1; g_dm_valid=1;
 }
+
+#ifdef BENCH
+/* Prove the CHUNKY idle-incremental (re-dim only animated/light-changed cells, keeping g_dimmed_map) is
+ * byte-identical to a full rebuild — the TT/Falcon analogue of the ST INV2 idle-verify (which can't cover
+ * this path because it keeps the chunky reference full-rebuilt). For f=1..4 anim ticks: prime a full
+ * compose, chain f idle-incremental composes, snapshot g_dimmed_map, then full-rebuild at the SAME
+ * (view,anim,light) and byte-compare. Forces the chunky path (g_native_planar=0) so it runs on ANY bench
+ * build. Returns total mismatched bytes over the walk (0 = the idle shortcut drops/freezes nothing). */
+static uint32_t chunky_idle_selftest(const world_t*w){
+    static uint8_t snap[TMP_T*TMP_T], plight[VT*VT], pvis[VT*VT];
+    uint32_t diff=0;
+    int sv_ls=g_light_style, sv_ia=g_idle_allow; uint32_t sv_ctr=g_anim_ctr;
+#ifdef HAVE_RDR_ST
+    int sv_np=g_native_planar; g_native_planar=0;      /* force the chunky path (the ST bench is planar by default) */
+#endif
+    g_light_style=LSTY_PREDIM_DITHER;
+    compute_predim_light(w,plight,pvis); g_predim_light=plight; g_predim_vis=pvis;  /* light invariant on idle */
+    for(int f=1; f<=4; f++){
+        g_anim_ctr=sv_ctr;
+        g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0;
+        predim_compose_static(w,plight,1);             /* prime: full rebuild at ctr0 */
+        for(int k=0;k<f;k++){ g_anim_ctr++; g_idle_allow=1; predim_compose_static(w,plight,1); g_idle_allow=0; } /* f idle ticks */
+        memcpy(snap,g_dimmed_map,sizeof snap);
+        g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0;
+        predim_compose_static(w,plight,1);             /* reference: full rebuild at ctr0+f */
+        for(int i=0;i<TMP_T*TMP_T;i++) if(snap[i]!=g_dimmed_map[i]) diff++;
+    }
+    g_light_style=sv_ls; g_idle_allow=sv_ia; g_anim_ctr=sv_ctr;
+#ifdef HAVE_RDR_ST
+    g_native_planar=sv_np;
+#endif
+    g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0;    /* leave caches invalid for the caller's next compose */
+    return diff;
+}
+#endif
 
 static void compose_map(const world_t*w)
 {
@@ -6492,6 +6554,10 @@ int main(void)
           for(int i=0;i<N;i++){ w.px=(uint16_t)((bpx0+(i&1))&(U6_SURFACE_TILES-1)); lsd += light_index_selftest(&w); }
           w.px=(uint16_t)bpx0; dbg_num("LS-INDEX full-vs-sparse diff=", (int)lsd); }
 #endif
+        /* CHUNKY-IDLE proof (TT/Falcon idle-incremental == full rebuild): forces the chunky path so it runs
+         * on ANY bench build (the ST INV2 idle-verify can't cover it — it keeps the chunky reference full). */
+        { uint32_t cid=chunky_idle_selftest(&w); dbg_num("CHUNKY-IDLE full-vs-incr diff=", (int)cid);
+          g_tmp_valid=0; g_dm_valid=0; }
         /* FULL-build compose (force a rebuild each time): the no-cache baseline. */
         uint32_t tf0=plat_ticks_200hz();
         for (int i=0;i<N;i++){ g_tmp_valid=0; compose_map(&w); }

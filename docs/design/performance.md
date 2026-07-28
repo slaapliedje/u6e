@@ -680,3 +680,32 @@ SMOOTH for an A/B or the fidelity path. Falcon shot verified clean.
 still full-rebuilds + re-dims all cells (Falcon idle ph0 193 ms, total 209), so standing still is now the
 worst case. Porting the ST idle-incremental (mark_anim_cells + the animated-cell dirty gate) to the chunky
 path is the follow-up.
+
+## 2026-07-24 — TT/Falcon: chunky idle-incremental — Falcon idle compose 209 → 50 ms
+After the PREDIM switch, the chunky `predim_compose_static` still only handled `can_scroll` incrementally,
+so an IDLE tick (dx=dy=0) full-rebuilt + re-dimmed all 121 cells every frame (Falcon idle ph0 193 ms, total
+209) — standing still became the worst case. Port the ST native-planar idle path to the chunky layer: on
+`can_idle`, keep g_dimmed_map and re-dim ONLY the cells whose STATIC content animates (mark_anim_cells →
+g_pd_anim) or whose light changed — refresh their undimmed g_tmp_map (fill_tiles + gated
+draw_view_objects pass-0), then dim_cell_into just those. The idle-recompose bookkeeping (g_pd_anim /
+g_pd_dirty / mark_anim_cells) is now SHARED (moved out of the HAVE_RDR_ST guard); the persistent-g_ptmp bits
+stay ST-only.
+
+**Falcon idle compose 209 → 50 ms (ph0 193 → 34).** Gated `!g_native_planar` so the ST INV2 verify keeps its
+chunky reference full-rebuilt (INV2 still 0). Validated by a new **chunky_idle_selftest** (the TT/Falcon
+analogue of INV2 idle-verify): for f=1..4 anim ticks, prime full → chain f idle-incrementals → snapshot
+g_dimmed_map → full-rebuild at the same state → byte-compare. **CHUNKY-IDLE diff = 0** on both the Falcon
+bench and the ST bench (which forces the chunky path). ST native-planar path untouched.
+
+### TT/Falcon frame budget after this pass (Falcon 68030, VIDEL truecolor)
+| | before (SMOOTH) | after (PREDIM + chunky idle) |
+|---|--:|--:|
+| scroll compose | 190 | 103 |
+| idle compose | 225 | 50 |
+| present (8→16-bit) | 89 | 89 |
+| **scroll frame** | 279 ms (3.58 fps) | **192 ms (5.2 fps)** |
+| **idle frame** | 314 ms (3.2 fps) | **139 ms (7.2 fps)** |
+
+TT benefits identically (same chunky path; its bench harness still isn't emitting BENCH.BIN). The remaining
+Falcon cost is the **89 ms VIDEL 8→16-bit present** — now the dominant per-frame cost and the next lever
+(rdr_falcon.c, Falcon-specific).
