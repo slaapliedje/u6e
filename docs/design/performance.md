@@ -778,3 +778,16 @@ palette rotations), so the LUT is stable per scene. Falcon truecolor gameplay sh
 | STE +Blitter | 8 MHz | 201 ms (5.0 fps) | 88 ms (11.4 fps) |
 | Falcon truecolor | 16 MHz | 130 ms (7.7 fps) | 77 ms (13.0 fps) |
 | TT 256-colour | 32 MHz | 91 ms (11.0 fps) | 70 ms (14.3 fps) |
+
+## 2026-07-24 — TT/Falcon default back to SMOOTH (VGA fidelity) — PREDIM now an opt-in fast mode
+A night A/B (midnight interior, TT) showed PREDIM_DITHER's ordered dither IS visible in torch/night lighting
+gradients vs SMOOTH's clean per-pixel falloff — SMOOTH matches the VGA/Nuvie model (smooth per-pixel globes,
+lighting.md §5), PREDIM_DITHER reads closer to the old ST port. Per the "indistinguishable from VGA" bar,
+default TT/Falcon back to **SMOOTH**. PREDIM_DITHER stays available as a FAST MODE via LIGHTSTY.REQ '4'
+(daytime/uniform light is byte-identical either way). The truecolor present (27 ms) is kept — it helps SMOOTH
+too. Honest SMOOTH numbers (compose+present): TT scroll 140 ms (7.1 fps) / idle 159 ms (6.3 fps); Falcon
+scroll 218 ms (4.6 fps) / idle 253 ms (4.0 fps).
+
+The cost is the per-frame lighting SMOOTH can't cache (idle re-lights + full-rebuilds every frame). The
+follow-up that recovers PREDIM's speed AT VGA quality is **smooth-PREDIM**: bake the per-pixel bilinear light
+into the cached static layer (dim per-pixel, not per-cell) so lighting is smooth AND incremental — deferred.

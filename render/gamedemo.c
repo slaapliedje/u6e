@@ -6456,11 +6456,12 @@ int main(void)
           else if(rdr_active_backend()==0){ g_light_style=LSTY_PREDIM; g_tmp_valid=0; }  /* ST-shifter default: PREDIM
                                           * (the low-colour lighting style + the native-planar present path). */
 #endif
-          else { g_light_style=LSTY_PREDIM_DITHER; g_tmp_valid=0; }  /* TT/Falcon default: dim-at-draw + ordered dither.
-                                          * Was SMOOTH (per-pixel bilinear ph3, ~131 ms/frame, re-lit EVERY frame with no
-                                          * cache); PREDIM bakes the per-cell dimming into the tile blit (ph3 -> plain copy)
-                                          * AND lets the static layer scroll incrementally. The dither smooths the per-cell
-                                          * steps for 256-colour/truecolor. LIGHTSTY.REQ '0' restores SMOOTH. */
+          else { g_light_style=LSTY_SMOOTH; g_tmp_valid=0; }  /* TT/Falcon default: SMOOTH = per-pixel bilinear light,
+                                          * the VGA-faithful model (matches Nuvie's smooth per-pixel globes; lighting.md §5).
+                                          * PREDIM_DITHER is faster (bakes per-cell dimming into the cached static, scrolls
+                                          * incrementally) but its ordered dither is visible in torch/night gradients vs
+                                          * VGA's smooth falloff — so it's opt-in via LIGHTSTY.REQ '4' (a "fast mode"), not
+                                          * the default. Daytime (uniform light) is byte-identical either way. */
 #ifdef HAVE_RDR_ST
           { int32_t pl=0; char*pq=(char*)plat_load_file("PLANAR.REQ",1,&pl);   /* '0' = force chunky (A/B control) */
             if(pq && pl>0 && pq[0]=='0') g_planar_allow=0; }
