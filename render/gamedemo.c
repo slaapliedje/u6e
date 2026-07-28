@@ -6384,8 +6384,14 @@ int main(void)
           if(rq && rl>0 && rq[0]>='0' && rq[0]<='4'){ g_light_style=rq[0]-'0'; g_tmp_valid=0; }
 #ifdef HAVE_RDR_ST
           else if(rdr_active_backend()==0){ g_light_style=LSTY_PREDIM; g_tmp_valid=0; }  /* ST-shifter default: PREDIM
-                                          * (the low-colour lighting style + the native-planar present path). TT/Falcon
-                                          * keep SMOOTH (per-pixel bilinear, right for 256 colours). */
+                                          * (the low-colour lighting style + the native-planar present path). */
+#endif
+          else { g_light_style=LSTY_PREDIM_DITHER; g_tmp_valid=0; }  /* TT/Falcon default: dim-at-draw + ordered dither.
+                                          * Was SMOOTH (per-pixel bilinear ph3, ~131 ms/frame, re-lit EVERY frame with no
+                                          * cache); PREDIM bakes the per-cell dimming into the tile blit (ph3 -> plain copy)
+                                          * AND lets the static layer scroll incrementally. The dither smooths the per-cell
+                                          * steps for 256-colour/truecolor. LIGHTSTY.REQ '0' restores SMOOTH. */
+#ifdef HAVE_RDR_ST
           { int32_t pl=0; char*pq=(char*)plat_load_file("PLANAR.REQ",1,&pl);   /* '0' = force chunky (A/B control) */
             if(pq && pl>0 && pq[0]=='0') g_planar_allow=0; }
 #endif

@@ -659,3 +659,24 @@ scroll compose 193.8 ms unchanged, INV2 = 0 over the scroll frames too. (Also fi
 **Idle compose across the session: 372 → 211 → 134 → 107 → 79 ms.** Standing still (compose+present): plain ST
 107+70=177 → 79+70=149 ms (~5.6 → ~6.7 fps); STE 107+11=118 → 77+11=88 ms (~8.5 → ~11.4 fps). Remaining idle floor
 (79 ms) = dirty-recompose 53 ms (animation regen — inherent) + restore 4 + ph1 16 + mark/overhead ~6.
+
+## 2026-07-24 — TT/Falcon: default to PREDIM_DITHER — Falcon scroll compose 190 → 103 ms
+TT/Falcon defaulted to LSTY_SMOOTH (per-pixel bilinear darkness LUT), the one lighting style with NO cache:
+every frame re-lit all 160×160 px in ph3 (Falcon **131 ms**), and the static layer couldn't scroll
+incrementally because dimming wasn't baked in. Profiling Falcon (bench-falcon --conout 2): scroll ph0 79 /
+ph1 7 / ph2 7 / **ph3 131** / present 89 → 190+89 = 279 ms = 3.58 fps; idle 225 ms.
+
+Switch the TT/Falcon default to **PREDIM_DITHER** (the ST dim-at-draw style): draw_cell sources each tile's
+pre-dimmed variant (dim_tile_d, per-cell light + 4×4 Bayer dither), so dimming folds into the tile blit and
+ph3 becomes a plain copy. The chunky `predim_compose_static` path then also scroll-shifts g_dimmed_map and
+re-dims only the lead band + light-changed cells (was full-rebuild-every-frame). dim_tile/g_darklut already
+work at 256 colours (SMOOTH used the same luts), and the dither smooths the per-cell steps for high-colour
+targets. **Falcon scroll compose 190 → 103 ms (ph3 131 → 9), frame 279 → 192 ms = 3.58 → 5.19 fps.** TT
+benefits identically (same chunky path; its bench harness isn't emitting BENCH.BIN — separate TT-run issue).
+ST is untouched (backend 0 still defaults PREDIM + native-planar; INV2 still 0). LIGHTSTY.REQ '0' restores
+SMOOTH for an A/B or the fidelity path. Falcon shot verified clean.
+
+**Caveat (next):** the chunky path only handles `can_scroll` incrementally — on an IDLE tick (dx=dy=0) it
+still full-rebuilds + re-dims all cells (Falcon idle ph0 193 ms, total 209), so standing still is now the
+worst case. Porting the ST idle-incremental (mark_anim_cells + the animated-cell dirty gate) to the chunky
+path is the follow-up.
