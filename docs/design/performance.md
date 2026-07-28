@@ -791,3 +791,44 @@ scroll 218 ms (4.6 fps) / idle 253 ms (4.0 fps).
 The cost is the per-frame lighting SMOOTH can't cache (idle re-lights + full-rebuilds every frame). The
 follow-up that recovers PREDIM's speed AT VGA quality is **smooth-PREDIM**: bake the per-pixel bilinear light
 into the cached static layer (dim per-pixel, not per-cell) so lighting is smooth AND incremental — deferred.
+
+## 2026-07-27 — smooth-PREDIM: VGA-faithful lighting at PREDIM speed (new TT/Falcon default)
+Built the deferred follow-up. `LSTY_SMOOTH_PREDIM` (style 5) bakes the **per-PIXEL bilinear** SMOOTH light
+into the cached static layer (`g_dimmed_map`) instead of a per-cell darklut level. The static is maintained
+incrementally exactly like PREDIM — scroll shifts `g_dimmed_map`/`g_dm_light` and re-dims only the revealed
+band + light-changed cells; idle re-dims only animated cells (light is invariant on an idle tick, so the whole
+cached static is reused). Actors, fields and roofs dim **at draw** per-pixel (`draw_cell`/roof loop via the
+shared `smooth_lp`), so the dynamic layer matches SMOOTH's ph3 too. Chunky-only (per-pixel ⇒ never
+native-planar). Two wrinkles vs per-cell PREDIM, both surfaced by the diagonal-scroll selftest:
+- a cell's per-pixel light reads its 3×3 light neighbourhood, so a scroll light-change is **dilated by one
+  cell** (and the revealed band is folded into the change mask, since a band cell's shifted `g_dm_light` is
+  stale garbage the delta test can't trust);
+- `smooth_lp` **clamps** at the view's left/top edges (`sx=max(0,X-8)`), so those edge cells' `Lp` is NOT
+  translation-invariant — they're re-dimmed unconditionally each scroll (they aren't always in the lead band).
+`dim_cell_smooth` also has a uniform-neighbourhood fast path (flat darklut level, byte-identical) covering
+ambient edges at night and all of daytime — the bulk of re-dimmed cells on a walk.
+
+**Byte-identical to plain SMOOTH.** `smooth_predim_selftest` composes SMOOTH-PREDIM (full / idle-tick /
+6-step mixed h-v-**diagonal** scroll walk with accumulation) and byte-compares the presented map region to a
+full SMOOTH rebuild: **diff = 0 at night (STARTMIN 1320 & 300) and day (720)**. Since SMOOTH is the validated
+VGA-faithful reference, the visual is proven identical by construction — no fidelity cost. (The diagonal walk
+was essential — an axis-aligned-only walk missed both wrinkles above.)
+
+Measured (compose ms; night = the non-uniform worst case, day = uniform light):
+| target | SMOOTH night s/i | **SMOOTH-PREDIM** night s/i | **SMOOTH-PREDIM** day s/i | PREDIM_DITHER night s/i |
+|---|--:|--:|--:|--:|
+| TT (32 MHz, +49 ms present) | 94 / 114 | **84 / 26** | **50 / 26** | 44 / 20 |
+| Falcon (16 MHz, +27 ms present) | 196 / 231 | **194 / 65** | **125 / 65** | 111 / 50 |
+
+Idle (the common standing/reading/menu/combat frame) is **~4× faster** than SMOOTH at the SAME pixels — TT
+idle frame 163→75 ms (6.1→13.3 fps), Falcon idle frame 258→92 ms (3.9→10.9 fps). Scroll is a TT win and a
+Falcon wash at night (the moving globe arc's per-pixel bilinear is inherently costly at 16 MHz), a clear win
+by day. So **SMOOTH-PREDIM is the new TT/Falcon default** (`gamedemo.c` ~6629): VGA quality, idle transformed
+and walk no worse than the SMOOTH it replaces. Plain SMOOTH ('0') stays the fidelity reference; PREDIM_DITHER
+('4') the low-colour fast mode. ST unchanged (native-planar PREDIM). Final per-target picture (night; +present):
+| target | clock | scroll | idle |
+|---|---|--:|--:|
+| ST shifter | 8 MHz | 264 ms (3.8 fps) | 149 ms (6.7 fps) |
+| STE +Blitter | 8 MHz | 201 ms (5.0 fps) | 88 ms (11.4 fps) |
+| Falcon truecolor | 16 MHz | 221 ms (4.5 fps) | 92 ms (10.9 fps) |
+| TT 256-colour | 32 MHz | 133 ms (7.5 fps) | 75 ms (13.3 fps) |

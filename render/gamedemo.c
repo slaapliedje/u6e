@@ -2000,10 +2000,25 @@ static int obj_tile(const wobj_t*o)
 /* DIM-AT-DRAW (PREDIM lighting): when g_predim is on, draw_cell sources each tile from its
  * PRE-DIMMED variant for that cell's light level — the whole composite (terrain, objects, actors)
  * dims for free, with the masked copy unchanged (dimming baked into the source). Defined below. */
-static int             g_predim = 0, g_dim_dither = 0;   /* g_dim_dither: PREDIM+DITHER variant */
+static int             g_predim = 0, g_dim_dither = 0, g_dim_smooth = 0;   /* g_dim_dither: PREDIM+DITHER; g_dim_smooth: SMOOTH-PREDIM */
 static const uint8_t  *g_predim_light, *g_predim_vis;   /* per-cell VTxVT (set by compose_map) */
 static const uint8_t  *dim_tile(int tile, int lev);     /* flat pre-dim (body after g_darklut) */
 static const uint8_t  *dim_tile_d(int tile, int Lc);    /* dithered pre-dim (body after g_bayer4) */
+#define NLEV 16                          /* darklut levels (must match tools/mkworld); [0] = fully black */
+static uint8_t g_darklut[NLEV][256];     /* palette -> darker-palette LUTs (shipped U6WJ). Moved up so */
+                                         /* draw_cell/roofs/dim_cell_smooth + smooth_lp can reach it.  */
+/* SMOOTH-PREDIM per-pixel light: bilinear interpolation of the VTxVT cell-light field at composite pixel
+ * (X,Y) — the EXACT ph3 SMOOTH interpolant (light-cell centres offset -8 px). Shared by the cached static
+ * bake (dim_cell_smooth), the actor dim-at-draw (draw_cell) and the roof pass so all three reproduce
+ * SMOOTH's ph3 byte-for-byte. `light` = the vis-folded per-cell field (hidden cells already 0). */
+static inline int smooth_lp(int X,int Y,const uint8_t*light){
+    int sy=Y-8; if(sy<0)sy=0; int cy0=sy>>4,fy=sy&15,cy1=cy0+1; if(cy1>=VT)cy1=VT-1;
+    int sx=X-8; if(sx<0)sx=0; int cx0=sx>>4,fx=sx&15,cx1=cx0+1; if(cx1>=VT)cx1=VT-1;
+    const uint8_t*r0=&light[cy0*VT], *r1=&light[cy1*VT];
+    int a=r0[cx0],b=r0[cx1],c=r1[cx0],d=r1[cx1];
+    int t=a+(((b-a)*fx)>>4), bo=c+(((d-c)*fx)>>4);
+    return t+(((bo-t)*fy)>>4);
+}
 
 /* NATIVE-PLANAR (ST shifter, PREDIM-only; docs/design/native-planar-st.md): when active, the shared
  * chunky compose runs as today AND the renderer maintains a planar mirror (g_pdimmed static + g_ptmp
@@ -2045,6 +2060,15 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
     if(g_pd_objgate && !g_pd_objgate[cvy*VT+cvx]) return;   /* incremental static objects: skip already-shifted clean cells */
     if(pass>=0 && ((g_tflags[tile]>>4)&1)!=pass) return;   /* tile belongs to other pass */
     const uint8_t*src;
+    if(g_predim && g_dim_smooth){                          /* SMOOTH-PREDIM: per-pixel bilinear dim-at-draw (chunky) */
+        int cc=cvy*VT+cvx, vis=g_predim_vis[cc];           /* invisible cell -> black (Lp forced 0), matches ph3 vr test */
+        const uint8_t*s=g_tileset+(int32_t)tile*256;
+        for(int r=0;r<16;r++){ int Y=cvy*16+r; uint8_t*dr=tmp+Y*T+cvx*16; const uint8_t*sr=s+r*16;
+            for(int c=0;c<16;c++){ uint8_t v=sr[c]; if(v==TILE_TRANSPARENT) continue;   /* masked: keep dimmed static below */
+                int Lp = vis ? smooth_lp(cvx*16+c,Y,g_predim_light) : 0;
+                dr[c]=g_darklut[Lp>>4][v]; } }
+        return;
+    }
     if(g_predim){ int cc=cvy*VT+cvx;                       /* dim-at-draw: pre-dimmed variant for this cell */
         int Lc=g_predim_vis[cc]?g_predim_light[cc]:0;      /* full 0..255 cell light */
         src = g_dim_dither ? dim_tile_d(tile,Lc) : dim_tile(tile,Lc>>4);
@@ -2096,8 +2120,7 @@ static void draw_multi(uint8_t*tmp,int T,int vx,int vy,int tile,int pass)
  * + additive light globes from emitter tiles (tileflags2 bits0-1) and the avatar.
  * Applied by remapping each map pixel through darklut[light>>5] — palette->darker-
  * palette LUTs shipped in the pack (U6WJ). NLEV must match tools/mkworld. */
-#define NLEV 16
-static uint8_t g_darklut[NLEV][256];
+/* NLEV + g_darklut are declared up near draw_cell now (smooth_lp/draw_cell need them earlier). */
 
 /* Lighting STYLE (docs/design/original-st-renderer.md — the native-planar model from the ST-port RE):
  *  0 SMOOTH = per-pixel BILINEAR darkness LUT — the fidelity path, right for 256-colour TT/Falcon.
@@ -2106,7 +2129,7 @@ static uint8_t g_darklut[NLEV][256];
  *            friendly gradient that beats the original ST port's BINARY look. Target: rdr_st.
  *  2 BINARY = the original ST port's model (lit cell -> full tile, else black) — reference only.
  * Selectable at runtime via LIGHTSTY.REQ (byte '0'..'2'); default SMOOTH so nothing regresses. */
-enum { LSTY_SMOOTH=0, LSTY_DITHER=1, LSTY_BINARY=2, LSTY_PREDIM=3, LSTY_PREDIM_DITHER=4 };
+enum { LSTY_SMOOTH=0, LSTY_DITHER=1, LSTY_BINARY=2, LSTY_PREDIM=3, LSTY_PREDIM_DITHER=4, LSTY_SMOOTH_PREDIM=5 };
 static int g_light_style = LSTY_SMOOTH;
 static const uint8_t g_bayer4[4][4] = {   /* ordered-dither thresholds 0..15 (recursive Bayer) */
     {  0,  8,  2, 10 }, { 12,  4, 14,  6 },
@@ -2534,6 +2557,40 @@ static void dim_cell_into(int vx,int vy,int Lc,int dither){
             for(int c=0;c<16;c++){ uint8_t v=sr[c]; dr[c]=(br[c&3]<f)?lk1[v]:lk[v]; }}
     }
 }
+/* SMOOTH-PREDIM dim: dim view cell (vx,vy) of the opaque g_tmp_map into g_dimmed_map with per-PIXEL
+ * bilinear light (smooth_lp) — the cached static layer then carries VGA-smooth lighting yet is
+ * maintained incrementally (scroll shift + dirty-cell re-dim). `light` = plight (vis folded to 0),
+ * `vis` = pvis (per-cell). A fully-hidden cell -> black, matching ph3's per-pixel `if(!vr) drow=0`
+ * (which is per-cell). Byte-identical to SMOOTH ph3 over this cell's pixels. */
+static void dim_cell_smooth(int vx,int vy,const uint8_t*light,const uint8_t*vis){
+    uint8_t *d=g_dimmed_map+(vy*16)*TMP_T+vx*16;
+    if(!vis[vy*VT+vx]){                                          /* whole cell hidden -> black */
+        for(int r=0;r<16;r++){ uint8_t*dr=d+r*TMP_T; for(int c=0;c<16;c++) dr[c]=0; }
+        return;
+    }
+    const uint8_t*s=g_tmp_map+(vy*16)*TMP_T+vx*16;
+    /* fast path: smooth_lp only samples this cell's 3x3 light neighbourhood, so if that box is UNIFORM the
+     * per-pixel bilinear collapses to one flat darklut level (byte-identical). Covers ambient edges at night
+     * and all of daytime (uniform light) — the bulk of re-dimmed cells on a scroll. */
+    { int lo=255,hi=0;
+      for(int ny=vy-1;ny<=vy+1;ny++){ if(ny<0||ny>=VT)continue; for(int nx=vx-1;nx<=vx+1;nx++){ if(nx<0||nx>=VT)continue;
+          int L=light[ny*VT+nx]; if(L<lo)lo=L; if(L>hi)hi=L; } }
+      if(lo==hi){ const uint8_t*lut=g_darklut[lo>>4];
+          for(int r=0;r<16;r++){ const uint8_t*sr=s+r*TMP_T; uint8_t*dr=d+r*TMP_T; for(int c=0;c<16;c++) dr[c]=lut[sr[c]]; }
+          return; } }
+    for(int r=0;r<16;r++){ int Y=vy*16+r;
+        int sy=Y-8; if(sy<0)sy=0; int cy0=sy>>4,fy=sy&15,cy1=cy0+1; if(cy1>=VT)cy1=VT-1;
+        const uint8_t*r0=&light[cy0*VT], *r1=&light[cy1*VT];
+        const uint8_t*sr=s+r*TMP_T; uint8_t*dr=d+r*TMP_T;
+        for(int c=0;c<16;c++){ int X=vx*16+c;                    /* inline smooth_lp (hoisted row terms) */
+            int sx=X-8; if(sx<0)sx=0; int cx0=sx>>4,fx=sx&15,cx1=cx0+1; if(cx1>=VT)cx1=VT-1;
+            int a=r0[cx0],b=r0[cx1],cc=r1[cx0],dd=r1[cx1];
+            int t=a+(((b-a)*fx)>>4), bo=cc+(((dd-cc)*fx)>>4);
+            int Lp=t+(((bo-t)*fy)>>4);
+            dr[c]=g_darklut[Lp>>4][sr[c]];
+        }
+    }
+}
 /* is cell (vx,vy) inside the lead 2-cell recompose band for a (dx,dy) scroll? (matches scroll_static) */
 static int in_lead_band(int vx,int vy,int dx,int dy){
     return (dx>0&&vx>=VT-2)||(dx<0&&vx<2)||(dy>0&&vy>=VT-2)||(dy<0&&vy<2);
@@ -2713,6 +2770,87 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
     g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1; g_dm_valid=1;
 }
 
+/* SMOOTH-PREDIM static bake: maintain the smooth-dimmed static layer (g_dimmed_map) incrementally, the
+ * VGA-faithful analogue of predim_compose_static's per-cell path. Same scroll/idle/full structure and the
+ * same undimmed g_tmp_map maintenance, but the dim step is per-PIXEL bilinear (dim_cell_smooth) so the
+ * cached static reads exactly like SMOOTH's ph3 — at PREDIM's incremental cost. The one extra wrinkle vs
+ * per-cell PREDIM: a cell's per-pixel light reads its 3x3 light neighbourhood, so a light change must
+ * DILATE by one cell (a changed cell dirties its 8 neighbours' edge pixels too). Chunky-only (SMOOTH-PREDIM
+ * never goes native-planar). `light`=plight (vis folded to 0), `vis`=pvis (per-cell hard-black). */
+static void smooth_compose_static(const world_t*w,const uint8_t*light,const uint8_t*vis){
+    int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;         /* wrap to shortest signed delta */
+    if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
+    if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
+    int can_scroll = (g_tmp_valid && dx>=-1&&dx<=1 && dy>=-1&&dy<=1 && (dx||dy));
+    int can_idle   = (g_tmp_valid && dx==0 && dy==0 && g_idle_allow);
+#ifdef BENCH
+    uint32_t subt;
+#endif
+    if(!can_idle) g_pd_anim_valid=0;                           /* view changed -> the cached anim-cell set is stale */
+    if(can_scroll && g_dm_valid){
+        SUB_T(); scroll_static(w,dx,dy); mark_view_anim(w); SUB_ADD(g_ph0_scroll);
+        SUB_T();
+        shift_buf(g_dimmed_map,TMP_T,16*dx,16*dy);            /* smooth-dimmed cache: shift in lockstep */
+        shift_buf(g_dm_light,VT,dx,dy);                        /* last-light: shift in lockstep          */
+        SUB_ADD(g_ph0_shift);
+        SUB_T();
+        /* A cell's per-pixel bilinear reads its 3x3 light neighbourhood, so re-dim a cell if any neighbour
+         * brought NEW light content. `lch` marks a cell with new light to PROPAGATE this frame:
+         *   (a) interior light delta (globe/emitter moved), OR
+         *   (b) the revealed band — new terrain+light; folded in EXPLICITLY since a band cell's shifted
+         *       g_dm_light is stale garbage so the delta test can't be trusted there.
+         * Then dilate lch by one cell. SEPARATELY, the LEFT/TOP edge cells (vx==0 / vy==0) are re-dimmed
+         * unconditionally (no dilation): smooth_lp CLAMPS there (sx=max(0,X-8), sy=max(0,Y-8)), so their Lp
+         * is NOT translation-invariant and the shifted dim is wrong whenever a light gradient reaches the
+         * edge — and they aren't always in the lead band (e.g. the left column on a rightward scroll).
+         * (Presented cells are 0..9; the right/bottom presented cells read the valid VT=11 col/row 10 so
+         * they don't clamp; cells 10 aren't presented.) (b)+edges were the diagonal/edge bugs the
+         * axis-aligned walk missed. */
+        uint8_t lch[VT*VT];
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+            lch[cc]=(uint8_t)(light[cc]!=g_dm_light[cc] || in_lead_band(vx,vy,dx,dy)); }
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
+            int d=(vx==0 || vy==0);                              /* clamping edges: always re-dim (see above) */
+            for(int ny=vy-1;ny<=vy+1 && !d;ny++){ if(ny<0||ny>=VT) continue;
+                for(int nx=vx-1;nx<=vx+1;nx++){ if(nx<0||nx>=VT) continue;
+                    if(lch[ny*VT+nx]){ d=1; break; } } }          /* self OR any neighbour brought new light */
+            if(d){ dim_cell_smooth(vx,vy,light,vis);
+#ifdef BENCH
+                   g_ph0_dirty++;
+#endif
+            }
+        }
+        for(int i=0;i<VT*VT;i++) g_dm_light[i]=light[i];       /* whole field is now current */
+        SUB_ADD(g_ph0_redim);
+    } else if(can_idle && g_dm_valid){
+        /* IDLE (dx=dy=0): plight is cached by compose_map (view+turn fixed), so the light field is invariant
+         * (lch=0) — re-dim ONLY the cells whose STATIC content animates. No dilation needed. */
+        int32_t left=w->px-VT/2, top=w->py-VT/2;
+        SUB_T();
+        if(!g_pd_anim_valid){ mark_anim_cells(w,left,top);
+            g_pd_has_anim=0; for(int i=0;i<VT*VT;i++) if(g_pd_anim[i]){ g_pd_has_anim=1; break; }
+            g_pd_anim_valid=1; }
+        if(g_pd_has_anim) g_view_has_anim=1;
+        for(int i=0;i<VT*VT;i++) g_pd_dirty[i]=g_pd_anim[i];   /* animated content cells */
+        SUB_ADD(g_ph0_scroll);
+        SUB_T();                                               /* refresh UNDIMMED g_tmp_map for dirty cells */
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++) if(g_pd_dirty[vy*VT+vx])
+            fill_tiles(w,left,top,vx,vy,vx+1,vy+1);
+        g_pd_objgate=g_pd_dirty; draw_view_objects(g_tmp_map,TMP_T,left,top,0); g_pd_objgate=0;
+        SUB_ADD(g_ph0_redim);
+        SUB_T();
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+            if(g_pd_dirty[cc]){ dim_cell_smooth(vx,vy,light,vis); g_dm_light[cc]=light[cc]; } }
+        SUB_ADD(g_ph0_shift);
+    } else {                                                   /* full rebuild */
+        build_static(w);
+        for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int cc=vy*VT+vx;
+            dim_cell_smooth(vx,vy,light,vis); g_dm_light[cc]=light[cc]; }
+        g_pd_anim_valid=0;
+    }
+    g_tmp_px=(int)w->px; g_tmp_py=(int)w->py; g_tmp_valid=1; g_dm_valid=1;
+}
+
 #ifdef BENCH
 /* Prove the CHUNKY idle-incremental (re-dim only animated/light-changed cells, keeping g_dimmed_map) is
  * byte-identical to a full rebuild — the TT/Falcon analogue of the ST INV2 idle-verify (which can't cover
@@ -2759,13 +2897,14 @@ static void compose_map(const world_t*w)
     int32_t left=w->px-VT/2, top=w->py-VT/2;
     /* DIM-AT-DRAW (PREDIM): compute the per-cell light FIRST, then every tile/sprite draw sources its
      * pre-dimmed variant (draw_cell -> dim_tile) — the whole composite dims for free, actors included. */
-    int predim = (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER);
+    int predim = (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER || g_light_style==LSTY_SMOOTH_PREDIM);
     g_dim_dither = (g_light_style==LSTY_PREDIM_DITHER);
+    g_dim_smooth = (g_light_style==LSTY_SMOOTH_PREDIM);   /* SMOOTH-PREDIM: per-pixel bilinear baked into the cached static */
 #ifdef HAVE_RDR_ST
     /* Native-planar enable (recomputed each frame): master switch + PREDIM + ST backend + single-LUT
      * (a band raster gives each row its own LUT, which pre-converted planar tiles can't honour). On the
      * off->on edge or after a palette (LUT) change, force a planar-static rebuild. */
-    { int elig = g_planar_allow && predim && rdr_active_backend()==0 && rdr_native_planar_ok();
+    { int elig = g_planar_allow && predim && !g_dim_smooth && rdr_active_backend()==0 && rdr_native_planar_ok();  /* SMOOTH-PREDIM is per-pixel -> chunky only */
       if(elig){ if(!g_native_planar){ g_pd_valid=0; rdr_pcursor_invalidate(); } /* enabled -> rebuild + drop stale cursor save-under */
                 if(rdr_planar_take_dirty()) g_pd_valid=0;   /* LUT changed (new scene) -> rebuild       */
                 g_native_planar=1; }
@@ -2812,7 +2951,8 @@ static void compose_map(const world_t*w)
          * raw tiles), dim only the revealed edge + light-changed cells into g_dimmed_map, then copy
          * it out. Actors dim-at-draw in ph1 (g_predim armed just below). */
         g_predim=0;
-        predim_compose_static(w,plight,g_dim_dither);
+        if(g_dim_smooth) smooth_compose_static(w,plight,pvis);   /* SMOOTH-PREDIM: per-pixel bilinear cached static */
+        else             predim_compose_static(w,plight,g_dim_dither);
         SUB_T(); if(g_chunky_dyn) memcpy(tmp,g_dimmed_map,sizeof tmp); SUB_ADD(g_ph0_copy);   /* dimmed static -> compose buffer (skipped when planar-only) */
 #ifdef HAVE_RDR_ST
         /* planar g_ptmp = static layer. IDLE (persistent g_ptmp): g_ptmp already holds last frame's whole
@@ -2899,9 +3039,17 @@ static void compose_map(const world_t*w)
             int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
             int di=roof_at(wx,wy); if(di<0||di>=g_nrtiles) continue;
             const uint8_t*src=g_rtiles+(int32_t)di*256;
-            if(g_chunky_dyn)
-            for(int r=0;r<16;r++){uint8_t*d=tmp+(vy*16+r)*T+vx*16; const uint8_t*s=src+r*16;
-                for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
+            if(g_chunky_dyn){
+                if(g_dim_smooth){                            /* SMOOTH-PREDIM: dim roof pixels per-pixel too (roof cells are forced visible) */
+                    int visc=g_predim_vis[vy*VT+vx];
+                    for(int r=0;r<16;r++){ int Y=vy*16+r; uint8_t*d=tmp+Y*T+vx*16; const uint8_t*s=src+r*16;
+                        for(int c=0;c<16;c++){ uint8_t v=s[c]; if(v==TILE_TRANSPARENT) continue;
+                            int Lp = visc ? smooth_lp(vx*16+c,Y,g_predim_light) : 0;
+                            d[c]=g_darklut[Lp>>4][v]; } }
+                } else
+                for(int r=0;r<16;r++){uint8_t*d=tmp+(vy*16+r)*T+vx*16; const uint8_t*s=src+r*16;
+                    for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
+            }
 #ifdef HAVE_RDR_ST
             if(g_native_planar && (!g_pd_dyngate || g_pd_dyngate[vy*VT+vx]))
                 rdr_pdyn_cell(0x20000000|di, src, vx, vy); /* roof cell -> g_ptmp (planar, undimmed; idle: dirty cells only) */
@@ -3000,6 +3148,51 @@ static void compose_map(const world_t*w)
     }
     PH_END(3);
 }
+
+#ifdef BENCH
+/* Prove SMOOTH-PREDIM is byte-identical to SMOOTH over the presented map region, across the three
+ * incremental scenarios (full rebuild / idle-anim-tick / 1-tile scroll). SMOOTH-PREDIM caches a
+ * per-pixel-bilinear static + dims actors/roofs at draw; SMOOTH re-lights the whole composite in ph3.
+ * If they agree byte-for-byte, the cached/incremental smooth-dim reproduces the VGA reference exactly.
+ * Most meaningful at NIGHT (non-uniform light — set STARTMIN.REQ); by day light is uniform and trivial.
+ * Forces the chunky path so it runs on any bench build. Returns total mismatched bytes (0 = proven). */
+static uint32_t smooth_predim_selftest(world_t*w){
+    static uint8_t snap[160*160];                       /* span = MAPSZ-2*MAP_INSET = 160 */
+    const int span=MAPSZ-2*MAP_INSET;
+    /* a mixed 1-tile walk (horizontal, vertical, both diagonals, reversal) exercising the scroll
+     * dilation + multi-step accumulation — U6 movement is 8-directional so dx=dy=±1 must be covered */
+    static const int8_t WK_X[6]={ 1, 1, 0,-1,-1, 1 }, WK_Y[6]={ 0, 1, 1, 0,-1, 0 };
+    uint32_t diff=0;
+    int sv_ls=g_light_style, sv_ia=g_idle_allow; uint32_t sv_ctr=g_anim_ctr;
+    int basepx=(int)w->px, basepy=(int)w->py;
+#ifdef HAVE_RDR_ST
+    int sv_np=g_native_planar, sv_pa=g_planar_allow; g_planar_allow=0;   /* force chunky reference on ST */
+#endif
+    for(int sc=0; sc<3; sc++){
+        /* --- candidate: SMOOTH-PREDIM, exercising its incremental path --- */
+        g_light_style=LSTY_SMOOTH_PREDIM;
+        g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0; g_idle_allow=0; g_anim_ctr=sv_ctr;
+        w->px=(uint16_t)basepx; w->py=(uint16_t)basepy; compose_map(w);   /* prime: full rebuild */
+        if(sc==1){ g_anim_ctr=sv_ctr+1; g_idle_allow=1; compose_map(w); g_idle_allow=0; }   /* idle-incremental */
+        if(sc==2){ int px=basepx, py=basepy;                            /* chained incremental scroll walk */
+            for(int k=0;k<6;k++){ px=(px+WK_X[k])&(U6_SURFACE_TILES-1); py=(py+WK_Y[k])&(U6_SURFACE_TILES-1);
+                w->px=(uint16_t)px; w->py=(uint16_t)py; compose_map(w); } }
+        for(int y=0;y<span;y++) memcpy(snap+y*span, ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET, (size_t)span);
+        /* --- reference: SMOOTH, a full rebuild at the SAME (view,anim) --- */
+        g_light_style=LSTY_SMOOTH;
+        g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0; g_idle_allow=0;
+        compose_map(w);                                              /* w->px/py + g_anim_ctr already at final state */
+        for(int y=0;y<span;y++){ const uint8_t*p=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET;
+            for(int x=0;x<span;x++) if(p[x]!=snap[y*span+x]) diff++; }
+    }
+    g_light_style=sv_ls; g_idle_allow=sv_ia; g_anim_ctr=sv_ctr; w->px=(uint16_t)basepx; w->py=(uint16_t)basepy;
+#ifdef HAVE_RDR_ST
+    g_native_planar=sv_np; g_planar_allow=sv_pa;
+#endif
+    g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0;
+    return diff;
+}
+#endif
 
 #if defined(BENCH) && defined(HAVE_RDR_ST)
 /* Phase-4c INV (static full rebuild): prove the planar-DIRECT static build (dim tiles blitted straight
@@ -6447,21 +6640,23 @@ int main(void)
             if(id>0){ talk(id); dbg_num("CONVPAL talk id=", id); dbg_num("CONVPAL portrait=", g_have_pc); } }
     }
 
-    /* DEBUG: LIGHTSTY.REQ byte '0'=SMOOTH '1'=DITHER '2'=BINARY '3'=PREDIM selects the lighting
-     * style once, BEFORE compose_map so the very first composed frame uses it. Harmless in play. */
+    /* DEBUG: LIGHTSTY.REQ byte '0'=SMOOTH '1'=DITHER '2'=BINARY '3'=PREDIM '4'=PREDIM_DITHER
+     * '5'=SMOOTH_PREDIM selects the lighting style once, BEFORE compose_map so the very first
+     * composed frame uses it. Harmless in play. */
     { static int ls_done=0;
       if(!ls_done){ int32_t rl=0; char *rq=(char*)plat_load_file("LIGHTSTY.REQ",1,&rl);
-          if(rq && rl>0 && rq[0]>='0' && rq[0]<='4'){ g_light_style=rq[0]-'0'; g_tmp_valid=0; }
+          if(rq && rl>0 && rq[0]>='0' && rq[0]<='5'){ g_light_style=rq[0]-'0'; g_tmp_valid=0; }   /* '5' = SMOOTH-PREDIM */
 #ifdef HAVE_RDR_ST
           else if(rdr_active_backend()==0){ g_light_style=LSTY_PREDIM; g_tmp_valid=0; }  /* ST-shifter default: PREDIM
                                           * (the low-colour lighting style + the native-planar present path). */
 #endif
-          else { g_light_style=LSTY_SMOOTH; g_tmp_valid=0; }  /* TT/Falcon default: SMOOTH = per-pixel bilinear light,
-                                          * the VGA-faithful model (matches Nuvie's smooth per-pixel globes; lighting.md §5).
-                                          * PREDIM_DITHER is faster (bakes per-cell dimming into the cached static, scrolls
-                                          * incrementally) but its ordered dither is visible in torch/night gradients vs
-                                          * VGA's smooth falloff — so it's opt-in via LIGHTSTY.REQ '4' (a "fast mode"), not
-                                          * the default. Daytime (uniform light) is byte-identical either way. */
+          else { g_light_style=LSTY_SMOOTH_PREDIM; g_tmp_valid=0; }  /* TT/Falcon default: SMOOTH-PREDIM = per-pixel
+                                          * bilinear light (VGA-faithful, matches Nuvie's smooth per-pixel globes; lighting.md
+                                          * §5) BAKED into the cached static layer, so it's incremental like PREDIM. Proven
+                                          * BYTE-IDENTICAL to plain SMOOTH (smooth_predim_selftest, night+day, full/idle/scroll)
+                                          * but ~4x faster idle (TT idle 114->26, Falcon 231->64 ms) — the best of both. Plain
+                                          * SMOOTH ('0') is kept as the fidelity reference; PREDIM_DITHER ('4') is the low-colour
+                                          * fast mode (visible dither); daytime (uniform light) is byte-identical across all. */
 #ifdef HAVE_RDR_ST
           { int32_t pl=0; char*pq=(char*)plat_load_file("PLANAR.REQ",1,&pl);   /* '0' = force chunky (A/B control) */
             if(pq && pl>0 && pq[0]=='0') g_planar_allow=0; }
@@ -6514,7 +6709,7 @@ int main(void)
         /* LIGHTSTY.REQ ('0'=SMOOTH '1'=DITHER '2'=BINARY) selects the lighting style so we can
          * bench per-pixel bilinear vs per-cell dither. Defaults SMOOTH. */
         { int32_t lrl=0; char *lrq=(char*)plat_load_file("LIGHTSTY.REQ",1,&lrl);
-          if(lrq && lrl>0 && lrq[0]>='0' && lrq[0]<='4'){ g_light_style=lrq[0]-'0';
+          if(lrq && lrl>0 && lrq[0]>='0' && lrq[0]<='5'){ g_light_style=lrq[0]-'0';   /* '5' = SMOOTH-PREDIM */
               dbg_num("LIGHT STYLE=", g_light_style); } }
         /* STARTMIN.REQ (decimal minute-of-day 0..1439) forces the game clock to exercise NIGHT lighting —
          * the scattered light-dirty cells that the incremental static-object gate must handle (uniform day
@@ -6566,6 +6761,10 @@ int main(void)
         /* CHUNKY-IDLE proof (TT/Falcon idle-incremental == full rebuild): forces the chunky path so it runs
          * on ANY bench build (the ST INV2 idle-verify can't cover it — it keeps the chunky reference full). */
         { uint32_t cid=chunky_idle_selftest(&w); dbg_num("CHUNKY-IDLE full-vs-incr diff=", (int)cid);
+          g_tmp_valid=0; g_dm_valid=0; }
+        /* SMOOTH-PREDIM proof: cached per-pixel-bilinear static + dim-at-draw == full SMOOTH ph3 (byte-exact
+         * over the presented map). Meaningful at NIGHT (STARTMIN.REQ); 0 by day (uniform light). */
+        { uint32_t spd=smooth_predim_selftest(&w); dbg_num("SMOOTH-PREDIM vs SMOOTH diff=", (int)spd);
           g_tmp_valid=0; g_dm_valid=0; }
         /* FULL-build compose (force a rebuild each time): the no-cache baseline. */
         uint32_t tf0=plat_ticks_200hz();
