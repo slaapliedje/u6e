@@ -5224,7 +5224,11 @@ int main(void)
                                                           * it survives this free — no g_nbook reset.) */
     }
 #endif
-    uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe) */
+    uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
+    if(!pak) pak=(uint8_t*)plat_load_file(PACK_NAME,0,&n);   /* fast pool full (tight TT-RAM) -> load into CHIP (ST-RAM);
+                                                              * the tileset then reads slower but the game FITS. A stock
+                                                              * 4 MB TT can't hold the pack in its ~2.7 MB fast pool + the
+                                                              * full engine, but has ST-RAM to spare. See fast-pool-tight-on-tt. */
     /* M9: the pack magic SELECTS the game (GameDef). The same binary accepts any registered
      * game's pack; U6's magic is "U6WT". SE/MD register their own magics as they land. */
     const GameDef *gd = (pak && n>=26) ? gamedef_for_magic((const char*)pak) : NULL;

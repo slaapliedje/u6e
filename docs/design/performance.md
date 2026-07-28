@@ -731,3 +731,21 @@ compose ~2.5× Falcon's, and the 8-bit 256-colour present (49.8 ms) beats Falcon
 | STE +Blitter | 8 MHz | 201 ms (5.0 fps) | 88 ms (11.4 fps) |
 | Falcon VIDEL truecolor | 16 MHz | 192 ms (5.2 fps) | 139 ms (7.2 fps) |
 | TT 256-colour | 32 MHz | 91 ms (11.0 fps) | 70 ms (14.3 fps) |
+
+## 2026-07-24 — TT 4 MB fit: slim pack (U6TT.PAK) + fast→chip pack-load fallback
+The full 256-colour U6.PAK (~2.5 MB) can't run on a stock 4 MB TT (the "unknown game magic" OOM). Two parts:
+1. **Slim TT pack** — `world-tt` runs `MKWORLD_SLIM` (same front-end split as the ST's U6ST.PAK) but keeps the
+   FULL 256-colour tileset the TT renders directly → **U6TT.PAK 1.08 MB**. New `gamett.prg` build loads it
+   (NOT ST_STREAM: that frees U6FE via plat_chip_reset which only reclaims CHIP RAM, but on TT plat_load_file
+   uses FAST RAM, so U6FE would never free — the TT slim build drops the front-end and boots to the baked
+   start, gated on the absent INTRO/CHARGEN/MENU.REQ).
+2. **fast→chip fallback** — the pack loaded `plat_load_file(...,fast=1)` into TT-RAM, but a 4 MB TT's ~2.7 MB
+   fast pool can't hold pack + full-engine buffers while 13 MB of ST-RAM sits idle. Retry with `fast=0` (CHIP)
+   on NULL → the pack lands in ST-RAM and the game FITS. General robustness win (ST/Falcon unaffected — their
+   fast alloc succeeds or falls back to the single pool).
+
+**Fits every stock-4 MB split** (2+2, 4+0 ST-only, 0+4): all load + render (256-colour shot verified). Cost of
+the ST-RAM fallback: tiles read slower, so **scroll compose 40→51 ms, idle 20→25 ms (~25%, not a cliff — the
+030 cache absorbs most tile reads)**. Even the ST-RAM path is **scroll 102 ms (9.8 fps) / idle 76 ms (13 fps)**;
+a big-RAM TT keeps tiles in fast RAM (40/20). Front-end (intro/chargen) is the one TT-slim gap — needs ST_STREAM
+taught to free TT-RAM, or a 256-colour resident front-end.

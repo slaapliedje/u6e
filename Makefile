@@ -743,6 +743,36 @@ $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch, slim pack)"
 game-st: $(BUILD)/gamest.prg
 
+# ---- TT SLIM build (M8 fit): the same 256-colour TT backend (rdr_tt.c, 8-plane c2p) as the unified
+# game.prg, but with the SLIM pack (U6TT.PAK) + front-end STREAMING (ST_STREAM) so it fits a STOCK 4 MB
+# TT. The full U6.PAK (~2.5 MB) overflows the ~2.7 MB TT fast pool once TPA + buffers are taken (the
+# "unknown game magic" OOM), so the flagship game.prg needs a big-RAM TT; this variant is the 4 MB path.
+# NOTE: NOT ST_STREAM — that path loads U6FE into a plat_chip region and frees it with plat_chip_reset,
+# which only reclaims CHIP (ST) RAM; on TT plat_load_file uses FAST (TT) RAM, so U6FE (1.4 MB) would
+# never free and the core pack would OOM. So the TT slim build DROPS the front-end (intro/chargen/menu
+# need resident art the slim pack omits) and boots straight to the baked start — the non-ST_STREAM
+# front-end path is gated on INTRO/CHARGEN/MENU.REQ, so with no .REQ it skips to gameplay. (Restoring the
+# TT front-end needs either ST_STREAM taught to free TT-RAM, or a 256-colour front-end that fits resident.)
+$(BUILD)/gamett.prg: $(GAME_SRC)
+	$(call HYBRID_BUILD,$@,$^,obj_tt_slim,-DHAVE_RDR_TT -DPACK_NAME='"U6TT.PAK"')
+game-tt: $(BUILD)/gamett.prg
+
+# SLIM TT world pack (U6TT.PAK): like world-st (MKWORLD_SLIM splits the ~1.35 MB front-end/intro art
+# to the shared U6FE.PAK) but keeps the FULL 256-colour tileset/palette the TT renders directly.
+world-tt: $(BUILD)/mkworld roof-extract
+	MKWORLD_SLIM=1 $(BUILD)/mkworld $(REFDATA) $(BUILD)/U6TT.PAK $(GX) $(GY)
+gamedata-tt: world-tt
+
+# TT slim shot: prove the 256-colour SLIM pack renders correctly AND fits at the STOCK --ttram 4.
+shot-tt: gamedata-tt $(BUILD)/gamett.prg
+	rm -f $(BUILD)/gamett.avi $(BUILD)/gamett_screen.png
+	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
+	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\gamett.prg' \
+	          --fast-forward on --run-vbls 8000 \
+	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamett.avi 2>/dev/null || true
+	-ffmpeg -y -i $(BUILD)/gamett.avi -update 1 $(BUILD)/gamett_screen.png 2>/dev/null
+	@echo "wrote $(BUILD)/gamett_screen.png (TT 256-colour, SLIM pack @ stock 4 MB)"
+
 # GRAPHICS-CARD variant (M8): the VDI card backend (rdr_vcard.c) instead of the direct-hardware
 # ST/TT/Falcon ones. Runs as a GEM app (rdr_vcard does appl_init + takes the screen with wind_update)
 # and presents the 320x240 frame centred on the card via VDI (c2p -> vr_trnfm -> vro_cpyfm). PURE
