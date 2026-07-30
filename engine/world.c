@@ -32,9 +32,11 @@ const GameDef gamedef_se = {
     "savage", "The Savage Empire",
     { 'S','E','W','T' },
     U6_SURFACE_TILES, U6_DUNGEON_LEVELS, 0, 0, &ruleset_u6,
-    /* wko: SE Avatar is obj_n 310 (captured objlist, see memory se-actor-capture). SE has no U6
-     * magic; key/lockpick obj_n not yet surveyed => 0 (no-match until the SE obj_n table is decoded). */
-    { 310, 0, 0, 0, 0 },
+    /* wko surveyed from SE's own BASETILE+LOOK.LZC (tools/objsurvey; docs/formats/se_md_objn.md):
+     * avatar 310 "modern man" (confirmed vs the captured objlist), key 53 "key". SE has NO lockpick
+     * (jungle setting), NO U6 magic => spellbook/reagent_base 0. gold is obj_n 69 but wko has no gold
+     * field (currency identity is not an obj_n check). */
+    { 310, 53, 0, 0, 0 },
 };
 const GameDef gamedef_md = {
     "martian", "Martian Dreams",

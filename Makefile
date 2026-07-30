@@ -169,6 +169,17 @@ $(BUILD)/lzctest: tools/lzctest.c $(LZC_SRC)
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 
+# M9 obj_n survey: map each SE/MD object number to its LOOK name (host-side, clean-room; no data
+# shipped) to identify the well-known objects (avatar/gold/key/container/door/food) for GameDef.wko
+# + per-game USE. `make objsurvey-se` / `objsurvey-md` dump obj_n -> name to stdout.
+$(BUILD)/objsurvey: tools/objsurvey.c $(LZC_SRC)
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+objsurvey-se: $(BUILD)/objsurvey
+	$(BUILD)/objsurvey $(SE_REFDATA) se
+objsurvey-md: $(BUILD)/objsurvey
+	$(BUILD)/objsurvey $(MD_REFDATA) md
+
 lzctest: $(BUILD)/lzctest
 	$(BUILD)/lzctest $(SE_REFDATA) se
 	@echo

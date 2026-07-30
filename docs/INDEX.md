@@ -38,6 +38,7 @@ Per-game:   "shared" if identical across all three; else note deltas.
 | music.md             | Music (.M) = LZW + OPL2 FM cmd stream | all  | verify   | VERIFIED | confirmed end-to-end: container + OPL2-not-MIDI + opcode/operand table + pitch/operator layout, via mdump on all 12 .M AND the working sequencer+synth+3 backends (make musictest, cross-checked vs ScummVM/Nuvie) | /tools (mdump) + /engine (music,oplsynth) + /platform (midi,dma,psg) | M10 |
 | music_areas.md       | Per-area music selection (which track where) | all | per-game area_group hook | VERIFIED | U6 group model confirmed from Nuvie native-U6 loader; overworld/town = random pool (no per-town song); combat→ENGAGE wired; boat/dungeon/gargoyle deferred to those systems | /render (gamedemo music_*) | M10 |
 | vdi_scrninfo.md      | VDI vq_scrninfo Device struct + graphics-card blit MFDB (truecolour layout, fd_wdwidth) | n/a (host video) | shared | VERIFIED | confirmed (rdr_vcard truecolour pixel-correct 16/32bpp on the card) | /render (rdr_vcard) | M8 |
+| se_md_objn.md        | SE/MD well-known obj_n (avatar/gold/key/door/container) via BASETILE∘LOOK.LZC | SE/MD | per-game obj_n table | VERIFIED (SE) / PROBABLE (MD) | SE confirmed (obj_n 310=modern man=captured-objlist avatar; key 53); MD avatar 318/319 "yourself" unconfirmed | /tools (objsurvey), /engine (GameDef.wko) | M9 |
 
 ## Rules specs (/docs/rules/)
 
