@@ -75,14 +75,18 @@ int main(int argc, char **argv)
     /* frames mode: `objsurvey <dir> <se|md> frames <obj_n> [count]` — dump a door/container's frames
      * with passability, to derive open/closed frame semantics from the game's own data. */
     if (kw && strcmp(kw, "frames") == 0){
-        int o = (argc > 4) ? atoi(argv[4]) : 0, cnt = (argc > 5) ? atoi(argv[5]) : 16;
+        int o = (argc > 4) ? atoi(argv[4]) : 0;
         int base = bt[o*2] | (bt[o*2+1] << 8);
-        printf("obj_n %d base tile %d '%s' — frames (P=passable, X=blocks):\n",
-               o, base, (base<NTILES&&name[base])?name[base]:"");
+        int next = (o+1 < NOBJ) ? (bt[(o+1)*2] | (bt[(o+1)*2+1] << 8)) : base+16;
+        int cnt = (argc > 5) ? atoi(argv[5]) : (next > base ? next - base : 8);  /* default = this object's OWN frames */
+        const char *self = (base < NTILES && name[base]) ? name[base] : "";
+        printf("obj_n %d base %d (obj_n+1 base %d => %d frames) '%s' — P=passable X=blocks, * = name != '%s':\n",
+               o, base, next, next-base, self, self);
         for (int fr = 0; fr < cnt; fr++){ int t = base + fr;
             int blk = (tf && t < NTILES) ? (tf[t] & 0x06) : -1;   /* tileflags1 bit1|bit2 */
-            printf("  fr %2d  tile %4d  %s  %s\n", fr, t,
-                   blk<0?"?":(blk?"X":"P"), (t<NTILES&&name[t])?name[t]:"");
+            const char *nm = (t < NTILES && name[t]) ? name[t] : "";
+            printf("  fr %2d  tile %4d  %s  %s%s\n", fr, t, blk<0?"?":(blk?"X":"P"),
+                   nm, (self[0] && strcmp(nm, self) != 0) ? "  *" : "");
         }
         return 0;
     }

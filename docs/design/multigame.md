@@ -68,9 +68,13 @@ unblocks (most foundational first):
    no-op until surveyed. This stopped SE/MD misfiring U6 semantics on renumbered objects (e.g. toggling
    passability on a non-door). **SE USE v1 DONE (2026-07-29):** containers (183/184/188/132/133) SEARCH
    /spill via the shared `spill_container`; food (103/110/197/114) EAT + feed — keyed on the surveyed SE
-   obj_n ([[se_md_objn]]), validated by the `SEUSE.BIN` self-test (food 2→1→gone; container child spills).
-   SE DOORS deferred: their frames are per-object and share tile ranges (no clean open/close delta) — a
-   per-object frame table is a later step. NOTE ON ARCHITECTURE: use/talk logic is gamedemo-coupled
+   obj_n (se_md_objn.md), validated by the `SEUSE.BIN` self-test (food 2→1→gone; container child spills).
+   **SE DOORS DONE (2026-07-29):** since SE door frames are per-object with no uniform delta, the toggle is
+   DATA-DRIVEN by passability — open=passable / closed=impassable tileflags1, now shipped to the core pack
+   via a new **CTF1** section; USE flips to the nearest opposite-passability door-named tile. CTF1 also
+   gives SE/MD **object passability in general** (walls/furniture/closed doors block — was entirely absent;
+   Avatar keeps 7/8 walkable neighbours, not boxed in). Validated: `SEUSE.BIN` door 977(closed)→USE→976(open).
+   NOTE ON ARCHITECTURE: use/talk logic is gamedemo-coupled
    (msgcat/blocking/UI), so those seams live in the game layer keyed on `g_gd`, NOT the engine `RuleSet`
    (which stays for engine-clean rules like `move_turn_cost`, wired via `world_init`→`w->rules`). Engine
    behavioural hooks (on_combat_hit, on_rest) are added when a game provides a real override — not

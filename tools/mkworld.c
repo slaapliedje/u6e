@@ -1150,6 +1150,11 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
         fwrite(gettable, 1, 1024, f);
     }
 
+    /* Optional "CTF1" section: per-tile tileflags1 (2048 B; bit1 Impassable, bit2 Wall). Gives the
+     * core-pack (SE/MD) engine OBJECT passability — walls/furniture/CLOSED DOORS block — and the
+     * open/closed passability a USE-a-door toggle reads (docs/formats/se_md_objn.md). [4 "CTF1"][2048]. */
+    if (tflag){ fwrite("CTF1", 1, 4, f); fwrite(tflag, 1, 2048, f); }
+
     /* Optional "CFNT" section: the game's WOU proportional font converted to the
      * U6.CH 8x8 1bpp format so the shared text renderer can draw it.
      * [4 "CFNT"][2048 font]. */

@@ -40,11 +40,18 @@ SE cast (context): 311 professor, 312 reporter, 313 woman, 314 shaman, 315 chief
   U6-proven `spill_container`). Validated: `SEUSE.BIN` self-test — a parked child spills alive.
 - **food → EAT** (IMPLEMENTED, `se_is_food`): 103/110 meat, 197 fruit, 114 bunch of turnips. USE
   consumes one + feeds the Avatar (shared hunger model). Validated: `SEUSE.BIN` — qty 2→1→gone.
-- **doors / doorways → DEFERRED**: 160 trap door, 161 door, 226 stone doorway, 234 door, 236 doorway,
-  270 door, 272 stone doorway, 275 door. SE door FRAMES are per-object and share tile ranges with
-  OTHER objects (`objsurvey ... frames`: 161's frames read as fountain/cave; 270's as table/window;
-  no consistent open/closed delta), so a reliable toggle needs a per-object frame table — a later step.
-  Until then SE doors fall through to "Nothing happens with the door." (safe; no passability corruption).
+- **doors / doorways → OPEN/CLOSE** (IMPLEMENTED, data-driven — no per-object table). SE door FRAMES
+  are per-object and share tile ranges with OTHER objects (`objsurvey ... frames`: 161's frames read as
+  fountain/cave; 234 open 0/2 closed 1/3; 270 open 2 closed 0 with "table" tiles interleaved; 275 open 3;
+  161/226/236/272 have NO open frame), so there is no uniform frame delta. Instead the toggle is derived
+  from **passability**: an OPEN door tile is passable, a CLOSED one impassable (tileflags1, now shipped
+  to the core pack via **CTF1**). USE flips to the NEAREST tile that is still "door"-named AND has the
+  opposite passability (name-match skips the interleaved table/window tiles; tie-break keeps orientation).
+  Doors with no opposite-passability door tile (161/226/236/272 arches, 160 trap door) → "won't budge"
+  (safe). Validated: `SEUSE.BIN` — door 977 (closed) → USE → 976 (open, passable).
+- **CTF1** also gives SE/MD **object passability in general** (walls/furniture/closed doors block) — it
+  was entirely absent before (g_tflags1 was zeroed for core packs); the Avatar keeps 7/8 walkable
+  neighbours at the SE start, so it's not boxed in.
 - water 140/152 excluded from food (terrain water, not a gettable item).
 
 ## Martian Dreams — well-known obj_n (PROBABLE — not yet confirmed)

@@ -3738,6 +3738,31 @@ static int se_use_object(int idx)
         int f=g_afood[1]+40; g_afood[1]=(uint8_t)(f>FOOD_MAX?FOOD_MAX:f);
         return 1;
     }
+    if(strstr(nm,"door")){                           /* SE door: OPEN/CLOSE, data-driven (se_md_objn.md).
+        * SE door frames are per-object (no U6 ±4 rule) and share tile ranges with other objects, so we
+        * DON'T do frame arithmetic. Instead: a door's open frame is PASSABLE, its closed frame IMPASSABLE
+        * (g_tflags1, shipped via CTF1). USE flips to the nearest tile that is still a "door" AND has the
+        * opposite passability. Name-matching skips the interleaved non-door tiles; the tie-break (opening
+        * prefers the lower frame, closing the higher) keeps a multi-orientation door in its orientation. */
+        int cur=g_wobj[idx].tile;
+        int curblk=(cur>=0&&cur<2048)?(g_tflags1[cur]&0x06):0;   /* impassable => currently CLOSED */
+        int want_pass=curblk?1:0;                                 /* closed -> want passable(open); open -> impassable(closed) */
+        int best=-1;
+        for(int d=1; d<=3 && best<0; d++){
+            int cand[2]; if(want_pass){ cand[0]=cur-d; cand[1]=cur+d; } else { cand[0]=cur+d; cand[1]=cur-d; }
+            for(int k=0;k<2 && best<0;k++){ int c=cand[k];
+                if(c<0||c>=2048) continue;
+                char cn[40]; obj_name(c,cn,sizeof cn);
+                int cpass=!(g_tflags1[c]&0x06);
+                if(strstr(cn,"door") && cpass==want_pass) best=c;
+            }
+        }
+        if(best>=0){ g_wobj[idx].tile=(uint16_t)best;
+            int n=msgcat(0, curblk?"You open the ":"You close the "); n=msgcat(n,nm); msgcat(n,".");
+            build_blocked();                          /* door passability changed */
+            return 1; }
+        { int n=msgcat(0,"The "); n=msgcat(n,nm); msgcat(n," won't budge."); return 0; }
+    }
     int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");
     return 0;
 }
@@ -5491,6 +5516,7 @@ int main(void)
     long core_end = 26 + (long)map_len + chunks_len + (long)ntiles*256 + 768 + 256
                   + (long)g_nobjs*14;
     int is_core = (gd != &gamedef_u6);
+    const uint8_t *ctf1 = NULL;                          /* CTF1 per-tile tileflags1 (SE/MD core pack) */
     g_gamename = is_core ? gd->name : (const char *)0;   /* panel title for SE/MD core packs */
     g_gd = gd ? gd : &gamedef_u6;                        /* authoritative loaded-game identity */
     g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
@@ -5534,6 +5560,10 @@ int main(void)
             } else if (ext[0]=='C'&&ext[1]=='F'&&ext[2]=='N'&&ext[3]=='T'){
                 if (ext+4+2048 > pak+n) break;
                 g_font = ext+4;                              /* SE/MD 8x8 font (points into pak) */
+                ext += 4+2048;
+            } else if (ext[0]=='C'&&ext[1]=='T'&&ext[2]=='F'&&ext[3]=='1'){
+                if (ext+4+2048 > pak+n) break;
+                ctf1 = ext+4;                                /* per-tile tileflags1 (obj passability + doors) */
                 ext += 4+2048;
             } else if (ext[0]=='C'&&ext[1]=='F'&&ext[2]=='A'&&ext[3]=='C'){
                 if (ext+10 > pak+n) break;                   /* [u16 nface][u16 w][u16 h][n x w*h] */
@@ -5789,7 +5819,11 @@ int main(void)
     }
     } else {   /* core pack (SE/MD): stub the U6-only cursor/basetile/anim/lighting/save tail */
         g_cw=g_ch=0; g_basetile=s_stub_basetile;
-        for(int i=0;i<2048;i++){ g_anim_idx[i]=-1; g_tflags[i]=0; g_tflags1[i]=0; }
+        for(int i=0;i<2048;i++){ g_anim_idx[i]=-1; g_tflags[i]=0; }
+        /* per-tile passability: from the CTF1 section if the core pack shipped it (SE/MD object blocking
+         * + door open/closed), else all-passable (0). build_blocked() (below) turns it into g_blocked. */
+        if(ctf1) for(int i=0;i<2048;i++) g_tflags1[i]=ctf1[i];
+        else     for(int i=0;i<2048;i++) g_tflags1[i]=0;
         g_nanim=0;
         for(int i=0;i<1024;i++) g_objanim[i]=0;
         for(int lev=0;lev<NLEV;lev++) for(int i=0;i<256;i++) g_darklut[lev][i]=(uint8_t)i;
@@ -6099,6 +6133,20 @@ int main(void)
                     dbg_num("SE cont child alive0=", g_wobj[child].alive);                       /* 0 (in basket) */
                     use_object(i); dbg_num("SE cont child spilled=", g_wobj[child].alive); }     /* expect 1 */
                 break; }
+            /* DOOR: force an obj to SE door 234 at its CLOSED frame (tile 977, impassable). USE -> should
+             * OPEN to a passable "door" tile (976). Proves CTF1 passability + the name/passability toggle. */
+            for(int i=0;i<g_ow.nobjs;i++){ if(!g_wobj[i].alive) continue;
+                g_wobj[i].obj_n=234; g_wobj[i].tile=977;                                          /* SE door, closed */
+                dbg_num("SE door tflags1 loaded=", (g_tflags1[976]|g_tflags1[977])!=0);           /* CTF1 present? */
+                dbg_num("SE door closed blk0=", (g_tflags1[977]&0x06)!=0);                        /* expect 1 (blocks) */
+                use_object(i);
+                dbg_num("SE door tile after USE=", g_wobj[i].tile);                               /* expect 976 (open) */
+                dbg_num("SE door open passable=", (g_tflags1[g_wobj[i].tile]&0x06)==0);           /* expect 1 */
+                break; }
+            /* SANITY: enabling object-blocking (CTF1) must not box the Avatar in — count walkable neighbours. */
+            { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
+                if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }
+              dbg_num("SE avatar passable neighbors=", pn); }                                      /* expect > 0 */
         }
     }
 
