@@ -53,6 +53,7 @@ enum { C_BLACK=0 };            /* U6PAL index 0 is pure black                 */
 
 static const uint8_t *g_tileset, *g_objs, *g_font, *g_paper, *g_portraits;
 static const char *g_gamename;   /* set for a CORE pack (SE/MD): shown in the panel; NULL for U6 */
+static WellKnownObjs g_wko = { 410, 64, 63, 57, 65 };   /* per-game well-known obj_n; U6 defaults until a pack loads */
 static const uint8_t *g_seface;  /* SE/MD portrait bank (CFAC): g_senface x g_sefw*g_sefh indices */
 static int g_senface, g_sefw, g_sefh;
 /* SE/MD conversation identity (CTLK): per-actor name + look-description. g_setalk_off
@@ -2494,7 +2495,7 @@ static void mark_dyn_anim(const world_t*w,int32_t left,int32_t top){
           for(int ox=(f&0x80)?vx-1:vx; ox<=vx; ox++)
             if(ox>=0&&ox<VT&&oy>=0&&oy<VT) g_dyn_anim[oy*VT+ox]=1;
     }
-    { int at=g_basetile?(g_basetile[410*2]|(g_basetile[410*2+1]<<8)):0;   /* avatar (obj 410) at view centre */
+    { int aon=g_wko.avatar; int at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0;   /* avatar (per-game obj_n) at view centre */
       if(at>0&&at<2048&&g_anim_idx[at]>=0){                    /* anchor drawn RAW, but extras cycle -> over-mark safely */
         int f=g_tflags[at];
         for(int oy=(f&0x40)?VT/2-1:VT/2; oy<=VT/2; oy++)
@@ -3018,7 +3019,7 @@ static void compose_map(const world_t*w)
                                               NPC anchored 1 cell off the right/bottom edge bleeds in (see
                                               draw_view_objects); draw_multi clips the off-view anchor */
     }
-    { int at=g_basetile?(g_basetile[410*2]|(g_basetile[410*2+1]<<8)):0;   /* avatar at centre (obj_n 410) */
+    { int aon=g_wko.avatar; int at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0;   /* avatar (per-game obj_n) at centre */
       if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,-1); }
     SUB_ADD(g_ph1_actors);
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
@@ -3632,10 +3633,10 @@ static int use_object_inner(int idx)
         int n;
         if(fr==13||fr==15){ msgcat(0,"Magically locked."); return 0; }
         if(fr==9||fr==11){                           /* locked: matching KEY (obj 64) or a LOCKPICK (obj 63) */
-            if(g_wobj[idx].quality!=0 && objworld_has(&g_ow,64,g_wobj[idx].quality)){
+            if(g_wobj[idx].quality!=0 && g_wko.key && objworld_has(&g_ow,g_wko.key,g_wobj[idx].quality)){
                 g_wobj[idx].tile-=4;                 /* unlock: frame -4 -> closed (still shut) */
                 msgcat(0,"Unlocked."); return 1; }
-            if(objworld_count(&g_ow,63)>0){          /* a lockpick opens any lock (a success doesn't break it) */
+            if(g_wko.lockpick && objworld_count(&g_ow,g_wko.lockpick)>0){          /* a lockpick opens any lock (a success doesn't break it) */
                 g_wobj[idx].tile-=4; msgcat(0,"You pick the lock."); return 1; }
             msgcat(0,"Locked."); return 0; }
         if(fr>=0 && fr<=3){ g_wobj[idx].tile+=4; n=msgcat(0,"You close the "); }
@@ -3649,10 +3650,10 @@ static int use_object_inner(int idx)
         int fr=(int)g_wobj[idx].tile - basetile(o);  /* frame 0 = open, 1 = closed (Nuvie use_container) */
         if(o==98 && fr==3){ msgcat(0,"Magically locked."); return 0; }
         if(o==98 && fr==2){                          /* locked chest: quality = key id, or pick it */
-            if(g_wobj[idx].quality!=0 && objworld_has(&g_ow,64,g_wobj[idx].quality)){
+            if(g_wobj[idx].quality!=0 && g_wko.key && objworld_has(&g_ow,g_wko.key,g_wobj[idx].quality)){
                 g_wobj[idx].tile--;                  /* unlock: frame 2 -> 1 (closed) */
                 msgcat(0,"Unlocked."); return 1; }
-            if(objworld_count(&g_ow,63)>0){          /* a lockpick opens any lock */
+            if(g_wko.lockpick && objworld_count(&g_ow,g_wko.lockpick)>0){          /* a lockpick opens any lock */
                 g_wobj[idx].tile--; msgcat(0,"You pick the lock."); return 1; }
             msgcat(0,"No effect."); return 0; }      /* Nuvie's locked-chest reply */
         if(fr==1){ g_wobj[idx].tile--;               /* open it, then search */
@@ -4816,8 +4817,11 @@ static void magic_init(void){
                               "Peer","Wizard Eye","Reveal","Invisibility","Mass Invisibility",0};
     for(int s=0;s<SPELL_COUNT;s++) g_known[s]=0;
     for(int i=0;impl[i];i++){ int s=magic_find(impl[i]); if(s>=0) g_known[s]=1; }
-    for(int b=0;b<REAG_COUNT && g_ow.ninv<OBJ_INV_MAX;b++){
-        uint16_t on=(uint16_t)magic_reagent_objn(b);
+    /* reagents seed ONLY for a game that has them (g_wko.reagent_base != 0). U6 => 65 (== magic_reagent_objn,
+     * byte-identical); SE/MD => 0, so this loop is skipped and they don't get spurious U6 reagents (magic_init
+     * runs before the is_core gate). */
+    for(int b=0;g_wko.reagent_base && b<REAG_COUNT && g_ow.ninv<OBJ_INV_MAX;b++){
+        uint16_t on=(uint16_t)(g_wko.reagent_base+b);
         if(objworld_count(&g_ow,on)>0) continue;          /* don't duplicate any already held */
         g_ow.inv[g_ow.ninv].obj_n=on; g_ow.inv[g_ow.ninv].tile=basetile(on);
         g_ow.inv[g_ow.ninv].qty=10; g_ow.inv[g_ow.ninv].quality=0; g_ow.ninv++;
@@ -4825,8 +4829,9 @@ static void magic_init(void){
     /* the spellbook itself (obj_n 57, magic_skills.md §4): U6 begins the game with Lord British
      * handing the Avatar the spellbook, so carry it as an inventory item (the fresh save ships
      * none — magic_skills.md §8). Guarded so it is not duplicated on reload. */
-    if(g_ow.ninv<OBJ_INV_MAX && objworld_count(&g_ow,57)==0){
-        g_ow.inv[g_ow.ninv].obj_n=57; g_ow.inv[g_ow.ninv].tile=basetile(57);
+    if(g_wko.spellbook && g_ow.ninv<OBJ_INV_MAX && objworld_count(&g_ow,g_wko.spellbook)==0){
+        uint16_t sb=g_wko.spellbook;                       /* U6 57; SE/MD 0 => no U6 spellbook seeded */
+        g_ow.inv[g_ow.ninv].obj_n=sb; g_ow.inv[g_ow.ninv].tile=basetile(sb);
         g_ow.inv[g_ow.ninv].qty=1; g_ow.inv[g_ow.ninv].quality=0; g_ow.ninv++;
     }
 }
@@ -5453,6 +5458,7 @@ int main(void)
                   + (long)g_nobjs*14;
     int is_core = (gd != &gamedef_u6);
     g_gamename = is_core ? gd->name : (const char *)0;   /* panel title for SE/MD core packs */
+    g_wko = gd ? gd->wko : gamedef_u6.wko;               /* per-game well-known obj_n (avatar/key/...) */
     const uint8_t *gettable;
     static uint8_t s_stub_paper[64000+2];   /* black background (no PAPER.BMP)     */
     static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */

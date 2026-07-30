@@ -21,6 +21,7 @@ const GameDef gamedef_u6 = {
     U6_DUNGEON_LEVELS,                /* dungeon_levels = 5                           */
     0, 0,                             /* start_x/y: the pack header overrides these   */
     &ruleset_u6,
+    { 410, 64, 63, 57, 65 },          /* wko: avatar, key, lockpick, spellbook, reagent_base */
 };
 
 /* Savage Empire + Martian Dreams: same U6 engine + surface geometry (verified —
@@ -31,11 +32,16 @@ const GameDef gamedef_se = {
     "savage", "The Savage Empire",
     { 'S','E','W','T' },
     U6_SURFACE_TILES, U6_DUNGEON_LEVELS, 0, 0, &ruleset_u6,
+    /* wko: SE Avatar is obj_n 310 (captured objlist, see memory se-actor-capture). SE has no U6
+     * magic; key/lockpick obj_n not yet surveyed => 0 (no-match until the SE obj_n table is decoded). */
+    { 310, 0, 0, 0, 0 },
 };
 const GameDef gamedef_md = {
     "martian", "Martian Dreams",
     { 'M','D','W','T' },
     U6_SURFACE_TILES, U6_DUNGEON_LEVELS, 0, 0, &ruleset_u6,
+    /* wko: MD obj_n not yet surveyed (avatar/key/... TBD) => all 0 (no-match). */
+    { 0, 0, 0, 0, 0 },
 };
 
 static const GameDef *const g_gamedefs[] = { &gamedef_u6, &gamedef_se, &gamedef_md };

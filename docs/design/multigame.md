@@ -49,9 +49,18 @@ unblocks (most foundational first):
    fields; add the missing **level-mapping policy** to GameDef (SE 4-of-6 + level-6 gargoyle variant).
 3. **Buffer sizing off `2048`/`1024`/`256`.** The pack header already carries `ntiles/nobjs`; make
    the fixed `[2048]`/`[1024]`/`U6_MAX_ACTORS` arrays GameDef-/header-driven (or max-of-games).
-4. **Well-known object table.** Move the scattered obj_n literals (gold 88, spellbook 57, spell 58,
-   key 64, lockpick 63, reagents 65-72, LB 409, containers, doors) into a per-game table on
-   GameDef/RuleSet. Unblocks get/use/save without a fork.
+4. **Well-known object table.** 🟡 STARTED (2026-07-29). `GameDef.wko` (`WellKnownObjs` in
+   `engine/ruleset.h`) now holds the per-game obj_n of the objects SHARED systems reference by
+   IDENTITY: `avatar, key, lockpick, spellbook, reagent_base`. U6 = {410,64,63,57,65}; SE =
+   {310,0,…} (Avatar 310 from the captured objlist); MD = all 0. 0 = "no such object" (shared code
+   treats it as no-match). `gamedemo.c` reads `g_wko` (set from the loaded GameDef) at: the view-centre
+   Avatar draw (was hard-coded 410 → now correct for SE), the USE key/lockpick unlock, and the
+   `magic_init` reagent/spellbook seeding. **Side-effect fix:** `magic_init` runs before the `is_core`
+   gate, so SE/MD previously got a spurious U6 spellbook + 8 reagents in inventory; the sentinel guards
+   now skip that for non-U6 games. U6 stays BYTE-IDENTICAL (wko == the old literals; enginetest ALL
+   PASS, USEFX lockpick 9→5, TT render unchanged). Still to move (as their subsystems go cross-game,
+   or behind an `on_use` hook): the deep container/door/actuator/field obj_n inside `use_object_inner`
+   (U6 usecode), gold's converse-VM pool, LB/containers. SE/MD real obj_n await an SE/MD obj_n survey.
 5. **Rule/skill subsystem behind RuleSet.** Add the missing hooks (`on_use_item`, `on_combat_hit`,
    `on_rest`, `area_group`, …) and gate U6 magic vs SE tribal-skills vs MD era-tech behind them.
 6. **Savegame/OBJLIST layout** parameterized (the U6 `0x100/0x400/0x600` offsets differ per game).

@@ -18,7 +18,25 @@ typedef struct RuleSet {
     /* Turn cost (game ticks) of a step by (dx,dy). NULL => default (10 per
      * orthogonal step, the U6 turn granularity). */
     int (*move_turn_cost)(const struct world *w, int dx, int dy);
+    /* Behavioural hooks are added HERE where SE/MD actually diverge from U6 (engine/CLAUDE.md):
+     * the natural next ones are on_use_item (the door/container/mechanism usecode currently baked
+     * into gamedemo's use_object_inner), on_combat_hit, on_rest, area_group (music). They are added
+     * with their U6 default + real call site when a per-game override lands, NOT speculatively. */
 } RuleSet;
+
+/* Well-known object numbers — the obj_n of the objects that SHARED (non-usecode) systems reference
+ * by IDENTITY. U6, SE and MD renumber these, so they are per-game DATA, not #defines. The engine
+ * reads them from the loaded GameDef instead of hard-coding U6's numbers. 0 = "this game has no
+ * such object / not yet identified" — shared code MUST treat 0 as no-match (never test obj_n==0).
+ * Deep per-item USE behaviour (door/container/mechanism frames) stays in the usecode path; it moves
+ * behind a RuleSet on_use hook later, so those obj_n stay there rather than in this table. */
+typedef struct WellKnownObjs {
+    uint16_t avatar;        /* the Avatar actor, drawn at view centre.   U6 410  SE 310  MD (TBD) */
+    uint16_t key;           /* key (opens a lock whose quality it matches).  U6 64   (SE/MD TBD)  */
+    uint16_t lockpick;      /* lockpick (opens any lock).                    U6 63   (SE/MD TBD)  */
+    uint16_t spellbook;     /* U6 spellbook inventory item.  U6 57.  SE/MD have NO U6 magic => 0  */
+    uint16_t reagent_base;  /* first of 8 consecutive reagent obj_n.  U6 65.  SE/MD => 0 (none)   */
+} WellKnownObjs;
 
 /* A game identity + its data model. The engine is one binary; the GameDef selected at load time
  * (by the asset-pack magic) supplies the per-game constants + rule overrides. SE/MD share U6's
@@ -33,6 +51,7 @@ typedef struct GameDef {
     int32_t     dungeon_levels;  /* number of dungeon levels (U6=5)               */
     int32_t     start_x, start_y;/* fallback start; the save/pack header overrides */
     const RuleSet *rules;        /* NULL => all-default U6 rules                   */
+    WellKnownObjs wko;           /* per-game obj_n of shared, identity-referenced objects */
 } GameDef;
 
 extern const RuleSet ruleset_u6;   /* the default rule set */
