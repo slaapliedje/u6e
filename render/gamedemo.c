@@ -361,6 +361,7 @@ static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a t
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
 static int            g_travel_tx, g_travel_ty;  /* the click-to-travel destination tile  */
 static int            g_show_inv;          /* 1 = inventory list shown in the panel */
+static int            g_inv_sel;            /* selected inventory row (for D)rop; cycled by 'D' while armed) */
 static int            g_show_status;        /* 1 = character status view shown in the panel */
 static int            g_status_actor=1;     /* which actor the status view shows (1 = Avatar) */
 
@@ -3923,11 +3924,48 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
             }
             else { n=msgcat(0,"You cannot move the "); n=msgcat(n,nm); msgcat(n,"."); }
         }
+    } else if(verb=='D'){                                        /* D)rop the selected inventory item onto (tx,ty) */
+        if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to drop."); }
+        else {
+            int s=g_inv_sel; if(s<0||s>=g_ow.ninv) s=0;
+            char dn[40]; obj_name(g_ow.inv[s].tile,dn,sizeof dn);
+            if(!world_is_passable(w,tx,ty)){ n=msgcat(0,"Thou canst not drop the "); n=msgcat(n,dn); msgcat(n," there."); }
+            else {
+                int slot=-1;                                     /* a free world-object slot: append, else reuse a truly-dead one */
+                if(g_ow.nobjs<MAXWOBJ) slot=(int)g_ow.nobjs++;
+                else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE){ slot=j; break; }
+                if(slot<0){ n=msgcat(0,"There is no room to drop the "); n=msgcat(n,dn); msgcat(n,"."); }
+                else {
+                    wobj_t*o=&g_wobj[slot];
+                    o->obj_n=g_ow.inv[s].obj_n; o->tile=g_ow.inv[s].tile; o->qty=g_ow.inv[s].qty; o->quality=g_ow.inv[s].quality;
+                    o->x=(uint16_t)tx; o->y=(uint16_t)ty; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE;
+                    o->alive=1; o->dirty=1;                       /* on the map now -> re-serialised on save */
+                    for(int k=s;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;   /* remove from inventory */
+                    if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
+                    build_blocked();                             /* new on-map object -> rebuild buckets/blocking */
+                    n=msgcat(0,"You drop the "); n=msgcat(n,dn); msgcat(n,"."); recompose=1;
+                }
+            }
+        }
     } else { /* 'U' use — dispatch by object number (doors open/close, ...) */
         if(idx<0){ msgcat(0,"Nothing to use there."); }
         else recompose = use_object(idx);
     }
     return recompose;
+}
+
+/* D)rop UI: show the item armed for dropping, then a direction places it. Cycling ('D' again) picks a
+ * different item — avoids fighting the arrow keys (which stay = direction). */
+static void drop_prompt(void)
+{
+    if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) g_inv_sel=0;
+    char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
+    int n=msgcat(0,"Drop the "); n=msgcat(n,dn); msgcat(n,"? (D=next, dir=here)");
+}
+static void arm_drop(void)          /* start a D)rop: open the pack, arm the verb, select the first item */
+{
+    if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to drop."); g_pending_verb=0; g_show_inv=0; return; }
+    g_show_inv=1; g_inv_sel=0; g_pending_verb='D'; drop_prompt();
 }
 
 /* inventory list into the panel scroll */
@@ -3937,11 +3975,13 @@ static void draw_inventory(uint8_t col)
     if(g_ow.ninv==0) ui_text(PANX+8, 32, "(nothing)", col);
     else for(int i=0;i<g_ow.ninv && i<15;i++){
         char line[24]; int t=0; char nm[20]; obj_name(g_ow.inv[i].tile,nm,sizeof nm);
+        int sel = (g_pending_verb=='D' && i==g_inv_sel);   /* the row armed for D)rop */
+        if(sel){ line[t++]='>'; line[t++]=' '; }            /* selection marker */
         if(g_ow.inv[i].qty>1){ int q=g_ow.inv[i].qty; if(q>99)q=99;
             line[t++]=(char)('0'+q/10); line[t++]=(char)('0'+q%10); line[t++]=' '; }
         for(int k=0;nm[k]&&t<23;k++) line[t++]=nm[k];
         line[t]=0;
-        ui_text(PANX+6, 32+i*10, line, col);
+        ui_text(PANX+6, 32+i*10, line, sel?14:col);         /* 14 = yellow highlight on the armed row */
     }
     /* GOLD — the shared conversation-VM pool (merchants / trainers add + subtract it) */
     { char g[24]; int t=0; const char*lb="Gold: "; for(;*lb;lb++) g[t++]=*lb;
@@ -4046,7 +4086,7 @@ static void draw_char_view(uint8_t col)
 static int verb_cmd(int v){ switch(v){case 'A':return 0;case 'C':return 1;case 'T':return 2;case 'L':return 3;
     case 'G':return 4;case 'M':return 6;case 'U':return 7;} return -1; }
 static int cmd_verb(int c){ switch(c){case 0:return 'A';case 1:return 'C';case 2:return 'T';case 3:return 'L';
-    case 4:return 'G';case 6:return 'M';case 7:return 'U';} return 0; }
+    case 4:return 'G';case 5:return 'D';case 6:return 'M';case 7:return 'U';} return 0; }
 
 static void restore_cmdbar(void)
 { for(int y=CMDY-1;y<CMDY+17 && y<LH;y++)
@@ -4958,6 +4998,7 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='L'){ do_verb(w,'L',dx,dy); return 0; }
     if(verb=='U'){ do_verb(w,'U',dx,dy); return 0; }
     if(verb=='G'){ return do_verb(w,'G',dx,dy); }
+    if(verb=='D'){ return do_verb(w,'D',dx,dy); }
     if(verb=='M'){ int sx=dx<0?-1:(dx>0?1:0), sy=dy<0?-1:(dy>0?1:0);
         if((sx||sy) && world_try_move(w,sx,sy)){ g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); return 1; }
         return 0; }
@@ -6117,6 +6158,25 @@ int main(void)
         }
     }
 
+    /* headless validation of D)ROP (generic, both games): seed an inventory item, select it, drop it one
+     * tile east via do_verb('D') -> it leaves the pack and appears on that map tile. Absent in play. */
+    {   int32_t dl=0; void*db=plat_load_file("DROPFX.BIN",1,&dl);
+        if(db){
+            inv_add_objn(129,1);                                     /* seed a food item in the pack */
+            g_inv_sel=g_ow.ninv-1; int on=g_ow.inv[g_inv_sel].obj_n; int ninv0=g_ow.ninv;
+            int ddx=1,ddy=0;                                         /* pick a PASSABLE neighbour (drop refuses walls) */
+            for(int d=0;d<8;d++){ static const int DX[8]={1,-1,0,0,1,1,-1,-1},DY[8]={0,0,1,-1,1,-1,1,-1};
+                if(world_is_passable(&w,(int)w.px+DX[d],(int)w.py+DY[d])){ ddx=DX[d]; ddy=DY[d]; break; } }
+            int ex=(int)((w.px+ddx)&(U6_SURFACE_TILES-1)), ey=(int)((w.py+ddy)&(U6_SURFACE_TILES-1));
+            for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].x==ex && g_wobj[j].y==ey) g_wobj[j].alive=0;
+            dbg_num("DROP inv before=", ninv0);
+            do_verb(&w,'D',ddx,ddy);
+            dbg_num("DROP inv after=", g_ow.ninv);                    /* expect ninv0-1 */
+            int onmap=0; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==on && g_wobj[j].x==ex && g_wobj[j].y==ey) onmap=1;
+            dbg_num("DROP item on map=", onmap);                      /* expect 1 */
+        }
+    }
+
     /* headless validation of SAVAGE-EMPIRE USE (only meaningful when booted on SE.PAK; g_gd==savage).
      * FOOD: force a gettable world obj to SE fruit (obj_n 197), USE twice -> qty 2->1 then alive->0 +
      * food up (proves se_is_food + the g_gd dispatch to se_use_object). CONTAINER: force an obj to an
@@ -7141,9 +7201,12 @@ int main(void)
                 }
                 if (g_show_status) { g_show_status=0; redraw=1; }  /* any key returns from the status view (then still acts) */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
-                    if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); }
-                                  g_pending_verb=0; redraw=1; }
-                    else if (a==0x1b) { g_pending_verb=0; g_msg[0]=0; redraw=1; }   /* cancel */
+                    if (g_pending_verb=='D' && (a=='d'||a=='D') && !(dx||dy) && g_ow.ninv>0){
+                        g_inv_sel=(g_inv_sel+1)%g_ow.ninv; drop_prompt(); redraw=1;   /* D again -> next item */
+                    }
+                    else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
+                                  g_pending_verb=0; g_show_inv=0; redraw=1; }
+                    else if (a==0x1b) { g_pending_verb=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
                 }
                 else if (a=='a'||a=='A') { g_pending_verb='A'; g_msg[0]=0; g_show_inv=0; redraw=1; }  /* A)ttack */
                 else if (a=='c'||a=='C') { open_cast_menu(); redraw=1; }                              /* C)ast: open the spell menu */
@@ -7151,6 +7214,7 @@ int main(void)
                     msgcat(0, g_combat_mode?"Combat mode!":"Peace mode."); redraw=1; }
                 else if (a=='l'||a=='L') { g_pending_verb='L'; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; redraw=1; }
+                else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); redraw=1; }                         /* D)rop */
                 else if (a=='u'||a=='U') { g_pending_verb='U'; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a=='i'||a=='I') { g_show_inv=!g_show_inv; g_msg[0]=0; redraw=1; }
                 else if (a=='s'||a=='S') { g_show_inv=0; do_save(&w); redraw=1; }  /* write SAVED.000 */
@@ -7181,6 +7245,7 @@ int main(void)
                 else if (icon==8){ g_pending_verb=0; g_show_inv=0; do_rest(&w);              /* Rest icon: camp + restore */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                 else if (v=='C'){ open_cast_menu(); }        /* Cast icon opens the spell menu */
+                else if (v=='D'){ g_msg[0]=0; arm_drop(); }  /* Drop icon: open the pack + arm the drop */
                 else if (v){ g_pending_verb=v; g_msg[0]=0; g_show_inv=0; }
                 else  { msgcat(0,"Not yet implemented."); g_pending_verb=0; g_show_inv=0; }
                 redraw=1;
