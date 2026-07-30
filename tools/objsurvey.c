@@ -68,6 +68,25 @@ int main(int argc, char **argv)
           prev = ix;
       } }
 
+    /* optional TILEFLAG (7168 B): tileflags1 @ 0x0000, one byte/tile — bit1 Impassable, bit2 Wall. */
+    snprintf(path, sizeof path, "%s/TILEFLAG", dir);
+    long tfn = 0; uint8_t *tf = slurp(path, &tfn);
+
+    /* frames mode: `objsurvey <dir> <se|md> frames <obj_n> [count]` — dump a door/container's frames
+     * with passability, to derive open/closed frame semantics from the game's own data. */
+    if (kw && strcmp(kw, "frames") == 0){
+        int o = (argc > 4) ? atoi(argv[4]) : 0, cnt = (argc > 5) ? atoi(argv[5]) : 16;
+        int base = bt[o*2] | (bt[o*2+1] << 8);
+        printf("obj_n %d base tile %d '%s' — frames (P=passable, X=blocks):\n",
+               o, base, (base<NTILES&&name[base])?name[base]:"");
+        for (int fr = 0; fr < cnt; fr++){ int t = base + fr;
+            int blk = (tf && t < NTILES) ? (tf[t] & 0x06) : -1;   /* tileflags1 bit1|bit2 */
+            printf("  fr %2d  tile %4d  %s  %s\n", fr, t,
+                   blk<0?"?":(blk?"X":"P"), (t<NTILES&&name[t])?name[t]:"");
+        }
+        return 0;
+    }
+
     for (int o = 0; o < NOBJ; o++){
         int tile = bt[o*2] | (bt[o*2+1] << 8);
         const char *nm = (tile < NTILES && name[tile]) ? name[tile] : "";

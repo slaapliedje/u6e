@@ -3715,20 +3715,43 @@ static int use_object_inner(int idx)
     return 0;
 }
 
+/* --- Savage Empire USE (docs/formats/se_md_objn.md) ------------------------------------------
+ * SE's obj_n differ from U6's, so USE gets its own handler behind the g_gd seam. V1 covers the two
+ * GENERIC, verifiable actions (reusing the shared, U6-proven mechanisms), keyed on the surveyed SE
+ * obj_n: SEARCH a container (spill its children onto the map) and EAT food. DOORS are deferred: SE
+ * door frames are per-object and share tile ranges with other objects (survey via
+ * `objsurvey ... frames`), so there is no clean open/close delta — they need a per-object frame table. */
+static int se_is_container(int on){ return on==183||on==184||on==188||on==132||on==133; } /* basket/pot/crate/clay pots */
+static int se_is_food(int on){ return (on==103||on==110||on==197||on==114) ? 1 : 0; }     /* meat/meat/fruit/turnips (eat) */
+static int se_use_object(int idx)
+{
+    int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
+    if(se_is_container(o)){                          /* search: spill children out (generic spill_container) */
+        int n=msgcat(0,"Searching here, you find ");
+        int found=spill_container(idx,&n); if(!found) n=msgcat(n,"nothing");
+        msgcat(n,".");
+        return found?1:0;
+    }
+    if(se_is_food(o)){                               /* eat: consume one + feed the Avatar (shared hunger model) */
+        int n=msgcat(0,"You eat the "); n=msgcat(n,nm); msgcat(n,".");
+        if(g_wobj[idx].qty>1) g_wobj[idx].qty--; else g_wobj[idx].alive=0;
+        int f=g_afood[1]+40; g_afood[1]=(uint8_t)(f>FOOD_MAX?FOOD_MAX:f);
+        return 1;
+    }
+    int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");
+    return 0;
+}
+
 /* U)se an object; if its tile (frame) changed (a door/container opened/closed/unlocked), mark it
- * DIRTY so do_save re-serialises the new frame into the save (in-place, nuvie_save.md). */
+ * DIRTY so do_save re-serialises the new frame into the save (in-place, nuvie_save.md). Per-game USE
+ * dispatches on g_gd (the game-layer seam): U6 usecode / SE usecode / MD stub (until surveyed). */
 static int use_object(int idx)
 {
-    if(g_gd != &gamedef_u6){        /* PER-GAME USE SEAM (the future on_use hook): use_object_inner below is
-                                     * U6's usecode keyed on U6 obj_n (doors 297-300, chest 98, levers...).
-                                     * SE/MD renumber objects, so running it on their world would MISFIRE
-                                     * (toggle passability on a non-door, "unlock" a random object). Until
-                                     * SE/MD USE usecode is decoded (M9), a safe no-op beats corrupting state. */
-        msgcat(0,"Nothing happens.");
-        return 0;
-    }
     uint16_t t0 = g_wobj[idx].tile;
-    int r = use_object_inner(idx);
+    int r;
+    if(g_gd == &gamedef_u6)      r = use_object_inner(idx);   /* U6 usecode (doors/chests/levers/food) */
+    else if(g_gd == &gamedef_se) r = se_use_object(idx);      /* SE usecode (containers/food; doors deferred) */
+    else { msgcat(0,"Nothing happens."); r = 0; }            /* MD: stub until its obj_n are surveyed */
     if(g_wobj[idx].tile != t0) g_wobj[idx].dirty = 1;
     return r;
 }
@@ -6049,6 +6072,32 @@ int main(void)
                 dbg_num("FOOD is_food=", is_food_objn(g_wobj[i].obj_n));
                 use_object(i); dbg_num("FOOD qty after 1st eat=", g_wobj[i].qty);              /* expect 1 */
                 use_object(i); dbg_num("FOOD alive after 2nd eat=", g_wobj[i].alive);          /* expect 0 */
+                break; }
+        }
+    }
+
+    /* headless validation of SAVAGE-EMPIRE USE (only meaningful when booted on SE.PAK; g_gd==savage).
+     * FOOD: force a gettable world obj to SE fruit (obj_n 197), USE twice -> qty 2->1 then alive->0 +
+     * food up (proves se_is_food + the g_gd dispatch to se_use_object). CONTAINER: force an obj to an
+     * SE basket (183) and park a dead child on it, USE -> child spills alive (proves se_is_container +
+     * spill via the SE path). Absent in normal play (SEUSE.BIN never staged). */
+    {   int32_t sl=0; void*sb=plat_load_file("SEUSE.BIN",1,&sl);
+        if(sb){
+            dbg_num("SE USE game==savage=", g_gd==&gamedef_se);
+            for(int i=0;i<g_ow.nobjs;i++){
+                if(!g_wobj[i].alive || !objworld_can_get(&g_ow,g_wobj[i].obj_n)) continue;
+                g_wobj[i].obj_n=197; g_wobj[i].tile=(uint16_t)basetile(197); g_wobj[i].qty=2;   /* -> SE fruit */
+                dbg_num("SE food is_food=", se_is_food(197));
+                use_object(i); dbg_num("SE food qty after 1st eat=", g_wobj[i].qty);            /* expect 1 */
+                use_object(i); dbg_num("SE food alive after 2nd eat=", g_wobj[i].alive);        /* expect 0 */
+                break; }
+            for(int i=0;i<g_ow.nobjs;i++){
+                if(!g_wobj[i].alive) continue;
+                g_wobj[i].obj_n=183; g_wobj[i].tile=(uint16_t)basetile(183);                    /* -> SE basket */
+                int child=-1; for(int j=0;j<g_ow.nobjs;j++) if(j!=i && !g_wobj[j].alive){ child=j; break; }
+                if(child>=0){ g_wobj[child].parent=(uint16_t)i; g_wobj[child].alive=0;
+                    dbg_num("SE cont child alive0=", g_wobj[child].alive);                       /* 0 (in basket) */
+                    use_object(i); dbg_num("SE cont child spilled=", g_wobj[child].alive); }     /* expect 1 */
                 break; }
         }
     }

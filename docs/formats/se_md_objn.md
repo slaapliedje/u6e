@@ -34,13 +34,18 @@ NOT carry over — SE/MD renumber objects — so shared engine code reads per-ga
 
 SE cast (context): 311 professor, 312 reporter, 313 woman, 314 shaman, 315 chieftain, 316/320 man.
 
-### SE door / container sets (for the future SE USE usecode, behind the g_gd USE seam)
-Not stored in `wko` (they are per-item USE behaviour, not identity). Recorded here for when SE's USE
-usecode is written:
-- **doors / doorways**: 160 trap door, 161 door, 226 stone doorway, 234 door, 236 doorway,
-  270 door, 272 stone doorway, 275 door.
-- **containers**: 183 basket, 184 pot, 188 crate, 132 soft clay pot, 133 fired clay pot.
-- **food** (USE = eat/drink): 103/110 meat, 197 fruit, 114 bunch of turnips; 140/152 water.
+### SE USE (behind the g_gd seam → `se_use_object` in gamedemo.c). Not `wko` (per-item behaviour).
+- **containers → SEARCH/spill** (IMPLEMENTED, `se_is_container`): 183 basket, 184 pot, 188 crate,
+  132 soft clay pot, 133 fired clay pot. USE spills the container's children onto the map (the shared,
+  U6-proven `spill_container`). Validated: `SEUSE.BIN` self-test — a parked child spills alive.
+- **food → EAT** (IMPLEMENTED, `se_is_food`): 103/110 meat, 197 fruit, 114 bunch of turnips. USE
+  consumes one + feeds the Avatar (shared hunger model). Validated: `SEUSE.BIN` — qty 2→1→gone.
+- **doors / doorways → DEFERRED**: 160 trap door, 161 door, 226 stone doorway, 234 door, 236 doorway,
+  270 door, 272 stone doorway, 275 door. SE door FRAMES are per-object and share tile ranges with
+  OTHER objects (`objsurvey ... frames`: 161's frames read as fountain/cave; 270's as table/window;
+  no consistent open/closed delta), so a reliable toggle needs a per-object frame table — a later step.
+  Until then SE doors fall through to "Nothing happens with the door." (safe; no passability corruption).
+- water 140/152 excluded from food (terrain water, not a gettable item).
 
 ## Martian Dreams — well-known obj_n (PROBABLE — not yet confirmed)
 - **Avatar**: obj_n **318 / 319** both LOOK as "yourself" (MD's generic player marker; MD starts by

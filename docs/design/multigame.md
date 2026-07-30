@@ -63,15 +63,18 @@ unblocks (most foundational first):
    (U6 usecode), gold's converse-VM pool, LB/containers. SE/MD real obj_n await an SE/MD obj_n survey.
 5. **Rule/skill subsystem behind RuleSet.** 🟡 SEAM STARTED (2026-07-29). `gamedemo.c` now holds
    `g_gd` — the loaded GameDef pointer, the authoritative game identity (id/geometry/wko/rules), set at
-   pack-load — and per-game GAME-LAYER seams branch on it. First seam: **USE** — `use_object`'s U6
-   usecode (`use_object_inner`: doors 297-300, chest 98, levers/cranks/fields, keyed on U6 obj_n) now
-   runs ONLY for U6; SE/MD get a safe no-op ("Nothing happens.") until their USE usecode is decoded,
-   instead of misfiring U6 semantics on renumbered objects (e.g. toggling passability on a non-door).
-   NOTE ON ARCHITECTURE: use/talk logic is gamedemo-coupled (msgcat/blocking/UI), so those seams live
-   in the game layer keyed on `g_gd`, NOT in the engine `RuleSet` (which stays for engine-clean rules
-   like `move_turn_cost`, wired via `world_init`→`w->rules`). Behavioural engine hooks (on_combat_hit,
-   on_rest) are added when a game provides a real override — not speculatively (engine/CLAUDE.md).
-   Still to do: SE/MD magic-vs-skills gating; the real SE/MD USE usecode behind these seams.
+   pack-load — and per-game GAME-LAYER seams branch on it. First seam: **USE** — `use_object` dispatches
+   on g_gd: U6 → `use_object_inner` (U6 usecode); **SE → `se_use_object` (real SE USE)**; MD → safe
+   no-op until surveyed. This stopped SE/MD misfiring U6 semantics on renumbered objects (e.g. toggling
+   passability on a non-door). **SE USE v1 DONE (2026-07-29):** containers (183/184/188/132/133) SEARCH
+   /spill via the shared `spill_container`; food (103/110/197/114) EAT + feed — keyed on the surveyed SE
+   obj_n ([[se_md_objn]]), validated by the `SEUSE.BIN` self-test (food 2→1→gone; container child spills).
+   SE DOORS deferred: their frames are per-object and share tile ranges (no clean open/close delta) — a
+   per-object frame table is a later step. NOTE ON ARCHITECTURE: use/talk logic is gamedemo-coupled
+   (msgcat/blocking/UI), so those seams live in the game layer keyed on `g_gd`, NOT the engine `RuleSet`
+   (which stays for engine-clean rules like `move_turn_cost`, wired via `world_init`→`w->rules`). Engine
+   behavioural hooks (on_combat_hit, on_rest) are added when a game provides a real override — not
+   speculatively (engine/CLAUDE.md). Still to do: SE doors (frame table); SE/MD magic-vs-skills gating.
 6. **Savegame/OBJLIST layout** parameterized (the U6 `0x100/0x400/0x600` offsets differ per game).
 7. **Start/clock policy** — ✅ ALREADY DATA. Start (`hdr[20/22]`) + game-time (`hdr[24]`, U6WH) come
    from the PACK HEADER (mkworld writes them per game: SE 380,555; MD 124,168), so this is per-game
