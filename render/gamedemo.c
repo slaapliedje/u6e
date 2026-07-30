@@ -53,7 +53,10 @@ enum { C_BLACK=0 };            /* U6PAL index 0 is pure black                 */
 
 static const uint8_t *g_tileset, *g_objs, *g_font, *g_paper, *g_portraits;
 static const char *g_gamename;   /* set for a CORE pack (SE/MD): shown in the panel; NULL for U6 */
-static WellKnownObjs g_wko = { 410, 64, 63, 57, 65 };   /* per-game well-known obj_n; U6 defaults until a pack loads */
+static const GameDef *g_gd = &gamedef_u6;   /* the loaded game's GameDef — authoritative game identity + per-game
+                                             * data (id, geometry, wko, rules). Set at pack-load; drives the
+                                             * per-game game-layer seams (USE, ...). U6 until a pack loads. */
+static WellKnownObjs g_wko = { 410, 64, 63, 57, 65 };   /* == g_gd->wko, cached for the hot compose path */
 static const uint8_t *g_seface;  /* SE/MD portrait bank (CFAC): g_senface x g_sefw*g_sefh indices */
 static int g_senface, g_sefw, g_sefh;
 /* SE/MD conversation identity (CTLK): per-actor name + look-description. g_setalk_off
@@ -3716,6 +3719,14 @@ static int use_object_inner(int idx)
  * DIRTY so do_save re-serialises the new frame into the save (in-place, nuvie_save.md). */
 static int use_object(int idx)
 {
+    if(g_gd != &gamedef_u6){        /* PER-GAME USE SEAM (the future on_use hook): use_object_inner below is
+                                     * U6's usecode keyed on U6 obj_n (doors 297-300, chest 98, levers...).
+                                     * SE/MD renumber objects, so running it on their world would MISFIRE
+                                     * (toggle passability on a non-door, "unlock" a random object). Until
+                                     * SE/MD USE usecode is decoded (M9), a safe no-op beats corrupting state. */
+        msgcat(0,"Nothing happens.");
+        return 0;
+    }
     uint16_t t0 = g_wobj[idx].tile;
     int r = use_object_inner(idx);
     if(g_wobj[idx].tile != t0) g_wobj[idx].dirty = 1;
@@ -5458,7 +5469,8 @@ int main(void)
                   + (long)g_nobjs*14;
     int is_core = (gd != &gamedef_u6);
     g_gamename = is_core ? gd->name : (const char *)0;   /* panel title for SE/MD core packs */
-    g_wko = gd ? gd->wko : gamedef_u6.wko;               /* per-game well-known obj_n (avatar/key/...) */
+    g_gd = gd ? gd : &gamedef_u6;                        /* authoritative loaded-game identity */
+    g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
     const uint8_t *gettable;
     static uint8_t s_stub_paper[64000+2];   /* black background (no PAPER.BMP)     */
     static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */
