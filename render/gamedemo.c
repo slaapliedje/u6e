@@ -56,7 +56,7 @@ static const char *g_gamename;   /* set for a CORE pack (SE/MD): shown in the pa
 static const GameDef *g_gd = &gamedef_u6;   /* the loaded game's GameDef — authoritative game identity + per-game
                                              * data (id, geometry, wko, rules). Set at pack-load; drives the
                                              * per-game game-layer seams (USE, ...). U6 until a pack loads. */
-static WellKnownObjs g_wko = { 410, 64, 63, 57, 65 };   /* == g_gd->wko, cached for the hot compose path */
+static WellKnownObjs g_wko = { 410, 64, 63, 57, 65, 88 };   /* == g_gd->wko, cached for the hot compose path */
 static const uint8_t *g_seface;  /* SE/MD portrait bank (CFAC): g_senface x g_sefw*g_sefh indices */
 static int g_senface, g_sefw, g_sefh;
 /* SE/MD conversation identity (CTLK): per-actor name + look-description. g_setalk_off
@@ -3907,8 +3907,15 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         if(idx<0){ msgcat(0,"Nothing to get there."); }
         else {
             obj_name(g_wobj[idx].tile,nm,sizeof nm);
-            uint16_t q=g_wobj[idx].qty;
-            if(objworld_get(&g_ow,idx)){
+            uint16_t q=g_wobj[idx].qty; if(!q) q=1;
+            if(g_gd!=&gamedef_u6 && g_wko.gold && g_wobj[idx].obj_n==g_wko.gold){
+                /* SE/MD: GET gold -> the shared Gold pool (the "Gold:" count), not an inventory stack.
+                 * U6 keeps its existing path (gated out) so it stays byte-identical. */
+                int t=g_cg.gold+(int)q; g_cg.gold=(t>0x7fffffff)?0x7fffffff:t;
+                g_wobj[idx].alive=0; g_wobj[idx].dirty=1;
+                n=msgcat(0,"You get "); n=msgcat_int(n,q); n=msgcat(n," gold."); recompose=1;
+            }
+            else if(objworld_get(&g_ow,idx)){
                 n=msgcat(0,"You get ");
                 if(q>1){ n=msgcat_int(n,q); n=msgcat(n," "); }    /* "You get 30 gold." */
                 else n=msgcat(n,"the ");
@@ -6147,6 +6154,36 @@ int main(void)
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }
               dbg_num("SE avatar passable neighbors=", pn); }                                      /* expect > 0 */
+            /* GET: SE ships the gettable table (CLOK), and GET is generic (objworld_get), so it should
+             * already work. Sanity the table, then do a full do_verb('G'): place an SE item (fruit 197,
+             * qty 3) one tile east of the Avatar, GET it -> it leaves the map and lands in inventory. */
+            dbg_num("SE gettable fruit197=", objworld_can_get(&g_ow,197));
+            dbg_num("SE gettable gold69=",  objworld_can_get(&g_ow,69));
+            { int ex=(int)((w.px+1)&(U6_SURFACE_TILES-1)), ey=(int)(w.py&(U6_SURFACE_TILES-1));
+              for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].x==ex && g_wobj[j].y==ey) g_wobj[j].alive=0; /* clear tile */
+              for(int i=0;i<g_ow.nobjs;i++){ if(g_wobj[i].alive) continue;                          /* reuse a dead slot */
+                g_wobj[i].obj_n=197; g_wobj[i].tile=(uint16_t)basetile(197); g_wobj[i].qty=3;       /* place SE fruit east */
+                g_wobj[i].x=(uint16_t)ex; g_wobj[i].y=(uint16_t)ey; g_wobj[i].parent=WOBJ_PARENT_NONE;
+                g_wobj[i].quality=0; g_wobj[i].origin=WOBJ_PARENT_NONE; g_wobj[i].alive=1;
+                build_blocked();
+                dbg_num("SE get: objworld_at finds it=", objworld_at(&g_ow,ex,ey)==i);            /* full do_verb target resolution */
+                int before=objworld_count(&g_ow,197);
+                do_verb(&w,'G',1,0);                                                              /* GET east — the real gameplay path */
+                dbg_num("SE get: obj taken=", g_wobj[i].alive==0);                                /* expect 1 (off map) */
+                dbg_num("SE get: inv fruit gained=", objworld_count(&g_ow,197)-before);           /* expect 3 */
+                break; } }
+            /* GOLD: SE gold (69) GET must feed the Gold POOL (g_cg.gold), not an inventory stack. */
+            { int ex=(int)((w.px+1)&(U6_SURFACE_TILES-1)), ey=(int)(w.py&(U6_SURFACE_TILES-1));
+              for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].x==ex && g_wobj[j].y==ey) g_wobj[j].alive=0;
+              for(int i=0;i<g_ow.nobjs;i++){ if(g_wobj[i].alive) continue;
+                g_wobj[i].obj_n=69; g_wobj[i].tile=(uint16_t)basetile(69); g_wobj[i].qty=40;
+                g_wobj[i].x=(uint16_t)ex; g_wobj[i].y=(uint16_t)ey; g_wobj[i].parent=WOBJ_PARENT_NONE;
+                g_wobj[i].quality=0; g_wobj[i].origin=WOBJ_PARENT_NONE; g_wobj[i].alive=1; build_blocked();
+                int gold0=g_cg.gold, ninv0=g_ow.ninv;
+                do_verb(&w,'G',1,0);
+                dbg_num("SE gold: pool gained=", g_cg.gold-gold0);                                /* expect 40 */
+                dbg_num("SE gold: NOT an inv stack=", (g_ow.ninv==ninv0 && objworld_count(&g_ow,69)==0)); /* expect 1 */
+                break; } }
         }
     }
 

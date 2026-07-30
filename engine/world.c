@@ -21,7 +21,7 @@ const GameDef gamedef_u6 = {
     U6_DUNGEON_LEVELS,                /* dungeon_levels = 5                           */
     0, 0,                             /* start_x/y: the pack header overrides these   */
     &ruleset_u6,
-    { 410, 64, 63, 57, 65 },          /* wko: avatar, key, lockpick, spellbook, reagent_base */
+    { 410, 64, 63, 57, 65, 88 },      /* wko: avatar, key, lockpick, spellbook, reagent_base, gold */
 };
 
 /* Savage Empire + Martian Dreams: same U6 engine + surface geometry (verified —
@@ -36,14 +36,15 @@ const GameDef gamedef_se = {
      * avatar 310 "modern man" (confirmed vs the captured objlist), key 53 "key". SE has NO lockpick
      * (jungle setting), NO U6 magic => spellbook/reagent_base 0. gold is obj_n 69 but wko has no gold
      * field (currency identity is not an obj_n check). */
-    { 310, 53, 0, 0, 0 },
+    { 310, 53, 0, 0, 0, 69 },         /* +gold 69 (survey); no lockpick/spellbook/reagents */
 };
 const GameDef gamedef_md = {
     "martian", "Martian Dreams",
     { 'M','D','W','T' },
     U6_SURFACE_TILES, U6_DUNGEON_LEVELS, 0, 0, &ruleset_u6,
-    /* wko: MD obj_n not yet surveyed (avatar/key/... TBD) => all 0 (no-match). */
-    { 0, 0, 0, 0, 0 },
+    /* wko: MD avatar/key TBD (unconfirmed — see se_md_objn.md); MD "dollar" is obj_n 24 but left 0
+     * until MD is a booted slice. All 0 => no-match. */
+    { 0, 0, 0, 0, 0, 0 },
 };
 
 static const GameDef *const g_gamedefs[] = { &gamedef_u6, &gamedef_se, &gamedef_md };

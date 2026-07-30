@@ -30,7 +30,7 @@ NOT carry over — SE/MD renumber objects — so shared engine code reads per-ga
 | lockpick       |     — | (none)          | SE has no lockpick → `wko.lockpick = 0` |
 | spellbook      |     — | (none)          | SE has no U6 magic → `wko.spellbook = 0` |
 | reagents       |     — | (none)          | no U6 magic → `wko.reagent_base = 0` |
-| gold           |    69 | gold            | no `wko` field (currency ≠ an obj_n check); nugget = 70 |
+| **gold**       |    69 | gold            | `wko.gold`: GET feeds the Gold POOL (g_cg.gold), not an inv stack. nugget = 70 |
 
 SE cast (context): 311 professor, 312 reporter, 313 woman, 314 shaman, 315 chieftain, 316/320 man.
 
@@ -53,6 +53,13 @@ SE cast (context): 311 professor, 312 reporter, 313 woman, 314 shaman, 315 chief
   was entirely absent before (g_tflags1 was zeroed for core packs); the Avatar keeps 7/8 walkable
   neighbours at the SE start, so it's not boxed in.
 - water 140/152 excluded from food (terrain water, not a gettable item).
+
+### SE GET (mostly already generic)
+GET (`do_verb 'G'` → `objworld_get`) is game-agnostic and reads the `gettable[1024]` table the core pack
+already ships (CLOK), so SE GET works with NO SE-specific code: fruit/items leave the map and land in the
+inventory (validated: `SEUSE.BIN` places SE fruit 197 east of the Avatar, `do_verb('G')` takes 3 into inv).
+One game delta: **gold** — SE gold (69) GET feeds the shared Gold POOL (`g_cg.gold`, the panel "Gold:"
+count), not an inventory stack (via `g_gd`+`wko.gold`; U6 keeps its existing path, gated out → byte-identical).
 
 ## Martian Dreams — well-known obj_n (PROBABLE — not yet confirmed)
 - **Avatar**: obj_n **318 / 319** both LOOK as "yourself" (MD's generic player marker; MD starts by

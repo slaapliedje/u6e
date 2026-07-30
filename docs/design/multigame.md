@@ -74,7 +74,9 @@ unblocks (most foundational first):
    via a new **CTF1** section; USE flips to the nearest opposite-passability door-named tile. CTF1 also
    gives SE/MD **object passability in general** (walls/furniture/closed doors block — was entirely absent;
    Avatar keeps 7/8 walkable neighbours, not boxed in). Validated: `SEUSE.BIN` door 977(closed)→USE→976(open).
-   NOTE ON ARCHITECTURE: use/talk logic is gamedemo-coupled
+   **SE GET works too** — `do_verb 'G'`/`objworld_get` are generic and read the core pack's gettable table,
+   so items land in inventory with no SE code; only delta is gold (69) → the Gold pool via `wko.gold`
+   (U6 gated out, byte-identical). NOTE ON ARCHITECTURE: use/talk logic is gamedemo-coupled
    (msgcat/blocking/UI), so those seams live in the game layer keyed on `g_gd`, NOT the engine `RuleSet`
    (which stays for engine-clean rules like `move_turn_cost`, wired via `world_init`→`w->rules`). Engine
    behavioural hooks (on_combat_hit, on_rest) are added when a game provides a real override — not

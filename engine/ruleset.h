@@ -32,10 +32,11 @@ typedef struct RuleSet {
  * behind a RuleSet on_use hook later, so those obj_n stay there rather than in this table. */
 typedef struct WellKnownObjs {
     uint16_t avatar;        /* the Avatar actor, drawn at view centre.   U6 410  SE 310  MD (TBD) */
-    uint16_t key;           /* key (opens a lock whose quality it matches).  U6 64   (SE/MD TBD)  */
-    uint16_t lockpick;      /* lockpick (opens any lock).                    U6 63   (SE/MD TBD)  */
+    uint16_t key;           /* key (opens a lock whose quality it matches).  U6 64   SE 53        */
+    uint16_t lockpick;      /* lockpick (opens any lock).                    U6 63   (SE/MD none)  */
     uint16_t spellbook;     /* U6 spellbook inventory item.  U6 57.  SE/MD have NO U6 magic => 0  */
     uint16_t reagent_base;  /* first of 8 consecutive reagent obj_n.  U6 65.  SE/MD => 0 (none)   */
+    uint16_t gold;          /* gold coin -> the Gold pool on GET.  U6 88  SE 69  MD (TBD, dollar) */
 } WellKnownObjs;
 
 /* A game identity + its data model. The engine is one binary; the GameDef selected at load time
