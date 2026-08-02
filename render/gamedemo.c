@@ -6887,7 +6887,11 @@ int main(void)
               while(i<rl && rq[i]==' ') i++;
               if(i<rl && rq[i]>='0'&&rq[i]<='9'){ y=0; while(i<rl&&rq[i]>='0'&&rq[i]<='9'){y=y*10+(rq[i]-'0');i++;} }
               if(lvl>=1 && lvl<=5){ w.level=lvl; w.px=x&255; w.py=y&255;
-                  g_tmp_valid=0; g_dm_valid=0; dbg_num("DUNGEON level=",lvl); } }
+                  g_tmp_valid=0; g_dm_valid=0; dbg_num("DUNGEON level=",lvl); }
+              else if(lvl==0){                       /* "0 X Y" = ENTER from surface (X,Y) via world_transition(DOWN) */
+                  w.level=0; w.px=x; w.py=y; world_transition(&w, WL_DOWN, 0);
+                  g_tmp_valid=0; g_dm_valid=0; build_blocked();
+                  dbg_num("DUNGEON entered level=",w.level); dbg_num(" x=",w.px); dbg_num(" y=",w.py); } }
           dg_done=1; } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
@@ -7235,6 +7239,15 @@ int main(void)
                 else if (a=='s'||a=='S') { g_show_inv=0; do_save(&w); redraw=1; }  /* write SAVED.000 */
                 else if (a=='r'||a=='R') { g_show_inv=0; do_rest(&w);                /* R)est: restore HP+mana */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='>' || a=='<') {          /* descend/ascend a map level (map_levels.md). '>' also
+                                                       * enters a dungeon from the surface (chunk /4 transform). */
+                    int lv0=w.level;
+                    if (world_transition(&w, a=='>'?WL_DOWN:WL_UP, 0)) {
+                        g_show_inv=0; g_tmp_valid=0; g_dm_valid=0; build_blocked();
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink);
+                        msgcat(0, w.level>lv0 ? "You descend." : (w.level==0 ? "You climb to the surface." : "You ascend."));
+                    } else msgcat(0, "There is no way up here.");
+                    redraw=1; }
                 else if (in==IN_QUIT) break;
                 else if (in==IN_TALK) {              /* talk to an adjacent NPC (a trainer advances thy level) */
                     if (!g_talking) { int id=find_adjacent_npc(&w);
