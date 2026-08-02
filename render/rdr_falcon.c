@@ -103,7 +103,11 @@ bool rdr_init(const platform_caps_t *caps)
     for (int32_t i = 0; i < g_screen_bytes; i++) g_screen[i] = 0;
     for (int32_t i = 0; i < FALC_PIXELS;     i++) g_back[i]   = 0;
 
-    g_yoff = (FH > UI_H) ? (FH - UI_H) / 2 : 0;   /* centre the 200-line UI in 240 -> 20px bands */
+    /* Letterbox ONLY on a VGA monitor: there the VIDEL runs 240 double-scanned lines (falcon_mode
+     * VGA|VERTFLAG), so the 200-line UI is centred with 20px black bands. On an RGB/TV monitor the
+     * visible area is ~200 lines, so any down-shift pushes the bottom off-screen — present top-aligned
+     * (g_yoff=0) there. (VgetMonitor XBIOS 89; same detection falcon_mode() uses for the mode word.) */
+    g_yoff = (FH > UI_H && VgetMonitor() == MON_VGA) ? (FH - UI_H) / 2 : 0;
 
     /* Save current video state, then switch VIDEL to our mode + buffer. */
     g_old_mode = VsetMode(VM_INQUIRE);

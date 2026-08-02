@@ -1087,22 +1087,29 @@ static const int GV_IMG_OFF[8]={2,5,8,0xB,0x18,0x1B,0x1E,0x21};
  * the pour transient sprites (arm, hand, the lifted vial's liquid, the pour stream). */
 static void draw_gypsy_scene(void){
     blit_opaque(g_gyp_scene,g_gyp_w,g_gyp_h,0,0);
+    /* Z-ORDER matches nuvie create_character (sprites drawn in creation order): the gypsy reaches
+     * from ACROSS the table, so the ARM and the POUR stream sit BEHIND the jar + vials; the HAND
+     * sits between the vial liquids and the vial glasses; the vial glasses are frontmost. (Was:
+     * arm/hand/pour drawn last, i.e. in front of the flasks — the reported bug.) */
+    if(g_arm_sh>=0)  gblit(g_arm_sh, g_arm_x, g_arm_y);          /* arm: behind jar + vials */
+    if(g_pour_sh>=0) gblit(g_pour_sh, g_pour_x, g_pour_y);       /* pour stream: also behind   */
     if(g_jar_lvl>0){                                             /* jar_liquid = shape 8+level, rises y-1/level */
         if(g_nflask>0 && g_jarbub_lvl==g_jar_lvl)                /* churning "essence": the speckled working copy */
             blit_indexed(g_jarbub, g_jarbub_w, g_jarbub_h, 146, 0x53 - g_jar_lvl);
         else gblit(8+g_jar_lvl, 146, 0x53 - g_jar_lvl);
     }
     gblit(16, 142, 56);                                          /* jar glass */
-    for(int v=0; v<8; v++){
-        if(v==g_pour_vial) continue;                            /* glass hidden while lifted */
+    for(int v=0; v<8; v++){                                      /* vial LIQUIDS (behind the hand) */
+        if(v==g_pour_vial) continue;                            /* the lifted vial's liquid is g_vl_sh */
         int L=g_vial_lvl[v];
         if(L>0) gblit(0x42 + GV_IMG_OFF[v] + (L-3), GV_LIQ_X[v], 77);
+    }
+    if(g_vl_sh>=0)   gblit(g_vl_sh, g_vl_x, g_vl_y);            /* the lifted vial's liquid, following the hand */
+    if(g_hand_sh>=0) gblit(g_hand_sh, g_hand_x, g_hand_y);      /* hand: over the liquids, under the glasses */
+    for(int v=0; v<8; v++){                                      /* vial GLASSES (frontmost) */
+        if(v==g_pour_vial) continue;                            /* glass hidden while lifted */
         gblit(v<4?20:23, GV_VIAL_X[v], 66);                     /* vial glass (20 left / 23 right) */
     }
-    if(g_arm_sh>=0)  gblit(g_arm_sh, g_arm_x, g_arm_y);
-    if(g_hand_sh>=0) gblit(g_hand_sh, g_hand_x, g_hand_y);
-    if(g_vl_sh>=0)   gblit(g_vl_sh, g_vl_x, g_vl_y);            /* the lifted vial's liquid, following the hand */
-    if(g_pour_sh>=0) gblit(g_pour_sh, g_pour_x, g_pour_y);      /* the pour stream */
 }
 
 /* nuvie gypsy_start_pouring: show the pour stream for (vial,level) + advance the jar one level. */
