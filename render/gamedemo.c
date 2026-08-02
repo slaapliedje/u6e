@@ -6874,6 +6874,20 @@ int main(void)
             if(pq && pl>0 && pq[0]=='0') g_planar_allow=0; }
 #endif
           ls_done=1; } }
+    /* DEBUG: DUNGEON.REQ "<level> [x] [y]" (level 1..5) drops the view onto a dungeon level at (x,y)
+     * (default 128,128 = level centre) once at boot, so a shot can capture underground geography.
+     * Absent in normal play. See docs/rules/map_levels.md. */
+    { static int dg_done=0;
+      if(!dg_done){ int32_t rl=0; char*rq=(char*)plat_load_file("DUNGEON.REQ",1,&rl);
+          if(rq && rl>0){ int lvl=0,x=128,y=128,i=0;
+              while(i<rl && rq[i]>='0'&&rq[i]<='9'){ lvl=lvl*10+(rq[i]-'0'); i++; }
+              while(i<rl && rq[i]==' ') i++;
+              if(i<rl && rq[i]>='0'&&rq[i]<='9'){ x=0; while(i<rl&&rq[i]>='0'&&rq[i]<='9'){x=x*10+(rq[i]-'0');i++;} }
+              while(i<rl && rq[i]==' ') i++;
+              if(i<rl && rq[i]>='0'&&rq[i]<='9'){ y=0; while(i<rl&&rq[i]>='0'&&rq[i]<='9'){y=y*10+(rq[i]-'0');i++;} }
+              if(lvl>=1 && lvl<=5){ w.level=lvl; w.px=x&255; w.py=y&255;
+                  g_tmp_valid=0; g_dm_valid=0; dbg_num("DUNGEON level=",lvl); } }
+          dg_done=1; } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
     /* DEBUG: TALKTEST.REQ (holding an actor number, or empty = nearest NPC) opens

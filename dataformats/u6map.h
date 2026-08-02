@@ -34,4 +34,8 @@ bool u6map_load(u6map_t *m, const uint8_t *map, int32_t map_len,
 /* Surface tile index at (x,y), toroidally wrapped. 0..255. */
 uint8_t u6map_surface_tile(const u6map_t *m, int32_t x, int32_t y);
 
+/* Dungeon-level tile index at (x,y) on level 0..4 (dungeon levels 1..5), wrapped to the 256x256
+ * level extent. 0..255. See docs/rules/map_levels.md for the level model. */
+uint8_t u6map_dungeon_tile(const u6map_t *m, int level, int32_t x, int32_t y);
+
 #endif

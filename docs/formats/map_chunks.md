@@ -67,11 +67,15 @@ Shared layout (verified U6). Per-game LEVEL semantics (U6 nested 3D dungeons;
 SE 4-of-6 + gargoyle level 6; MD toroidal) are a /docs/rules concern
 (map_levels.md), not this byte layout.
 
+### Dungeon levels — chunk ordering (RESOLVED)
+The 5 dungeon levels (32×32 chunks = 256×256 tiles, 1536 packed bytes each) are **FLAT 32×32 row-major**
+(`file_index = cy*32 + cx`), NOT superchunk-blocked like the surface. Verified by rendering level 1 both
+ways (mapdump dungeon1_sc/flat): only the flat order gives a coherent dungeon (intact maze corridors +
+a symmetric cross-room); superchunk fragments it into 2×2 quadrants. Level model + per-game policy:
+docs/rules/map_levels.md. Accessor: `u6map_dungeon_tile`.
+
 ## 6. Open questions / unknown fields
-- [ ] Dungeon-level chunk ordering: confirm whether the 32×32 levels use the
-      same superchunk blocking (2×2 superchunks) — only the surface is rendered
-      so far.
-- [ ] Confirm Savage/Martian use the identical layout.
+- [ ] Confirm Savage/Martian use the identical dungeon-level layout (SE 4-of-6 + gargoyle level 6).
 
 ## 7. Status
-VERIFIED (surface). Dungeon-level ordering: PROBABLE (not yet rendered).
+VERIFIED — surface AND dungeon-level chunk ordering (both rendered coherently: worldmap.png, dungeon1).

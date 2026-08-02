@@ -63,3 +63,20 @@ uint8_t u6map_surface_tile(const u6map_t *m, int32_t x, int32_t y)
     if (cidx >= U6_CHUNK_COUNT) return 0;
     return m->chunks[cidx * 64 + wy * 8 + wx];
 }
+
+uint8_t u6map_dungeon_tile(const u6map_t *m, int level, int32_t x, int32_t y)
+{
+    if (level < 0 || level >= U6_DUNGEON_LEVELS) return 0;
+    const int32_t SIDE = U6_DUNGEON_CHUNKS * 8;        /* 256 tiles per side */
+    x &= (SIDE - 1); y &= (SIDE - 1);
+    int32_t cx = x >> 3, cy = y >> 3;                  /* chunk coords 0..31 */
+    int32_t wx = x & 7,  wy = y & 7;
+    /* Dungeon levels are FLAT 32x32 row-major — NOT superchunk-blocked like the 128x128 surface
+     * (the superchunk scheme is a surface-only artifact). Verified by mapdump: the flat order renders a
+     * coherent dungeon (intact maze corridors + a symmetric cross-room) while the superchunk order
+     * fragments it into 2x2 quadrants. (map_chunks.md §3, map_levels.md.) */
+    int32_t lin = cy * U6_DUNGEON_CHUNKS + cx;
+    uint16_t cidx = m->dungeon[level][lin];
+    if (cidx >= U6_CHUNK_COUNT) return 0;
+    return m->chunks[cidx * 64 + wy * 8 + wx];
+}

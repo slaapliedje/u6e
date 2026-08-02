@@ -73,6 +73,7 @@ bool world_init(world_t *w, const uint8_t *map, int32_t map_len,
     w->rules    = (def->rules) ? def->rules : &ruleset_u6;
     w->px       = def->start_x;
     w->py       = def->start_y;
+    w->level    = 0;                 /* start on the surface */
     w->turns    = 0;
     w->clock    = 0;
     rng_seed(&w->rng, seed);
@@ -81,13 +82,14 @@ bool world_init(world_t *w, const uint8_t *map, int32_t map_len,
 
 uint8_t world_tile(const world_t *w, int32_t x, int32_t y)
 {
-    return u6map_surface_tile(&w->map, x, y);
+    if (w->level == 0) return u6map_surface_tile(&w->map, x, y);
+    return u6map_dungeon_tile(&w->map, w->level - 1, x, y);        /* dungeon level (256x256, wrapped) */
 }
 
 bool world_is_passable(const world_t *w, int32_t x, int32_t y)
 {
     if (!w->passable[world_tile(w, x, y)]) return false;          /* terrain blocks */
-    if (w->blocked_obj) {                                          /* impassable object? */
+    if (w->level == 0 && w->blocked_obj) {                        /* impassable object? (surface bitmap only) */
         int32_t bx = x & (U6_SURFACE_TILES - 1), by = y & (U6_SURFACE_TILES - 1);
         int32_t idx = by * U6_SURFACE_TILES + bx;
         if (w->blocked_obj[idx >> 3] & (1u << (idx & 7))) return false;

@@ -21,6 +21,7 @@ typedef struct world {
                                     * impassable OBJECT on that tile. NULL = none. */
     const RuleSet *rules;          /* never NULL after init (defaults to U6) */
     int32_t        px, py;         /* player tile position (wrapped)      */
+    int32_t        level;          /* 0 = surface (1024x1024); 1..5 = dungeon level (256x256). map_levels.md */
     uint32_t       turns;          /* completed turns                     */
     uint32_t       clock;          /* game-time ticks (sum of turn costs) */
     rng_t          rng;            /* deterministic RNG seam              */

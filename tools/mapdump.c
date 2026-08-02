@@ -102,6 +102,24 @@ int main(int argc, char **argv)
     png_write_rgb(path, W, H, idximg);
     printf("  -> %s (tile-index hash visualization)\n", path);
 
+    /* --- dungeon level 1 (256x256): render both candidate chunk orderings to settle the open
+     * question (map_chunks.md §6). superchunk = u6map_dungeon_tile; flat = plain cy*32+cx. --- */
+    { int DW = U6_DUNGEON_CHUNKS * 8, DH = DW;
+      uint8_t *dsc = malloc((size_t)DW*DH*3), *dfl = malloc((size_t)DW*DH*3);
+      for (int y = 0; y < DH; y++) for (int x = 0; x < DW; x++) {
+          uint8_t t_sc = u6map_dungeon_tile(&map, 0, x, y);
+          int cx = x>>3, cy = y>>3, wx = x&7, wy = y&7;               /* flat ordering for comparison */
+          uint16_t cf = map.dungeon[0][cy*32 + cx];
+          uint8_t t_fl = (cf < U6_CHUNK_COUNT) ? map.chunks[cf*64 + wy*8 + wx] : 0;
+          u6_rgb csc = pal.color[u6tile_repr(&ts, t_sc)], cfl = pal.color[u6tile_repr(&ts, t_fl)];
+          uint8_t *p = dsc + ((size_t)y*DW+x)*3; p[0]=csc.r; p[1]=csc.g; p[2]=csc.b;
+          uint8_t *q = dfl + ((size_t)y*DW+x)*3; q[0]=cfl.r; q[1]=cfl.g; q[2]=cfl.b;
+      }
+      snprintf(path, sizeof path, "%s/dungeon1_sc.png", out);   png_write_rgb(path, DW, DH, dsc);
+      snprintf(path, sizeof path, "%s/dungeon1_flat.png", out); png_write_rgb(path, DW, DH, dfl);
+      printf("  -> dungeon1_sc.png / dungeon1_flat.png (%dx%d) — compare chunk orderings\n", DW, DH);
+      free(dsc); free(dfl); }
+
     /* report the dominant terrain tile (U6 surface is mostly ocean) */
     int top = 0; for (int i = 1; i < 256; i++) if (histo[i] > histo[top]) top = i;
     printf("  dominant surface tile = %d (%.1f%% of surface)\n",
