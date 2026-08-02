@@ -34,10 +34,18 @@ Per target, the installed folder ends up with:
 - `MENU.REQ` (1 byte) — presence tells the engine to boot to the U6 **title /
   main menu** (Introduction / Create a Character / Journey Onward) instead of
   dropping straight into gameplay. This is the authentic interactive boot.
+- **music**: all `.M` songs + `MIDI.DAT` (the MT-32 map) — ~11 KB total. These
+  enable the **YM2149 PSG chiptune** backend (the default on any Atari when no
+  digital PCM is present) and **MT-32 / MIDI-OUT** if the player adds a 1-byte
+  `MIDI.CFG` = `1` and connects an MT-32. See `docs/rules/music_areas.md`.
 - `README.TXT`
 
-Not yet included: **music** (`MIDI.DAT` + `.M` songs) is not packaged yet — the
-game degrades gracefully to silence. (Tracked with the M10 music loose ends.)
+**AdLib digital audio (optional).** The DMA "AdLib" path plays host-pre-rendered
+PCM (`tools/m2pcm`, `build/music/*.PCM`) at ~0% CPU and sounds like the DOS
+AdLib, but the PCMs are ~20 MB total — too big for a floppy set. To use it, copy
+the `.PCM` files into the install folder on a CF/HD (the engine auto-selects DMA
+when a song's `BASE.PCM` is present, else falls back to PSG). Not shipped on the
+floppies.
 
 The engine's many `*.REQ` / `*.BIN` files are debug/headless-test sentinels and
 are **not** shipped (their absence = normal play).
@@ -102,7 +110,8 @@ make st-disks-tt        # TT030 (256-colour)
   "Ultima VI" title menu (VIDEL 320×240, TOS 4.04).
 
 ## Follow-ups
-- Package **music** (`MIDI.DAT` + `.M`) once the M10 loose ends are wired.
+- Optionally auto-include the AdLib PCMs (a `--with-pcm` splitter mode) for
+  CF/HD targets that aren't floppy-size-bound.
 - Optional NEWDESK.INF `#Z` auto-launch entry (would overwrite the user's desktop
   file, so left out — the user runs the `.PRG` from the desktop).
 - Savage Empire / Martian Dreams distributions once a per-game pack selection (or

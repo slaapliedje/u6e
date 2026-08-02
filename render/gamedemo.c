@@ -5356,11 +5356,14 @@ static void music_play_song(const char *base){
     int use = (g_music_pref==1) ? 1 :               /* MIDI */
               (g_music_pref==3) ? 3 :               /* PSG  */
                                   (g_music_dma_ok?2:3);   /* DMA-pref or auto: DMA if present, else PSG */
-    g_music_active = use;
     char nm[20];
-    if(use==1){ music_name(nm, g_music_cur, ".M");   music_play_seq(nm, &g_midi_be, 1, 1); }
-    else if(use==2){ music_name(nm, g_music_cur, ".PCM"); plat_dma_music_start(nm); }
-    else { music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_psg_be, 2, 0); }   /* PSG */
+    if(use==2){                                     /* DMA: needs a host-pre-rendered BASE.PCM */
+        music_name(nm, g_music_cur, ".PCM");
+        if(plat_dma_music_start(nm)){ g_music_active=2; return; }
+        use = 3;                                     /* PCM absent (e.g. compact install) -> chiptune, not silence */
+    }
+    if(use==1){ g_music_active=1; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_midi_be, 1, 1); }
+    else       { g_music_active=3; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_psg_be, 2, 0); }  /* PSG */
 }
 
 /* set the backend preference at runtime (0 auto / 1 MIDI / 2 DMA / 3 PSG) and re-cue the current
@@ -5411,11 +5414,11 @@ enum { MG_RANDOM=0, MG_COMBAT, MG_DUNGEON, MG_BOAT, MG_GARGOYLE };
 static const char *const MUS_WANDER[4] = { "BRIT", "FOREST", "STONES", "ULTIMA" };
 
 /* which music group the current game context calls for */
-static int music_area_group(void){
-    if(g_combat_mode) return MG_COMBAT;    /* battle                                 */
+static int music_area_group(int level){
+    if(g_combat_mode) return MG_COMBAT;    /* battle (overrides location)             */
+    if(level > 0)     return MG_DUNGEON;   /* underground: dungeon theme (levels 1..5) */
     /* future context hooks (need the systems first):
        if(player_on_boat)   return MG_BOAT;
-       if(in_dungeon)       return MG_DUNGEON;
        if(in_gargoyle_land) return MG_GARGOYLE; */
     return MG_RANDOM;                       /* overworld + towns: a wandering theme    */
 }
@@ -5431,9 +5434,9 @@ static const char *music_group_pick(int g){
         return MUS_WANDER[(g_music_rng >> 24) & 3];
     }
 }
-static void music_update_area(void){
+static void music_update_area(int level){
     if(g_music_forced) return;             /* a forced song (test hook / event) owns the music */
-    int g = music_area_group();
+    int g = music_area_group(level);
     if(g != g_music_group){                /* context changed group -> pick a track + play  */
         g_music_group = g;
         music_play_song(music_group_pick(g));
@@ -7324,7 +7327,7 @@ int main(void)
          * a main-loop pump for its disk refill (can't do GEMDOS I/O from an ISR; the 2.6 s ring
          * gives ample slack). */
         plat_dma_music_pump();  /* M10: refill the DMA-sound ring from the streaming PCM file */
-        music_update_area();    /* M10: start/switch the area's song (overworld <-> battle) on change */
+        music_update_area(w.level);    /* M10: start/switch the area's song (overworld/battle/dungeon) on change */
 
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)
          * is actually in view — most scenes have none, so this is free there. */

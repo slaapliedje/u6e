@@ -13,12 +13,12 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M10 (audio: music)
 > - References   : Nuvie `sound/SoundManager.cpp` (group→song table, random-pick collections); the
 >   MIDI.DAT song titles ("Engagement and Melee", "Dungeon", "Rule Britannia", …); Ultima Codex.
 > - Tools        : Hatari MIDI capture (program-changes identify the running song).
-> - Validated by : mechanism (auto-start + combat switch) verified on-target; the GROUP→SONG table is
->   taken from Nuvie's native-U6 loader (the authoritative reimplementation). The exact runtime TRIGGERS
->   for the boat/dungeon/gargoyle groups are not yet wired (those game systems don't exist here yet).
+> - Validated by : mechanism (auto-start + combat switch + dungeon switch) verified on-target; the
+>   GROUP→SONG table is taken from Nuvie's native-U6 loader (the authoritative reimplementation). The
+>   boat/gargoyle triggers are not yet wired (those game systems don't exist here yet).
 > - Confidence   : group model + song-group table = confirmed (from Nuvie). Trigger wiring = partial
->   (combat done; boat/dungeon/gargoyle pending the underlying systems).
-> - Last updated : 2026-07-16
+>   (combat + dungeon done; boat/gargoyle pending the underlying systems).
+> - Last updated : 2026-08-02
 
 ## 1. System (GROUP-based, faithful to the original)
 U6 does NOT map screen position to a specific song. It sorts its songs into GROUPS and, when the game
@@ -38,7 +38,7 @@ music and suppresses auto-switching.
 |------------|-------------------------------------------|-------------------------------------------|--------|
 | `random`   | BRIT, FOREST, STONES, ULTIMA (random pick)| overworld AND towns — the default/wandering| yes    |
 | `combat`   | ENGAGE                                     | combat mode active                        | yes    |
-| `dungeon`  | DUNGEON                                    | underground / in a dungeon                | no¹    |
+| `dungeon`  | DUNGEON                                    | underground / in a dungeon (map level > 0)| yes¹   |
 | `boat`     | HORNPIPE                                   | aboard a ship                             | no²    |
 | `gargoyle` | GARGOYLE                                   | the gargoyle lands                        | no³    |
 | (front-end)| INTRO, CREATE, BOOTUP, END                | intro / chargen / boot / endgame          | n/a⁴   |
@@ -51,7 +51,8 @@ Priority: combat overrides the location groups. Only a group CHANGE re-cues; ste
 integer compare each turn. Leaving a group (e.g. combat ends) re-requests the location group, which for
 `random` re-picks a wandering track (Nuvie behaves the same).
 
-¹ needs dungeon navigation.  ² needs ship/boarding state.  ³ needs gargoyle-region detection.
+¹ wired: `music_area_group(level)` returns `dungeon` when the map level > 0 (the level-transition
+work made dungeons navigable).  ² needs ship/boarding state.  ³ needs gargoyle-region detection.
 ⁴ driven by the front-end sequences, not this hook.
 
 ## 3. Per-game deltas -> RuleSet hooks
@@ -73,8 +74,10 @@ pick never destabilises a test.
   yet automated headless).
 
 ## 6. Open questions
-- [ ] Wire the boat/dungeon/gargoyle triggers once ship/dungeon/region state exists (the group table is
-      already correct; only `music_area_group()` gains the checks).
+- [x] Dungeon trigger WIRED (2026-08-02): `music_area_group(level)` returns `dungeon` when the map
+      level > 0 (the level-transition work made dungeons navigable). Validated on Falcon.
+- [ ] Wire the boat/gargoyle triggers once ship/region state exists (the group table is already
+      correct; only `music_area_group()` gains the checks).
 - [x] Pool ROTATION — DECIDED (2026-07-18): keep the SEAMLESS single-track loop (the M10 loop_start
       work) rather than re-picking a wandering track on song-end. This is the "better than the original"
       call (same spirit as M7's palette): no audible gap/restart. Song-end rotation remains an optional
@@ -87,7 +90,7 @@ pick never destabilises a test.
 ## 7. Status
 VERIFIED (U6) — group model + song-group table confirmed from Nuvie's native-U6 loader; the
 overworld/town assignment is verified (no per-town song; both draw the `random` wandering pool, per
-U6's design). Auto-start + combat switch wired and mechanism-verified; `make musictest` sequences all
-12 `.M` clean. Pool-rotation decided (seamless loop, §6). Remaining (non-blocking, future systems):
-wire boat/dungeon/gargoyle triggers when ship/dungeon/region state exists — the group→song table is
+U6's design). Auto-start + combat switch + dungeon switch wired and mechanism-verified; `make musictest`
+sequences all 12 `.M` clean. Pool-rotation decided (seamless loop, §6). Remaining (non-blocking, future
+systems): wire boat/gargoyle triggers when ship/region state exists — the group→song table is
 already correct, only `music_area_group()` gains the checks.

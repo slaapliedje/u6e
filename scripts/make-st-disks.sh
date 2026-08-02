@@ -78,6 +78,13 @@ command -v "$CC" >/dev/null 2>&1 || { echo "missing cross-compiler: $CC" >&2; ex
 # AUX              = extra original data files copied verbatim from REFDATA — the
 #                    engine loads these as separate files (NPC dialogue + faces).
 AUX=(CONVERSE.A CONVERSE.B PORTRAIT.A PORTRAIT.B)   # U6; the engine loads these by name
+# Music (M10): the .M songs + the MT-32 map are TINY (~11 KB total). Shipping them
+# enables the YM2149 PSG chiptune backend on ANY Atari (the default when no digital
+# PCM is present), and MT-32 / MIDI-OUT if the player adds a 1-byte MIDI.CFG='1'.
+# The DMA "AdLib" PCM path is host-pre-rendered and huge (~20 MB) — too big for a
+# floppy set; drop build/music/*.PCM into the install folder on a CF/HD to use it.
+for _m in "$REFDATA"/*.M; do [ -e "$_m" ] && AUX+=("$(basename "$_m")"); done
+[ -e "$REFDATA/MIDI.DAT" ] && AUX+=(MIDI.DAT)
 case "$TARGET" in
   falcon)
     PRG_SRC=$BUILD/gamef.prg;  PRG_DOS=GAMEF.PRG
@@ -160,6 +167,13 @@ README="$STAGE/README.TXT"
   printf '%s\r\n' "  Create a Character, or Journey Onward to start playing."
   printf '%s\r\n' "  Arrow keys move; letters are commands (S=save, L=look,"
   printf '%s\r\n' "  U=use, G=get, T=talk ...).  Enjoy!"
+  printf '\r\n'
+  printf '%s\r\n' "MUSIC"
+  printf '%s\r\n' "  Plays as YM2149 chiptune by default (any Atari)."
+  printf '%s\r\n' "  Roland MT-32 owners: put a 1-byte file MIDI.CFG containing"
+  printf '%s\r\n' "  the character 1 in this folder + connect the MT-32 to MIDI."
+  printf '%s\r\n' "  AdLib digital audio (STE/TT/Falcon): copy the pre-rendered"
+  printf '%s\r\n' "  *.PCM files into this folder (see the project docs)."
 } > "$README"
 
 # MENU.REQ: presence (non-empty) tells the engine to show the U6 title/main menu
