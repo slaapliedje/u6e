@@ -4,9 +4,11 @@
  * Why this backend exists alongside rdr_tt.c: the TT's only practical 256-color
  * mode on a VGA monitor is TT-low 320x480, so the 320x200 game UI must be shown
  * 2x-vertically-doubled and letterboxed (see rdr_tt.c rdr_present_doubled). The
- * Falcon's VIDEL can show 320x240 natively (double-scanned by hardware on VGA),
- * so we present the UI 1:1 — no software doubling, no letterbox. The Falcon is a
- * first-class target (better sound + flexible resolutions); the TT is the
+ * Falcon's VIDEL shows 320x240 natively (double-scanned by hardware on VGA), so
+ * we present the 320x200 UI 1:1 — no software line-doubling. The screen is 240
+ * lines though, so the UI is CENTRED with a 20px black letterbox band top and
+ * bottom (g_yoff), rather than top-aligned with a grey strip below. The Falcon is
+ * a first-class target (better sound + flexible resolutions); the TT is the
  * lowest-common-denominator fallback.
  *
  * Falcon 8bpp ("BPS8") is 8 INTERLEAVED bitplanes, byte-identical in layout to
@@ -41,6 +43,9 @@ extern void c2p_span_asm(const uint8_t *src, uint16_t *dst, long ngroups);
 #define FW 320
 #define FH 240
 #define FALC_PIXELS (FW * FH)
+#define UI_H 200                 /* the game's logical UI height (native U6). The VIDEL screen is
+                                  * 240 lines on VGA, so we centre the 200-line image and leave a
+                                  * black letterbox band above and below (20px each). */
 
 static uint8_t  *g_screen;              /* visible screen (ST-RAM): 8bpp planar OR 16bpp chunky */
 static uint8_t  *g_back;                /* chunky 8-bit backbuffer          */
@@ -49,11 +54,24 @@ static uint16_t  g_pal16[256];          /* RGB565 expand LUT (truecolor mode)   
 static int       g_tc;                  /* 1 = 16-bit truecolor present active                  */
 static int       g_want_tc;             /* rdr_prefer_truecolor request (before rdr_init)        */
 static int32_t   g_screen_bytes;        /* visible screen size (depends on depth)               */
+static int       g_yoff;                /* vertical letterbox offset = (FH - UI_H)/2 (0 if none) */
 
 static short     g_old_mode;
 static void     *g_old_phys, *g_old_log;
 
 void rdr_prefer_truecolor(int on) { g_want_tc = on; }   /* honoured at rdr_init */
+
+/* Zero the top + bottom letterbox bands (index 0 / RGB 0 = black — U6 palette entry 0 is black).
+ * The image is presented into the middle UI_H rows; these bands are never otherwise written. */
+static void falcon_clear_bands(void)
+{
+    if (g_yoff <= 0) return;
+    int32_t bpp  = g_tc ? 2 : 1;                         /* bytes per pixel                     */
+    int32_t band = (int32_t)g_yoff * FW * bpp;           /* one band, in bytes                  */
+    memset(g_screen, 0, (size_t)band);                                   /* top: rows [0, g_yoff)        */
+    memset(g_screen + (int32_t)(g_yoff + UI_H) * FW * bpp, 0,
+           (size_t)((int32_t)(FH - g_yoff - UI_H) * FW * bpp));          /* bottom: rows [yoff+UI_H, FH)  */
+}
 
 /* Choose the VIDEL mode word for 320x240 on the attached monitor, at 8bpp (indexed) or 16bpp
  * (truecolor per g_tc).
@@ -84,6 +102,8 @@ bool rdr_init(const platform_caps_t *caps)
 
     for (int32_t i = 0; i < g_screen_bytes; i++) g_screen[i] = 0;
     for (int32_t i = 0; i < FALC_PIXELS;     i++) g_back[i]   = 0;
+
+    g_yoff = (FH > UI_H) ? (FH - UI_H) / 2 : 0;   /* centre the 200-line UI in 240 -> 20px bands */
 
     /* Save current video state, then switch VIDEL to our mode + buffer. */
     g_old_mode = VsetMode(VM_INQUIRE);
@@ -171,57 +191,64 @@ static inline void tc_span(const uint8_t *src, uint16_t *dst, int npix)
     for (int i = 0; i < npix; i++) dst[i] = g_pal16[src[i]];
 }
 
-/* Full-screen present: truecolor = per-pixel 565 expand; else chunky -> 8 interleaved bitplanes. */
+/* Full-screen present: the logical UI is UI_H tall; present it centred (offset g_yoff) with black
+ * letterbox bands. truecolor = per-pixel 565 expand; else chunky -> 8 interleaved bitplanes. */
 void rdr_present(void)
 {
     if (g_tc) {
-        tc_span(g_back, (uint16_t *)g_screen, FALC_PIXELS);
+        tc_span(g_back, (uint16_t *)g_screen + (int32_t)g_yoff * FW, FW * UI_H);
+        falcon_clear_bands();
         Vsync();
         return;
     }
     const int groups = FW / 16;                 /* 20 */
-    for (int y = 0; y < FH; y++)
+    for (int y = 0; y < UI_H; y++)
         c2p_span_asm(g_back + (int32_t)y * FW,
-                     (uint16_t *)(g_screen + (int32_t)y * FW), groups);
+                     (uint16_t *)(g_screen + (int32_t)(y + g_yoff) * FW), groups);
+    falcon_clear_bands();
     Vsync();
 }
 
-/* Present sub-rectangle [x,x+w) x [y,y+h); x,w must be multiples of 16. */
+/* Present sub-rectangle [x,x+w) x [y,y+h); x,w must be multiples of 16. Coords are in the logical
+ * UI (0..UI_H); the destination row is shifted down by g_yoff so the whole UI stays letterboxed. */
 void rdr_present_rect(int x, int y, int w, int h)
 {
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x + w > FW) w = FW - x;
-    if (y + h > FH) h = FH - y;
+    if (y + h > UI_H) h = UI_H - y;
+    if (h < 0) h = 0;
     if (g_tc) {
         for (int yy = y; yy < y + h; yy++)
             tc_span(g_back + (int32_t)yy * FW + x,
-                    (uint16_t *)g_screen + (int32_t)yy * FW + x, w);
+                    (uint16_t *)g_screen + (int32_t)(yy + g_yoff) * FW + x, w);
         return;
     }
     int g0 = x / 16, gn = w / 16;
     for (int yy = y; yy < y + h; yy++)
         c2p_span_asm(g_back + (int32_t)yy * FW + g0 * 16,
-                     (uint16_t *)(g_screen + (int32_t)yy * FW) + g0 * 8, gn);
+                     (uint16_t *)(g_screen + (int32_t)(yy + g_yoff) * FW) + g0 * 8, gn);
 }
 
-/* On the Falcon the UI is shown 1:1 (no 2x vertical doubling / letterbox the TT
- * needs), so the "_doubled" entry points just present the region natively. `lh`
- * is the logical UI height; we present those rows top-aligned and leave any rows
- * below black (the backbuffer is zero-cleared at init and the UI is <= lh tall). */
+/* On the Falcon the UI is shown 1:1 (no 2x vertical doubling the TT needs), but the 200-line UI is
+ * CENTRED in the 240-line VIDEL screen with black letterbox bands (20px top + 20px bottom) so the
+ * VGA display isn't top-aligned with a grey strip below. `lh` is the logical UI height; we present
+ * those rows at offset g_yoff and clear the bands. */
 void rdr_present_doubled(int lh)
 {
     if (lh < 1) lh = 1;
-    if (lh > FH) lh = FH;
+    if (lh > FH - g_yoff) lh = FH - g_yoff;
     if (g_tc) {
-        tc_span(g_back, (uint16_t *)g_screen, FW * lh);
+        tc_span(g_back, (uint16_t *)g_screen + (int32_t)g_yoff * FW, FW * lh);
+        falcon_clear_bands();
         Vsync();
         return;
     }
     const int groups = FW / 16;
     for (int y = 0; y < lh; y++)
         c2p_span_asm(g_back + (int32_t)y * FW,
-                     (uint16_t *)(g_screen + (int32_t)y * FW), groups);
+                     (uint16_t *)(g_screen + (int32_t)(y + g_yoff) * FW), groups);
+    falcon_clear_bands();
     Vsync();
 }
 
@@ -255,19 +282,19 @@ void rdr_test_hscroll(int v) { (void)v; }
 void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
 {
     if (lh < 1) lh = 1;
-    if (lh > FH) lh = FH;
+    if (lh > FH - g_yoff) lh = FH - g_yoff;
     int last = (FW/16 - 1) * 16;
     if (pan_x < 0) pan_x = 0;
     if (g_tc) {
         for (int y = 0; y < lh; y++) {
-            uint16_t *r = (uint16_t *)g_screen + (int32_t)y * FW;
+            uint16_t *r = (uint16_t *)g_screen + (int32_t)(y + g_yoff) * FW;
             memmove(r, r + 16, (size_t)(FW - 16) * 2);          /* shift left one 16-px group  */
             tc_span(chunky + (int32_t)y*cw + pan_x + last, r + last, 16);  /* expand new group */
         }
         return;
     }
     for (int y = 0; y < lh; y++) {
-        uint8_t *r = g_screen + (int32_t)y * FW;
+        uint8_t *r = g_screen + (int32_t)(y + g_yoff) * FW;
         memmove(r, r + 16, (size_t)(FW - 16));                  /* planar shift left one group */
         const uint8_t *px = chunky + (int32_t)y*cw + pan_x + last;
         c2p_span_asm(px, (uint16_t *)(r + last), 1);            /* c2p the new rightmost group */

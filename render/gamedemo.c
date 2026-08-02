@@ -1276,6 +1276,7 @@ static int cc_ask(int qnum, int va, int vb)
         rdr_present_doubled(LH);
         int key=plat_input_raw();
         if(!key){ Vsync(); continue; }                            /* idle: re-present so the jar bubbles animate */
+        { int d; while((d=plat_input_raw())){ (void)d; } }        /* drain auto-repeat backlog: one press = one choice */
         int ch=key&0xFF, sc=(key>>8)&0xFF;
         if(ch=='a'||ch=='A') return lo;
         if(ch=='b'||ch=='B') return hi;
@@ -1283,6 +1284,20 @@ static int cc_ask(int qnum, int va, int vb)
         else if(sc==0x4d||sc==0x50) sel=1;                        /* right/down -> B */
         else if(ch==0x0d||ch==' ') return sel==0?lo:hi;
     }
+}
+
+/* Front-end key read for menus/character-creation: wait until the keyboard is QUIET (no char
+ * for two frames — i.e. the previous key was released and the OS auto-repeat backlog has
+ * drained), THEN block for a fresh press. On real hardware the fast movement auto-repeat
+ * (Kbrate, tuned for smooth walking) queues many chars during a slow full-screen present, so a
+ * single tap used to "jump through" several options / questions. This makes every menu and
+ * chargen choice exactly one-press-one-action, independent of the repeat rate. */
+static int fe_getkey(void)
+{
+    int k, quiet = 0;
+    while(quiet < 2){ if(plat_input_raw()) quiet = 0; else quiet++; Vsync(); }  /* wait for release + drain */
+    while(!(k = plat_input_raw())) Vsync();                                     /* then a fresh keystroke  */
+    return k;
 }
 
 /* name entry: type a name (letters/space, backspace, Enter). Fills g_cc_name. */
@@ -1297,7 +1312,7 @@ static void cc_name_entry(void)
         ui_text((LW-ui_textw(nm))/2, 110, nm, 14);
         ui_text((LW-ui_textw("(type a name, Enter when done)"))/2, 168, "(type a name, Enter when done)", 24);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();
+        int key=fe_getkey();
         int ch=key&0xFF;
         if(ch==0x0d && len>0) break;                              /* Enter (needs a name) */
         else if(ch==0x08 && len>0) g_cc_name[--len]=0;            /* backspace */
@@ -1317,7 +1332,7 @@ static void cc_gender(void)
         ui_text((LW-ui_textw("Male"))/2, 108, "Male", sel==1?14:33);
         ui_text((LW-ui_textw("Female"))/2, 128, "Female", sel==0?14:33);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();
+        int key=fe_getkey();
         int ch=key&0xFF, sc=(key>>8)&0xFF;
         if(ch=='m'||ch=='M'){ g_cc_gender=1; return; }
         if(ch=='f'||ch=='F'){ g_cc_gender=0; return; }
@@ -1347,7 +1362,7 @@ static void cc_portrait(void)
         ui_text((LW-ui_textw(lbl))/2, py+g_cc_ph+24, lbl, 33);
         ui_text((LW-ui_textw("< > face   S sex   Enter ok"))/2, 182, "< > face   S sex   Enter ok", 24);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();
+        int key=fe_getkey();
         int ch=key&0xFF, sc=(key>>8)&0xFF;
         if(sc==0x4b) p=(p+5)%6;                              /* left  */
         else if(sc==0x4d||ch==' ') p=(p+1)%6;                /* right / space */
@@ -1374,7 +1389,7 @@ static void cc_summary(void)
         ui_text(90,110,s,33); ui_text(90,130,dxs,33); ui_text(90,150,is,33);
         ui_text((LW-ui_textw("Press any key"))/2, 182, "Press any key", 24);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();
+        (void)fe_getkey();
         break;
     }
 }
@@ -1397,7 +1412,7 @@ static void cc_woods_intro(void)
         ui_text((LW-ui_textw(cap))/2, 182, cap, 15);
         ui_text((LW-ui_textw("(press a key)"))/2, 192, "(press a key)", 15);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();
+        (void)fe_getkey();
         break;
     }
 }
@@ -1417,7 +1432,7 @@ static void cc_gypsy_intro(void)
         ui_text((LW-ui_textw("Eight vials of glowing virtue await."))/2, 150, "Eight vials of glowing virtue await.", 0x3e);
         ui_text((LW-ui_textw("(press a key)"))/2, 180, "(press a key)", 0x3e);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();
+        (void)fe_getkey();
         break;
     }
 }
@@ -1572,7 +1587,7 @@ static int run_menu(void)
         menu_highlight(mx,my,mw,g_menu_h,sel,rowh);         /* yellow->orange distance tint */
         if(note) ui_text((LW-ui_textw("Not yet available."))/2, my+g_menu_h+10, "Not yet available.", 15);
         rdr_present_doubled(LH);
-        int key; while(!(key=plat_input_raw())) Vsync();     /* wait for a keystroke */
+        int key=fe_getkey();     /* wait for a keystroke */
         int a=key&0xFF, sc=(key>>8)&0xFF; note=0;
         if(sc==0x48) sel=(sel+nopt-1)%nopt;              /* up   */
         else if(sc==0x50) sel=(sel+1)%nopt;              /* down */
