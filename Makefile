@@ -1230,5 +1230,20 @@ trace: all
 	          --trace gemdos,xbios --trace-file $(BUILD)/trace.log 2>/dev/null
 	@echo "wrote $(BUILD)/trace.log"
 
+# ---- Distribution: Atari .ST floppy images + hard-drive installer -----------
+# Build a redistributable floppy set from YOUR OWN game data. The script splits
+# the (oversized) packs across 1.44 MB floppies and ships INSTALL.TOS, which
+# reassembles them onto a hard drive / CF card on the target machine. Ships no
+# data — reads the packs it just built from $(BUILD). Pass extra flags via
+# STDISK_ARGS, e.g.:  make st-disks-falcon STDISK_ARGS='--media /path/to/gotek'
+.PHONY: st-disks st-disks-falcon st-disks-st st-disks-tt
+st-disks: st-disks-falcon
+st-disks-falcon:
+	scripts/make-st-disks.sh --target falcon $(STDISK_ARGS)
+st-disks-st:
+	scripts/make-st-disks.sh --target st $(STDISK_ARGS)
+st-disks-tt:
+	scripts/make-st-disks.sh --target tt $(STDISK_ARGS)
+
 clean:
 	rm -rf $(BUILD)
