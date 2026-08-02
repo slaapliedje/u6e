@@ -47,10 +47,34 @@ else → `u6map_dungeon_tile(level-1)`. Since the whole compose/lighting/LOS pat
 - **Savage Empire**: uses 4 of 6 levels; level 6 = a gargoyle-world variant. Level meaning differs; TBD.
 - **Martian Dreams**: toroidal world; era mechanics; TBD.
 
-## 4. NOT YET (follow-ups, tracked here)
-- **Transitions**: stairs/ladders/holes between levels, and surface dungeon entrances. Needs the
-  transition-object semantics (which obj_n move which direction, and how positions map between levels).
-  Until then, levels are reachable only via the DUNGEON.REQ debug hook.
+## 4. Level transitions (CONFIRMED)
+Transition objects (obj_n): **ladder 305**, **wooden ladder 106**, **hole 308**, **cave 326** (the
+surface dungeon-mouth). Derived from our own object data (tools/dungobj over LZOBJBLK+LZDNGBLK) +
+public U6 format sources (Nuvie usecode, Ultima Codex).
+
+- **Direction is the ladder's FRAME** (same obj_n 305): frame 0 = **DOWN** (→ z+1), frame ≠0 = **UP**
+  (→ z-1). Verified in our data: of 365 dungeon ladders, frame-0 connect down 147:9, frame-1 connect
+  up 161:9; and the levels are vertically ALIGNED (309/365 have a ladder at the same (x,y) one level
+  above/below — e.g. z1 ladder/f0 ↔ z2 ladder/f1 at identical x,y).
+- **Interior levels (z=1..4 down / z=2..5 up): identity (x,y), z±1.** A **hole (308)** drops to z+1 at
+  the same (x,y); a hole at the deepest level (z=5) goes UP instead (U6 quirk).
+- **Surface (z=0) → level 1** (cave/hole/down-ladder): a chunk-granular /4 transform (surface 1024 →
+  dungeon 256), collapsing every 4 surface chunks into 1 dungeon chunk:
+  `x1 = (x0 & 7) | ((x0>>2) & 0xF8)` (same for y). It is LOSSY (which of the 4 surface chunks is
+  discarded).
+- **Level 1 → surface** (up-ladder): inverts the /4 using the up-ladder's **`quality`** field as the
+  surface sub-chunk selector — bits0-1 = x sub-chunk (0..3), bits2-3 = y:
+  `x0 = (x1/8)*32 + ((quality & 3)*8) + (x1 % 8)` (same for y). A world-authored up-ladder on level 1
+  carries the quality that lands you back in the right surface chunk.
+- **Trigger:** ladder (305/106) = **USE** only; cave (326) = **step onto** (PASS); hole (308) = USE or
+  step-on. The cave/hole `quality` on the surface names *which dungeon* (text only), NOT coordinates.
+
+Engine: `world_transition(w, kind, quality)` (kind DOWN/UP/HOLE) applies exactly these transforms
+(enginetest: down (100,100)→(28,28,1); up recovers; down/up round-trip via quality; interior ±1; hole
+at z5→up; up-from-surface no-op). Wiring the in-game triggers (render the ladder/cave/hole objects per
+level + USE/PASS detection) is the integration step.
+
+## 4b. NOT YET (follow-ups)
 - **Dungeon lighting**: dungeons should be DARK (torch-lit) regardless of surface time; currently
   `compute_light` uses the surface day/night ambient (so a daytime level renders lit where visible).
 - **Dungeon objects**: per-level object blocking + object rendering (the objblk/save objects carry z).

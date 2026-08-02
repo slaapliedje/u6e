@@ -179,6 +179,13 @@ objsurvey-se: $(BUILD)/objsurvey
 	$(BUILD)/objsurvey $(SE_REFDATA) se
 objsurvey-md: $(BUILD)/objsurvey
 	$(BUILD)/objsurvey $(MD_REFDATA) md
+# M9 dungeon-transition probe: dump U6 ladders/holes across levels + test vertical alignment
+# (feeds docs/rules/map_levels.md). Clean-room; ships nothing.
+$(BUILD)/dungobj: tools/dungobj.c dataformats/u6lzw.c dataformats/u6obj.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+dungobj: $(BUILD)/dungobj
+	$(BUILD)/dungobj refdata/dos/u6
 
 lzctest: $(BUILD)/lzctest
 	$(BUILD)/lzctest $(SE_REFDATA) se

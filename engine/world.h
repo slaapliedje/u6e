@@ -44,4 +44,13 @@ void    world_set_blocked_obj(world_t *w, const uint8_t *bitmap);
  * clock only if the destination is passable. Returns true if the player moved. */
 bool    world_try_move(world_t *w, int dx, int dy);
 
+/* Level transitions (docs/rules/map_levels.md). kind: */
+enum { WL_DOWN = 0, WL_UP = 1, WL_HOLE = 2 };
+/* Apply a level transition from the player's current (px,py,level), moving (px,py,level) to the
+ * destination per the U6 rules: surface->L1 uses a chunk-granular /4 transform (down); L1->surface
+ * inverts it via `quality` (the up-ladder's surface sub-chunk selector, bits0-1=x, bits2-3=y);
+ * interior levels are vertically aligned (identity x,y, z+/-1); a hole at the deepest level goes up.
+ * `quality` is used only for the L1->surface case. Returns true if the level changed. */
+bool    world_transition(world_t *w, int kind, uint8_t quality);
+
 #endif

@@ -117,6 +117,35 @@ int main(int argc, char **argv)
         check("RNG differs for different seeds",       differs);
     }
 
+    /* 5) Level transitions (docs/rules/map_levels.md): the coordinate transforms are deterministic
+     * (world_transition reads/writes only px,py,level). */
+    {
+        world_t t; t.px = 100; t.py = 100; t.level = 0;
+        world_transition(&t, WL_DOWN, 0);                     /* surface->L1: chunk-granular /4 */
+        check("down surface->L1 transform (100,100)->(28,28,1)", t.px==28 && t.py==28 && t.level==1);
+        world_transition(&t, WL_UP, 0);                       /* L1->surface, quality 0 recovers sub-chunk 0 */
+        check("up L1->surface recovers (28->100)", t.px==100 && t.py==100 && t.level==0);
+
+        t.px = 140; t.py = 76; t.level = 0;                   /* nonzero sub-chunk round-trip */
+        world_transition(&t, WL_DOWN, 0);
+        int sub = ((140/8)%4) | (((76/8)%4)<<2);             /* the up-ladder quality that inverts the /4 */
+        world_transition(&t, WL_UP, (uint8_t)sub);
+        check("down/up round-trip via ladder quality (140,76)", t.px==140 && t.py==76 && t.level==0);
+
+        t.px = 200; t.py = 50; t.level = 2;                   /* interior levels: identity x,y, z+/-1 */
+        world_transition(&t, WL_DOWN, 0);
+        check("interior down keeps x,y, z+1", t.px==200 && t.py==50 && t.level==3);
+        world_transition(&t, WL_UP, 0);
+        check("interior up keeps x,y, z-1", t.px==200 && t.py==50 && t.level==2);
+
+        t.px = 10; t.py = 10; t.level = 5;                    /* hole at the deepest level goes UP (U6 quirk) */
+        world_transition(&t, WL_HOLE, 0);
+        check("hole at deepest level goes up (5->4)", t.level==4);
+
+        t.px = 5; t.py = 5; t.level = 0;                      /* up from the surface is a no-op */
+        check("up from surface is a no-op", !world_transition(&t, WL_UP, 0));
+    }
+
     printf(g_fail ? "\nRESULT: %d FAILURE(S)\n" : "\nRESULT: ALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }

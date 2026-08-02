@@ -46,17 +46,26 @@ int main(int argc, char **argv)
     long bn = 0; uint8_t *bt = slurp(path, &bn);
     if (!bt || bn < NOBJ*2){ fprintf(stderr, "BASETILE missing/short (%ld)\n", bn); return 1; }
 
-    snprintf(path, sizeof path, "%s/LOOK.LZC", dir);
+    int is_u6 = (strcmp(argv[2], "u6") == 0);        /* U6 uses LOOK.LZD (bare U6-LZW); SE/MD use LOOK.LZC */
+    snprintf(path, sizeof path, "%s/%s", dir, is_u6 ? "LOOK.LZD" : "LOOK.LZC");
     long ln = 0; uint8_t *lb = slurp(path, &ln);
-    if (!lb){ fprintf(stderr, "LOOK.LZC missing\n"); return 1; }
+    if (!lb){ fprintf(stderr, "%s missing\n", is_u6 ? "LOOK.LZD" : "LOOK.LZC"); return 1; }
 
     static uint8_t look[65536]; long look_len = 0;
-    u6lzc_t lc;
-    if (u6lzc_open(&lc, lb, (int32_t)ln, marker) && u6lzc_count(&lc) >= 1){
-        int32_t got = u6lzc_read(&lc, 0, look, sizeof look);
-        if (got < 0){ fprintf(stderr, "LOOK.LZC decode failed\n"); return 1; }
+    if (is_u6){                                       /* U6: bare LZW (4-byte LE size hdr + stream) */
+        int32_t cap = u6lzw_unpacked_size(lb, (int32_t)ln);
+        if (cap <= 0 || cap > (int32_t)sizeof look) cap = sizeof look;
+        int32_t got = u6lzw_decompress(lb, (int32_t)ln, look, cap);
+        if (got <= 0){ fprintf(stderr, "LOOK.LZD decode failed\n"); return 1; }
         look_len = got;
-    } else { fprintf(stderr, "LOOK.LZC: not a valid .LZC for marker 0x%02x\n", marker); return 1; }
+    } else {
+        u6lzc_t lc;
+        if (u6lzc_open(&lc, lb, (int32_t)ln, marker) && u6lzc_count(&lc) >= 1){
+            int32_t got = u6lzc_read(&lc, 0, look, sizeof look);
+            if (got < 0){ fprintf(stderr, "LOOK.LZC decode failed\n"); return 1; }
+            look_len = got;
+        } else { fprintf(stderr, "LOOK.LZC: not a valid .LZC for marker 0x%02x\n", marker); return 1; }
+    }
 
     /* run-fill: [u16 tile][name\0] fills tiles (prev+1 .. tile) with `name` (look.md). */
     static const char *name[NTILES];

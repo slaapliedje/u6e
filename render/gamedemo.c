@@ -2240,7 +2240,8 @@ static void compute_light(const world_t*w, uint8_t*light_out, int inside){
         /* DAY: interiors are full daylight (roofs only HIDE interiors from outside, they don't
          * darken them — matches U6/ScummVM). NIGHT: indoors fall to torch-only ambient, outdoors
          * to moonlight. (Dungeons would be a separate always-dark case — not surface throne room.) */
-        int amb = day ? 255 : ((inside && tile_is_indoor(wx,wy)) ? LIGHT_INDOOR_AMB : LIGHT_NIGHT_AMB);
+        int amb = (w->level>0) ? LIGHT_INDOOR_AMB          /* dungeons: no daylight — torch/avatar-lit only */
+                : day ? 255 : ((inside && tile_is_indoor(wx,wy)) ? LIGHT_INDOOR_AMB : LIGHT_NIGHT_AMB);
         L[vy*VT+vx]=(int16_t)amb;
     }
     for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){              /* terrain emitter globes */

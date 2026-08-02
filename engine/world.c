@@ -86,6 +86,31 @@ uint8_t world_tile(const world_t *w, int32_t x, int32_t y)
     return u6map_dungeon_tile(&w->map, w->level - 1, x, y);        /* dungeon level (256x256, wrapped) */
 }
 
+bool world_transition(world_t *w, int kind, uint8_t quality)
+{
+    int32_t z = w->level, nx = w->px, ny = w->py, nz;
+    if (kind == WL_UP) {
+        if (z <= 0) return false;                                 /* already on the surface */
+        nz = z - 1;
+        if (nz == 0) {                                            /* L1 -> surface: recover the /4-lost sub-chunk */
+            nx = (w->px / 8) * 32 + ((quality & 3) * 8) + (w->px % 8);
+            ny = (w->py / 8) * 32 + (((quality >> 2) & 3) * 8) + (w->py % 8);
+        }                                                         /* interior up: identity x,y */
+    } else {                                                      /* WL_DOWN or WL_HOLE */
+        if (z == 0) {                                             /* surface -> L1: chunk-granular /4 (map_levels.md) */
+            nx = (w->px & 7) | ((w->px >> 2) & 0xF8);
+            ny = (w->py & 7) | ((w->py >> 2) & 0xF8);
+            nz = 1;
+        } else if (z >= U6_DUNGEON_LEVELS) {                      /* hole at the deepest level goes UP (U6 quirk) */
+            nz = z - 1;
+        } else {
+            nz = z + 1;                                           /* interior down: identity x,y */
+        }
+    }
+    w->level = nz; w->px = nx; w->py = ny;
+    return true;
+}
+
 bool world_is_passable(const world_t *w, int32_t x, int32_t y)
 {
     if (!w->passable[world_tile(w, x, y)]) return false;          /* terrain blocks */
