@@ -1301,9 +1301,18 @@ static int cc_ask(int qnum, int va, int vb)
  * chargen choice exactly one-press-one-action, independent of the repeat rate. */
 static int fe_getkey(void)
 {
-    int k, quiet = 0;
-    while(quiet < 2){ if(plat_input_raw()) quiet = 0; else quiet++; Vsync(); }  /* wait for release + drain */
-    while(!(k = plat_input_raw())) Vsync();                                     /* then a fresh keystroke  */
+    int k;
+    /* Wait until the keyboard has been QUIET for ~120 ms (key released + any auto-repeat
+     * backlog drained) BEFORE accepting a new press. Time-based (200 Hz clock) so it reliably
+     * spans the repeat interval regardless of the refresh rate — a frame count could exit in
+     * the gap BETWEEN two repeats and re-fire (the residual double-press seen on real HW). */
+    uint32_t quiet = plat_ticks_200hz();
+    for(;;){
+        if(plat_input_raw()) quiet = plat_ticks_200hz();           /* saw a char -> restart the timer */
+        else if(plat_ticks_200hz() - quiet >= 24) break;           /* 24/200 s = 120 ms of silence   */
+        Vsync();
+    }
+    while(!(k = plat_input_raw())) Vsync();                         /* then block for a fresh keystroke */
     return k;
 }
 

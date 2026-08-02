@@ -12,11 +12,12 @@
 
 void plat_input_init(void)
 {
-    /* Fast keyboard auto-repeat so a HELD arrow key moves the avatar smoothly.
-     * XBIOS 35 Kbrate(initial, repeat) — both in VBL ticks (~1/50 s). Default TOS
-     * is a sluggish ~0.5 s initial delay + slow repeat; we cut the initial delay
-     * to ~120 ms and repeat every ~40 ms so movement keeps up with the frame rate. */
-    Kbrate(6, 2);
+    /* Keyboard auto-repeat. XBIOS 35 Kbrate(initial, repeat) — both in VBL ticks
+     * (~1/50 s). The INITIAL delay must be LONGER than a normal keypress, or an
+     * ordinary tap auto-repeats and every menu choice / command / single step
+     * double-fires (reported on real HW). ~300 ms initial means a tap = one event,
+     * while deliberately HOLDING an arrow (>300 ms) still auto-walks (~60 ms/step). */
+    Kbrate(15, 3);
 }
 
 int plat_input_raw(void)

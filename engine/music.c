@@ -40,6 +40,14 @@ void music_seq_stop(music_seq_t *m){
     m->playing = 0;
 }
 
+/* Release every still-sounding note. Called when the song WRAPS (end-of-song or a top-level
+ * loop) so a note that was on at the wrap point can't drone forever if the loop body doesn't
+ * re-address that channel (the "hanging notes" heard on real HW). */
+static void seq_all_notes_off(music_seq_t *m){
+    for(int i = 0; i < 9; i++)
+        if(m->note[i] >= 0){ m->be->note_off(m->mch[i], m->note[i]); m->note[i] = -1; }
+}
+
 void music_seq_tick(music_seq_t *m, int nticks){
     if(!m->playing) return;
     m->delay -= nticks;
@@ -48,6 +56,7 @@ void music_seq_tick(music_seq_t *m, int nticks){
         if(m->pos >= m->len){                          /* ran off the end without a return: loop */
             m->pos = m->loop_pos;
             if(m->pos >= m->len){ music_seq_stop(m); break; }
+            seq_all_notes_off(m);                       /* release held notes across the wrap */
             continue;
         }
         uint8_t b = m->d[m->pos++]; int hi = b >> 4, lo = b & 0xF;
@@ -87,7 +96,7 @@ void music_seq_tick(music_seq_t *m, int nticks){
           case 0xF:                                                     /* return / loop */
             if(m->sp > 0){ if(--m->stk[m->sp-1].reps > 0) m->pos = m->stk[m->sp-1].start;
                            else m->pos = m->stk[--m->sp].ret; }
-            else m->pos = m->loop_pos;                                  /* top level: loop the whole song */
+            else { seq_all_notes_off(m); m->pos = m->loop_pos; }        /* top level: loop the whole song */
             break;
           default: break;                                              /* 0x9..0xD undefined */
         }
