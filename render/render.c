@@ -24,6 +24,13 @@
 
 static const rdr_vtable *g_be;      /* the selected backend (NULL until rdr_select) */
 
+/* Physical-cursor -> logical-UI map (render.h). The present transform differs per backend (the
+ * Falcon VGA letterbox shifts the 320x200 UI down; the TT doubles it into 320x480); the ACTIVE
+ * backend's rdr_init sets these so the engine can turn a line-A mouse (x,y) into UI coords:
+ *   ui_y = (phys_y - rdr_ui_yoff) / rdr_ui_yscale ,  ui_x = phys_x .
+ * Defaults are identity (plain ST 320x200); each backend overrides in its init. */
+int rdr_ui_yoff = 0, rdr_ui_yscale = 1;
+
 /* Pick the backend from the hardware. Idempotent + lazy: rdr_prefer_truecolor may run before
  * rdr_init, and both call this; platform_detect is deterministic so a second call is harmless. */
 static void rdr_select(void)

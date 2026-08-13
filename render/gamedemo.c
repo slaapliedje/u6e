@@ -270,6 +270,17 @@ static const uint8_t *g_digit[11]; static int g_dig_w[11], g_dig_h[11], g_clk_x,
 static const uint8_t *g_gate, *g_cover; static int g_gw,g_gh,g_gx, g_cvw,g_cvh,g_cvx,g_cvy, g_gate_y;  /* moongate rise */
 static const uint8_t *g_cc_port[12]; static int g_cc_pw, g_cc_ph, g_cc_nport;  /* MONTAGE.SHP 0..11: chargen portraits (6 female @0..5, 6 male @6..11) */
 static const char *g_cc_qtext[28]; static int g_cc_qlen[28], g_cc_nq;          /* gypsy question prose, extracted from U.EXE into the pack (canonical order; NOT NUL-terminated) */
+/* CHARGEN CEREMONY TEXT (extracted from U.EXE into the pack; NOT NUL-terminated; %s = player name).
+ * When a section is empty the engine falls back to its committed PARAPHRASE (clean-room: real text
+ * only ever comes from the user's own file). See docs/design/chargen_authentic.md. */
+#define CC_TXT_MAX 16
+#define CG_TXT_LEN 320                  /* max chars in one ceremony page (matches mkworld CG_LEN) */
+static const char *g_cc_np, *g_cc_gp;   static int g_cc_np_len, g_cc_gp_len;    /* name / gender prompt */
+static const char *g_appr[CC_TXT_MAX];  static int g_appr_len[CC_TXT_MAX],  g_nappr;   /* woods approach pages */
+static const char *g_greet[CC_TXT_MAX]; static int g_greet_len[CC_TXT_MAX], g_ngreet;  /* gypsy greeting pages */
+static const char *g_ftxt[CC_TXT_MAX];  static int g_ftxt_len[CC_TXT_MAX],  g_nftxt;    /* flask/sleep/wake outro */
+#define CC_GARG_MAX 24
+static const char *g_garg[CC_GARG_MAX]; static int g_garg_len[CC_GARG_MAX], g_ngarg;      /* §1B gargoyle-sacrifice opening */
 #define BOOK_MAX 256
 static const char *g_book[BOOK_MAX]; static int g_booklen[BOOK_MAX], g_nbook;   /* BOOK.DAT readable text (signs/books/plaques), indexed by object quality-1 (docs/formats/strings.md) */
 static const uint8_t *g_gyp_scene, *g_gyp_pal, *g_gyp_scroll;                   /* gypsy "casting" bg (PALETTES.INT 5, bg only) + tall question parchment */
@@ -303,6 +314,12 @@ static const uint8_t *g_forest_base, *g_win_ov; static int g_forest_w, g_forest_
 /* stones obsidian-pickup (INTRO_3.SHP): the hand rises to grab the obsidian; bg5 = stone gone */
 static const uint8_t *g_stn_hand, *g_stn_obs, *g_stn_bg5; static int g_stn_hw,g_stn_hh, g_stn_ow,g_stn_oh, g_stn_b5w,g_stn_b5h;
 static const uint8_t *g_av_frame[20]; static int g_av_w[20], g_av_h[20], g_av_ox[20], g_av_oy[20], g_av_n;   /* Avatar-into-gate walk frames (INTRO_3 7..26), each cropped to its bbox + (ox,oy) offset */
+/* §1B gargoyle-sacrifice scene (chargen_authentic.md §1B.1): raw INTRO.SHP shape table +
+ * PALETTES.INT 7 (+ per-scene ST 16) + the small/short BLOCKS.SHP scrolls (0/1). */
+#define GG_NSH 13
+static const uint8_t *g_gg_pal, *g_gg_lc;
+static const uint8_t *g_gg[GG_NSH]; static int g_gg_w[GG_NSH], g_gg_h[GG_NSH], g_ngg;
+static const uint8_t *g_gg_scroll[2]; static int g_gg_scw[2], g_gg_sch[2];
 /* dense roof-tile index at (x,y), or -1 if not roofed. Binary-searches the sorted map. */
 static int roof_at(int x,int y){
     int32_t key=(int32_t)y*1024+x; int lo=0, hi=g_nroof-1;
@@ -1240,6 +1257,24 @@ static void gypsy_pour(int vial){
     g_arm_sh=g_hand_sh=g_pour_sh=g_vl_sh=-1; g_pour_vial=-1;   /* the vial glass reappears at its new level */
 }
 
+static void fe_mouse(int *ux, int *uy, int *click);   /* fwd: front-end mouse (defined after fe_getkey) */
+
+/* A/B choice buttons at the tall parchment's lower-right (spec §3f): GYPSY.SHP shape 7 (A) at
+ * (279,174), shape 8 (B) at (296,174), with a 2px underline (palette 248) beneath the selected one.
+ * Falls back to plain "A"/"B" glyphs if the button art is absent. Mouse rects match: A x278..295,
+ * B x296..313, y173..190. */
+static void cc_draw_ab(int sel)
+{
+    const int ax=279, bx=296, y=174;
+    if(7<g_ngsh && g_gsh[7] && g_gsh_w[7]>0){
+        gblit(7,ax,y); gblit(8,bx,y);
+        int sx=sel?bx:ax, sw=g_gsh_w[sel?8:7], uy=y+g_gsh_h[sel?8:7];
+        if(uy+1<LH) for(int t=0;t<sw && sx+t<LW;t++){ ROW(uy)[sx+t]=248; ROW(uy+1)[sx+t]=248; }
+    } else {
+        ui_text(ax,y,"A",sel==0?14:24); ui_text(bx,y,"B",sel==1?14:24);
+    }
+}
+
 /* one A/B virtue question. Shows the gypsy's REAL prose (extracted from U.EXE) when present —
  * the A) / B) choices are inline in the text — else a generic prompt with the two virtue
  * names. A) is always the lower-indexed virtue, B) the higher. Returns the WINNING virtue. */
@@ -1249,22 +1284,18 @@ static int cc_ask(int qnum, int va, int vb)
     int qi=cc_question_index(va,vb);
     int have=(qi>=0 && qi<g_cc_nq);
     int sel=0;                                                    /* 0 = A (lo), 1 = B (hi) */
-    char hdr[20]; { const char*h="Question "; int n=0; for(const char*p=h;*p;p++) hdr[n++]=*p;
-        hdr[n++]=(char)('0'+qnum); const char*o=" of 7"; for(const char*p=o;*p;p++) hdr[n++]=*p; hdr[n]=0; }
+    (void)qnum;                                                   /* no "Question N of 7" counter — the original has none */
     for(;;){
         gypsy_update_bubbles();                                   /* churn the jar essence while the player reads (once it is filling) */
         if(g_gyp_scene){                                          /* authentic gypsy "casting" scene */
             draw_gypsy_scene();                                  /* gypsy + table + 8 vials at their current levels */
             blit_indexed(g_gyp_scroll,g_gscroll_w,g_gscroll_h,0,120);   /* question parchment (torn edges transparent) */
-            ui_text(6, 4, hdr, 15);                               /* "Question N of 7" over the scene */
-            ui_text(246, 4, "[A]", sel==0?14:24);                 /* A/B selector, top-right */
-            ui_text(282, 4, "[B]", sel==1?14:24);
             if(have) draw_wrapped(g_cc_qtext[qi], g_cc_qlen[qi], 128, 38, 9, 0x3e);   /* prose, parchment ink */
             else ui_text((LW-ui_textw("Which path guides thee?"))/2, 150, "Which path guides thee?", 0x3e);
+            cc_draw_ab(sel);                                      /* A/B buttons, lower-right, on top */
         } else {                                                  /* fallback: plain text on black */
             clear_bb(0);
             ui_text((LW-ui_textw("The Gypsy's Questions"))/2, 8, "The Gypsy's Questions", 15);
-            ui_text((LW-ui_textw(hdr))/2, 24, hdr, 14);
             if(have){
                 draw_wrapped(g_cc_qtext[qi], g_cc_qlen[qi], 46, 38, 12, 15);
                 ui_text(LW/2-52, 168, "[ A ]", sel==0?14:33);
@@ -1281,6 +1312,10 @@ static int cc_ask(int qnum, int va, int vb)
             }
         }
         rdr_present_doubled(LH);
+        /* MOUSE: hover the A/B button rects to select, click to choose (spec §3f: keyboard AND mouse) */
+        int mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);
+        if(muy>=173 && muy<=190){ if(mux>=278&&mux<296) sel=0; else if(mux>=296&&mux<=313) sel=1; }
+        if(mclick && muy>=173 && muy<=190){ if(mux>=278&&mux<296) return lo; if(mux>=296&&mux<=313) return hi; }
         int key=plat_input_raw();
         if(!key){ Vsync(); continue; }                            /* idle: re-present so the jar bubbles animate */
         { int d; while((d=plat_input_raw())){ (void)d; } }        /* drain auto-repeat backlog: one press = one choice */
@@ -1316,14 +1351,64 @@ static int fe_getkey(void)
     return k;
 }
 
+/* Front-end mouse: line-A cursor position mapped to UI (320x200) coords + an EDGE-triggered click
+ * (*click = 1 only on the frame a button goes down, so a held button fires once). The renderer sets
+ * rdr_ui_yoff/yscale to undo its present transform (Falcon VGA letterbox, TT 2x-doubling). */
+static int g_fe_mb;
+static void fe_mouse(int *ux, int *uy, int *click)
+{
+    int px, py, b; plat_mouse(&px, &py, &b);
+    int lx = px, ly = py - rdr_ui_yoff; if(rdr_ui_yscale > 1) ly /= rdr_ui_yscale;
+    if(lx < 0) lx = 0; if(lx >= LW) lx = LW-1;
+    if(ly < 0) ly = 0; if(ly >= LH) ly = LH-1;
+    *ux = lx; *uy = ly; *click = (b && !g_fe_mb); g_fe_mb = b;
+}
+
+/* Substitute "%s" -> the created name into a NUL-terminated display buffer; returns length.
+ * (The flask outro's opening line addresses the Avatar by name: "...worthy %s,...".) */
+static int cc_subst(char *out, int cap, const char *s, int len)
+{
+    int o=0;
+    for(int i=0;i<len && o<cap-1;i++){
+        if(s[i]=='%' && i+1<len && s[i+1]=='s'){
+            const char *nm = g_cc_name[0] ? g_cc_name : "Avatar";
+            for(int k=0; nm[k] && o<cap-1; k++) out[o++]=nm[k];
+            i++; continue;
+        }
+        out[o++]=s[i];
+    }
+    out[o]=0; return o;
+}
+
+/* One ceremony narration page: parchment scroll `sc` at (sx,sy) over the CURRENT backbuffer, the
+ * page text (s,len) proportionally wrapped + vertically centred on it (parchment ink 0x3e), then
+ * present and wait for a keypress (input-advanced, as the original — the player reads at their own
+ * pace). %s in the text is replaced by the created name. Caller draws the background first. */
+static int fe_scroll_page(const uint8_t *sc, int scw, int sch, int sx, int sy, const char *s, int len)
+{
+    char buf[CG_TXT_LEN]; int bl = cc_subst(buf, sizeof buf, s, len);
+    if(sc && scw>0 && sch>0) blit_indexed(sc, scw, sch, sx, sy);
+    int maxpx = (scw>40 ? scw-24 : 288);                     /* usable width inside the torn edges */
+    int nl = pwrap(buf, bl, 0, maxpx, 0, 0, 0);              /* count lines (no draw) */
+    int ph = (sch>0 ? sch : 34);
+    int dy = (ph-8)/(nl>0?nl:1); if(dy>9) dy=9; if(dy<7) dy=7;
+    int ty = sy + (ph - nl*dy)/2 + 1; if(ty < sy+2) ty = sy+2;
+    pwrap(buf, bl, ty, maxpx, dy, 62, 1);                    /* draw, ink 0x3e */
+    rdr_present_doubled(LH);
+    return fe_getkey();                                      /* the advancing key (Esc lets callers skip) */
+}
+
 /* name entry: type a name (letters/space, backspace, Enter). Fills g_cc_name. */
 static void cc_name_entry(void)
 {
+    char prompt[80];                                             /* real U.EXE prompt, else paraphrase */
+    if(g_cc_np_len>0 && g_cc_np_len<(int)sizeof prompt){ memcpy(prompt,g_cc_np,(size_t)g_cc_np_len); prompt[g_cc_np_len]=0; }
+    else { const char*fb="By what name art thou known?"; int i=0; while(fb[i]){prompt[i]=fb[i];i++;} prompt[i]=0; }
     int len=0; g_cc_name[0]=0;
     for(;;){
         clear_bb(0);
         ui_text((LW-ui_textw("Character Creation"))/2, 24, "Character Creation", 15);
-        ui_text((LW-ui_textw("By what name art thou known?"))/2, 70, "By what name art thou known?", 15);
+        ui_text((LW-ui_textw(prompt))/2, 70, prompt, 15);
         char nm[18]; int i=0; for(;i<len;i++) nm[i]=g_cc_name[i]; nm[i++]='_'; nm[i]=0;
         ui_text((LW-ui_textw(nm))/2, 110, nm, 14);
         ui_text((LW-ui_textw("(type a name, Enter when done)"))/2, 168, "(type a name, Enter when done)", 24);
@@ -1340,11 +1425,14 @@ static void cc_name_entry(void)
 /* gender select (M/F, or arrows + Enter). Fills g_cc_gender (1=male, 0=female). */
 static void cc_gender(void)
 {
+    char prompt[80];                                             /* real U.EXE prompt, else paraphrase */
+    if(g_cc_gp_len>0 && g_cc_gp_len<(int)sizeof prompt){ memcpy(prompt,g_cc_gp,(size_t)g_cc_gp_len); prompt[g_cc_gp_len]=0; }
+    else { const char*fb="Art thou Male, or Female?"; int i=0; while(fb[i]){prompt[i]=fb[i];i++;} prompt[i]=0; }
     int sel=1;
     for(;;){
         clear_bb(0);
         ui_text((LW-ui_textw("Character Creation"))/2, 24, "Character Creation", 15);
-        ui_text((LW-ui_textw("Art thou Male, or Female?"))/2, 70, "Art thou Male, or Female?", 15);
+        ui_text((LW-ui_textw(prompt))/2, 70, prompt, 15);
         ui_text((LW-ui_textw("Male"))/2, 108, "Male", sel==1?14:33);
         ui_text((LW-ui_textw("Female"))/2, 128, "Female", sel==0?14:33);
         rdr_present_doubled(LH);
@@ -1360,30 +1448,60 @@ static void cc_gender(void)
 /* portrait pick (nuvie create_character): cycle the 6 MONTAGE portraits for the chosen
  * gender; 'S'/up/down flips gender (montage index = gender*6 + portrait_num). Left/right or
  * space cycle; Enter confirms. Fills g_cc_portrait (and may adjust g_cc_gender). */
+/* portrait + gender picker (authentic §3c): the live MONTAGE portrait with four labelled buttons —
+ * Sex (re-pick gender), Portrait (cycle the 6 faces), Continue (confirm), Exit — driven by keyboard
+ * (Up/Down move the highlight + Enter, or the s/p/c hotkeys) AND the mouse (hover highlights, click
+ * activates), the active button carrying a 2px underline (palette 248). Because Sex re-toggles gender
+ * HERE, you can change your mind after the initial pick (the gap you hit). Fills g_cc_portrait (and
+ * possibly g_cc_gender). VELLUM1 parchment/button ART is a later cosmetic pass. */
 static void cc_portrait(void)
 {
     if(g_cc_nport<12){ g_cc_portrait=0; return; }         /* no montage shipped -> skip */
-    int p=0;
+    static const char *const BLAB[4] = { "Sex", "Portrait", "Continue", "Exit" };
+    const int BY[4] = { 70, 95, 120, 145 }, BX = 44;
+    int p=g_cc_portrait; if(p<0||p>5) p=0;
+    int btn=2;                                            /* highlighted button (default Continue) */
     for(;;){
         clear_bb(0);
-        ui_text((LW-ui_textw("Choose Thy Likeness"))/2, 20, "Choose Thy Likeness", 15);
+        ui_text((LW-ui_textw("Choose Thy Likeness"))/2, 16, "Choose Thy Likeness", 15);
         int idx=g_cc_gender*6 + p; if(idx<0)idx=0; if(idx>=g_cc_nport)idx=g_cc_nport-1;
-        int px=(LW-g_cc_pw)/2, py=60;
-        blit_opaque(g_cc_port[idx], g_cc_pw, g_cc_ph, px, py);   /* current portrait (opaque) */
-        for(int t=-1;t<=g_cc_pw;t++){                            /* thin frame around it */
-            ROW(py-1)[px+t<0?px:(px+t>=LW?LW-1:px+t)]=14; ROW(py+g_cc_ph)[px+t<0?px:(px+t>=LW?LW-1:px+t)]=14; }
+        int px=180, py=56;
+        blit_opaque(g_cc_port[idx], g_cc_pw, g_cc_ph, px, py);   /* live portrait */
+        for(int t=-1;t<=g_cc_pw;t++){ int xx=px+t; if(xx<0)xx=0; if(xx>=LW)xx=LW-1;
+            ROW(py-1)[xx]=14; ROW(py+g_cc_ph)[xx]=14; }         /* thin frame */
         const char*g = g_cc_gender ? "Male" : "Female";
-        ui_text((LW-ui_textw(g))/2, py+g_cc_ph+8, g, 14);
-        char lbl[16]; lbl[0]='('; lbl[1]=(char)('1'+p); lbl[2]=' '; lbl[3]='o'; lbl[4]='f'; lbl[5]=' '; lbl[6]='6'; lbl[7]=')'; lbl[8]=0;
-        ui_text((LW-ui_textw(lbl))/2, py+g_cc_ph+24, lbl, 33);
-        ui_text((LW-ui_textw("< > face   S sex   Enter ok"))/2, 182, "< > face   S sex   Enter ok", 24);
+        ui_text(px+(g_cc_pw-ui_textw(g))/2, py+g_cc_ph+6, g, 14);
+        char lbl[20]; { int n=0; const char*a="Face "; for(const char*q=a;*q;q++)lbl[n++]=*q;
+            lbl[n++]=(char)('1'+p); const char*b=" of 6"; for(const char*q=b;*q;q++)lbl[n++]=*q; lbl[n]=0; }
+        ui_text(px+(g_cc_pw-ui_textw(lbl))/2, py+g_cc_ph+18, lbl, 33);
+        for(int i=0;i<4;i++){                                   /* the four buttons + active underline */
+            ui_text(BX, BY[i], BLAB[i], i==btn?14:33);
+            if(i==btn){ int w=ui_textw(BLAB[i]), uy=BY[i]+9;
+                if(uy+1<LH) for(int t=0;t<w && BX+t<LW;t++){ ROW(uy)[BX+t]=248; ROW(uy+1)[BX+t]=248; } }
+        }
+        ui_text((LW-ui_textw("arrows + Enter or click   S sex   P face"))/2, 186, "arrows + Enter or click   S sex   P face", 24);
         rdr_present_doubled(LH);
-        int key=fe_getkey();
-        int ch=key&0xFF, sc=(key>>8)&0xFF;
-        if(sc==0x4b) p=(p+5)%6;                              /* left  */
-        else if(sc==0x4d||ch==' ') p=(p+1)%6;                /* right / space */
-        else if(ch=='s'||ch=='S'||sc==0x48||sc==0x50) g_cc_gender=!g_cc_gender;  /* toggle sex */
-        else if(ch==0x0d||ch==0x1b){ g_cc_portrait=p; return; }   /* Enter/Esc -> accept */
+
+        int mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);        /* hover highlights, click activates */
+        int over=-1;
+        for(int i=0;i<4;i++){ int w=ui_textw(BLAB[i]);
+            if(mux>=BX-2 && mux<BX+w+2 && muy>=BY[i]-1 && muy<BY[i]+10){ over=i; btn=i; break; } }
+        int act = (mclick && over>=0) ? over : -1;
+        int key=plat_input_raw();
+        if(key){ { int d; while((d=plat_input_raw())){ (void)d; } }
+            int ch=key&0xFF, sc=(key>>8)&0xFF;
+            if(sc==0x48) btn=(btn+3)%4;                         /* up   */
+            else if(sc==0x50) btn=(btn+1)%4;                    /* down */
+            else if(ch=='s'||ch=='S') act=0;                    /* hotkeys */
+            else if(ch=='p'||ch=='P') act=1;
+            else if(ch=='c'||ch=='C') act=2;
+            else if(ch==0x1b)        act=3;                     /* Esc -> Exit */
+            else if(ch==0x0d||ch==' ') act=btn;
+        }
+        if(act<0){ Vsync(); continue; }
+        if(act==0) g_cc_gender=!g_cc_gender;                    /* Sex: re-pick gender */
+        else if(act==1) p=(p+1)%6;                             /* Portrait: cycle the six faces */
+        else { g_cc_portrait=p; return; }                      /* Continue / Exit: accept + proceed */
     }
 }
 
@@ -1410,47 +1528,298 @@ static void cc_summary(void)
     }
 }
 
-/* forest-path lead-in: pan the WOODS panorama left toward the gypsy's wagon (own-worded
- * caption). Palette 4 must already be set. Auto-pans, then holds until a key. */
+/* forest-path lead-in (authentic, PALETTES.INT 4): the gypsy's "Welcome, O Seeker!" greets thee on
+ * the narration scroll, THEN the woods pan reveals her wagon, THEN the approach narration — each page
+ * held until a keypress (input-advanced, as the original). U.EXE text via g_appr[]; paraphrase if absent. */
 static void cc_woods_intro(void)
 {
     if(!g_woods) return;
     int panlen = g_woods_w - LW; if(panlen<0) panlen=0;
+    int scw=g_scroll_w, sch=g_scroll_h, sx=(LW-scw)/2, sy=(sch>0?LH-sch:LH-34);
+    if(g_nappr>0){
+        blit_opaque(g_woods,g_woods_w,g_woods_h,0,0);                    /* page 1: "Welcome, O Seeker!" */
+        fe_scroll_page(g_scroll,scw,sch,sx,sy,g_appr[0],g_appr_len[0]);
+        for(int s=0;s<=panlen;s+=2){                                     /* pan to the wagon (skippable) */
+            blit_opaque(g_woods,g_woods_w,g_woods_h,-s,0); rdr_present_doubled(LH);
+            if(plat_input_raw()) break; }
+        for(int k=1;k<g_nappr;k++){                                      /* the rest of the approach prose */
+            blit_opaque(g_woods,g_woods_w,g_woods_h,-panlen,0);
+            fe_scroll_page(g_scroll,scw,sch,sx,sy,g_appr[k],g_appr_len[k]); }
+        return;
+    }
+    /* fallback (no extracted text): pan + own-worded caption */
     const char*cap="A path winds to a gypsy's wagon...";
-    for(int s=0;s<=panlen;s+=2){
-        blit_opaque(g_woods,g_woods_w,g_woods_h,-s,0);
-        ui_text((LW-ui_textw(cap))/2, 182, cap, 15);
-        rdr_present_doubled(LH);
-        if(plat_input_raw()) break;                          /* a key skips to the end */
-    }
-    for(;;){
-        blit_opaque(g_woods,g_woods_w,g_woods_h,-panlen,0);
-        ui_text((LW-ui_textw(cap))/2, 182, cap, 15);
-        ui_text((LW-ui_textw("(press a key)"))/2, 192, "(press a key)", 15);
-        rdr_present_doubled(LH);
-        (void)fe_getkey();
-        break;
-    }
+    for(int s=0;s<=panlen;s+=2){ blit_opaque(g_woods,g_woods_w,g_woods_h,-s,0);
+        ui_text((LW-ui_textw(cap))/2, 182, cap, 15); rdr_present_doubled(LH);
+        if(plat_input_raw()) break; }
+    blit_opaque(g_woods,g_woods_w,g_woods_h,-panlen,0);
+    ui_text((LW-ui_textw(cap))/2, 182, cap, 15);
+    rdr_present_doubled(LH); (void)fe_getkey();
 }
 
-/* brief "casting" lead-in on the gypsy scene (own-worded — the authentic U.EXE narration is a
- * later extraction). Palette 5 must already be set. Holds until a key. */
+/* Entering the wagon — the gypsy's greeting (authentic, PALETTES.INT 5): the casting scene with all
+ * eight vials FULL, and the greeting read a page at a time on the tall parchment ("At last thou hast
+ * come to fulfill thy destiny," ... "Let us begin the casting!"). U.EXE text via g_greet[]. */
 static void cc_gypsy_intro(void)
 {
     if(!g_gyp_scene) return;
     for(int i=0;i<8;i++) g_vial_lvl[i]=3; g_jar_lvl=0;    /* vials start FULL (level 3); the gypsy DRAINS them into the jar (nuvie) */
     g_arm_sh=g_hand_sh=g_pour_sh=g_vl_sh=-1; g_pour_vial=-1;
     g_nflask=0; g_bubble_ctr=0; g_jarbub_lvl=-1; rng_seed(&g_bubrng, 0x6b0bb1e ^ plat_ticks_200hz());  /* reset jar bubbles */
-    for(;;){
-        draw_gypsy_scene();
-        blit_indexed(g_gyp_scroll,g_gscroll_w,g_gscroll_h,0,120);
-        ui_text((LW-ui_textw("The gypsy bids thee sit at her table."))/2, 138, "The gypsy bids thee sit at her table.", 0x3e);
-        ui_text((LW-ui_textw("Eight vials of glowing virtue await."))/2, 150, "Eight vials of glowing virtue await.", 0x3e);
-        ui_text((LW-ui_textw("(press a key)"))/2, 180, "(press a key)", 0x3e);
-        rdr_present_doubled(LH);
-        (void)fe_getkey();
-        break;
+    if(g_ngreet>0){
+        for(int k=0;k<g_ngreet;k++){
+            draw_gypsy_scene();
+            fe_scroll_page(g_gyp_scroll,g_gscroll_w,g_gscroll_h,0,120,g_greet[k],g_greet_len[k]); }
+        return;
     }
+    /* fallback (no extracted text): own-worded lead-in */
+    draw_gypsy_scene();
+    blit_indexed(g_gyp_scroll,g_gscroll_w,g_gscroll_h,0,120);
+    ui_text((LW-ui_textw("The gypsy bids thee sit at her table."))/2, 138, "The gypsy bids thee sit at her table.", 0x3e);
+    ui_text((LW-ui_textw("Eight vials of glowing virtue await."))/2, 150, "Eight vials of glowing virtue await.", 0x3e);
+    rdr_present_doubled(LH); (void)fe_getkey();
+}
+
+/* §1B GARGOYLE-SACRIFICE opening — the new-game cinematic that bridges the gypsy's flask/sleep outro
+ * into Britannia (the companions drag the Avatar through a collapsing moongate). Full animated
+ * INTRO.SHP scene per docs/design/chargen_authentic.md §1B.1: a fixed-draw-order sprite list is
+ * composited per frame (the altar AFTER the Avatar lays the Avatar "on" it); the hordes sway and
+ * the moongate's ring palette (232..239) rotates during text holds; every walk/rise/fall animation
+ * is input-skippable and Esc aborts the scene. Falls back to the plain text-over-black pager when
+ * the pack lacks the INTRO.SHP shapes (missing user data). */
+enum { GS_BG, GS_GATE, GS_HL, GS_HR, GS_PBODY, GS_PHEAD, GS_IOLO, GS_SHAM, GS_DUPRE,
+       GS_AVATAR, GS_ALTAR, GS_ROPES, GS_N };
+static struct { int shp, x, y, vis; } g_ggs[GS_N];
+static int g_gg_lidx, g_gg_ridx;      /* horde sway phases (0..11), left/right out of phase */
+static int g_gg_cyc, g_gg_cf;         /* moongate palette-cycle step + frame divider */
+static rng_t g_gg_rng;
+
+/* rotate the moongate ring colours (palette 232..239) by `shift` over the scene palette
+ * (same CLUT-rotation trick as intro_crimson_cycle; no-op visually on the ST's static LUT). */
+static void gg_gate_cycle(int shift)
+{ uint8_t p[768]; memcpy(p,g_gg_pal,768);
+  for(int i=0;i<8;i++){ int src=232+((i+shift)&7);
+    p[(232+i)*3]=g_gg_pal[src*3]; p[(232+i)*3+1]=g_gg_pal[src*3+1]; p[(232+i)*3+2]=g_gg_pal[src*3+2]; }
+  rdr_set_palette(p,256); }
+
+/* hordes sway: 12-phase +-3px x-wobble, each side ~3/4 likely to advance a phase per frame
+ * (spec §1B.1). Returns 1 if either horde moved (caller recomposes). */
+static const int8_t GG_SWAY[12] = {1,1,1,-1,-1,-1,-1,-1,-1,1,1,1};
+static int gg_sway(void)
+{ int moved=0;
+  if(rng_range(&g_gg_rng,4)){ g_gg_lidx=(g_gg_lidx+1)%12; g_ggs[GS_HL].x+=GG_SWAY[g_gg_lidx]; moved=1; }
+  if(rng_range(&g_gg_rng,4)){ g_gg_ridx=(g_gg_ridx+1)%12; g_ggs[GS_HR].x+=GG_SWAY[g_gg_ridx]; moved=1; }
+  return moved; }
+
+/* composite the visible sprites in draw order into the backbuffer (index 0 = transparent, over
+ * black; blit_indexed clips, so off-screen entry positions are fine). */
+static void gg_compose(void)
+{ clear_bb(0);
+  for(int i=0;i<GS_N;i++){ int sh=g_ggs[i].shp;
+    if(!g_ggs[i].vis || sh<0 || sh>=g_ngg || !g_gg[sh]) continue;
+    blit_indexed(g_gg[sh], g_gg_w[sh], g_gg_h[sh], g_ggs[i].x, g_ggs[i].y); } }
+
+/* draw narration text on scroll `which` (0 small / 1 short from the pack; 2 = the shared medium
+ * g_scroll) at (px,py) over the current backbuffer — same layout rules as fe_scroll_page. */
+static void gg_caption(int which,int px,int py,const char*s,int len)
+{ const uint8_t *sc; int scw,sch;
+  if(which<2 && g_gg_scroll[which]){ sc=g_gg_scroll[which]; scw=g_gg_scw[which]; sch=g_gg_sch[which]; }
+  else { sc=g_scroll; scw=g_scroll_w; sch=g_scroll_h;
+         if(which<2){ px=(LW-scw)/2; py=(sch>0?LH-sch:LH-34); } }   /* fallback: shared scroll at the bottom */
+  if(!sc||scw<=0||sch<=0||!s) return;
+  char buf[CG_TXT_LEN]; int bl=cc_subst(buf,sizeof buf,s,len);
+  blit_indexed(sc,scw,sch,px,py);
+  int maxpx=(scw>40?scw-24:288);
+  int nl=pwrap(buf,bl,0,maxpx,0,0,0);
+  int dy=(sch-8)/(nl>0?nl:1); if(dy>9)dy=9; if(dy<7)dy=7;
+  int ty=py+(sch-nl*dy)/2+1; if(ty<py+2)ty=py+2;
+  pwrap(buf,bl,ty,maxpx,dy,62,1); }
+
+/* reset the sprite list to the scene-opening state (spec §1B.1 placements) + the sway/cycle
+ * phases. Shared by run_gargoyle and the headless tableau capture hooks. */
+static void gg_reset(void)
+{
+    static const struct { int shp,x,y,vis; } GG0[GS_N] = {
+        [GS_BG]    ={6,   0,  0,1}, [GS_GATE]  ={7, 120,120,0},
+        [GS_HL]    ={3, -84,109,1}, [GS_HR]    ={4, 326,199,1},
+        [GS_PBODY] ={8, 213,141,0}, [GS_PHEAD] ={11,291,155,0},
+        [GS_IOLO]  ={1, 168,202,0}, [GS_SHAM]  ={2,  68,122,0},
+        [GS_DUPRE] ={0, -32,122,0}, [GS_AVATAR]={9,  49, 68,0},
+        [GS_ALTAR] ={5,   0,112,1}, [GS_ROPES] ={12,210,132,0} };
+    for(int i=0;i<GS_N;i++){ g_ggs[i].shp=GG0[i].shp; g_ggs[i].x=GG0[i].x;
+                             g_ggs[i].y=GG0[i].y; g_ggs[i].vis=GG0[i].vis; }
+    rng_seed(&g_gg_rng, 0x9a4960 ^ plat_ticks_200hz());
+    g_gg_lidx=0; g_gg_ridx=5; g_gg_cyc=0; g_gg_cf=0;               /* sway phases out of step */
+}
+
+/* one narration page + hold: compose scene + caption, present, then wait for input while running
+ * the idle animations (GGF_SWAY hordes, GGF_CYC gate palette). Auto-advances after PAGE_MAXTICKS
+ * (attract/headless). Returns 0 = advance, 1 = Esc (abort the scene). */
+#define GGF_SWAY 1
+#define GGF_CYC  2
+static int gg_page(int k,int which,int px,int py,int flags)
+{
+    const char *s = (k>=0 && k<g_ngarg) ? g_garg[k] : 0;
+    int len = s ? g_garg_len[k] : 0;
+    gg_compose(); if(s) gg_caption(which,px,py,s,len);
+    rdr_present_doubled(LH);
+    uint32_t t0=plat_ticks_200hz();
+    for(;;){
+        int a=intro_advance(); if(a) return a==2;
+        if((uint32_t)(plat_ticks_200hz()-t0)>=PAGE_MAXTICKS) return 0;
+        int moved = (flags&GGF_SWAY) ? gg_sway() : 0;
+        if(flags&GGF_CYC){ if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); } }
+        if(moved){ gg_compose(); if(s) gg_caption(which,px,py,s,len); rdr_present_doubled(LH); }
+        else Vsync();
+    }
+}
+
+static void run_gargoyle(void)
+{
+    if(g_ngarg<=0) return;
+    { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale keys */
+    g_intro_mb=0;
+    if(g_ngg<GG_NSH || !g_gg[6] || !g_gg[5] || !g_scroll){
+        /* pack lacks the INTRO.SHP scene -> plain text pager (first-pass fallback) */
+        if(!g_scroll) return;
+        rdr_set_palette(g_basepal,256);
+        if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48);
+        int scw=g_scroll_w, sch=g_scroll_h, sx=(LW-scw)/2, sy=(sch>0?LH-sch:LH-34);
+        for(int k=0;k<g_ngarg;k++){
+            clear_bb(0);
+            int key=fe_scroll_page(g_scroll,scw,sch,sx,sy,g_garg[k],g_garg_len[k]);
+            if((key&0xFF)==0x1b) break; }
+        return;
+    }
+    /* ---- the full animated scene (spec §1B.1 beats) ---- */
+    gg_reset();
+    if(g_gg_lc) rdr_set_lowcolor(g_gg_lc, g_gg_lc+48);             /* ST: this scene's own 16 */
+    gg_compose(); rdr_present_doubled(LH);
+    for(int k=0;k<=8;k++){ intro_fade(g_gg_pal,k); Vsync(); }      /* fade in on the plain */
+
+    if(gg_page(0, 2,1,152, 0)) goto out;                           /* "Dazed, you emerge..." */
+    if(gg_page(1, 2,1,152, 0)) goto out;                           /* "...a slow, deathlike song..." */
+    /* horde approach: left per 6-step move table; right (from step 24) at double speed */
+    { static const int8_t LMX[6]={1,1,0,1,1,1}, LMY[6]={0,0,-1,0,0,-1}, RMY[6]={-1,-1,0,-1,-1,-1};
+      for(int i=0;i<96;i++){
+        g_ggs[GS_HL].x+=LMX[i%6]; g_ggs[GS_HL].y+=LMY[i%6];
+        if(i>23){ g_ggs[GS_HR].x-=2; g_ggs[GS_HR].y+=RMY[i%6]*2; }
+        gg_compose(); rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out;
+        if(a){ g_ggs[GS_HL].x=-4; g_ggs[GS_HL].y=77;               /* skip -> snap to arrived */
+               g_ggs[GS_HR].x=182; g_ggs[GS_HR].y=79; break; } } }
+    if(gg_page(2, 0,33,157, 0)) goto out;                          /* "...no place to go." */
+    if(gg_page(3, 2,1,152, 0)) goto out;                           /* "...scaly claws grasp your body." */
+    g_ggs[GS_AVATAR].vis=1; g_ggs[GS_ROPES].vis=1;                 /* bound to the altar stone */
+    if(gg_page(4, 1,1,160, 0)) goto out;
+    /* the winged nightmare steps forward (hordes settle +4y; priest walks up from lower right) */
+    g_ggs[GS_HL].y+=4; g_ggs[GS_HR].y+=4;
+    g_ggs[GS_PBODY].vis=1; g_ggs[GS_PHEAD].vis=1;
+    { int skip=0;
+      for(int i=0;i<23 && !skip;i++){
+        g_ggs[GS_PBODY].x-=3; g_ggs[GS_PBODY].y-=3; g_ggs[GS_PHEAD].x-=3; g_ggs[GS_PHEAD].y-=3;
+        gg_compose(); rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out; if(a) skip=1; }
+      for(int i=0;i<14 && !skip;i++){
+        g_ggs[GS_PBODY].y-=3; g_ggs[GS_PHEAD].y-=3;
+        gg_compose(); rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out; if(a) skip=1; }
+      g_ggs[GS_PBODY].x=144; g_ggs[GS_PBODY].y=30;                 /* settle behind the altar */
+      g_ggs[GS_PHEAD].x=222; g_ggs[GS_PHEAD].y=44; }
+    if(gg_page(5, 1,1,160, GGF_SWAY)) goto out;                    /* "Kneeling, the hordes sway..." */
+    if(gg_page(6, 2,1,152, GGF_SWAY)) goto out;                    /* "...brass-bound book..." */
+    if(gg_page(7, 2,1,152, GGF_SWAY)) goto out;                    /* "...dagger drips with moonlight." */
+    /* "You close your eyes" holds while the moongate RISES (ring palette cycling from here on) */
+    g_ggs[GS_GATE].vis=1;
+    { const char *s8=(8<g_ngarg)?g_garg[8]:0; int l8=s8?g_garg_len[8]:0;
+      for(int gy=120; gy>58; gy--){
+        g_ggs[GS_GATE].y=gy;
+        if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+        gg_compose(); if(s8) gg_caption(1,1,160,s8,l8);
+        rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out; if(a) break; }
+      g_ggs[GS_GATE].y=58;
+      gg_compose(); if(s8) gg_caption(1,1,160,s8,l8);              /* risen gate + page 8 hold */
+      rdr_present_doubled(LH);
+      { uint32_t t0=plat_ticks_200hz();
+        for(;;){ int a=intro_advance(); if(a==2) goto out; if(a) break;
+          if((uint32_t)(plat_ticks_200hz()-t0)>=PAGE_MAXTICKS) break;
+          if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+          Vsync(); } } }
+    /* fade to black -> the four blind-terror interlude pages, each faded in/out on its own */
+    for(int k=8;k>=0;k--){ intro_fade(g_gg_pal,k); Vsync(); }
+    for(int k=9;k<=12;k++){
+        clear_bb(0);
+        if(k<g_ngarg) gg_caption(1,1,80,g_garg[k],g_garg_len[k]);  /* short scroll, mid-screen */
+        rdr_present_doubled(LH);
+        for(int f=0;f<=8;f++){ intro_fade(g_gg_pal,f); Vsync(); }
+        { uint32_t t0=plat_ticks_200hz();
+          for(;;){ int a=intro_advance(); if(a==2) goto out; if(a) break;
+            if((uint32_t)(plat_ticks_200hz()-t0)>=PAGE_MAXTICKS) break; Vsync(); } }
+        for(int f=8;f>=0;f--){ intro_fade(g_gg_pal,f); Vsync(); }
+    }
+    /* the scene returns: full tableau, risen gate; the crossbow has spoken (head -> shape 10) */
+    g_ggs[GS_BG].vis=1; g_ggs[GS_GATE].vis=1; g_ggs[GS_HL].vis=1; g_ggs[GS_HR].vis=1;
+    g_ggs[GS_PBODY].vis=1; g_ggs[GS_PHEAD].vis=1; g_ggs[GS_ALTAR].vis=1;
+    g_ggs[GS_AVATAR].vis=1; g_ggs[GS_ROPES].vis=1;
+    gg_compose(); rdr_present_doubled(LH);
+    for(int k=0;k<=8;k++){ intro_fade(g_gg_pal,k); Vsync(); }
+    g_ggs[GS_PHEAD].shp=10;                                        /* quarrel in the barren forehead */
+    if(gg_page(13, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Silent red light..." */
+    /* the priest falls */
+    { int skip=0;
+      for(int i=0;i<43 && !skip;i++){
+        int jx=(int)rng_range(&g_gg_rng,4)-1;                      /* x jitter -1..+2 */
+        g_ggs[GS_PBODY].x+=jx; g_ggs[GS_PBODY].y+=3;
+        g_ggs[GS_PHEAD].x+=jx; g_ggs[GS_PHEAD].y+=3;
+        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+        gg_compose(); rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out; if(a) skip=1; }
+      g_ggs[GS_PBODY].vis=0; g_ggs[GS_PHEAD].vis=0; }
+    /* friendly faces vault from the newborn moongate */
+    g_ggs[GS_IOLO].vis=1; g_ggs[GS_DUPRE].vis=1; g_ggs[GS_SHAM].vis=1;
+    { int skip=0;
+      for(int i=0;i<83 && !skip;i++){
+        g_ggs[GS_DUPRE].x += (i>33)?2:1;  g_ggs[GS_DUPRE].y -= 1;
+        if(i>13){ g_ggs[GS_SHAM].x += (i>36)?2:1; g_ggs[GS_SHAM].y -= 1; }
+        if(i>10){ g_ggs[GS_IOLO].x += 1;  g_ggs[GS_IOLO].y -= (i>14)?2:1; }
+        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+        gg_compose(); rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out;
+        if(a){ g_ggs[GS_DUPRE].x=99;  g_ggs[GS_DUPRE].y=40;        /* skip -> snap beside the gate */
+               g_ggs[GS_SHAM].x=183;  g_ggs[GS_SHAM].y=53;
+               g_ggs[GS_IOLO].x=240;  g_ggs[GS_IOLO].y=62; skip=1; } } }
+    if(gg_page(14, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Friendly faces vault..." */
+    /* bonds cut: the ropes vanish; the party pulls back into the gate, the Avatar slides off */
+    g_ggs[GS_ROPES].vis=0;
+    { int skip=0;
+      for(int i=0;i<83 && !skip;i++){
+        g_ggs[GS_DUPRE].x-=1; g_ggs[GS_DUPRE].y+=2;
+        g_ggs[GS_SHAM].x-=1;  g_ggs[GS_SHAM].y+=2;
+        g_ggs[GS_IOLO].x-=1;  g_ggs[GS_IOLO].y+=2;
+        g_ggs[GS_AVATAR].y+=1;                                     /* pulled down behind the altar */
+        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+        gg_compose(); rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out;
+        if(a){ g_ggs[GS_DUPRE].vis=0; g_ggs[GS_SHAM].vis=0;
+               g_ggs[GS_IOLO].vis=0;  g_ggs[GS_AVATAR].vis=0; skip=1; } } }
+    if(gg_page(15, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Quickly, old friend!..." */
+    if(gg_page(16, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Snatching the fallen priest's book..." */
+    /* "The gate wanes rapidly..." holds while the gate SINKS behind the altar */
+    { const char *s17=(17<g_ngarg)?g_garg[17]:0; int l17=s17?g_garg_len[17]:0;
+      for(int i=0;i<151;i++){
+        if(i&1) g_ggs[GS_GATE].y+=1;
+        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+        gg_compose(); if(s17) gg_caption(1,1,160,s17,l17);
+        rdr_present_doubled(LH);
+        int a=intro_advance(); if(a==2) goto out;
+        if(a){ g_ggs[GS_GATE].vis=0; break; } } }
+    if(gg_page(18, 0,33,157, GGF_SWAY)) goto out;                  /* "...but not rapidly enough." */
+    gg_page(19, 2,1,152, GGF_SWAY);                                /* the abominations follow you in */
+out:
+    for(int k=8;k>=0;k--){ intro_fade(g_gg_pal,k); Vsync(); }      /* fade out -> gameplay */
+    rdr_set_palette(g_basepal,256);
+    if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48);
 }
 
 /* Run character creation: name -> gender -> portrait -> virtue tournament -> Str/Dex/Int. */
@@ -1474,11 +1843,19 @@ static void run_chargen(void)
             st+=CC_ADJ[win][0]; dx+=CC_ADJ[win][1]; in+=CC_ADJ[win][2];
             v[i]=win;
         }
-    if(use_gypsy){ rdr_set_palette(g_basepal,256);                /* back to the menu/game palette */
-        if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48); }   /* ST: base 16 */
     g_cc_str=st; g_cc_dex=dx; g_cc_int=in; g_cc_virtue=v[0];
     g_cc_done=1;                                                  /* apply g_cc_* to the Avatar at play start */
-    cc_summary();
+    /* flask -> sleep -> awakening outro (authentic U.EXE text, %s = the name), shown on the gypsy
+     * scene while the filled jar still glows. Replaces the old non-authentic stat summary; that
+     * summary is kept only as a fallback if no outro text was extracted from U.EXE. */
+    int had_outro = (use_gypsy && g_nftxt>0);
+    if(had_outro)
+        for(int k=0;k<g_nftxt;k++){ draw_gypsy_scene();
+            fe_scroll_page(g_gyp_scroll,g_gscroll_w,g_gscroll_h,0,120,g_ftxt[k],g_ftxt_len[k]); }
+    if(use_gypsy){ rdr_set_palette(g_basepal,256);                /* back to the menu/game palette */
+        if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48); }   /* ST: base 16 */
+    if(!had_outro) cc_summary();                                  /* fallback ending */
+    run_gargoyle();                                               /* §1B: gargoyle-sacrifice opening -> Britannia */
 }
 
 /* Headless capture hook: the CHARGEN.REQ byte selects ONE chargen sub-screen (each draws
@@ -1520,6 +1897,32 @@ static void chargen_capture(int which)
               ui_text((LW-ui_textw(m))/2,150,m,0x3e); }
             rdr_present_doubled(LH); { int k; while(!(k=plat_input_raw())) Vsync(); } break;
         case 's': cc_summary();    break;
+        case 'X': run_gargoyle();  break;    /* §1B gargoyle-sacrifice opening (full run) */
+        case '5':                            /* §1B tableau: priest arrived, Avatar bound ("Kneeling...") */
+            if(g_ngg>0){ gg_reset();
+                g_ggs[GS_HL].x=-4;  g_ggs[GS_HL].y=81; g_ggs[GS_HR].x=182; g_ggs[GS_HR].y=83;
+                g_ggs[GS_AVATAR].vis=1; g_ggs[GS_ROPES].vis=1;
+                g_ggs[GS_PBODY].vis=1; g_ggs[GS_PBODY].x=144; g_ggs[GS_PBODY].y=30;
+                g_ggs[GS_PHEAD].vis=1; g_ggs[GS_PHEAD].x=222; g_ggs[GS_PHEAD].y=44;
+                rdr_set_palette((uint8_t*)g_gg_pal,256); if(g_gg_lc) rdr_set_lowcolor(g_gg_lc,g_gg_lc+48);
+                gg_page(5, 1,1,160, GGF_SWAY); } break;
+        case '6':                            /* §1B tableau: gate risen, priest fallen, rescue ("Friendly faces...") */
+            if(g_ngg>0){ gg_reset();
+                g_ggs[GS_HL].x=-4;  g_ggs[GS_HL].y=81; g_ggs[GS_HR].x=182; g_ggs[GS_HR].y=83;
+                g_ggs[GS_AVATAR].vis=1; g_ggs[GS_ROPES].vis=1;
+                g_ggs[GS_GATE].vis=1; g_ggs[GS_GATE].y=58;
+                g_ggs[GS_DUPRE].vis=1; g_ggs[GS_DUPRE].x=99;  g_ggs[GS_DUPRE].y=40;
+                g_ggs[GS_SHAM].vis=1;  g_ggs[GS_SHAM].x=183;  g_ggs[GS_SHAM].y=53;
+                g_ggs[GS_IOLO].vis=1;  g_ggs[GS_IOLO].x=240;  g_ggs[GS_IOLO].y=62;
+                rdr_set_palette((uint8_t*)g_gg_pal,256); if(g_gg_lc) rdr_set_lowcolor(g_gg_lc,g_gg_lc+48);
+                gg_page(14, 2,1,152, GGF_SWAY|GGF_CYC); } break;
+        case '7':                            /* §1B tableau: gate sinking behind the altar ("The gate wanes...") */
+            if(g_ngg>0){ gg_reset();
+                g_ggs[GS_HL].x=-4;  g_ggs[GS_HL].y=81; g_ggs[GS_HR].x=182; g_ggs[GS_HR].y=83;
+                g_ggs[GS_AVATAR].vis=1; g_ggs[GS_AVATAR].y=151;   /* pulled down behind the altar */
+                g_ggs[GS_GATE].vis=1; g_ggs[GS_GATE].y=100;
+                rdr_set_palette((uint8_t*)g_gg_pal,256); if(g_gg_lc) rdr_set_lowcolor(g_gg_lc,g_gg_lc+48);
+                gg_page(17, 1,1,160, GGF_SWAY|GGF_CYC); } break;
         case 'N':                            /* apply a sample character to the new game (no blocking UI) */
             { const char*nm="Milady"; int i=0; while(nm[i]){g_cc_name[i]=nm[i];i++;} g_cc_name[i]=0; }
             g_cc_gender=0; g_cc_portrait=2; g_cc_str=21; g_cc_dex=13; g_cc_int=19; g_cc_virtue=1;
@@ -1603,17 +2006,36 @@ static int run_menu(void)
         menu_highlight(mx,my,mw,g_menu_h,sel,rowh);         /* yellow->orange distance tint */
         if(note) ui_text((LW-ui_textw("Not yet available."))/2, my+g_menu_h+10, "Not yet available.", 15);
         rdr_present_doubled(LH);
-        int key=fe_getkey();     /* wait for a keystroke */
-        int a=key&0xFF, sc=(key>>8)&0xFF; note=0;
-        if(sc==0x48) sel=(sel+nopt-1)%nopt;              /* up   */
-        else if(sc==0x50) sel=(sel+1)%nopt;              /* down */
-        else if(a==0x1b){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; }  /* Esc -> Journey Onward */
-        else if(a==0x0d || a==' '){                        /* select */
-            if(sel==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; }  /* Journey Onward -> play */
-            else if(sel==0) run_intro();                  /* Introduction -> cutscene, then back */
-            else if(sel==1){ run_chargen(); if(g_cc_done){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; } }  /* Create a Character -> new game */
-            else note=1;                                  /* Transfer/Ack -> not yet */
+
+        /* MOUSE: hovering an option highlights it; a click activates it (authentic — the U6 menu is
+         * both keyboard and mouse). A poll loop (not fe_getkey) keeps the hover highlight live. */
+        int mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);
+        int over=-1;
+        if(mux>=mx && mux<mx+mw && muy>=my && muy<my+g_menu_h){
+            over=(rowh>0)?(muy-my)/rowh:0; if(over<0)over=0; if(over>=nopt)over=nopt-1; sel=over; }
+
+        int key=plat_input_raw();
+        int act = (mclick && over>=0) ? over : -1;          /* option to activate this frame (or -1) */
+        if(key){
+            { int d; while((d=plat_input_raw())){ (void)d; } }   /* drain auto-repeat: one press = one action */
+            int a=key&0xFF, sc=(key>>8)&0xFF; note=0;
+            if(sc==0x48) sel=(sel+nopt-1)%nopt;              /* up   */
+            else if(sc==0x50) sel=(sel+1)%nopt;              /* down */
+            else if(a=='i'||a=='I') act=0;                   /* first-letter hotkeys (spec §2) */
+            else if(a=='c'||a=='C') act=1;
+            else if(a=='t'||a=='T') act=2;
+            else if(a=='a'||a=='A') act=3;
+            else if(a=='j'||a=='J') act=4;
+            else if(a==0x1b)        act=4;                   /* Esc -> Journey Onward */
+            else if(a==0x0d||a==' ') act=sel;                /* Enter/Space -> highlighted */
         }
+        if(act<0){ Vsync(); continue; }
+
+        sel=act; note=0;
+        if(act==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; }  /* Journey Onward -> play */
+        else if(act==0) run_intro();                     /* Introduction -> cutscene, then back */
+        else if(act==1){ run_chargen(); if(g_cc_done){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; } }  /* Create -> new game */
+        else note=1;                                     /* Transfer / Acknowledgements -> not yet */
     }
 }
 
@@ -5189,6 +5611,19 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
               ap+=L; } }
         if(!g_intro_have)
             for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); }
+        /* chargen ceremony text (from U.EXE): [u16 nameL][name][u16 genderL][gender]
+         * [u8 nA]+A[u16 L][b] [u8 nG]+G[u16 L][b] [u8 nF]+F[u16 L][b]. Points into the pak. */
+        { int L;
+          L=(ap[0]<<8)|ap[1]; ap+=2; g_cc_np=(const char*)ap; g_cc_np_len=L; ap+=L;
+          L=(ap[0]<<8)|ap[1]; ap+=2; g_cc_gp=(const char*)ap; g_cc_gp_len=L; ap+=L;
+          g_nappr=*ap++; if(g_nappr>CC_TXT_MAX) g_nappr=CC_TXT_MAX;
+          for(int q=0;q<g_nappr;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_appr[q]=(const char*)ap; g_appr_len[q]=L; ap+=L; }
+          g_ngreet=*ap++; if(g_ngreet>CC_TXT_MAX) g_ngreet=CC_TXT_MAX;
+          for(int q=0;q<g_ngreet;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_greet[q]=(const char*)ap; g_greet_len[q]=L; ap+=L; }
+          g_nftxt=*ap++; if(g_nftxt>CC_TXT_MAX) g_nftxt=CC_TXT_MAX;
+          for(int q=0;q<g_nftxt;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_ftxt[q]=(const char*)ap; g_ftxt_len[q]=L; ap+=L; }
+          g_ngarg=*ap++; if(g_ngarg>CC_GARG_MAX) g_ngarg=CC_GARG_MAX;   /* §1B gargoyle-sacrifice opening */
+          for(int q=0;q<g_ngarg;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_garg[q]=(const char*)ap; g_garg_len[q]=L; ap+=L; } }
         /* (BOOK.DAT text moved to the RESIDENT core section U6BK — the ST frees this front-end block
          * with U6FE, which nulled in-game reading. Parsed in the core-pack loader instead.) */
         /* gypsy "casting" scene: [768 pal5][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll] */
@@ -5239,6 +5674,14 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
             g_av_ox[k]=(ap[0]<<8)|ap[1]; ap+=2; g_av_oy[k]=(ap[0]<<8)|ap[1]; ap+=2;
             g_av_w[k] =(ap[0]<<8)|ap[1]; ap+=2; g_av_h[k] =(ap[0]<<8)|ap[1]; ap+=2;
             g_av_frame[k]=ap; ap+=(int32_t)g_av_w[k]*g_av_h[k]; }
+        /* §1B gargoyle-sacrifice scene: [768 pal7][48+256 ST lc][u16 nsh]+nsh x [u16 w][u16 h][w*h]
+         * + 2 x [u16 w][u16 h][w*h] (BLOCKS.SHP 0 small / 1 short scrolls). Points into the pak. */
+        g_gg_pal=ap; ap+=768; g_gg_lc=ap; ap+=48+256;
+        g_ngg=(ap[0]<<8)|ap[1]; ap+=2; if(g_ngg>GG_NSH) g_ngg=GG_NSH;
+        for(int i=0;i<g_ngg;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_gg_w[i]=w; g_gg_h[i]=h; g_gg[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+        for(int b=0;b<2;b++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_gg_scw[b]=w; g_gg_sch[b]=h; g_gg_scroll[b]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
         return ap;
 }
 
@@ -5474,11 +5917,49 @@ static void music_update_area(int level){
     }
 }
 
-int main(void)
+/* Make the working directory the folder GAMEF.PRG itself lives in, so every
+ * bare-filename data load (U6.PAK, MENU.REQ, CONVERSE/PORTRAIT, .M songs, ...)
+ * resolves no matter what directory the launcher left us in. Real hardware bit
+ * this: installed to C:\U6 and launched with a working dir that ISN'T C:\U6,
+ * the pack Fopen misses and boot dies on the white desktop with just an error
+ * line — a "white screen" on the Falcon. Desktops that pass the program's full
+ * path as argv[0] (TOS 2+/MiNT/MagiC extended ARGV) let us self-locate.
+ *   Tightly guarded so it can NEVER break an already-correct launch: we only
+ * act when argv[0] both carries a path separator AND ends in a program
+ * extension (.PRG/.TOS/.APP/.GTP) — i.e. it really is our own path, not a bare
+ * name or a bogus value. If argv[0] has no path (old TOS), we keep the
+ * inherited cwd (unchanged behaviour). GEMDOS: Dsetdrv 0x0E, Dsetpath 0x3B. */
+static void boot_chdir_to_exe(int argc, char **argv)
 {
+    if (argc < 1 || !argv || !argv[0]) return;
+    const char *a = argv[0];
+    int len = 0, cut = -1;
+    for (int i = 0; a[i]; i++) { if (a[i]=='\\' || a[i]=='/' || a[i]==':') cut = i; len = i + 1; }
+    if (cut < 0 || len < 5) return;                     /* no path component -> keep cwd */
+    /* require a program extension so we only trust a genuine exe path */
+    char e2 = (char)(a[len-3] & ~0x20), e1 = (char)(a[len-2] & ~0x20), e0 = (char)(a[len-1] & ~0x20);
+    int is_prog = (a[len-4]=='.') && (
+        (e2=='P'&&e1=='R'&&e0=='G') || (e2=='T'&&e1=='O'&&e0=='S') ||
+        (e2=='A'&&e1=='P'&&e0=='P') || (e2=='G'&&e1=='T'&&e0=='P'));
+    if (!is_prog) return;
+    char dir[80];
+    int j = 0;
+    for (int i = 0; i <= cut && j < (int)sizeof(dir)-1; i++) dir[j++] = (a[i]=='/') ? '\\' : a[i];
+    dir[j] = '\0';                                       /* e.g. "C:\U6\" or "\U6\" or "C:" */
+    if (dir[1] == ':') Dsetdrv((short)((dir[0] & ~0x20) - 'A'));   /* select the exe's drive */
+    int dl = (int)strlen(dir);
+    if (dl > 1 && dir[dl-1]=='\\' && dir[dl-2] != ':') dir[dl-1] = '\0';   /* trim trailing '\' */
+    const char *path = (dir[1]==':') ? dir + 2 : dir;   /* Dsetpath takes the path sans drive */
+    if (path[0]) Dsetpath(path);
+}
+
+int main(int argc, char **argv)
+{
+    boot_chdir_to_exe(argc, argv);   /* resolve data relative to GAMEF.PRG (launchers that pass argv[0]) */
     platform_caps_t caps; platform_detect(&caps);
-    Cconws("u6e M6 authentic UI: loading...\r\n");
-    if (!plat_mem_init(&caps)) { Cconws("mem init failed\r\n"); Crawcin(); return 1; }
+    Cconws("u6e loading (stage 1: memory)...\r\n");
+    if (!plat_mem_init(&caps)) { Cconws("*** memory init failed\r\n"); Crawcin(); return 1; }
+    Cconws("stage 1b: audio...\r\n");
     plat_dma_init(&caps);       /* M10: grab an ST-RAM ring for DMA-sound music (STE/TT/Falcon) */
     music_manager_init();       /* M10: detect DMA + read the MIDI toggle default (MIDI.CFG) */
 
@@ -5555,9 +6036,11 @@ int main(void)
             g_font = fe+4+48+256;                       /* font (2048 bytes) for text */
             parse_frontend(fe+4+48+256+2048);           /* set g_menu/g_intro/g_gyp/... into fe */
             int32_t ml=0;
-            void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq) run_intro();
+            void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq) run_intro();      /* explicit intro capture */
             void*creq=plat_load_file("CHARGEN.REQ",1,&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');
-            void*mreq=plat_load_file("MENU.REQ",1,&ml);    if(mreq) run_menu();
+            void*mreq=plat_load_file("MENU.REQ",1,&ml);
+            if(mreq){ if(!ireq && !creq) run_intro();   /* interactive boot: auto-play the (skippable) intro FIRST */
+                      run_menu(); }                    /* then the title/main menu */
         }
         {   int32_t mil=0; if(plat_load_file("MEMINFO.BIN",1,&mil)){ plat_mem_info_t mi; plat_mem_get_info(&mi);
                 dbg_num("MEM fe_loaded=", fe?1:0);
@@ -5568,6 +6051,7 @@ int main(void)
                                                           * it survives this free — no g_nbook reset.) */
     }
 #endif
+    Cconws("stage 2: game data...\r\n");
     uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
     if(!pak) pak=(uint8_t*)plat_load_file(PACK_NAME,0,&n);   /* fast pool full (tight TT-RAM) -> load into CHIP (ST-RAM);
                                                               * the tileset then reads slower but the game FITS. A stock
@@ -5577,7 +6061,20 @@ int main(void)
      * game's pack; U6's magic is "U6WT". SE/MD register their own magics as they land. */
     const GameDef *gd = (pak && n>=26) ? gamedef_for_magic((const char*)pak) : NULL;
     if (!gd){
-        Cconws("cannot load asset pack (unknown game magic)\r\n"); Crawcin(); return 1; }
+        /* Readable failure instead of a cryptic near-blank screen: this runs BEFORE rdr_init,
+         * so it prints on the plain TOS console. Say WHICH file and WHERE we looked so a bad
+         * working dir / incomplete install is obvious (real-HW "white screen" root cause). */
+        char cwd[80]; cwd[0]='\0'; Dgetpath(cwd, 0);
+        Cconws("\r\n*** Could not load the game data file  "); Cconws(PACK_NAME); Cconws("\r\n");
+        if (!pak) {
+            Cconws("    It was not found in the working directory:\r\n      ");
+            Cconws(cwd[0] ? cwd : "\\"); Cconws("\r\n");
+            Cconws("    Open the install folder on the desktop and run the .PRG from there.\r\n");
+        } else {
+            Cconws("    The file is present but not a valid pack (truncated or corrupt).\r\n");
+            Cconws("    Re-install from the disks (a bad copy can do this).\r\n");
+        }
+        Crawcin(); return 1; }
     uint32_t map_len=((uint32_t)pak[4]<<24)|(pak[5]<<16)|(pak[6]<<8)|pak[7];
     uint32_t chunks_len=((uint32_t)pak[8]<<24)|(pak[9]<<16)|(pak[10]<<8)|pak[11];
     uint32_t ntiles=((uint32_t)pak[12]<<24)|(pak[13]<<16)|(pak[14]<<8)|pak[15];
@@ -5959,7 +6456,12 @@ int main(void)
         dbg_num("MEM libs_ok=", (g_convA&&g_convB&&g_portA&&g_portB)?1:0); }
 
 #ifndef ST_STREAM   /* ST did rdr_init early (before streaming the front-end); TT/Falcon do it here */
-    if (!rdr_init(&caps)) { Cconws("no renderer\r\n"); Crawcin(); return 1; }
+    /* This is the last console line before the video mode switches — if the machine dies HERE
+     * (e.g. VsetScreen on the real VIDEL), "stage 3: video" is what stays on the white screen. */
+    Cconws("stage 3: video...\r\n");
+    if (!rdr_init(&caps)) {
+        Cconws("\r\n*** Renderer init failed (could not set the video mode / allocate buffers).\r\n");
+        Crawcin(); return 1; }
     plat_input_init();                              /* fast key auto-repeat for smooth movement */
 #endif
     rdr_set_palette(palette, 256);
@@ -6044,10 +6546,12 @@ int main(void)
      * Phase 2 without navigating the menu). (shapes.md; Phase 1/2.) */
 #ifndef ST_STREAM   /* ST ran the front-end EARLY (streamed from U6FE, then freed); TT/Falcon here */
     { int32_t ml=0;
-      void*ireq=plat_load_file("INTRO.REQ",1,&ml); if(ireq) run_intro();
+      void*ireq=plat_load_file("INTRO.REQ",1,&ml); if(ireq) run_intro();      /* explicit intro capture */
       void*creq=plat_load_file("CHARGEN.REQ",1,&ml);                          /* headless chargen capture */
       if(creq) chargen_capture(ml>0 ? ((uint8_t*)creq)[0] : '1');             /* byte selects the sub-screen */
-      void*mreq=plat_load_file("MENU.REQ",1,&ml);  if(mreq) run_menu(); }
+      void*mreq=plat_load_file("MENU.REQ",1,&ml);
+      if(mreq){ if(!ireq && !creq) run_intro();   /* interactive boot: auto-play the (skippable) intro FIRST */
+                run_menu(); } }                    /* then the title/main menu (authentic boot order) */
 #endif
     apply_chargen();   /* if a character was created, it becomes the Avatar (name/stats) for play */
 

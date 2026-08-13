@@ -108,6 +108,7 @@ bool rdr_init(const platform_caps_t *caps)
      * visible area is ~200 lines, so any down-shift pushes the bottom off-screen — present top-aligned
      * (g_yoff=0) there. (VgetMonitor XBIOS 89; same detection falcon_mode() uses for the mode word.) */
     g_yoff = (FH > UI_H && VgetMonitor() == MON_VGA) ? (FH - UI_H) / 2 : 0;
+    rdr_ui_yoff = g_yoff; rdr_ui_yscale = 1;            /* map the line-A mouse into the letterboxed UI */
 
     /* Save current video state, then switch VIDEL to our mode + buffer. */
     g_old_mode = VsetMode(VM_INQUIRE);

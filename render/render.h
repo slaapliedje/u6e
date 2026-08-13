@@ -74,6 +74,11 @@ int      rdr_is_ste(void);
  * shared with the graphics-card backend. */
 void     rdr_prefer_truecolor(int on);
 
+/* Physical-cursor -> logical-UI map. The active backend's rdr_init sets these so a line-A mouse
+ * (x,y) in physical screen space maps to the 320x200 UI: ui_y = (phys_y - rdr_ui_yoff)/rdr_ui_yscale,
+ * ui_x = phys_x. Defaults (0,1) = identity (plain ST). Read by the front-end mouse handlers. */
+extern int rdr_ui_yoff, rdr_ui_yscale;
+
 /* Convert the backbuffer to the screen's native layout and display it. */
 void     rdr_present(void);
 

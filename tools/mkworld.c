@@ -491,6 +491,129 @@ static int extract_intro(const char *dir, char pages[IP_MAX][IP_LEN])
     free(d); return np;
 }
 
+/* ---- CHARGEN CEREMONY TEXT (name/gender prompts + approach + gypsy greeting + flask outro) ----
+ * Same clean-room rule as the questions/intro: these strings live ONLY in the user's U.EXE and go
+ * straight into the never-committed build-artifact pack. Located STRUCTURALLY.
+ *
+ * U.EXE text convention (verified by inspecting the user's file): word-wrap fragments are NUL-
+ * terminated; a display PAGE spans consecutive fragments and ends when a fragment ends in
+ *   "%P" (pause marker) | "\n\n" (paragraph) | "%c" (closing curly-quote, at the true end) |
+ *   a sentence . ! ? WHILE OUTSIDE an open quote ('"' opens, "%c" closes).
+ * That single rule keeps multi-sentence quoted dialogue (and the 28 questions) intact yet splits
+ * plain prose per sentence. "%c" (closing quote) is dropped for display; "%s" (player name) is
+ * kept verbatim for the engine to substitute; "%P"/trailing "\n\n" are stripped. */
+#define CG_LEN 320
+#define CG_N   16
+#define GARG_N 24                                       /* gargoyle §1B is ~18 pages */
+typedef struct {
+    char name[CG_LEN], gender[CG_LEN];              /* the two "?\n\n%P" prompts (name, gender)   */
+    char approach[CG_N][CG_LEN]; int napproach;     /* woods-approach narration pages (WOODS bg)  */
+    char greeting[CG_N][CG_LEN]; int ngreet;        /* gypsy greeting pages (GYPSY bg)            */
+    char flask[CG_N][CG_LEN];    int nflask;        /* flask -> sleep -> wake outro pages         */
+    char garg[GARG_N][CG_LEN];   int ngarg;         /* §1B gargoyle-sacrifice new-game opening    */
+} chargen_text_t;
+
+/* Read one quote-aware page from d[*pp..]; fills out[] (NUL-terminated, markers stripped, leading
+ * '"' dropped). *reason: 0 sentence, 1 %c, 2 \n\n, 3 %P, 4 EOF/non-text. Returns text length. */
+static int cg_next_page(const uint8_t *d, long n, long *pp, char *out, int cap, int *reason)
+{
+    long p=*pp; int al=0, open=0, rsn=4;
+    while(p<n){
+        long m=p; while(m<n && d[m]) m++;                    /* one NUL-terminated fragment */
+        int fl=(int)(m-p);
+        if(fl==0){ p=m+1; if(al>0){ rsn=2; break; } continue; }   /* empty fragment = break */
+        int ftext=1; for(int k=0;k<fl;k++){ uint8_t c=d[p+k]; if(!((c>=32&&c<127)||c==10)){ ftext=0; break; } }
+        if(!ftext){ if(al==0) p=m+1; rsn=4; break; }          /* non-text -> region ends */
+        for(int k=0;k<fl;k++){                                /* append, tracking quotes + markers */
+            char c=(char)d[p+k];
+            if(c=='"'){ open=1; continue; }                   /* opening quote: track state, drop glyph */
+            if(c=='%' && k+1<fl){ char nx=(char)d[p+k+1];
+                if(nx=='c'){ open=0; k++; continue; }         /* closing curly-quote: drop */
+                if(nx=='P'){ k++; continue; } }               /* pause marker: drop */
+            if(c=='\n') c=' ';                                /* internal newline -> space */
+            if(al<cap-1) out[al++]=c;
+        }
+        char t0=(char)d[m-1], t1=(fl>=2)?(char)d[m-2]:0;
+        p=m+1;
+        if(t1=='%'&&t0=='P'){ rsn=3; break; }
+        if(t1=='%'&&t0=='c'){ rsn=1; break; }
+        if(t1=='\n'&&t0=='\n'){ rsn=2; break; }
+        if((t0=='.'||t0=='!'||t0=='?') && !open){ rsn=0; break; }
+        /* else: word-wrap continuation -> keep joining */
+    }
+    while(al>0 && out[al-1]==' ') al--;                       /* trim trailing spaces */
+    out[al]=0; *pp=p; if(reason) *reason=rsn;
+    return al;
+}
+
+/* Fill `o` from U.EXE. Returns 1 on success (approach+greeting+flask all found), else 0. */
+static int extract_chargen(const char *dir, chargen_text_t *o)
+{
+    memset(o,0,sizeof *o);
+    char path[1024]; snprintf(path,sizeof path,"%s/U.EXE",dir);
+    long n; uint8_t *d=slurp_path(path,NULL,&n);
+    if(!d){ printf("chargen text: U.EXE not found -> placeholder prompts\n"); return 0; }
+
+    /* (1) name + gender = the first two fragments ending in "?\n\n%P" (strip "\n\n%P"). */
+    { int got=0; long i=0;
+      while(i<n && got<2){ long j=i; while(j<n && d[j]) j++; int L=(int)(j-i);
+        if(L>=6 && d[j-1]=='P'&&d[j-2]=='%'&&d[j-3]=='\n'&&d[j-4]=='\n'&&d[j-5]=='?'){
+            int keep=L-4; if(keep>CG_LEN-1) keep=CG_LEN-1;    /* drop trailing "\n\n%P", keep '?' */
+            char *dst = got==0?o->name:o->gender;
+            memcpy(dst,d+i,(size_t)keep); dst[keep]=0; got++; }
+        i=j+1; } }
+
+    /* (2) find the intro asset-filename block (>=5 "introN.ext" fragments); prose starts after it. */
+    long start=-1; { long i=0; int run=0;
+      while(i<n){ long j=i; while(j<n && d[j]) j++; int L=(int)(j-i);
+        int isfn=(L>=8 && L<=12 && !memcmp(d+i,"intro",5));
+        if(isfn){ int sp=0,dot=0; for(int k=0;k<L;k++){ if(d[i+k]==' ')sp=1; if(d[i+k]=='.')dot=1; } if(sp||!dot) isfn=0; }
+        if(isfn) run++; else { if(run>=5){ start=i; break; } run=0; }
+        i=j+1; } }
+    if(start<0){ printf("chargen text: intro filename block not found -> placeholder\n"); free(d); return 0; }
+
+    /* (3) walk pages from `start`. Skip the summoning narration (leading .!?-ended pages) up to the
+     *     first %c-ended page ("Welcome, O Seeker!") = approach page 1. Then:
+     *       approach = 3 pages; greeting = pages until the first question (A)/B)/?);
+     *       skip the 28-question run; flask = pages after it, through the title-flourish page. */
+    long p=start; char buf[CG_LEN]; int rsn; int seen_welcome=0, in_flask=0, past_q=0;
+    while(p<n){
+        int L=cg_next_page(d,n,&p,buf,CG_LEN,&rsn);
+        if(L<=0 && rsn==4) break;
+        if(L<=0) continue;
+        int qflag = (strstr(buf," A) ") && strstr(buf," B) ") && buf[L-1]=='?');
+        if(!seen_welcome){ if(rsn==1) seen_welcome=1; else continue; }   /* wait for "Welcome" (%c) */
+        if(!past_q){
+            if(qflag){ past_q=1; continue; }                             /* first question: stop pre-Q collection */
+            if(o->napproach<3){ snprintf(o->approach[o->napproach++],CG_LEN,"%s",buf); }
+            else if(o->ngreet<CG_N){ snprintf(o->greeting[o->ngreet++],CG_LEN,"%s",buf); }
+            continue;
+        }
+        if(qflag) continue;                                              /* still inside the question run */
+        if(!in_flask){                                                   /* flask outro, thru the "Ultima VI" flourish */
+            if(o->nflask<CG_N) snprintf(o->flask[o->nflask++],CG_LEN,"%s",buf);
+            if(strstr(buf,"Ultima VI")) in_flask=1;
+            continue;
+        }
+        /* §1B gargoyle-sacrifice opening: the narrative run right after the flask. It ends where the
+         * game's non-narrative SYSTEM messages begin ("A game is already in progress / Please run ...")
+         * — that content transition is the structural stop boundary (plus the GARG_N cap). */
+        if(strstr(buf,"in progress") || strstr(buf,"Please run")) break;
+        if(o->ngarg<GARG_N) snprintf(o->garg[o->ngarg++],CG_LEN,"%s",buf);
+    }
+    int ok = (o->napproach>0 && o->ngreet>0 && o->nflask>0);
+    printf("chargen text: name=%d gender=%d approach=%d greeting=%d flask=%d gargoyle=%d (%s)\n",
+           o->name[0]?1:0, o->gender[0]?1:0, o->napproach, o->ngreet, o->nflask, o->ngarg, ok?"ok":"INCOMPLETE");
+    if(getenv("CHARGEN_DUMP")){
+        printf("  NAME  : %s\n  GENDER: %s\n", o->name, o->gender);
+        for(int k=0;k<o->napproach;k++) printf("  appr[%d]: %s\n",k,o->approach[k]);
+        for(int k=0;k<o->ngreet;k++)    printf("  greet[%d]: %s\n",k,o->greeting[k]);
+        for(int k=0;k<o->nflask;k++)    printf("  flask[%d]: %s\n",k,o->flask[k]);
+        for(int k=0;k<o->ngarg;k++)     printf("  garg[%d]: %s\n",k,o->garg[k]);
+    }
+    free(d); return ok;
+}
+
 /* Extract BOOK.DAT's readable-text entries (signs / plaques / tombstones / books / scrolls).
  * BOOK.DAT is a library (docs/formats/strings.md): a 2-byte-LE offset index — offset[0] = the
  * index size, so entry count = offset[0]/2 — followed by NUL-terminated ASCII entries (\n = line
@@ -1829,6 +1952,24 @@ int main(int argc, char **argv)
         fputc(nip,fe);
         for(int q=0;q<nip;q++){ int L=(int)strlen(ib[q]); be16(fe,(unsigned)L); fwrite(ib[q],1,(size_t)L,fe);
           if(getenv("INTRO_DUMP")) printf("  intro[%2d] (%d) %s\n", q, L, ib[q]); } }
+      /* CHARGEN CEREMONY TEXT (extracted from U.EXE at build time; NEVER shipped/committed). Layout:
+       *   [u16 nameL][name][u16 genderL][gender]
+       *   [u8 nApproach] + n x [u16 L][bytes]   (woods-approach narration pages)
+       *   [u8 nGreet]    + n x [u16 L][bytes]   (gypsy greeting pages)
+       *   [u8 nFlask]    + n x [u16 L][bytes]   (flask -> sleep -> wake outro pages)
+       * All zero/empty => engine falls back to its own paraphrase. Strings keep "%s" (name splice). */
+      { static chargen_text_t cg; extract_chargen(dir, &cg);
+        int nl=(int)strlen(cg.name), gl=(int)strlen(cg.gender);
+        be16(fe,(unsigned)nl); fwrite(cg.name,1,(size_t)nl,fe);
+        be16(fe,(unsigned)gl); fwrite(cg.gender,1,(size_t)gl,fe);
+        fputc(cg.napproach,fe);
+        for(int q=0;q<cg.napproach;q++){ int L=(int)strlen(cg.approach[q]); be16(fe,(unsigned)L); fwrite(cg.approach[q],1,(size_t)L,fe); }
+        fputc(cg.ngreet,fe);
+        for(int q=0;q<cg.ngreet;q++){ int L=(int)strlen(cg.greeting[q]); be16(fe,(unsigned)L); fwrite(cg.greeting[q],1,(size_t)L,fe); }
+        fputc(cg.nflask,fe);
+        for(int q=0;q<cg.nflask;q++){ int L=(int)strlen(cg.flask[q]); be16(fe,(unsigned)L); fwrite(cg.flask[q],1,(size_t)L,fe); }
+        fputc(cg.ngarg,fe);                                    /* §1B gargoyle-sacrifice opening pages */
+        for(int q=0;q<cg.ngarg;q++){ int L=(int)strlen(cg.garg[q]); be16(fe,(unsigned)L); fwrite(cg.garg[q],1,(size_t)L,fe); } }
       /* NOTE: BOOK.DAT readable text moved OUT of the front-end block into the RESIDENT core section
        * U6BK (below) — on the ST the front-end (U6FE) is FREED after chargen, which nulled in-game
        * book/sign reading. Books belong with gameplay data, not the transient front-end. */
@@ -1935,6 +2076,32 @@ int main(int argc, char **argv)
                                 else { uint8_t z=0; fwrite(&z,1,1,fe); }
           tot+=(long)cw*ch; free(ap); }
         printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(fe)-apre); } }
+      /* GARGOYLE-SACRIFICE opening (§1B, docs/design/chargen_authentic.md §1B.1): the RAW 13-shape
+       * INTRO.SHP table + PALETTES.INT 7 + the two extra BLOCKS.SHP scrolls (0 small / 1 short;
+       * shape 2 already ships as the shared narration scroll). The engine composites the animated
+       * scene per frame from the sprite list — no baked canvas, nearly every layer moves.
+       * [768 pal7][48+256 ST lc][u16 nsh] + nsh x [u16 w][u16 h][w*h] + 2 x [u16 w][u16 h][w*h]. */
+      { enum { GG_NSH = 13 };
+        uint8_t p7[768]; if(!load_intpal(dir,7,p7)) memset(p7,0,768);
+        fwrite(p7,1,768,fe);
+        /* ST 16: weight the quantizer with the full mid-scene tableau (bg + hordes at their
+         * arrived spots + priest + bound Avatar + altar + ropes + risen gate). */
+        { static const ishape_t GG[] = { {6,0,0},{3,-4,77},{4,182,79},{8,144,30},{11,222,44},
+                                         {9,49,68},{5,0,112},{12,210,132},{7,120,58} };
+          static uint8_t gsc[320*200]; memset(gsc,0,sizeof gsc);
+          compose_shapes(dir,"INTRO.SHP",GG,(int)(sizeof GG/sizeof GG[0]),gsc,320,200);
+          { uint8_t lc[48+256]; build_scene_lc(p7,gsc,320*200,lc); fwrite(lc,1,sizeof lc,fe); } }
+        be16(fe, GG_NSH); { int nshipped=0; long gpre=ftell(fe);
+        for(int i=0;i<GG_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"INTRO.SHP",i,&w,&h);
+          if(sp&&w>0&&h>0){ be16(fe,(unsigned)w); be16(fe,(unsigned)h); fwrite(sp,1,(size_t)w*h,fe); nshipped++; }
+          else { be16(fe,0); be16(fe,0); }
+          free(sp); }
+        for(int b=0;b<2;b++){ int w=0,h=0; uint8_t*sc=load_shape(dir,"BLOCKS.SHP",b,&w,&h);
+          if(sc&&w>0&&h>0){ be16(fe,(unsigned)w); be16(fe,(unsigned)h); fwrite(sc,1,(size_t)w*h,fe); }
+          else { be16(fe,0); be16(fe,0); }
+          free(sc); }
+        printf("gargoyle scene: pal7 + %d/%d raw INTRO.SHP shapes + blocks 0/1 (%ld bytes, animated §1B)\n",
+               nshipped, GG_NSH, ftell(fe)-gpre); } }
     }   /* end front-end/intro art block */
     if(fe!=f) fclose(fe);   /* slim: close the separate U6FE.PAK */
 

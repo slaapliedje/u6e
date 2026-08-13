@@ -67,6 +67,8 @@ bool rdr_init(const platform_caps_t *caps)
     if (!g_back || !g_screen) return false;
     g_vis = g_screen;                                          /* displayed buffer (single-buf) */
 
+    rdr_ui_yoff = (TTH - 200*2) / 2; rdr_ui_yscale = 2;        /* UI is 2x-doubled + centred: map the mouse back */
+
     /* save current video state, then switch to TT-low + our screen */
     g_old_shift = EgetShift();
     g_old_phys  = Physbase();
