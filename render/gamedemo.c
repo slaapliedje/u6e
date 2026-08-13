@@ -723,6 +723,7 @@ static int intro_advance(void)
     return adv ? 1 : 0;
 }
 #define PAGE_MAXTICKS (10*200)   /* auto-advance a page after ~10s of no input (attract/headless) */
+static void fe_music(const char *base);   /* fwd: front-end music cue (defined with the M10 music manager) */
 
 /* STORM WINDOW scene (nuvie window_sequence, INTRO_2.SHP / PALETTES.INT 2): a curtained window
  * onto a stormy pine forest. Static scene baked; lightning = a bright random bolt over it + a
@@ -896,6 +897,7 @@ static void run_intro(void)
 {
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
     g_intro_mb=0;
+    fe_music("BOOTUP");                                          /* nuvie play(): bootup.m over the summoning */
     rdr_flip_begin();                                            /* tear-free double buffer */
     for(int s=0;s<g_nintro;s++){
         const uint8_t *pal=g_intro[s].pal;
@@ -1679,6 +1681,7 @@ static void run_gargoyle(void)
     if(g_ngarg<=0) return;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale keys */
     g_intro_mb=0;
+    fe_music("INTRO");                                            /* nuvie intro(): intro.m */
     if(g_ngg<GG_NSH || !g_gg[6] || !g_gg[5] || !g_scroll){
         /* pack lacks the INTRO.SHP scene -> plain text pager (first-pass fallback) */
         if(!g_scroll) return;
@@ -1826,6 +1829,7 @@ out:
 static void run_chargen(void)
 {
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
+    fe_music("CREATE");                                           /* nuvie create_character(): create.m */
     cc_name_entry();
     cc_gender();
     cc_portrait();
@@ -1998,8 +2002,11 @@ static int run_menu(void)
     for(;;){
         /* ST: the title screen has its OWN 16 (U6WU per-scene) — tuned to the logo's metallic gradient
          * + the gold menu ramp instead of the terrain-16. Re-assert each frame so returning from the
-         * Introduction / Create-a-Character sub-screens (which set their own palettes) restores it. */
+         * Introduction / Create-a-Character sub-screens (which set their own palettes) restores it.
+         * Same idiom for the menu song: re-cue ultima.m (no-op while it already plays) so returning
+         * from a sub-flow that switched tracks (intro=bootup, chargen=create/intro) restores it. */
         if(g_menu_lc) rdr_set_lowcolor(g_menu_lc, g_menu_lc+48);
+        fe_music("ULTIMA");                                 /* nuvie main_menu_load(): ultima.m */
         clear_bb(0);
         if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
         blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
@@ -5838,6 +5845,17 @@ static void music_play_song(const char *base){
     }
     if(use==1){ g_music_active=1; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_midi_be, 1, 1); }
     else       { g_music_active=3; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_psg_be, 2, 0); }  /* PSG */
+}
+
+/* Front-end music cue (nuvie flow: play()=bootup.m, main menu=ultima.m, create_character=
+ * create.m, gargoyle intro()=intro.m; Acknowledgements keeps the menu song). No-op while
+ * `base` is already the current song, so the menu loop can re-cue it every frame (same
+ * re-assert idiom as the per-scene ST palette) without restarting the track. Gameplay then
+ * takes over via music_update_area (group -1 -> first game frame switches songs). */
+static void fe_music(const char *base){
+    int i=0; while(base[i] && g_music_cur[i]==base[i]) i++;
+    if(!base[i] && !g_music_cur[i]) return;                 /* already playing this song */
+    music_play_song(base);
 }
 
 /* set the backend preference at runtime (0 auto / 1 MIDI / 2 DMA / 3 PSG) and re-cue the current
