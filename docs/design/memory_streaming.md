@@ -155,6 +155,34 @@ restores the desktop mode (`rdr_shutdown`) before printing which file it could n
 - `make game-st game-tt game game-falcon` all build from the same source; the disks ship
   `U6.PAK` + `U6FE.PAK` for every target (`scripts/make-st-disks.sh`).
 
+## DMA music: resident song cache (2026-08-16)
+
+The last thing that streamed from disk during play on a big machine was the DMA music: the
+pump refills a 32 KB ST-RAM ring from the song's `.PCM` (1–3 MB each, 21 MB for U6's twelve)
+in 4 KB sector-aligned reads. `platform/platdma.c` now has a **resident song cache**:
+
+- At the end of boot (everything else loaded), `main()` hands the backend an **arena** = the
+  bigger pool's remaining free space minus a 512 KB reserve, capped at 24 MB, Fast RAM preferred
+  (`plat_dma_music_cache_init`). Stock 4 MB machines have nothing left → no arena → streaming
+  exactly as before. Measured: Falcon 14 MB → **7976 KB** arena; DFB1X-like → 24 MB (all songs).
+- Songs are placed by a **ring allocator** (head advances, wrapping to 0 evicts whatever the new
+  extent overlaps — the oldest first). Up to 16 entries; each keeps the header facts (rate,
+  length, loop point).
+- **Progressive fill**: the FIRST pass of a song streams from disk as usual, and every contiguous
+  chunk is also copied into the song's slot. The first pass reads the body sequentially from 0,
+  so at its first loop wrap the whole file has gone by → the entry is COMPLETE, the file is
+  closed, and from then on the ring is refilled by `memcpy` from RAM (the DMA itself still plays
+  the ST-RAM ring; that's why the arena can be Fast RAM). A later replay of a complete song opens
+  no file at all. An interrupted first pass leaves a partial entry that refills from 0 next time.
+- No stall on song change (unlike loading the file whole), no disk activity after a song has been
+  heard once, and the same code path serves both tiers (`plat_dma_music_cached()` tells).
+
+Validation (Hatari Falcon 14 MB, `--conout 2`, AVI audio vs the PCM): BRIT.PCM (74.7 s, loop at
+37.3 s) tracks with corr ≈ 0.995 and a constant offset through the first pass AND after the wrap
+(t = 90…117 s, served from RAM); `MEM music_cache KB=7976`. `SONG.REQ` accepts a playlist
+(`GARGOYLE,BRIT,GARGOYLE`, 80 s each) so a replay-from-cache can be exercised headlessly
+(`music from_cache=1` on the console).
+
 ## Follow-ups (not done)
 
 - Finer streaming granularity (per scene inside INTRO) if a smaller-RAM config ever matters — the
@@ -162,3 +190,9 @@ restores the desktop mode (`rdr_shutdown`) before printing which file it could n
 - The 1.4 MB BSS: `g_blocked/g_sightblk/g_indoor/g_dimcache` (4 × 128 K), `g_wobj` 216 K,
   `s_stub_paper` 64 K (core packs only) are static and could become pool allocations sized per game.
 - SAVE.000 template stays a whole-file load when present (optional dev file).
+- The front-end's own songs (BOOTUP/ULTIMA/CREATE/INTRO) play before the arena exists, so they
+  stream once and are not cached; if a "return to the menu" ever lands, allocate the arena
+  before the front-end on the resident tier.
+- PCM quality/size knobs already exist and are header-driven (`make m2pcm PCM_RATE=25033`
+  renders 25 kHz; the backend programs the STE mode bits / Falcon prescaler from the header) —
+  the shipped default stays 12517 Hz 8-bit mono (21 MB set).

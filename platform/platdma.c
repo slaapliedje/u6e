@@ -55,6 +55,7 @@
 
 #include <osbind.h>
 #include <mint/falcon.h>
+#include <string.h>
 
 #define RING_SIZE  32768u          /* ST-RAM ring: ~2.6 s at 12517 Hz (power of two) */
 #define HDR_SIZE   16              /* U6PC header bytes before the PCM body          */
@@ -73,6 +74,19 @@ static int32_t   g_last_off;       /* last observed play offset into the ring   
 static int32_t   g_cur_off;        /* filled by dma_hw_pos() (Supexec)                */
 static int       g_playing;
 static int       g_fresh;          /* first pump after start (distrust a stale counter) */
+
+/* ---- resident song cache (platdma.h) ------------------------------------------------------
+ * One arena, songs placed by a ring allocator (head advances; wrapping evicts whatever the new
+ * extent overlaps = oldest first). An entry FILLS progressively while its song streams from disk
+ * the first time (stream_into copies each contiguous chunk), and is COMPLETE once the file has
+ * been read end to end (which the sequential first pass guarantees at its first loop wrap); a
+ * complete entry needs no file at all — its header facts are kept in the entry. */
+#define CACHE_MAX 16
+typedef struct { char name[14]; uint32_t off, len; int32_t rate, loop_start; int32_t fill; int complete; int used; } cache_ent_t;
+static uint8_t    *g_cache;  static uint32_t g_cache_size, g_cache_head, g_cache_used;
+static cache_ent_t g_cent[CACHE_MAX];
+static cache_ent_t *g_ent;         /* entry for the playing song (filling or complete), or NULL */
+static int         g_from_cache;   /* current song is served from RAM                             */
 
 /* ---- supervisor-mode register helpers (run via Supexec) ------------------- */
 static long dma_hw_start(void){
@@ -124,35 +138,103 @@ static uint32_t rate_to_bits(int32_t rate){
  * the ring AND wrapping the file at the song loop point. Advances g_frame_pos. */
 static void stream_into(int32_t dst, int32_t n){
     while(n > 0){
-        if(g_frame_pos >= g_nframes) g_frame_pos = g_loop_start;
+        if(g_frame_pos >= g_nframes){
+            g_frame_pos = g_loop_start;
+            /* first loop wrap of a filling entry: the whole body has streamed past -> RESIDENT.
+             * Close the file: from here on the ring is refilled by memcpy, the disk stays idle. */
+            if(g_ent && !g_ent->complete && g_ent->fill >= g_nframes){
+                g_ent->complete = 1; g_from_cache = 1;
+                if(g_f != PLAT_BADFILE){ plat_fclose(g_f); g_f = PLAT_BADFILE; } }
+        }
         int32_t file_avail = g_nframes - g_frame_pos;
         int32_t ring_avail = (int32_t)g_ring_size - dst;
         int32_t chunk = n;
         if(chunk > file_avail) chunk = file_avail;
         if(chunk > ring_avail) chunk = ring_avail;
         if(chunk <= 0) break;
-        plat_fseek(g_f, HDR_SIZE + g_frame_pos, PLAT_SEEK_SET);
-        plat_fread(g_f, g_ring + dst, chunk);
+        if(g_from_cache){
+            memcpy(g_ring + dst, g_cache + g_ent->off + (uint32_t)g_frame_pos, (size_t)chunk);
+        } else {
+            plat_fseek(g_f, HDR_SIZE + g_frame_pos, PLAT_SEEK_SET);
+            plat_fread(g_f, g_ring + dst, chunk);
+            /* progressive fill: the first pass reads the body sequentially from 0, so a chunk that
+             * starts exactly at the fill mark extends it (a re-read after a wrap never does) */
+            if(g_ent && !g_ent->complete && g_frame_pos == g_ent->fill){
+                memcpy(g_cache + g_ent->off + (uint32_t)g_frame_pos, g_ring + dst, (size_t)chunk);
+                g_ent->fill += chunk; }
+        }
         g_frame_pos += chunk;
         dst += chunk; if(dst >= (int32_t)g_ring_size) dst = 0;
         n -= chunk;
     }
 }
 
+/* ---- cache management ---- */
+void plat_dma_music_cache_init(uint32_t bytes, int prefer_fast){
+    if(!g_avail || g_cache || bytes < 65536u) return;
+    g_cache = (uint8_t *)(prefer_fast ? plat_alloc_fast(bytes) : plat_alloc_chip(bytes));
+    if(!g_cache) return;
+    g_cache_size = bytes; g_cache_head = 0; g_cache_used = 0;
+    for(int i=0;i<CACHE_MAX;i++) g_cent[i].used = 0;
+}
+uint32_t plat_dma_music_cache_size(void){ return g_cache ? g_cache_size : 0; }
+uint32_t plat_dma_music_cache_used(void){ return g_cache_used; }
+int      plat_dma_music_cached(void){ return g_playing && g_from_cache; }
+
+static int name_eq(const char *a, const char *b){ int i=0; for(;i<13;i++){ char x=a[i],y=b[i]; if(x>='a'&&x<='z') x-=32; if(y>='a'&&y<='z') y-=32; if(x!=y) return 0; if(!x) return 1; } return 1; }
+static cache_ent_t *cache_find(const char *path){
+    if(!g_cache) return 0;
+    for(int i=0;i<CACHE_MAX;i++) if(g_cent[i].used && name_eq(g_cent[i].name, path)) return &g_cent[i];
+    return 0;
+}
+/* Place a new entry of `len` body bytes: ring allocation at the head; wrapping to 0 when it would
+ * run off the end; evict every entry the new extent overlaps (the oldest ones by construction). */
+static cache_ent_t *cache_alloc(const char *path, uint32_t len){
+    if(!g_cache || len == 0 || len > g_cache_size) return 0;
+    uint32_t start = g_cache_head; if(start + len > g_cache_size) start = 0;
+    uint32_t end = start + len;
+    for(int i=0;i<CACHE_MAX;i++){ cache_ent_t *e=&g_cent[i]; if(!e->used) continue;
+        if(e->off < end && start < e->off + e->len){ e->used = 0; g_cache_used -= e->len; } }
+    cache_ent_t *e = 0;
+    for(int i=0;i<CACHE_MAX;i++) if(!g_cent[i].used){ e=&g_cent[i]; break; }
+    if(!e){ /* table full: evict the entry at the lowest offset >= start (oldest region) */
+        uint32_t best=0xFFFFFFFFu; for(int i=0;i<CACHE_MAX;i++) if(g_cent[i].off>=start && g_cent[i].off<best){ best=g_cent[i].off; e=&g_cent[i]; }
+        if(!e) e=&g_cent[0];
+        g_cache_used -= e->len; }
+    { int i=0; for(;i<13 && path[i];i++) e->name[i]=path[i]; e->name[i]=0; }
+    e->off = start; e->len = len; e->fill = 0; e->complete = 0; e->used = 1;
+    g_cache_used += len;
+    g_cache_head = (end + 15u) & ~15u; if(g_cache_head >= g_cache_size) g_cache_head = 0;
+    return e;
+}
+
 int plat_dma_music_start(const char *path){
     if(!g_avail) return 0;
     plat_dma_music_stop();
 
-    g_f = plat_fopen(path, PLAT_RDONLY);
-    if(g_f == PLAT_BADFILE) return 0;
-    uint8_t h[HDR_SIZE];
-    if(plat_fread(g_f, h, HDR_SIZE) != HDR_SIZE ||
-       h[0]!='U'||h[1]!='6'||h[2]!='P'||h[3]!='C'){ plat_fclose(g_f); g_f=PLAT_BADFILE; return 0; }
-    int32_t rate = ((int32_t)h[4]<<24)|((int32_t)h[5]<<16)|((int32_t)h[6]<<8)|h[7];   /* big-endian */
-    g_nframes    = ((int32_t)h[8]<<24)|((int32_t)h[9]<<16)|((int32_t)h[10]<<8)|h[11];
-    g_loop_start = ((int32_t)h[12]<<24)|((int32_t)h[13]<<16)|((int32_t)h[14]<<8)|h[15];
-    if(g_nframes <= 0){ plat_fclose(g_f); g_f=PLAT_BADFILE; return 0; }
-    if(g_loop_start < 0 || g_loop_start >= g_nframes) g_loop_start = 0;
+    int32_t rate;
+    g_ent = cache_find(path); g_from_cache = 0;
+    if(g_ent && g_ent->complete){
+        /* RESIDENT: no file at all — geometry from the entry, ring refilled from RAM */
+        rate = g_ent->rate; g_nframes = (int32_t)g_ent->len; g_loop_start = g_ent->loop_start;
+        g_from_cache = 1;
+    } else {
+        g_f = plat_fopen(path, PLAT_RDONLY);
+        if(g_f == PLAT_BADFILE) return 0;
+        uint8_t h[HDR_SIZE];
+        if(plat_fread(g_f, h, HDR_SIZE) != HDR_SIZE ||
+           h[0]!='U'||h[1]!='6'||h[2]!='P'||h[3]!='C'){ plat_fclose(g_f); g_f=PLAT_BADFILE; return 0; }
+        rate         = ((int32_t)h[4]<<24)|((int32_t)h[5]<<16)|((int32_t)h[6]<<8)|h[7];   /* big-endian */
+        g_nframes    = ((int32_t)h[8]<<24)|((int32_t)h[9]<<16)|((int32_t)h[10]<<8)|h[11];
+        g_loop_start = ((int32_t)h[12]<<24)|((int32_t)h[13]<<16)|((int32_t)h[14]<<8)|h[15];
+        if(g_nframes <= 0){ plat_fclose(g_f); g_f=PLAT_BADFILE; return 0; }
+        if(g_loop_start < 0 || g_loop_start >= g_nframes) g_loop_start = 0;
+        /* a partially filled entry from an interrupted earlier play restarts its fill from 0;
+         * a new song gets a slot if the arena can hold it (else it just streams) */
+        if(g_ent){ g_ent->fill = 0; }
+        else g_ent = cache_alloc(path, (uint32_t)g_nframes);
+        if(g_ent){ g_ent->rate = rate; g_ent->loop_start = g_loop_start; }
+    }
     g_rate_bits = rate_to_bits(rate);
 
     /* prime the whole ring, then start the DMA loop */

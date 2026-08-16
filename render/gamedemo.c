@@ -6870,6 +6870,8 @@ static void music_manager_init(void){
  * the current track seamlessly instead (the DMA loop work) — pool rotation is a future refinement.
  * Only combat is context-detectable today; boat/dungeon/gargoyle wait on those systems. */
 static int g_music_forced;   /* a SONG.REQ / scripted request pins the song (skip auto-switch) */
+static char g_songlist[8][16]; static int g_songlist_n, g_songlist_cur; static uint32_t g_songlist_t0;   /* SONG.REQ playlist (test hook) */
+#define SONGLIST_SECS 80
 
 enum { MG_RANDOM=0, MG_COMBAT, MG_DUNGEON, MG_BOAT, MG_GARGOYLE };
 static const char *const MUS_WANDER[4] = { "BRIT", "FOREST", "STONES", "ULTIMA" };
@@ -7554,6 +7556,19 @@ int main(int argc, char **argv)
     g_savetmpl=(uint8_t*)plat_load_file("SAVE.000",0,&g_savetmpl_len);  /* CHIP: read-mostly template; spares the fast pool */
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n"); }
+
+    /* DMA MUSIC, resident tier (memory_streaming.md "DMA music"): everything the game keeps is
+     * loaded by now, so whatever the bigger pool still has beyond a reserve becomes the song
+     * arena — songs turn resident as they are first heard and the disk goes quiet. On the stock
+     * 4 MB machines nothing is left and the music simply streams, as before. */
+    if(plat_dma_available()){ plat_mem_info_t mi; plat_mem_get_info(&mi);
+        long chip_free=(long)mi.chip_size-(long)mi.chip_used;
+        long fast_free=mi.have_altram?(long)mi.fast_size-(long)mi.fast_used:0;
+        const long RESERVE=512L*1024L, CAP=24L*1024L*1024L;   /* U6's 12 songs = ~21 MB */
+        int use_fast = mi.have_altram && fast_free>chip_free;
+        long avail=(use_fast?fast_free:chip_free)-RESERVE;
+        if(avail>=1024L*1024L){ if(avail>CAP) avail=CAP; plat_dma_music_cache_init((uint32_t)avail, use_fast); }
+        if(_meminfo) dbg_num("MEM music_cache KB=", (int)(plat_dma_music_cache_size()/1024)); }
 
     /* FRONT-END: show the title + main menu on interactive boot (gated on MENU.REQ so
      * plain headless scene captures still render the game). "Journey Onward" returns
@@ -8702,9 +8717,16 @@ int main(int argc, char **argv)
      * play, where music_update_area() drives the music from the game context instead. */
     {   int32_t rl=0; void *req=plat_load_file("SONG.REQ",1,&rl);
         if(req && rl>0){ char nm[16]; int i=0; const char*s=(const char*)req;
-            while(i<15 && s[i] && s[i]!='\r' && s[i]!='\n' && s[i]!=' ' && s[i]!='.') { nm[i]=s[i]; i++; } nm[i]=0;
-            if(nm[0]){ music_play_song(nm); g_music_forced=1; }
-            dbg_num("music backend (1=MIDI 2=DMA 3=PSG)=", music_active_backend()); } }
+            /* "A,B,C" = a PLAYLIST: A now, then B / C / A ... every SONGLIST_SECS (resident-cache test:
+             * a song heard again should come from RAM — see "music from_cache" in the console) */
+            g_songlist_n=0; { int p=0; while(g_songlist_n<8 && p<rl){ int k=0;
+                while(p<rl && k<15 && s[p] && s[p]!='\r' && s[p]!='\n' && s[p]!=' ' && s[p]!='.' && s[p]!=',') g_songlist[g_songlist_n][k++]=s[p++];
+                g_songlist[g_songlist_n][k]=0; if(k) g_songlist_n++;
+                while(p<rl && s[p]!=',' && s[p]!='\n') p++; if(p<rl) p++; } }
+            i=0; while(g_songlist_n && g_songlist[0][i]){ nm[i]=g_songlist[0][i]; i++; } nm[i]=0;
+            if(nm[0]){ music_play_song(nm); g_music_forced=1; g_songlist_cur=0; g_songlist_t0=plat_ticks_200hz(); }
+            dbg_num("music backend (1=MIDI 2=DMA 3=PSG)=", music_active_backend());
+            dbg_num("music from_cache=", plat_dma_music_cached()); } }
 
 #ifdef HAVE_RDR_ST
     /* headless native-planar capture (2c): AUTOWALK.REQ (byte = step count) walks the avatar east that
@@ -8872,6 +8894,11 @@ int main(int argc, char **argv)
          * gives ample slack). */
         plat_dma_music_pump();  /* M10: refill the DMA-sound ring from the streaming PCM file */
         music_update_area(w.level);    /* M10: start/switch the area's song (overworld/battle/dungeon) on change */
+        if(g_songlist_n>1 && plat_ticks_200hz()-g_songlist_t0 >= (uint32_t)SONGLIST_SECS*200u){   /* SONG.REQ playlist step */
+            g_songlist_cur=(g_songlist_cur+1)%g_songlist_n; g_songlist_t0=plat_ticks_200hz();
+            music_play_song(g_songlist[g_songlist_cur]);
+            Cconws("music next: "); Cconws(g_songlist[g_songlist_cur]); Cconws("\r\n");
+            dbg_num("music from_cache=", plat_dma_music_cached()); }
 
         /* tile-animation tick: recompose + present only when an ANIMDATA tile (water/fountain)
          * is actually in view — most scenes have none, so this is free there. */
