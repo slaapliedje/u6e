@@ -38,25 +38,26 @@ renderer code):
 1. **CPU tier.** The flagship is the `-m68020-60`-codegen hybrid (68020 integer ops in the hot paths);
    those opcodes fault on a plain 68000. So the 68000 line (ST/STE, and 68000+card) needs a separate
    `-m68000` image. You cannot have one image that is both 68000- and 68020-optimised.
-2. **Memory + runtime model.** A 4 MB ST cannot hold the full pack, so it streams a slim pack
-   (`ST_STREAM`, `U6ST.PAK`); the card path additionally links `libgem16` and runs as an AES app.
+2. **Runtime model.** The card path additionally links `libgem16` and runs as an AES app. (Memory is
+   no longer a build-time split: since 2026-08-16 every binary loads the same `U6.PAK` + `U6FE.PAK`
+   and decides resident-vs-streamed at boot — [memory_streaming.md](memory_streaming.md).)
 
 So the binaries are:
 
 | binary        | CPU        | backends linked (HAVE_RDR_*)        | covers                              |
 |---------------|------------|-------------------------------------|-------------------------------------|
 | **game.prg**  | 68020 hyb  | st + tt + falcon + vcard (+libgem16)| **TT, Falcon (VIDEL), AND a card** — one image, runtime-selected |
-| gamest.prg    | 68000      | st                                  | plain ST / STE (4 MB slim pack)     |
-| gamevc.prg    | 68000      | vcard (+libgem16)                   | 68000 Atari + card, RAM-rich (full pack) |
-| **gamevcs.prg** | 68000    | vcard (+libgem16)                   | **stock 4 MB Mega ST/STe + a VDI card** (slim pack + streamed front-end) |
+| gamest.prg    | 68000      | st                                  | plain ST / STE                      |
+| gamevc.prg    | 68000      | vcard (+libgem16)                   | 68000 Atari + card                  |
+| **gamevcs.prg** | 68000    | vcard (+libgem16)                   | same as gamevc.prg (kept as the 8.3 name the Mega install uses) |
 | gamef.prg     | 68020 hyb  | falcon                              | Falcon-only isolated test image     |
 
 ### 68000 + graphics card on a stock 4 MB Mega (gamevcs.prg)
 The headline use for the card backend is a **Mega ST / Mega STe + a VDI graphics card** (e.g. an
-ATW800/2 with an NVDI-style driver) — a 68000 machine with lovely card video modes. `gamevc.prg`
-(full pack) needs ~4.2 MB, so on a stock 4 MB Mega we use **`gamevcs.prg`**: the same card backend
-with the ST build's memory strategy — the slim `U6ST.PAK` + `ST_STREAM` (stream the front-end from
-`U6FE.PAK`, then free it). Gameplay tiles are 8-bit, so the card shows full 256 colour (or its
+ATW800/2 with an NVDI-style driver) — a 68000 machine with lovely card video modes. On a stock 4 MB Mega the
+runtime memory policy ([memory_streaming.md](memory_streaming.md)) streams the front-end from the
+sectioned `U6FE.PAK` and reads CONVERSE/PORTRAIT on demand — the same code in every binary, so
+`gamevcs.prg` is now just `gamevc.prg` under its 8.3 install name. Gameplay tiles are 8-bit, so the card shows full 256 colour (or its
 truecolour mode); the front-end streams and renders fine on the card too (it sets 256-colour palettes,
 which the VDI honours). Validated on ARAnyM+fVDI: the main menu and gameplay both render on the card
 via the slim/streaming path (indexed 640×480×8) and the truecolour grid at 640×480×16.

@@ -35,4 +35,17 @@ int32_t   plat_fsize(plat_file f);   /* size in bytes; restores position */
  * close. Returns buffer (NULL on any error); *out_len gets the byte count. */
 void     *plat_load_file(const char *path, bool fast, int32_t *out_len);
 
+/* Size of a file by name (Fopen/Fseek/Fclose), or -1 if it can't be opened. Lets a loader
+ * plan memory (resident vs streamed) BEFORE reading anything. */
+int32_t   plat_fsize_path(const char *path);
+
+/* Read a whole file into a caller-owned buffer of `cap` bytes (no pool allocation): returns the
+ * byte count, or -1 if absent/unreadable/bigger than cap. For small, repeatedly (re)loaded files
+ * (a song, a config) that must not bump-allocate every time. */
+int32_t   plat_load_into(const char *path, void *dst, int32_t cap);
+
+/* Read `len` bytes at absolute offset `off` of an open file (Fseek + plat_fread). Returns bytes
+ * read (== len on success). The streaming primitive for sectioned packs / indexed libraries. */
+int32_t   plat_read_at(plat_file f, int32_t off, void *dst, int32_t len);
+
 #endif /* U6E_PLATFILE_H */

@@ -14,6 +14,7 @@
 #include "platmem.h"   /* plat_addr_is_fastram, plat_alloc_* */
 
 #include <osbind.h>
+#include <string.h>
 
 #define BOUNCE_SIZE  (16u * 1024u)
 static uint8_t g_bounce[BOUNCE_SIZE];   /* ST-RAM (BSS) DMA bounce buffer */
@@ -46,7 +47,7 @@ int32_t plat_fread(plat_file f, void *dst, int32_t len)
         long got = Fread((short)f, (long)chunk, g_bounce);
         if (got < 0) return (int32_t)got;      /* GEMDOS error */
         if (got == 0) break;                    /* EOF */
-        for (long i = 0; i < got; i++) out[i] = g_bounce[i];
+        memcpy(out, g_bounce, (size_t)got);     /* (was a byte loop: a 1.8 MB read into TT-RAM took seconds) */
         out   += got;
         total += (int32_t)got;
         len   -= (int32_t)got;
@@ -108,4 +109,30 @@ void *plat_load_file(const char *path, bool fast, int32_t *out_len)
 
     if (out_len) *out_len = size;
     return buf;
+}
+
+int32_t plat_fsize_path(const char *path)
+{
+    plat_file f = plat_fopen(path, PLAT_RDONLY);
+    if (f == PLAT_BADFILE) return -1;
+    int32_t n = plat_fsize(f);
+    plat_fclose(f);
+    return n;
+}
+
+int32_t plat_load_into(const char *path, void *dst, int32_t cap)
+{
+    plat_file f = plat_fopen(path, PLAT_RDONLY);
+    if (f == PLAT_BADFILE) return -1;
+    int32_t size = plat_fsize(f);
+    if (size <= 0 || size > cap) { plat_fclose(f); return -1; }
+    int32_t got = plat_fread(f, dst, size);
+    plat_fclose(f);
+    return (got == size) ? got : -1;
+}
+
+int32_t plat_read_at(plat_file f, int32_t off, void *dst, int32_t len)
+{
+    if (plat_fseek(f, off, PLAT_SEEK_SET) < 0) return -1;
+    return plat_fread(f, dst, len);
 }

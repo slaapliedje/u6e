@@ -526,12 +526,12 @@ bench-falcon: world $(BUILD)/benchf.prg $(BUILD)/NEWDESK.INF
 # on a real 8 MHz 68000 (`--machine st`), so we measure the ACTUAL ST cost the TT bench can't.
 # BENCH.BIN is the same 5 u32 [scroll-compose, full-compose, present-c2p, unused, N]. Set
 # START_MIN=<0..1439> to force night (exercises the lighting path); stage LIGHTSTY.REQ ('0'/'1'/'2')
-# in build/ before running to pick SMOOTH/DITHER/BINARY. Uses the slim ST pack (U6ST.PAK).
+# in build/ before running to pick SMOOTH/DITHER/BINARY. Loads the same U6.PAK + U6FE.PAK as the game.
 BENCH_ST_SRC := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(BENCH_SRC)) render/rdr_st.c render/c2p_st.s render/ppresent_st.s
 $(BUILD)/benchst.prg: $(BENCH_ST_SRC)
 	@mkdir -p $(BUILD)/obj_benchst
 	@for s in $^; do o=$(BUILD)/obj_benchst/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DBENCH -DHAVE_RDR_ST -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DBENCH -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_benchst/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour bench)"
 # BLIT=1 adds Hatari's --blitter on so a plain-ST run emulates a Blitter-equipped Mega ST (8 MHz +
@@ -621,8 +621,14 @@ roof-extract:
 	   || echo "roof: extract FAILED -> mkworld uses floor-tile fallback, no roofs"; \
 	 else echo "roof: $(ULTIMA_DAT) not found -> mkworld uses floor-tile fallback, no roofs"; fi
 
+# `world` writes the PAIR every target loads: U6.PAK (the gameplay core, ~1.1 MB) + U6FE.PAK (the
+# sectioned front-end/intro art, ~1.8 MB) — one data set for ST/TT/Falcon; the engine keeps the
+# front-end resident or streams it by section group depending on the machine's RAM
+# (docs/design/memory_streaming.md). world-st / world-tt are aliases kept for the older targets.
 world: $(BUILD)/mkworld roof-extract
 	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(GX) $(GY)
+world-st world-tt: world
+gamedata-st gamedata-tt: world
 
 # M9: emit a CORE world pack for Savage / Martian from the user's SE/MD data.
 # Reuses the U6 loaders (MAP/CHUNKS/tileset/palette/passable/objects); SE/MD wrap
@@ -766,34 +772,24 @@ game-falcon: $(BUILD)/gamef.prg
 # for -m68000 and link the stock 68000 libc. Drops c2p_asm.s (the TT's 8-plane asm); rdr_st uses
 # its own 4-plane c2p — hand-asm c2p_st.s (C reference c2p4_lut kept). 8.3 name for Hatari --auto.
 GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_st.c render/c2p_st.s render/ppresent_st.s
-# -DPACK_NAME loads the SLIM pack (U6ST.PAK, front-end art omitted) so it fits a real 4 MB ST.
+# Loads U6.PAK (core) + U6FE.PAK (front-end, streamed by section group on a 4 MB ST) like every target.
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_ST -DPACK_NAME='"U6ST.PAK"' -DST_STREAM=1 $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
-	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch, slim pack)"
+	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch)"
 game-st: $(BUILD)/gamest.prg
 
-# ---- TT SLIM build (M8 fit): the same 256-colour TT backend (rdr_tt.c, 8-plane c2p) as the unified
-# game.prg, but with the SLIM pack (U6TT.PAK) + front-end STREAMING (ST_STREAM) so it fits a STOCK 4 MB
-# TT. The full U6.PAK (~2.5 MB) overflows the ~2.7 MB TT fast pool once TPA + buffers are taken (the
-# "unknown game magic" OOM), so the flagship game.prg needs a big-RAM TT; this variant is the 4 MB path.
-# ST_STREAM: stream the front-end (intro/chargen/menu) from the shared U6FE.PAK, then FREE it before the
-# gameplay core loads — the U6FE load now goes to CHIP RAM (gamedemo.c ~5205, fast=0) so plat_chip_reset
-# actually reclaims it on TT (was fast=1 -> TT-RAM -> leaked, forcing the front-end to be dropped). The
-# front-end art is native 256-colour (the ST merely quantises it to 16), so the TT renders it directly.
+# ---- TT single-backend build: the 256-colour TT backend (rdr_tt.c, 8-plane c2p) alone (the unified
+# game.prg also covers the TT). Same data + memory policy as every target: U6.PAK core + the U6FE.PAK
+# front-end, resident or streamed by section group from the machine's free RAM at boot
+# (docs/design/memory_streaming.md) — this is what lets a STOCK 4 MB TT boot the whole game.
 $(BUILD)/gamett.prg: $(GAME_SRC)
-	$(call HYBRID_BUILD,$@,$^,obj_tt_slim,-DHAVE_RDR_TT -DPACK_NAME='"U6TT.PAK"' -DST_STREAM=1)
+	$(call HYBRID_BUILD,$@,$^,obj_tt_slim,-DHAVE_RDR_TT)
 game-tt: $(BUILD)/gamett.prg
 
-# SLIM TT world pack (U6TT.PAK): like world-st (MKWORLD_SLIM splits the ~1.35 MB front-end/intro art
-# to the shared U6FE.PAK) but keeps the FULL 256-colour tileset/palette the TT renders directly.
-world-tt: $(BUILD)/mkworld roof-extract
-	MKWORLD_SLIM=1 $(BUILD)/mkworld $(REFDATA) $(BUILD)/U6TT.PAK $(GX) $(GY)
-gamedata-tt: world-tt
-
-# TT slim shot: prove the 256-colour SLIM pack renders correctly AND fits at the STOCK --ttram 4.
+# TT shot: prove the 256-colour build renders correctly AND fits at the STOCK --ttram 4.
 shot-tt: gamedata-tt $(BUILD)/gamett.prg
 	rm -f $(BUILD)/gamett.avi $(BUILD)/gamett_screen.png
 	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
@@ -801,7 +797,7 @@ shot-tt: gamedata-tt $(BUILD)/gamett.prg
 	          --fast-forward on --run-vbls 8000 \
 	          --avirecord --avi-vcodec png --avi-file $(BUILD)/gamett.avi 2>/dev/null || true
 	-ffmpeg -y -i $(BUILD)/gamett.avi -update 1 $(BUILD)/gamett_screen.png 2>/dev/null
-	@echo "wrote $(BUILD)/gamett_screen.png (TT 256-colour, SLIM pack @ stock 4 MB)"
+	@echo "wrote $(BUILD)/gamett_screen.png (TT 256-colour @ stock 4 MB)"
 
 # GRAPHICS-CARD variant (M8): the VDI card backend (rdr_vcard.c) instead of the direct-hardware
 # ST/TT/Falcon ones. Runs as a GEM app (rdr_vcard does appl_init + takes the screen with wind_update)
@@ -819,25 +815,21 @@ $(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
 	@echo "built $@ (pure 68000 + card; VDI backend via render.c dispatch, libgem16)"
 game-vcard: $(BUILD)/gamevc.prg
 
-# SLIM graphics-card variant (M8): the card backend for a STOCK 4 MB Mega ST/STe + a VDI card
-# (e.g. ATW800/2 with NVDI). Same as gamevc.prg but with the ST build's memory strategy: the SLIM
-# pack (U6ST.PAK) + front-end streaming (ST_STREAM streams U6FE, then frees it) so it fits 4 MB —
-# the full-pack gamevc.prg needs ~4.2 MB. Gameplay tiles are 8-bit, so the card shows full 256
-# colour (or the card's truecolour mode); only the streamed front-end is shifter-oriented. 8.3 name.
+# 68000 graphics-card variant (M8): the card backend for a Mega ST/STe + a VDI card (e.g. ATW800/2 with
+# NVDI). Same as gamevc.prg — kept as a separate 8.3 image name for the 4 MB Mega install; the memory
+# policy (streamed front-end + on-demand libraries on tight RAM) is the same runtime code in every
+# build now (docs/design/memory_streaming.md). Gameplay tiles are 8-bit, so the card shows full 256
+# colour (or the card's truecolour mode).
 GAME_SRC_VCARD_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render/rdr_vcard.c
 $(BUILD)/gamevcs.prg: $(GAME_SRC_VCARD_ST)
 	@mkdir -p $(BUILD)/obj_vcs
 	@for s in $^; do o=$(BUILD)/obj_vcs/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_VCARD -DST_STREAM=1 -DPACK_NAME='"U6ST.PAK"' $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vcs/*.o -lgem16
-	@echo "built $@ (pure 68000 + card, SLIM pack + streamed front-end for a 4 MB Mega; libgem16)"
+	@echo "built $@ (pure 68000 + card; libgem16)"
 game-vcard-st: $(BUILD)/gamevcs.prg
 
-# SLIM ST world pack (U6ST.PAK): same as `world` but MKWORLD_SLIM omits the ~1.35 MB front-end/intro
-# art so the pack + libs + buffers fit a real 4 MB ST. The ST capture targets depend on this.
-world-st: $(BUILD)/mkworld roof-extract
-	MKWORLD_SLIM=1 $(BUILD)/mkworld $(REFDATA) $(BUILD)/U6ST.PAK $(GX) $(GY)
-gamedata-st: world-st
+# (world-st / gamedata-st: aliases of `world`, defined next to it.)
 
 # interactive: walk the U6 world on an emulated TT
 run-game: gamedata $(BUILD)/game.prg
@@ -936,7 +928,7 @@ shot-se-svm: world-se-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This
 # is the headline "optimised 16 vs the lazy EGA port" shot. Runs on a REAL 4 MB ST: the slim pack
-# (U6ST.PAK, front-end art omitted) + libs + buffers leave ~900 KB free (see the MEMINFO diagnostic).
+# (U6.PAK core + streamed U6FE.PAK) + libs + buffers leave headroom (see the MEMINFO diagnostic).
 shot-st: gamedata-st $(BUILD)/gamest.prg
 	rm -f $(BUILD)/gamest.avi $(BUILD)/gamest_screen.png
 	-$(HL) $(HATARI) --machine st --memsize 4 --monitor rgb \

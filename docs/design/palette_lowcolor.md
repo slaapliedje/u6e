@@ -201,6 +201,14 @@ streaming (DONE)" below. BSS is a further target (the full-world maps g_indoor/g
 wf are 128 KB each) if more headroom is ever needed.
 
 ## Front-end streaming (DONE) — the ST title/intro/chargen off the hard drive
+> **2026-08-16 — superseded by [memory_streaming.md](memory_streaming.md).** The ST-only
+> `ST_STREAM` path became the boot order for EVERY target: `U6FE.PAK` is now a *sectioned* pack
+> (v2, `dataformats/fepack.h`), the front-end is streamed by section GROUP (common / intro /
+> chargen — the whole 1.8 MB U6FE no longer fits a 4 MB ST pool at once), or kept resident on
+> big-RAM machines; the "slim" `U6ST.PAK`/`U6TT.PAK` names are gone (`U6.PAK` IS the core pack for
+> all machines) and CONVERSE/PORTRAIT are read on demand when RAM is tight. The paragraphs below are
+> the history of the ST-first implementation and stay accurate as far as they go.
+
 The 1.35 MB front-end art can't coexist with the gameplay core+libs on a 4 MB ST, so the ST STREAMS
 it — the period-correct pattern (load from HD, use, free; don't hold it resident). The foundation
 is `plat_chip_mark()`/`plat_chip_reset()` (platform/platmem.h): a scoped (LIFO) region free on the

@@ -9,9 +9,11 @@
 # you get floppy images that install and run on a real Atari (or a Gotek/HxC
 # floppy emulator, or an emulator).
 #
-# The full U6.PAK (~2.4 MB) is bigger than a 1.44 MB floppy, so the script
-# splits big packs across disks and the installer (INSTALL.TOS) reassembles
-# them on the target drive. ST/STE and TT use smaller slim packs.
+# The front-end pack U6FE.PAK (~1.8 MB) is bigger than a 1.44 MB floppy, so the
+# script splits big packs across disks and the installer (INSTALL.TOS) reassembles
+# them on the target drive. Every target ships the SAME data pair — U6.PAK (the
+# gameplay core) + U6FE.PAK (front-end art the engine keeps resident or streams
+# by section depending on the machine's RAM; docs/design/memory_streaming.md).
 #
 # Usage:
 #   scripts/make-st-disks.sh --target falcon [options]
@@ -89,19 +91,19 @@ case "$TARGET" in
   falcon)
     PRG_SRC=$BUILD/gamef.prg;  PRG_DOS=GAMEF.PRG
     MAKE_TGT=(game-falcon world)
-    PACKS=(U6.PAK)
+    PACKS=(U6.PAK U6FE.PAK)
     TITLE="Ultima VI for the Atari Falcon030 ($VERSION)"
     ;;
   st)
     PRG_SRC=$BUILD/gamest.prg; PRG_DOS=GAMEST.PRG
-    MAKE_TGT=(game-st world-st)
-    PACKS=(U6ST.PAK U6FE.PAK)
+    MAKE_TGT=(game-st world)
+    PACKS=(U6.PAK U6FE.PAK)
     TITLE="Ultima VI for the Atari ST/STE ($VERSION)"
     ;;
   tt)
     PRG_SRC=$BUILD/gamett.prg; PRG_DOS=GAMETT.PRG
-    MAKE_TGT=(game-tt world-tt)
-    PACKS=(U6TT.PAK U6FE.PAK)
+    MAKE_TGT=(game-tt world)
+    PACKS=(U6.PAK U6FE.PAK)
     TITLE="Ultima VI for the Atari TT030 ($VERSION)"
     ;;
   *) echo "unknown --target: $TARGET (use falcon|st|tt)" >&2; exit 1;;

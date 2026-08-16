@@ -733,6 +733,8 @@ compose ~2.5× Falcon's, and the 8-bit 256-colour present (49.8 ms) beats Falcon
 | TT 256-colour | 32 MHz | 91 ms (11.0 fps) | 70 ms (14.3 fps) |
 
 ## 2026-07-24 — TT 4 MB fit: slim pack (U6TT.PAK) + fast→chip pack-load fallback
+> (Historical. Since 2026-08-16 there is no slim pack / `ST_STREAM` build: one `U6.PAK` + sectioned
+> `U6FE.PAK` for all targets, resident-vs-streamed decided at boot — [memory_streaming.md](memory_streaming.md).)
 The full 256-colour U6.PAK (~2.5 MB) can't run on a stock 4 MB TT (the "unknown game magic" OOM). Two parts:
 1. **Slim TT pack** — `world-tt` runs `MKWORLD_SLIM` (same front-end split as the ST's U6ST.PAK) but keeps the
    FULL 256-colour tileset the TT renders directly → **U6TT.PAK 1.08 MB**. New `gamett.prg` build loads it

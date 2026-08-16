@@ -47,7 +47,11 @@ Each shape (at byte offset[i]) begins with a 4-word header (LE):
 | 6   | u16 lowerY | pixels BELOW the hotspot                     |
 
 - **Width = leftX + rightX + 1, Height = upperY + lowerY + 1.**
-- The **hotspot** is at canvas pixel (leftX, upperY).
+- The **hotspot** is at canvas pixel (leftX, upperY). A sprite placed "at (x,y)" is drawn with its
+  hotspot on (x,y), i.e. top-left = (x−leftX, y−upperY). Almost every U6 shape has hotspot (0,0);
+  the exceptions among the front-end files are INTRO_2.SHP 12–23 (the storm's lightning bolts, hotspot
+  at their right edge, and the strikes, hotspot = the ground-splash point ~(57,130)) and GYPSY.SHP
+  21/22 (2/5,0). `u6shape_hotspot()` reads it; mkworld ships it for the storm sprites (2026-08-16).
 
 Then a stream of **pixel blocks**, until a terminator:
 

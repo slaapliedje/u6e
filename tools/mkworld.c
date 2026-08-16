@@ -43,6 +43,7 @@
 #include "u6tile.h"
 #include "u6obj.h"
 #include "u6shape.h"
+#include "fepack.h"
 #include "u6map.h"
 #include "combat.h"
 #include "passability.h"
@@ -304,6 +305,20 @@ static uint8_t *load_shape(const char *dir, const char *name, int idx, int *ow, 
         out=malloc((size_t)w*h); memcpy(out,cv,(size_t)w*h); *ow=w; *oh=h; }
     if(freed) free(d); free(raw);
     return out;
+}
+
+/* like load_shape, and also returns the shape's hotspot (origin) — nuvie draws a sprite at
+ * (x - hot_x, y - hot_y); the intro's lightning bolts/strikes are the shapes that need it. */
+static uint8_t *load_shape_hot(const char *dir, const char *name, int idx, int *ow, int *oh, int *hx, int *hy)
+{
+    long n; uint8_t *raw = slurp(dir, name, &n); *hx=*hy=0;
+    if(!raw) return NULL;
+    int32_t un = u6lzw_unpacked_size(raw,(int32_t)n);
+    uint8_t *d = raw; int32_t dn = (int32_t)n; int freed=0;
+    if(un>0){ d=malloc((size_t)un); dn=u6lzw_decompress(raw,(int32_t)n,d,un); freed=1; }
+    u6shape_hotspot(d,dn,idx,hx,hy);
+    if(freed) free(d); free(raw);
+    return load_shape(dir,name,idx,ow,oh);
 }
 
 /* Load PALETTES.INT sub-palette `idx` as 256 x 6-bit RGB (768B, values 0..63) — the
@@ -1394,7 +1409,11 @@ int main(int argc, char **argv)
     const char *svm_objlist = argc > 6 ? argv[6] : NULL;
     const char *svm_inv     = argc > 7 ? argv[7] : NULL;   /* actor-inventory chunk (readied gear, CB3b) */
     int svm = (svm_objblk && svm_objlist) ? 1 : 0;
-    int slim = getenv("MKWORLD_SLIM") != NULL;   /* ST pack: front-end/intro art -> separate U6FE.PAK */
+    /* The front-end/intro art ALWAYS goes to a separate, sectioned U6FE.PAK (dataformats/fepack.h;
+     * docs/design/memory_streaming.md): the engine loads it whole on big-RAM machines or streams it
+     * a group of sections at a time on 4 MB ones. (MKWORLD_SLIM used to select this; it is now the
+     * only mode — one U6.PAK + U6FE.PAK pair serves ST/TT/Falcon.) */
+    int slim = 1; (void)getenv("MKWORLD_SLIM");
     char fe_path[1024];                          /* the front-end pack, a sibling of the core pack */
     { const char *s=strrchr(out,'/'); int d=s?(int)(s-out)+1:0;
       snprintf(fe_path,sizeof fe_path,"%.*sU6FE.PAK",d,out); }
@@ -1813,12 +1832,21 @@ int main(int argc, char **argv)
     static uint8_t g_lc_pal[48], g_lc_pal4[48], g_lc_lut[256];   /* g_lc_pal4 = STE 4-bit game 16 (U6WS) */
     build_lowcolor(&ts, palb, g_lc_pal, g_lc_pal4, g_lc_lut);   /* the game 16 + 256->16 LUT (also shipped as U6WW) */
     FILE *fe = f;
+    /* U6FE.PAK v2 section directory (fepack.h): [u8 nsec] + nsec x [u8 id][u32 off][u32 len], written
+     * as a placeholder here and PATCHED at the end (fe_dir_close) once every section's extent is known.
+     * FE_SEC(id) marks the start of section `id`; the previous section ends there. */
+    long fe_dir_pos = 0, fe_sec_off[FEPACK_MAX_SEC], fe_sec_len[FEPACK_MAX_SEC]; int fe_nsec = 0, fe_cur = -1;
+    for(int i=0;i<FEPACK_MAX_SEC;i++){ fe_sec_off[i]=0; fe_sec_len[i]=0; }
+    #define FE_SEC(id) do { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; \
+                            fe_cur=(id); fe_sec_off[fe_cur]=_p; if(fe_cur+1>fe_nsec) fe_nsec=fe_cur+1; } while(0)
     if(slim){ fwrite("NOFE",1,4,f);
         fe = fopen(fe_path,"wb");
-        if(fe){ fwrite("U6FE",1,4,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
-                printf("slim ST pack: front-end/intro art -> %s (+ palette + font)\n", fe_path); }
+        if(fe){ fwrite(FEPACK_MAGIC,1,4,fe); fwrite(palb,1,768,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
+                fe_dir_pos=ftell(fe); fputc(FES_N,fe); for(int i=0;i<FES_N*FEPACK_DIR_ENT;i++) fputc(0,fe);   /* placeholder dir */
+                printf("front-end/intro art -> %s (sectioned: %d sections + base palette + ST 16 + font)\n", fe_path, (int)FES_N); }
         else  { fe = f; printf("WARN: cannot open %s; front-end inline\n", fe_path); } }
     {
+    FE_SEC(FES_MENU);
     /* FRONT-END art (U6WU): MAINMENU.SHP shape 0 + TITLES.SHP shape 0 (shapes.md).
      * [u16 mw][u16 mh][mw*mh indices][u16 tw][u16 th][tw*th indices]. 0x0 if absent. */
     { int mw=0,mh=0,tw=0,th=0;
@@ -1842,6 +1870,7 @@ int main(int argc, char **argv)
         fwrite(lc,1,sizeof lc,fe); }
       printf("front-end: menu %dx%d, title %dx%d (+per-scene title 16)\n", mw,mh,tw,th);
       free(menu); free(title); }
+    FE_SEC(FES_INTRO);
     /* INTRO SCENES (U6WV): [u8 n] then per scene [u8 type][768B pal(6-bit)] + layers.
      *   type 0 (static hold): [u16 w=320][u16 h=200][320*200 idx]
      *   type 1 (horizontal pan): [u16 pw=640][u16 h=200][640*200 panorama]
@@ -1854,8 +1883,10 @@ int main(int argc, char **argv)
         /* living room: panorama = room bg(0) + bg1(1@320, has a transparent window) with
          * the twilight field(15) placed BEHIND bg1's window (panorama 450,20 — nuvie floats
          * it in as a slow parallax layer; we bake it behind the window so it's not black).
-         * Foreground = avatar/chair(13@0,63) + remote(14@143,91), pans at 2x. */
-        {"INTRO_1.SHP", {{15,450,20},{0,0,0},{1,320,0}}, 3, {{13,0,63},{14,143,91}}, 2, 1, 1},
+         * Foreground = avatar/chair(13@0,63), pans at 2x. (The FINGER on the remote, 14@143,91, is
+         * NOT baked: nuvie shows it only while the TV shows static = a channel change; shipped
+         * separately with the TV sprite set below.) */
+        {"INTRO_1.SHP", {{15,450,20},{0,0,0},{1,320,0}}, 3, {{13,0,63}}, 1, 1, 1},
         {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 0},   /* ring of standing stones (lightning-lit, obsidian present) */
         {"INTRO_3.SHP", {{5,0,0}}, 1, {{0,0,0}}, 0, 3, 2},   /* gate RISES: bg = shape 5 (obsidian gone, scene re-lit by the
                                                                 gate's glow — nuvie sets bg.image=img[5] before the rise; the
@@ -1889,38 +1920,26 @@ int main(int argc, char **argv)
           be16(fe,320);              fwrite(fg,1,sizeof fg,fe);
           printf("intro scene %d: PAN %s pal %d (640 panorama + 320 fg)\n", i, SC[i].file, SC[i].pal);
         } }
+      FE_SEC(FES_SCROLL);
       /* shared narration parchment scroll (BLOCKS.SHP shape 2, 320x48) drawn at the
-       * bottom over the scene, 255 = torn/transparent edges. [u16 w][u16 h][w*h]. */
+       * bottom over the scene, 255 = torn/transparent edges. [u16 w][u16 h][w*h]. Its own
+       * section (COMMON group): the intro captions AND the §1B gargoyle scene use it. */
       { int sw=0,sh=0; uint8_t *scr=load_shape(dir,"BLOCKS.SHP",2,&sw,&sh);
         be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
         if(scr&&sw>0&&sh>0) fwrite(scr,1,(size_t)sw*sh,fe);
         printf("intro scroll: BLOCKS.SHP[2] %dx%d\n", sw, sh); free(scr); }
-      /* living-room TV anchor (nuvie tv-anchor program): base 57x37 @ (0xe5,0x32) +
-       * talking-mouth frames 17x19 @ (+9,+7) = INTRO_1.SHP 31 / 32,33,34. The engine
-       * draws these over the scrolling panorama and cycles the mouth. [u16 aw][u16 ah]
-       * [u16 ax][u16 ay][aw*ah] then [u16 mw][u16 mh][u16 mx][u16 my][u8 nf][nf*mw*mh]. */
-      { int aw=0,ah=0; uint8_t *anc=load_shape(dir,"INTRO_1.SHP",31,&aw,&ah);
-        be16(fe,(unsigned)aw); be16(fe,(unsigned)ah); be16(fe,0xe5); be16(fe,0x32);
-        if(anc&&aw>0) fwrite(anc,1,(size_t)aw*ah,fe); free(anc);
-        static const int MF[]={32,33,34}; int nmf=(int)(sizeof MF/sizeof MF[0]);
-        int mw=0,mh=0; uint8_t *m0=load_shape(dir,"INTRO_1.SHP",MF[0],&mw,&mh); free(m0);
-        be16(fe,(unsigned)mw); be16(fe,(unsigned)mh); be16(fe,0xe5+9); be16(fe,0x32+7); fputc(nmf,fe);
-        for(int k=0;k<nmf;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"INTRO_1.SHP",MF[k],&w,&h);
-          if(mp&&w>0) fwrite(mp,1,(size_t)w*h,fe); free(mp); }
-        printf("intro TV: anchor %dx%d @229,50 + %d mouth %dx%d\n", aw,ah, nmf, mw,mh); }
-      /* TV alt-channels (nuvie tv-program cycler): each a full 57x37 TV-screen image; the engine
-       * flips between the news anchor (channel 0 = base+mouth above), these channels, and
-       * generated static ("switching channels"). Two 2-frame programs: a talk-show (16/18) and
-       * a drama (24/25). [u8 nchan][u8 fpc][u16 cw][u16 ch] + nchan*fpc x [cw*ch idx]. */
-      { static const int CH[2][2]={{16,18},{24,25}}; int nchan=2, fpc=2;
-        int cw=0,ch=0; uint8_t*c0=load_shape(dir,"INTRO_1.SHP",CH[0][0],&cw,&ch); free(c0);
-        fputc(nchan,fe); fputc(fpc,fe); be16(fe,(unsigned)cw); be16(fe,(unsigned)ch);
-        for(int c=0;c<nchan;c++) for(int fr=0;fr<fpc;fr++){
-          int w=0,h=0; uint8_t*cp=load_shape(dir,"INTRO_1.SHP",CH[c][fr],&w,&h);
-          if(cp&&w==cw&&h==ch) fwrite(cp,1,(size_t)w*h,fe);
-          else { static uint8_t z[57*37]; memset(z,0,sizeof z); fwrite(z,1,(size_t)cw*ch,fe); }
-          free(cp); }
-        printf("intro TV channels: %d x %d-frame programs %dx%d\n", nchan, fpc, cw, ch); }
+      FE_SEC(FES_TV);
+      /* living-room TV (nuvie display_tv program interpreter — docs/design/intro_sequence.md §1):
+       * the 57x37 screen at (0xE5,0x32) shows sprites INTRO_1.SHP 16+image (image 0..52) placed by
+       * per-image x/y offsets, up to 5 per 50 ms step, plus generated static; the Avatar's FINGER on
+       * the remote (shape 14 @143,91) shows only during static. Ship the raw sprite set + finger:
+       * [u16 bx][u16 by][u8 nimg] + nimg x [u16 w][u16 h][pix] + [u16 fw][u16 fh][u16 fx][u16 fy][pix]. */
+      { be16(fe,0xe5); be16(fe,0x32); int nimg=53; fputc(nimg,fe); long tb=0;
+        for(int k=0;k<nimg;k++){ int w=0,h=0; uint8_t*tp=load_shape(dir,"INTRO_1.SHP",16+k,&w,&h);
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(tp&&w>0){ fwrite(tp,1,(size_t)w*h,fe); tb+=(long)w*h; } free(tp); }
+        int fw=0,fh=0; uint8_t*fp=load_shape(dir,"INTRO_1.SHP",14,&fw,&fh);
+        be16(fe,(unsigned)fw); be16(fe,(unsigned)fh); be16(fe,143); be16(fe,91); if(fp&&fw>0) fwrite(fp,1,(size_t)fw*fh,fe); free(fp);
+        printf("intro TV: %d program sprites (%ld bytes) + finger %dx%d\n", nimg, tb, fw, fh); }
       /* clock digits: INTRO_1.SHP 2..12 = LED glyphs 0..9 + blank (3x5), drawn over the
        * blanked cells at (0xdd,0x14) with x-steps 0,4,10,14. [u16 cx][u16 cy][u8 nd] +
        * nd x [u16 w][u16 h][w*h]. */
@@ -1928,6 +1947,7 @@ int main(int argc, char **argv)
         for(int k=0;k<nd;k++){ int w=0,h=0; uint8_t*dg=load_shape(dir,"INTRO_1.SHP",2+k,&w,&h);
           be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(dg&&w>0) fwrite(dg,1,(size_t)w*h,fe); free(dg); }
         printf("intro clock: 11 LED digits @ 0xdd,0x14\n"); }
+      FE_SEC(FES_GATE);
       /* moongate rise (type-2 scene): the gate (INTRO_3.SHP shape 2) rises at x=0x7c; the
        * ground cover (shape 4 @ 0x5e,0x66) is drawn OVER it so it emerges from the earth.
        * [u16 gw][u16 gh][u16 gx][gate] [u16 cw][u16 ch][u16 cx][u16 cy][cover]. (nuvie stones.) */
@@ -1938,6 +1958,7 @@ int main(int argc, char **argv)
         be16(fe,(unsigned)cvw); be16(fe,(unsigned)cvh); be16(fe,0x5e); be16(fe,0x66);
         if(cv&&cvw>0) fwrite(cv,1,(size_t)cvw*cvh,fe); free(cv);
         printf("intro moongate: gate %dx%d @124 + cover %dx%d @94,102\n", gw,gh, cvw,cvh); }
+      FE_SEC(FES_CCPORT);
       /* CHARACTER-CREATION portraits (MONTAGE.SHP 0..11 = 6 female @0..5, 6 male @6..11,
        * each 56x64; montage index = gender*6 + portrait_num — nuvie create_character). The
        * new-game portrait picker renders these OPAQUELY under the boot palette (portrait skin
@@ -1951,6 +1972,7 @@ int main(int argc, char **argv)
           else { static uint8_t z[56*64]; memset(z,0,sizeof z); fwrite(z,1,(size_t)pw0*ph0,fe); }
           free(mp); }
         printf("chargen portraits: %d montage %dx%d\n", nmp, pw0, ph0); }
+      FE_SEC(FES_TEXT);
       /* gypsy virtue questions (extracted from U.EXE at build time; NEVER shipped/committed):
        * [u8 nq] + nq x [u16 len][len bytes] (quote/%c stripped). 0 => engine uses generic prompts. */
       { static char qb[GQ_MAX][GQ_LEN]; int nq=extract_questions(dir, qb);
@@ -1984,6 +2006,7 @@ int main(int argc, char **argv)
       /* NOTE: BOOK.DAT readable text moved OUT of the front-end block into the RESIDENT core section
        * U6BK (below) — on the ST the front-end (U6FE) is FREED after chargen, which nulled in-game
        * book/sign reading. Books belong with gameplay data, not the transient front-end. */
+      FE_SEC(FES_GYPSY);
       /* GYPSY SCENE (character-creation "casting", PALETTES.INT 5). To run nuvie's EXACT pour
        * animation (create_character gypsy_vial_anim), we ship the RAW GYPSY.SHP shape table so
        * the engine can address arm/hand/vial/vial_liquid/pour/jar sprites by shape number, just
@@ -2011,6 +2034,7 @@ int main(int argc, char **argv)
             else { be16(fe,0); be16(fe,0); }
             free(sp); }
           printf("gypsy scene: bg 320x200 pal5 + scroll BLOCKS.SHP[3] %dx%d + %d/%d raw shapes (nuvie pour animation)\n", sw,sh,nshipped,GYP_NSH); } }
+      FE_SEC(FES_WOODS);
       /* WOODS forest-path lead-in (PALETTES.INT 4): the approach to the gypsy's wagon. Panorama
        * = WOODS.SHP[0] (320 wide) + WOODS.SHP[1] (191) @x=320 = 511 wide; the engine pans it
        * left (nuvie scroll_lounge-style). [768 pal4][u16 ww][u16 wh][ww*wh]. */
@@ -2022,52 +2046,40 @@ int main(int argc, char **argv)
         { uint8_t lc[48+256]; build_scene_lc(p4,wpano,511*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* woods ST 16 */
         be16(fe,511); be16(fe,200); fwrite(wpano,1,sizeof wpano,fe);
         printf("gypsy woods: WOODS.SHP panorama 511x200 pal4\n"); }
-      /* STORM WINDOW scene (INTRO_2.SHP, PALETTES.INT 2 — nuvie window_sequence): a curtained,
-       * mullioned window onto a stormy pine forest. The static scene (sky 1 + trees 8 + ground
-       * 10@76 + glass 26@57 + frame 28) is baked once; the engine animates lightning FLASHES
-       * (11-18, random position) + a big STRIKE (19-23) over it with a palette flash. Layout:
-       * [768 pal2][u16 bw][u16 bh][bw*bh base] [u8 nbolt] + nbolt x [u16 w][u16 h][w*h]
-       * [u8 nstrike][u16 sx][u16 sy] + nstrike x [u16 w][u16 h][w*h]. */
+      FE_SEC(FES_STORM);
+      /* STORM WINDOW scene (INTRO_2.SHP, PALETTES.INT 2 — nuvie window_sequence/display_window): a
+       * curtained, mullioned window onto a stormy pine forest, ANIMATED IN LAYERS (2026-08-16, real-
+       * Falcon report: "no rain or clouds; the lightning flashes behind the trees and lights the
+       * ground"). Draw order = nuvie's sprite order: sky(1) -> 2 big scrolling clouds(0) + 5 small
+       * (2/3) -> lightning bolt(11-18, random, BEHIND the ground+trees) -> ground(10@76) -> trees(8)
+       * -> strike(19-23 @158,114) -> 100 rain drops(4-7) -> frame(28) -> glass(26 / 27 = white flash)
+       * -> door leaves(24/25). Palette 0x58/0x5a/0x5c = the ground highlights that light up blue on a
+       * flash. Everything ships as raw layers (255 = transparent) so the engine composites per step:
+       * [768 pal2][48+256 lc][u8 nbolt]+nbolt x [u16 w][u16 h][pix][u8 nstr][u16 sx][u16 sy]+nstr x
+       * [u16 w][u16 h][pix], then in this order each as [u16 w][u16 h][pix]: sky, ground, trees,
+       * cloud big, cloud 2, cloud 3, rain 4,5,6,7, frame 28, glass 26, glass 27, door 24, door 25. */
       { uint8_t p2[768]; if(!load_intpal(dir,2,p2)) memset(p2,0,sizeof p2);
         fwrite(p2,1,768,fe);
         static uint8_t sbase[320*200]; memset(sbase,0,sizeof sbase);
-        /* z-order = nuvie load_window: sky, ground(@76), TREES OVER THE GROUND (the trees' lower rows
-         * cover the ground image's opaque black top band — drawn under the ground that band showed
-         * as a black gap between forest and ground on the real Falcon, 2026-08-16), glass, frame. */
-        static const ishape_t WIN[]={{1,0,0},{10,0,76},{8,0,0},{26,57,0},{28,0,0}};
+        static const ishape_t WIN[]={{1,0,0},{10,0,76},{8,0,0},{28,0,0},{26,57,0}};   /* for the ST 16 only */
         compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
         { uint8_t lc[48+256]; build_scene_lc(p2,sbase,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* storm ST 16 */
-        be16(fe,320); be16(fe,200); fwrite(sbase,1,sizeof sbase,fe);
+        /* bolts + strikes carry their HOTSPOT: nuvie draws a sprite at (x - hot_x, y - hot_y) — the
+         * strikes' hotspot is the ground-splash point (e.g. 57,130), so (158,114) is where the bolt HITS;
+         * the small bolts' hotspot is their right edge. [u16 w][u16 h][u16 hx][u16 hy][pix]. */
         static const int BOLT[]={11,12,13,14,15,16,17,18}; int nbolt=(int)(sizeof BOLT/sizeof BOLT[0]);
         fputc(nbolt,fe);
-        for(int k=0;k<nbolt;k++){ int w=0,h=0; uint8_t*bp=load_shape(dir,"INTRO_2.SHP",BOLT[k],&w,&h);
-          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(bp&&w>0) fwrite(bp,1,(size_t)w*h,fe); free(bp); }
+        for(int k=0;k<nbolt;k++){ int w=0,h=0,hx=0,hy=0; uint8_t*bp=load_shape_hot(dir,"INTRO_2.SHP",BOLT[k],&w,&h,&hx,&hy);
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); be16(fe,(unsigned)hx); be16(fe,(unsigned)hy); if(bp&&w>0) fwrite(bp,1,(size_t)w*h,fe); free(bp); }
         static const int STK[]={19,20,21,22,23}; int nstk=(int)(sizeof STK/sizeof STK[0]);
-        fputc(nstk,fe); be16(fe,140); be16(fe,6);       /* strike top-left (tunable) */
-        for(int k=0;k<nstk;k++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"INTRO_2.SHP",STK[k],&w,&h);
-          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(sp&&w>0) fwrite(sp,1,(size_t)w*h,fe); free(sp); }
-        /* FOREST REVEAL (nuvie window_sequence tail @685): after the 4 storm pages the window
-         * frame slides off to reveal the FRAMELESS storm forest (same sky/trees/ground, no glass/
-         * frame — the "into the forest, down the path, to the stones" bg). Ship the forest base
-         * (opaque) + the window overlay (glass 26@57 + frame 28, 255 = transparent) so the engine
-         * can slide the frame off a static forest. [u16 fw][u16 fh][fw*fh][u16 ow][u16 oh][ow*oh]. */
-        static uint8_t fbase[320*200]; memset(fbase,0,sizeof fbase);
-        static const ishape_t FOR[]={{1,0,0},{10,0,76},{8,0,0}};   /* sky, ground, trees on top (see WIN) */
-        compose_shapes(dir,"INTRO_2.SHP",FOR,(int)(sizeof FOR/sizeof FOR[0]),fbase,320,200);
-        be16(fe,320); be16(fe,200); fwrite(fbase,1,sizeof fbase,fe);
-        static uint8_t wov[320*200]; memset(wov,U6SHAPE_TRANSPARENT,sizeof wov);   /* overlay layer */
-        static const ishape_t WOV[]={{26,57,0},{28,0,0}};
-        compose_shapes(dir,"INTRO_2.SHP",WOV,(int)(sizeof WOV/sizeof WOV[0]),wov,320,200);
-        be16(fe,320); be16(fe,200); fwrite(wov,1,sizeof wov,fe);
-        /* DOORWAY (nuvie window_sequence @706-749): the pan doesn't land on open forest — the two
-         * door LEAVES (img 24 = left, 66x200, starts at x=320; img 25 = right, 67x200, at x=573)
-         * trail the sliding frame, so after the 320-px pan they sit at the screen edges (0..66 and
-         * 253..320) framing the doorway; then they slide apart (68 px each) onto the clear forest.
-         * Shipped as-is (opaque leaves): [u16 w][u16 h][left][u16 w][u16 h][right]. */
-        { static const int DOOR[]={24,25};
-          for(int k=0;k<2;k++){ int w=0,h=0; uint8_t*dp=load_shape(dir,"INTRO_2.SHP",DOOR[k],&w,&h);
-            be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(dp&&w>0) fwrite(dp,1,(size_t)w*h,fe); free(dp); } }
-        printf("storm window: base 320x200 pal2 + %d bolts + %d strikes + forest reveal (bg+frame overlay+door leaves)\n", nbolt, nstk); }
+        fputc(nstk,fe); be16(fe,158); be16(fe,114);     /* nuvie strike sprite position (= its ground point) */
+        for(int k=0;k<nstk;k++){ int w=0,h=0,hx=0,hy=0; uint8_t*sp=load_shape_hot(dir,"INTRO_2.SHP",STK[k],&w,&h,&hx,&hy);
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); be16(fe,(unsigned)hx); be16(fe,(unsigned)hy); if(sp&&w>0) fwrite(sp,1,(size_t)w*h,fe); free(sp); }
+        static const int LAY[]={1,10,8,0,2,3,4,5,6,7,28,26,27,24,25}; long lbytes=0;
+        for(unsigned k=0;k<sizeof LAY/sizeof LAY[0];k++){ int w=0,h=0; uint8_t*lp=load_shape(dir,"INTRO_2.SHP",LAY[k],&w,&h);
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(lp&&w>0){ fwrite(lp,1,(size_t)w*h,fe); lbytes+=(long)w*h; } free(lp); }
+        printf("storm window: pal2 + %d bolts + %d strikes + 15 animation layers (%ld bytes)\n", nbolt, nstk, lbytes); }
+      FE_SEC(FES_STONES);
       /* STONES obsidian-pickup assets (INTRO_3.SHP, palette 3 — nuvie stones_sequence): the hand
        * (img 1) rises into the circle to grab the obsidian stone (img 3); afterwards the stone is
        * gone (bg img 5). The engine animates the hand rising over the stones bg. Layout:
@@ -2078,7 +2090,13 @@ int main(int argc, char **argv)
         be16(fe,(unsigned)ow); be16(fe,(unsigned)oh); if(obs&&ow>0) fwrite(obs,1,(size_t)ow*oh,fe); free(obs);
         int bw=0,bh=0; uint8_t*bg5=load_shape(dir,"INTRO_3.SHP",5,&bw,&bh);
         be16(fe,(unsigned)bw); be16(fe,(unsigned)bh); if(bg5&&bw>0) fwrite(bg5,1,(size_t)bw*bh,fe); free(bg5);
-        printf("stones pickup: hand %dx%d + obsidian %dx%d + bg5 %dx%d\n", hw,hh, ow,oh, bw,bh); }
+        /* + the "clutch the stone" hand (img 6, 114x134): after the gate rises the hand lifts the
+         * obsidian to the eye (x 0x9b, y 0xc7 -> 0x44) while the whole scene scrolls up 65 px
+         * (nuvie stones_sequence @911-955); appended [u16 w][u16 h][pix]. */
+        int cw=0,chh=0; uint8_t*clutch=load_shape(dir,"INTRO_3.SHP",6,&cw,&chh);
+        be16(fe,(unsigned)cw); be16(fe,(unsigned)chh); if(clutch&&cw>0) fwrite(clutch,1,(size_t)cw*chh,fe); free(clutch);
+        printf("stones pickup: hand %dx%d + obsidian %dx%d + bg5 %dx%d + clutch hand %dx%d\n", hw,hh, ow,oh, bw,bh, cw,chh); }
+      FE_SEC(FES_AVATAR);
       /* AVATAR-into-gate climax (INTRO_3.SHP frames 7..26 — nuvie stones_sequence tail): the Avatar
        * walks up into the risen moongate and dissolves. The source shapes are full 320x200 canvases
        * that are ~empty (uncovered = transparent) except for the small figure, so each is CROPPED to
@@ -2098,6 +2116,7 @@ int main(int argc, char **argv)
                                 else { uint8_t z=U6SHAPE_TRANSPARENT; fwrite(&z,1,1,fe); }
           tot+=(long)cw*ch; free(ap); }
         printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(fe)-apre); } }
+      FE_SEC(FES_GARG);
       /* GARGOYLE-SACRIFICE opening (§1B, docs/design/chargen_authentic.md §1B.1): the RAW 13-shape
        * INTRO.SHP table + PALETTES.INT 7 + the two extra BLOCKS.SHP scrolls (0 small / 1 short;
        * shape 2 already ships as the shared narration scroll). The engine composites the animated
@@ -2124,6 +2143,7 @@ int main(int argc, char **argv)
           free(sc); }
         printf("gargoyle scene: pal7 + %d/%d raw INTRO.SHP shapes + blocks 0/1 (%ld bytes, animated §1B)\n",
                nshipped, GG_NSH, ftell(fe)-gpre); } }
+      FE_SEC(FES_VELLUM);
       /* CHARGEN VELLUM screens (nuvie create_character; chargen_authentic.md §3a-3c): VELLUM1.SHP
        * shape 0 = the 284x118 parchment drawn at (16,80) under the title logo, + the four button
        * LABELS of the portrait screen: 3 Sex (58x16 @94,112), 18 Portrait (90x16 @62,129),
@@ -2143,6 +2163,7 @@ int main(int argc, char **argv)
         for(int k=0;k<5;k++){ be16(fe,(unsigned)vw[k]); be16(fe,(unsigned)vh[k]);
           if(vp[k]&&vw[k]>0&&vh[k]>0) fwrite(vp[k],1,(size_t)vw[k]*vh[k],fe); free(vp[k]); }
         printf("chargen vellum: VELLUM1.SHP parchment %dx%d + 4 button labels\n", vw[0], vh[0]); }
+      FE_SEC(FES_FSET);
       /* FRONT-END FONT: U6.SET (docs/formats/fonts.md "U6.SET"), the proportional font nuvie's
        * cutscene/chargen text uses (image_print) — a DIFFERENT typeface from the 8x8 U6.CH (60 of 94
        * printable glyphs differ) with per-glyph widths (1 leading blank column, 0 trailing; space=4).
@@ -2162,8 +2183,35 @@ int main(int argc, char **argv)
             free(sd); } }
         free(sraw);
         if(!ok){ fputc(0,fe); printf("front-end font: U6.SET missing/undecodable -> engine falls back to U6.CH\n"); } }
+      FE_SEC(FES_LOGOS);
+      /* BOOT LOGOS (nuvie play(): INTRO_1.SHP 0x45 "ORIGIN Presents", 0x46 "A Lord British Production",
+       * each faded in/out under PALETTES.INT 0 before the summoning story). Full-screen but mostly
+       * black, so shipped run-length coded: [768 pal0] + 2 x [u16 w][u16 h][u32 rlelen][rle: (u8 run
+       * 1..255, u8 value)*] over the 320x200 canvas (uncovered = black; the logo shapes use no 255). */
+      { uint8_t p0[768]; if(!load_intpal(dir,0,p0)) memset(p0,0,sizeof p0);
+        fwrite(p0,1,768,fe);
+        static const int LOGO[2]={0x45,0x46};
+        for(int k=0;k<2;k++){ int w=0,h=0; uint8_t *lp=load_shape(dir,"INTRO_1.SHP",LOGO[k],&w,&h);
+          if(!lp||w<=0||h<=0){ be16(fe,0); be16(fe,0); be32(fe,0); free(lp); continue; }
+          static uint8_t rle[320*200*2]; long n=0; long tot=(long)w*h;
+          for(long i=0;i<tot;){ uint8_t v=lp[i]; if(v==U6SHAPE_TRANSPARENT) v=0; long r=1;
+            while(i+r<tot && r<255){ uint8_t u=lp[i+r]; if(u==U6SHAPE_TRANSPARENT) u=0; if(u!=v) break; r++; }
+            rle[n++]=(uint8_t)r; rle[n++]=v; i+=r; }
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); be32(fe,(uint32_t)n); fwrite(rle,1,(size_t)n,fe);
+          printf("boot logo %d: INTRO_1.SHP %d %dx%d -> %ld RLE bytes\n", k, LOGO[k], w, h, n); free(lp); } }
     }   /* end front-end/intro art block */
-    if(fe!=f) fclose(fe);   /* slim: close the separate U6FE.PAK */
+    if(fe!=f){                                    /* close the section directory + the file */
+        { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; }
+        fseek(fe, fe_dir_pos, SEEK_SET); fputc(FES_N,fe);
+        for(int i=0;i<FES_N;i++){ fputc(i,fe); be32(fe,(unsigned long)fe_sec_off[i]); be32(fe,(unsigned long)fe_sec_len[i]); }
+        fseek(fe, 0, SEEK_END);
+        long biggest=0; for(int i=0;i<FES_N;i++) if(fe_sec_len[i]>biggest) biggest=fe_sec_len[i];
+        long g_common=0,g_intro=0,g_cg=0;
+        for(int i=0;i<FES_N;i++){ if(FEG_COMMON&(1u<<i)) g_common+=fe_sec_len[i]; if(FEG_INTRO&(1u<<i)) g_intro+=fe_sec_len[i]; if(FEG_CHARGEN&(1u<<i)) g_cg+=fe_sec_len[i]; }
+        printf("U6FE.PAK: %ld KB total; groups common %ld KB / intro %ld KB / chargen %ld KB; largest section %ld KB\n",
+               ftell(fe)/1024, g_common/1024, g_intro/1024, g_cg/1024, biggest/1024);
+        fclose(fe); }
+    #undef FE_SEC
 
     long o_lowcolor = ftell(f);   /* footprint: front-end/intro art ends here, low-colour starts */
     printf("footprint: core+gameplay %ld KB | front-end/intro art %ld KB (U6WU..U6WV)\n",

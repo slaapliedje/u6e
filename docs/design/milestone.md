@@ -1555,6 +1555,21 @@ Reported by the user; each item traced + fixed under Hatari the same day, pendin
   (60/94 glyphs differ, other advances) — so mkworld now ships U6.SET decoded and every
   front-end string (narration, questions, chargen) renders in the true font (fonts.md).
 
+### Runs #3 / #4 and the memory-fit rework (2026-08-16)
+- Runs #3/#4 (same card, DFB1X): MIDI OUT works (GM mode via F1; MIDITEST.PRG); the DMA music
+  "grind" was a per-frame Fseek/Fread pump → 4 KB sector-aligned chunks; forest black band =
+  ground/trees layer order; gargoyle pace + doorway pan now wall-clock stepped; ORIGIN + Lord
+  British logo screens; storm rain/clouds/lightning layers; TV program interpreter + finger; gypsy
+  pour glitch; moongate shake + the clutch-the-stone beat. All in the front-end docs.
+- **Target baseline set by the user: STOCK TT/Falcon (no Fast RAM), quantised ST second, Amiga
+  ECS/AGA next — never tune for the DFB1X; take extra RAM when present.** Measured on Hatari
+  `--machine falcon --memsize 4 --ttram 0`: pool 2050 KB vs a 3535 KB resident set — the game
+  could not open its pack. Fixed by **[memory_streaming.md](memory_streaming.md)**: one data pair
+  (`U6.PAK` core + sectioned `U6FE.PAK` v2) and one binary per CPU class; the boot decides
+  resident-vs-streamed from the free pools (front-end by section GROUP through a scoped chip
+  region; CONVERSE/PORTRAIT indexed + read per talk; static music buffers; eager flip screens).
+  Stock 4 MB Falcon now boots and plays with 634 KB free; big machines keep everything resident.
+
 ## Risk register (review each milestone)
 | Risk | Mitigation | Milestone |
 |------|------------|-----------|

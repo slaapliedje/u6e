@@ -23,4 +23,8 @@ int u6shape_count(const uint8_t *d, int32_t len);
 int u6shape_decode(const uint8_t *d, int32_t len, int idx,
                    int *w, int *h, uint8_t *out, int32_t outcap);
 
+/* Hotspot (origin) of shape idx = canvas pixel (leftX, upperY): draw at (x - hx, y - hy).
+ * Returns 1 on success. */
+int u6shape_hotspot(const uint8_t *d, int32_t len, int idx, int *hx, int *hy);
+
 #endif

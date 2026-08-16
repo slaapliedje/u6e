@@ -16,6 +16,18 @@ int u6shape_count(const uint8_t *d, int32_t len)
     return (int)((off0 - 4) / 4);
 }
 
+/* Hotspot (origin) of shape idx = canvas pixel (leftX, upperY) (shapes.md). Most U6 shapes have
+ * (0,0); the intro's lightning bolts/strikes don't (a strike is placed by its ground point). */
+int u6shape_hotspot(const uint8_t *d, int32_t len, int idx, int *hx, int *hy)
+{
+    int n = u6shape_count(d, len);
+    if (idx < 0 || idx >= n) return 0;
+    uint32_t off = le32(d + 4 + idx * 4);
+    if (off + 8 > (uint32_t)len) return 0;
+    *hx = le16(d + off + 2); *hy = le16(d + off + 4);
+    return 1;
+}
+
 int u6shape_decode(const uint8_t *d, int32_t len, int idx,
                    int *w, int *h, uint8_t *out, int32_t outcap)
 {

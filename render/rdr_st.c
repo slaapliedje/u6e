@@ -123,6 +123,11 @@ bool rdr_init(const platform_caps_t *caps)
     g_screen = (uint8_t *)plat_alloc_chip(ST_SCREEN_BYTES);   /* chip RAM, 256-byte aligned */
     if (!g_back || !g_screen) return false;
     g_vis = g_screen;
+    /* Second (flip) screen allocated EAGERLY (not on the first rdr_flip_begin): the front-end streams
+     * into a scoped chip region after rdr_init and frees it LIFO, so a lazy mid-intro allocation would
+     * be freed under us. Optional: without it we stay single-buffered. (memory_streaming.md) */
+    g_screen2 = (uint8_t *)plat_alloc_chip(ST_SCREEN_BYTES);
+    if (g_screen2) for (int32_t i=0;i<ST_SCREEN_BYTES;i++) g_screen2[i]=0;
 
     /* identity-ish default remap + a grey ramp, until rdr_set_lowcolor supplies the real
      * U6WW palette/LUT (so a present before that isn't total garbage). */
@@ -1131,9 +1136,7 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
  * second ST-RAM buffer can't be allocated (stays single-buffered). */
 void rdr_flip_begin(void)
 {
-    if (!g_screen2) { g_screen2 = (uint8_t *)plat_alloc_chip(ST_SCREEN_BYTES);
-                      if (g_screen2) for (int32_t i=0;i<ST_SCREEN_BYTES;i++) g_screen2[i]=0; }
-    if (g_screen2) g_flip = 1;
+    if (g_screen2) g_flip = 1;      /* allocated in rdr_init (never lazily — see there) */
 }
 
 void rdr_flip_end(void)

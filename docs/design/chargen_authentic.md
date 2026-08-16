@@ -428,6 +428,13 @@ Int** (U6 has no class). It is done entirely on-screen; there is no disk step. O
   docs/rules/character_creation.md §"Question data". (They are consistent with the wording:
   the virtue named in the "A)" clause is the A-virtue, the "B)" clause names the B-virtue.)
 
+
+> Pour choreography fix (2026-08-16, real-Falcon report "a couple of frames with the bottle back in
+> her hand after she sets it down"): nuvie's `gypsy_vial_anim` runs idx 0..16 where idx 16 matches no
+> pose branch — the set-down pose (idx 15) simply holds one more beat. Ours let idx 16 fall into the
+> 7..9 (pouring) branch, so on a vial at level ≤ 1 (2nd/3rd pour of a virtue) the hand jumped back
+> over the jar for a beat before the glass reappeared. Now idx 16 changes nothing.
+
 ### 3g. The flask, the sleep, the awakening (chargen outro)
 After the 7th answer the A/B buttons vanish and the closing passage plays. Text verbatim from
 U.EXE (`%s` = the player's name):

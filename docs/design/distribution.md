@@ -13,24 +13,27 @@ Make targets: `st-disks`, `st-disks-falcon`, `st-disks-st`, `st-disks-tt`.
 ## Why an installer (and disk-spanning)
 The game loads its data by bare filename via GEMDOS `Fopen` (opcode 0x3D), so
 the packs must sit **in the same folder as the `.PRG`** on the target drive. The
-full 256-colour `U6.PAK` is ~2.4 MB — **bigger than a 1.44 MB floppy** — so a
+front-end pack `U6FE.PAK` is ~1.8 MB — **bigger than a 1.44 MB floppy** — so a
 single file cannot live on one disk. The builder therefore:
 
 1. splits oversized packs into cluster-aligned parts that each fit a floppy, and
 2. ships `INSTALL.TOS`, which **reassembles** the parts (and copies the whole
    files) onto a hard-drive/CF folder, prompting for disk swaps.
 
-The ST/TT slim packs (`U6ST.PAK`/`U6TT.PAK` ~1.08 MB, streamed `U6FE.PAK`
-~1.40 MB) each fit one floppy, but they are packed and reassembled by the same
-generic mechanism.
+Every target ships the SAME data pair — `U6.PAK` (the gameplay core, ~1.08 MB,
+fits one floppy) + `U6FE.PAK` (the sectioned front-end art, split across disks);
+the engine keeps the front-end resident or streams it by section group depending
+on the machine's RAM ([memory_streaming.md](memory_streaming.md)). (The old
+`U6ST.PAK`/`U6TT.PAK` "slim" packs were byte-identical to today's `U6.PAK`.)
 
 ## What goes in a distribution (U6)
 Per target, the installed folder ends up with:
 - the engine `.PRG` — `GAMEF.PRG` (Falcon) / `GAMEST.PRG` (ST) / `GAMETT.PRG` (TT)
-- the pack(s) — `U6.PAK` (Falcon) or `U6ST.PAK`+`U6FE.PAK` / `U6TT.PAK`+`U6FE.PAK`
+- the packs — `U6.PAK` + `U6FE.PAK` (identical for Falcon / ST / TT)
 - `CONVERSE.A`, `CONVERSE.B`, `PORTRAIT.A`, `PORTRAIT.B` — NPC dialogue + faces,
-  which the engine loads as **separate files** (see `gamedemo.c`, kept out of the
-  pack so they land in ST-RAM); copied verbatim from your `refdata`.
+  which the engine loads as **separate files** (see `gamedemo.c`; resident when
+  RAM allows, otherwise read entry-by-entry on demand); copied verbatim from
+  your `refdata`.
 - `MENU.REQ` (1 byte) — presence tells the engine to boot to the U6 **title /
   main menu** (Introduction / Create a Character / Journey Onward) instead of
   dropping straight into gameplay. This is the authentic interactive boot.

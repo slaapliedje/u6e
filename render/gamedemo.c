@@ -19,6 +19,7 @@
 #include "converse_vm.h"
 #include "u6actor.h"
 #include "u6lzw.h"
+#include "fepack.h"           /* U6FE.PAK section ids + header layout (front-end streaming) */
 #include "objects.h"
 #include <string.h>            /* memcpy/memmove for the incremental map-scroll buffer */
 #include "save.h"
@@ -153,8 +154,19 @@ static int32_t        g_savetmpl_len;         /* template byte length           
 static int32_t        g_objlist_off;          /* objlist offset within the template (-1 = none) */
 
 /* runtime-loaded conversation + portrait libraries (4-byte LE offset tables) */
-static const uint8_t *g_convA,*g_convB,*g_portA,*g_portB;
-static int32_t        g_convAlen,g_convBlen,g_portAlen,g_portBlen;
+/* CONVERSE.A/.B + PORTRAIT.A/.B: 4-byte-offset libraries (docs/formats/library.md), either RESIDENT
+ * (whole file in the pool, big-RAM machines) or ON DEMAND (only the offset index in RAM; an entry is
+ * read into a bounce buffer when a conversation/portrait needs it — 4 MB machines). Decided at boot
+ * from the free pool (memory_streaming.md). Entries are tiny (largest 4.3 KB) so on-demand costs one
+ * Fopen/Fseek/Fread per talk. */
+#define LIB_MAXENT 160                     /* CONVERSE.B has 125 entries; PORTRAIT.A 98 */
+#define LIB_BOUNCE 8192                    /* >= the largest U6 entry (4.3 KB) */
+typedef struct { const char *name; const uint8_t *data; int32_t len; int count; int32_t maxent; uint8_t idx[LIB_MAXENT*4]; } lib_t;
+enum { LIB_CONVA=0, LIB_CONVB, LIB_PORTA, LIB_PORTB, LIB_N };
+static lib_t   g_lib[LIB_N] = {{"CONVERSE.A"},{"CONVERSE.B"},{"PORTRAIT.A"},{"PORTRAIT.B"}};
+static uint8_t g_lib_bounce[LIB_BOUNCE];
+static int     g_libs_resident;            /* 1 = all four libraries resident, 0 = on demand */
+static int     g_libs_ok;                  /* all four opened (resident or indexed) */
 static int            g_countA;            /* CONVERSE.A entry count (NPC split)  */
 static int            g_talking;           /* 1 = a conversation is on screen     */
 static int            g_have_pc;           /* 1 = g_cur_portrait holds a portrait  */
@@ -263,17 +275,25 @@ static const uint8_t *g_menu_lc;   /* per-scene ST 16 + 256->16 LUT for the titl
 static struct { const uint8_t *pix, *fg, *pal, *lc; int w, h, type; } g_intro[INTRO_MAX];
 static int g_nintro;
 static const uint8_t *g_scroll; static int g_scroll_w, g_scroll_h;  /* narration parchment (BLOCKS.SHP) */
-static const uint8_t *g_tv_base, *g_tv_mouth[4];                    /* living-room TV anchor + mouth frames */
-static int g_tv_bw,g_tv_bh,g_tv_bx,g_tv_by, g_tv_mw,g_tv_mh,g_tv_mx,g_tv_my, g_tv_nmouth, g_tv_frame;
-static const uint8_t *g_tv_chan[2][2]; static int g_tv_nchan, g_tv_fpc;  /* TV alt-channels (57x37 program frames) for the channel cycler */
+/* living-room TV (nuvie display_tv program interpreter, intro_sequence.md §1): sprite set INTRO_1 16..68
+ * (image 0..52) placed by per-image offsets in the 57x37 screen at (g_tv_bx,g_tv_by); the finger on
+ * the remote (shape 14) shows only during static. */
+#define TV_NIMG 53
+#define TV_W 57
+#define TV_H 37
+static const uint8_t *g_tvi[TV_NIMG]; static int g_tvi_w[TV_NIMG], g_tvi_h[TV_NIMG], g_tv_nimg;
+static int g_tv_bx, g_tv_by;
+static const uint8_t *g_finger; static int g_fing_w, g_fing_h, g_fing_x, g_fing_y;
 static const uint8_t *g_digit[11]; static int g_dig_w[11], g_dig_h[11], g_clk_x, g_clk_y, g_ndigit;  /* LED clock */
-static const uint8_t *g_gate, *g_cover; static int g_gw,g_gh,g_gx, g_cvw,g_cvh,g_cvx,g_cvy, g_gate_y;  /* moongate rise */
+static const uint8_t *g_gate, *g_cover; static int g_gw,g_gh,g_gx, g_cvw,g_cvh,g_cvx,g_cvy, g_gate_y, g_gate_jx;  /* moongate rise (+x jitter for the shake) */
 #define GATE_CLIP_Y 0x66   /* nuvie stones_sequence: the moon_gate sprite is clipped to rows 0..0x65 — it is only ever
                             * seen ABOVE the ground line, which is what makes it "ascend from the earth"; the ground
                             * cover strip (shape 4 @ 0x5e,0x66) then redraws the band the gate's foot would cross. */
 static const uint8_t *g_cc_port[12]; static int g_cc_pw, g_cc_ph, g_cc_nport;  /* MONTAGE.SHP 0..11: chargen portraits (6 female @0..5, 6 male @6..11) */
+static uint8_t g_cc_face[56*64]; static int g_cc_face_ok;   /* the CHOSEN face, copied out of the front-end art (which may be freed before play) */
 static const uint8_t *g_vel[5]; static int g_vel_w[5], g_vel_h[5], g_vel_n; static const uint8_t *g_vel_lc;  /* VELLUM1: 0 parchment, 1 Sex, 2 Portrait, 3 Continue, 4 Exit */
 static const uint8_t *g_fset;                /* U6.SET front-end font: [256 w][256*8 u16 rows]; NULL -> U6.CH trimmed */
+static const uint8_t *g_logo_pal, *g_logo_rle[2]; static int g_logo_w[2], g_logo_h[2]; static int32_t g_logo_n[2];   /* boot logos (RLE) */
 static const char *g_cc_qtext[28]; static int g_cc_qlen[28], g_cc_nq;          /* gypsy question prose, extracted from U.EXE into the pack (canonical order; NOT NUL-terminated) */
 /* CHARGEN CEREMONY TEXT (extracted from U.EXE into the pack; NOT NUL-terminated; %s = player name).
  * When a section is empty the engine falls back to its committed PARAPHRASE (clean-room: real text
@@ -310,15 +330,18 @@ static uint8_t g_jarbub[96*96]; static int g_jarbub_w, g_jarbub_h, g_jarbub_lvl=
 static rng_t g_bubrng;                                    /* dedicated RNG for the bubble speckle */
 static const uint8_t *g_woods, *g_woods_pal;  static int g_woods_w, g_woods_h;  /* forest-path lead-in panorama (PALETTES.INT 4) */
 /* storm-window intro scene (INTRO_2.SHP, PALETTES.INT 2): baked window scene + lightning frames */
-static const uint8_t *g_storm_pal, *g_storm_base; static int g_storm_w, g_storm_h;
-static const uint8_t *g_storm_bolt[8]; static int g_storm_boltw[8], g_storm_bolth[8], g_storm_nbolt;
-static const uint8_t *g_storm_str[5]; static int g_storm_strw[5], g_storm_strh[5], g_storm_nstr, g_storm_sx, g_storm_sy;
+static const uint8_t *g_storm_pal;
+static const uint8_t *g_storm_bolt[8]; static int g_storm_boltw[8], g_storm_bolth[8], g_storm_bolthx[8], g_storm_bolthy[8], g_storm_nbolt;
+static const uint8_t *g_storm_str[5]; static int g_storm_strw[5], g_storm_strh[5], g_storm_strhx[5], g_storm_strhy[5], g_storm_nstr, g_storm_sx, g_storm_sy;
 /* per-scene ST 16 + 256->16 LUT for the chargen lead-in scenes (after each scene's 6-bit palette). */
 static const uint8_t *g_gyp_lc, *g_woods_lc, *g_storm_lc;
-static const uint8_t *g_forest_base, *g_win_ov; static int g_forest_w, g_forest_h, g_win_ow, g_win_oh;  /* forest reveal: frameless storm bg + window overlay that slides off */
-static const uint8_t *g_door_l, *g_door_r; static int g_door_lw, g_door_lh, g_door_rw, g_door_rh;      /* doorway leaves (INTRO_2 24/25) that trail the frame + slide apart */
+/* storm animation layers (INTRO_2.SHP raw, 255 = transparent), nuvie's draw order: see storm_compose */
+enum { SWL_SKY, SWL_GROUND, SWL_TREES, SWL_CLOUD, SWL_CLOUD2, SWL_CLOUD3, SWL_RAIN0, SWL_RAIN1, SWL_RAIN2, SWL_RAIN3,
+       SWL_FRAME, SWL_GLASS, SWL_GLASSF, SWL_DOORL, SWL_DOORR, SWL_N };
+static const uint8_t *g_swl[SWL_N]; static int g_swl_w[SWL_N], g_swl_h[SWL_N];
 /* stones obsidian-pickup (INTRO_3.SHP): the hand rises to grab the obsidian; bg5 = stone gone */
 static const uint8_t *g_stn_hand, *g_stn_obs, *g_stn_bg5; static int g_stn_hw,g_stn_hh, g_stn_ow,g_stn_oh, g_stn_b5w,g_stn_b5h;
+static const uint8_t *g_stn_clutch; static int g_stn_cw, g_stn_ch;   /* the hand lifting the stone to the eye (INTRO_3 6) */
 static const uint8_t *g_av_frame[20]; static int g_av_w[20], g_av_h[20], g_av_ox[20], g_av_oy[20], g_av_n;   /* Avatar-into-gate walk frames (INTRO_3 7..26), each cropped to its bbox + (ox,oy) offset */
 /* §1B gargoyle-sacrifice scene (chargen_authentic.md §1B.1): raw INTRO.SHP shape table +
  * PALETTES.INT 7 (+ per-scene ST 16) + the small/short BLOCKS.SHP scrolls (0/1). */
@@ -374,9 +397,12 @@ static const uint8_t *g_lcx_pal4;           /* 2 bands x 48, STE 4-bit (into the
 static const uint8_t *g_convpal4;           /* nconvpal x 48, STE 4-bit (into the pak)               */
 /* pick the palette to hand the backend for the current hardware: 4-bit STE array when g_is_ste. */
 #define LCPAL(p3,p4)  (g_is_ste ? (p4) : (p3))
-/* front-end base 16+LUT (the game palette carried in U6FE) — restored between cutscene scenes on ST.
- * Points into the streamed U6FE, valid only during the front-end phase (freed after). */
+/* front-end base 16+LUT (the game palette carried in the U6FE.PAK header) — restored between cutscene
+ * scenes on ST. Points into the static header copy (g_fe_hdr), so it stays valid. */
 static const uint8_t *g_fe_base_lc;
+/* front-end pack section groups (defined with the loader, below): stream a group in / release it */
+static int  fe_group_load(uint32_t mask, int depth);
+static void fe_group_free(int depth);
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
@@ -436,6 +462,40 @@ static const uint8_t* lib_entry(const uint8_t*f,int32_t flen,int idx,int32_t*out
     for(int j=idx+1;j<count;j++){ int32_t o=(int32_t)rd4(f+j*4); if(o){e=o;break;} }
     if(e>flen) e=flen;
     *outlen=e-s; return f+s;
+}
+/* Open a library RESIDENT (whole file into the chip pool) or INDEXED (offset table only, entries read
+ * on demand). Returns 1 on success. A resident request that does not fit falls back to indexed. */
+static int lib_open(lib_t *L, int resident)
+{
+    L->data=0; L->len=0; L->count=0; L->maxent=0;
+    if(resident){ int32_t n=0; const uint8_t *d=(const uint8_t*)plat_load_file(L->name,0,&n);
+        if(d && n>4){ L->data=d; L->len=n; L->count=lib_count(d,n); if(L->count>LIB_MAXENT) L->count=LIB_MAXENT;
+                      memcpy(L->idx,d,(size_t)L->count*4); return 1; } }
+    /* indexed: the offset table is the first count*4 bytes (count = first nonzero offset / 4) */
+    int32_t fsz=plat_fsize_path(L->name); if(fsz<=4) return 0;
+    plat_file f=plat_fopen(L->name,PLAT_RDONLY); if(f==PLAT_BADFILE) return 0;
+    int32_t hn = fsz < (int32_t)sizeof L->idx ? fsz : (int32_t)sizeof L->idx;
+    int32_t got=plat_fread(f,L->idx,hn); plat_fclose(f);
+    if(got!=hn) return 0;
+    L->len=fsz; L->count=lib_count(L->idx,hn); if(L->count>LIB_MAXENT) L->count=LIB_MAXENT;
+    for(int k=0;k<L->count;k++){ int32_t st=(int32_t)rd4(L->idx+k*4); if(st<=0||st>=fsz) continue;
+        int32_t e=fsz; for(int j=k+1;j<L->count;j++){ int32_t o=(int32_t)rd4(L->idx+j*4); if(o){e=o;break;} }
+        if(e-st>L->maxent) L->maxent=e-st; }
+    return L->count>0;
+}
+/* Entry idx of library L: a pointer into the resident image, or into the bounce buffer after an
+ * on-demand read (valid until the next lib_get). NULL if absent / too big for the bounce. */
+static const uint8_t* lib_get(lib_t *L, int idx, int32_t *outlen)
+{
+    if(L->data) return lib_entry(L->data,L->len,idx,outlen);
+    if(idx<0||idx>=L->count||L->len<=0) return 0;
+    int32_t st=(int32_t)rd4(L->idx+idx*4); if(st<=0||st>=L->len) return 0;
+    int32_t e=L->len; for(int j=idx+1;j<L->count;j++){ int32_t o=(int32_t)rd4(L->idx+j*4); if(o){e=o;break;} }
+    int32_t n=e-st; if(n<=0||n>LIB_BOUNCE) return 0;
+    plat_file f=plat_fopen(L->name,PLAT_RDONLY); if(f==PLAT_BADFILE) return 0;
+    int32_t got=plat_read_at(f,st,g_lib_bounce,n); plat_fclose(f);
+    if(got!=n) return 0;
+    *outlen=n; return g_lib_bounce;
 }
 
 /* clock -> game minutes-of-day / hour (1 clock unit == 1 game minute) */
@@ -541,6 +601,13 @@ static void blit_opaque(const uint8_t*pix,int iw,int ih,int dx,int dy)
 { for(int y=0;y<ih;y++){ int py=dy+y; if((unsigned)py>=(unsigned)LH) continue;
     const uint8_t*s=pix+(int32_t)y*iw; uint8_t*d=ROW(py);
     for(int x=0;x<iw;x++){ int px=dx+x; if((unsigned)px>=(unsigned)LW) continue; d[px]=s[x]; } } }
+/* opaque blit clipped to [cx0,cx1)x[cy0,cy1): row memcpy of the visible span (fast path for the
+ * 100%-covered layers — sky, ground — when only part of the scene is being recomposed) */
+static void blit_opaque_clip(const uint8_t*pix,int iw,int ih,int dx,int dy,int cx0,int cy0,int cx1,int cy1)
+{ if(cx0<0)cx0=0; if(cy0<0)cy0=0; if(cx1>LW)cx1=LW; if(cy1>LH)cy1=LH;
+  int x0=dx>cx0?dx:cx0, x1=(dx+iw<cx1)?dx+iw:cx1; if(x1<=x0) return;
+  int y0=dy>cy0?dy:cy0, y1=(dy+ih<cy1)?dy+ih:cy1;
+  for(int y=y0;y<y1;y++) memcpy(ROW(y)+x0, pix+(int32_t)(y-dy)*iw+(x0-dx), (size_t)(x1-x0)); }
 
 /* Intro narration PAGES (nuvie intro.lua): each scene holds 1-2 pages; an input (space/click)
  * advances a page while the scene animates. These are OUR paraphrases matching the original's
@@ -617,28 +684,82 @@ static int g_hold_part = IF_FULL;
 /* TV channel cycler (nuvie tv-program loop): the living-room TV flips between the news anchor
  * (channel 0 = base + talking mouth), the shipped alt-channels, and generated static ("changing
  * channels"). Time-based off the 200Hz clock, so it's loop-rate independent. */
-#define TV_SHOW   360                    /* ticks a channel plays (~1.8 s) */
-#define TV_STATIC  70                    /* ticks of static between channels (~0.35 s) */
-#define TV_UNIT   (TV_SHOW+TV_STATIC)
-static void tv_state(uint32_t now, int *st, int *chan, int *fr)   /* *st=1 => static; else channel+frame */
+/* ---- TV PROGRAM INTERPRETER (nuvie display_tv; spec + tables: intro_sequence.md §1) ----
+ * One step per 50 ms: run the current program's bytecode until an end-of-step op, collecting up
+ * to 5 sprites (image, x, y) or "static". Programs play 3,4,5,6,7,1,2,... (interpreter starts on
+ * program 3). Ops: <0x80 draw image; 80 n loop start; 81 loop end (repeat while count>0), ends
+ * step; 82 static + finger, ends step; 83 endless road (two scrolling stripes 0x22 + 0x21); 84 n
+ * a1..an random pick; 86 news image; 87 pick news image; 88 pledge (every 4th step, 37/38 alternate
+ * every 16); 89 random 50..52; 8A end step; 8B rotate palette 224..228. */
+static const uint8_t TVP1[]={0x82,0x82,0x80,0x03,0x02,0x8A,0x02,0x8A,0x01,0x8A,0x01,0x8A,0x00,0x8A,0x00,0x8A,0x01,0x8A,0x01,0x81};
+static const uint8_t TVP2[]={0x82,0x82,0x80,0x28,0x03,0x8B,0x81};
+static const uint8_t TVP3[]={0x82,0x82,0x80,0x04,0x04,0x81,0x80,0x04,0x08,0x81,0x80,0x04,0x09,0x81,0x80,0x04,0x0A,0x81,0x80,0x04,0x0B,0x81,0x80,0x04,0x0C,0x81};
+static const uint8_t TVP4[]={0x82,0x82,0x87,0x80,0x46,0x0F,0x86,0x84,0x09,0x10,0x10,0x10,0x11,0x11,0x11,0x12,0x12,0x12,0x81};
+static const uint8_t TVP5[]={0x82,0x82,0x80,0x32,0x83,0x81};
+static const uint8_t TVP6[]={0x82,0x82,0x80,0x05,0x27,0x8A,0x28,0x8A,0x29,0x81,0x80,0x06,0x2A,0x8A,0x2A,0x8A,0x2B,0x8A,0x2B,0x8A,0x2C,0x8A,0x2C,0x8A,0x2D,0x8A,0x2D,0x81,
+                             0x80,0x0A,0x2E,0x8A,0x2F,0x8A,0x30,0x8A,0x84,0x09,0x2E,0x2E,0x2E,0x2F,0x2F,0x2F,0x30,0x30,0x30,0x8A,0x2E,0x8A,0x2F,0x8A,0x30,0x81};
+static const uint8_t TVP7[]={0x82,0x82,0x80,0x55,0x16,0x17,0x84,0x0C,0x13,0x13,0x13,0x13,0x14,0x14,0x14,0x14,0x15,0x15,0x15,0x15,0x88,0x81,
+                             0x80,0x0F,0x16,0x84,0x02,0x1A,0x1B,0x89,0x88,0x81,0x80,0x03,0x16,0x1A,0x89,0x88,0x81,0x80,0x03,0x16,0x1C,0x88,0x81,
+                             0x80,0x03,0x16,0x1D,0x88,0x81,0x80,0x03,0x16,0x1E,0x88,0x81,0x80,0x03,0x16,0x23,0x88,0x81,0x80,0x03,0x16,0x24,0x88,0x81,
+                             0x80,0x32,0x16,0x88,0x81};
+static const uint8_t *const TVP[7]={TVP1,TVP2,TVP3,TVP4,TVP5,TVP6,TVP7};
+static const int TVP_LEN[7]={(int)sizeof TVP1,(int)sizeof TVP2,(int)sizeof TVP3,(int)sizeof TVP4,(int)sizeof TVP5,(int)sizeof TVP6,(int)sizeof TVP7};
+static const uint8_t TV_XOFF[55]={0,0,0,0,0,0x1F,0x1F,0x1F,0,0,0,0,0,0x1F,0x1F,0,9,9,9,0x0C,0x0C,0x0C,0,4,0x1F,0x1F,4,0,4,4,4,0x1F,0x1F,0,0,6,6,8,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+static uint8_t       TV_YOFF[55]={0,0,0,0,0,2,2,2,0,0,0,0,0,2,2,0,7,7,7,3,3,3,0,2,2,2,0,0,0,0,1,2,2,0,0,3,8,0x1D,0x1C,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+static const uint8_t TV_NEWS[9]={5,6,7,0x0D,0x0E,0x18,0x19,0x1F,0x20};
+static struct { int prog,pos,loop_pos,loop_cnt,news,pledge_ctr,pledge_img,road;
+                int nspr; struct { int img,x,y; } spr[5]; int stat; int palrot; } g_tvs;
+static rng_t g_tv_rng;
+static void tv_reset(void){ rng_seed(&g_tv_rng, 0x5107u ^ plat_ticks_200hz());
+    g_tvs.prog=2; g_tvs.pos=0; g_tvs.loop_pos=0; g_tvs.loop_cnt=0; g_tvs.news=0; g_tvs.pledge_ctr=0; g_tvs.pledge_img=37; g_tvs.road=0xe;
+    g_tvs.nspr=0; g_tvs.stat=0; g_tvs.palrot=0; }
+static int tv_rand(int lo,int hi){ return lo+(int)rng_range(&g_tv_rng,(uint32_t)(hi-lo+1)); }
+static void tv_spr(int img){ if(g_tvs.nspr<5){ g_tvs.spr[g_tvs.nspr].img=img; g_tvs.spr[g_tvs.nspr].x=img<55?TV_XOFF[img]:0; g_tvs.spr[g_tvs.nspr].y=img<55?TV_YOFF[img]:0; g_tvs.nspr++; } }
+static void tv_step(void)
 {
-    int ntot = 1 + g_tv_nchan;                                    /* anchor + alt-channels */
-    uint32_t p = now % ((uint32_t)ntot*TV_UNIT);
-    int slot = (int)(p / TV_UNIT);
-    if((int)(p % TV_UNIT) >= TV_SHOW){ *st=1; *chan=0; *fr=0; return; }
-    *st=0; *chan=slot;
-    if(slot==0) *fr = g_tv_nmouth ? (int)((now/28)%g_tv_nmouth) : 0;   /* anchor mouth ~7fps */
-    else        *fr = g_tv_fpc    ? (int)((now/24)%g_tv_fpc)    : 0;   /* program frames ~8fps */
+    g_tvs.nspr=0; g_tvs.stat=0;
+    for(int guard=0; guard<64; guard++){
+        const uint8_t *P=TVP[g_tvs.prog]; int L=TVP_LEN[g_tvs.prog];
+        int item = (g_tvs.pos<L) ? P[g_tvs.pos] : 0x8A;
+        int done=0;
+        if(item<0x80) tv_spr(item);
+        else if(item==0x82){ g_tvs.stat=1; done=1; }
+        else if(item==0x80){ g_tvs.pos++; g_tvs.loop_cnt=(g_tvs.pos<L)?P[g_tvs.pos]:0; g_tvs.loop_pos=g_tvs.pos; }
+        else if(item==0x81){ if(g_tvs.loop_cnt>0){ g_tvs.pos=g_tvs.loop_pos; g_tvs.loop_cnt--; } done=1; }
+        else if(item==0x83){ if(--g_tvs.road==0) g_tvs.road=0xe;
+            TV_YOFF[0x22]=(uint8_t)(0x15-g_tvs.road); tv_spr(0x22);
+            TV_YOFF[0x22]=(uint8_t)(0x24-g_tvs.road); tv_spr(0x22); tv_spr(0x21); }
+        else if(item==0x84){ int n=(g_tvs.pos+1<L)?P[g_tvs.pos+1]:1; int k=tv_rand(1,n);
+            int pick=(g_tvs.pos+1+k<L)?P[g_tvs.pos+1+k]:0; tv_spr(pick); g_tvs.pos+=1+n; }
+        else if(item==0x86) tv_spr(g_tvs.news);
+        else if(item==0x87) g_tvs.news=TV_NEWS[tv_rand(0,8)];
+        else if(item==0x88){ g_tvs.pledge_ctr++; if(g_tvs.pledge_ctr%4==0) tv_spr(g_tvs.pledge_img);
+            if(g_tvs.pledge_ctr==16){ g_tvs.pledge_img=(g_tvs.pledge_img==37)?38:37; g_tvs.pledge_ctr=0; } }
+        else if(item==0x89) tv_spr(tv_rand(50,52));
+        else if(item==0x8A) done=1;
+        else if(item==0x8B) g_tvs.palrot++;
+        g_tvs.pos++;
+        if(g_tvs.pos>=L){ g_tvs.prog++; g_tvs.pos=0; if(g_tvs.prog>=7) g_tvs.prog=0; }
+        if(done) break;
+    }
 }
-/* fill the TV screen rect with black/white/grey noise (channel static); rng advances per pixel
- * so it shimmers frame to frame. */
-static rng_t g_tv_rng; static int g_tv_rng_ready;
+static void tv_draw(int scroll);   /* fwd */
 static void draw_tv_static(int x,int y,int w,int h)
 {
-    if(!g_tv_rng_ready){ rng_seed(&g_tv_rng, 0x5107u ^ plat_ticks_200hz()); g_tv_rng_ready=1; }
     for(int yy=0;yy<h;yy++){ int py=y+yy; if((unsigned)py>=(unsigned)LH) continue; uint8_t*d=ROW(py);
         for(int xx=0;xx<w;xx++){ int px=x+xx; if((unsigned)px>=(unsigned)LW) continue;
             uint32_t r=rng_range(&g_tv_rng,4); d[px]=(uint8_t)(r==0?15:(r==1?25:0)); } }
+}
+/* draw the current TV step (sprites clipped to the 57x37 screen, or static) + the finger on the
+ * remote during static, at the panorama scroll offset (screen x = base - scroll; the finger rides
+ * the 2x foreground) */
+static void tv_draw(int scroll)
+{
+    int tx=g_tv_bx-scroll, ty=g_tv_by;
+    if(g_tvs.stat) draw_tv_static(tx,ty,TV_W,TV_H);
+    else for(int i=0;i<g_tvs.nspr;i++){ int im=g_tvs.spr[i].img; if(im<0||im>=g_tv_nimg||!g_tvi[im]) continue;
+        blit_indexed_clip(g_tvi[im],g_tvi_w[im],g_tvi_h[im],tx+g_tvs.spr[i].x,ty+g_tvs.spr[i].y,tx,ty,tx+TV_W,ty+TV_H); }
+    if(g_tvs.stat && g_finger) blit_indexed(g_finger,g_fing_w,g_fing_h,g_fing_x-2*scroll,g_fing_y);
 }
 
 /* draw one intro frame at horizontal pan offset `scroll`: type 1 pans the wide panorama
@@ -649,14 +770,7 @@ static void draw_intro_frame(int s,int scroll,int show_cap)
     int bg = (g_hold_part != IF_ANIM), anim = (g_hold_part != IF_BG);   /* layer gates */
     if(g_intro[s].type==1){                                                        /* PAN scene (living room) */
         if(bg) blit_opaque(g_intro[s].pix,g_intro[s].w,g_intro[s].h,-scroll,0);     /* room 1x */
-        if(anim && g_tv_base){                                                     /* TV screen: current channel / static */
-            uint32_t now=plat_ticks_200hz(); int st,chan,fr; tv_state(now,&st,&chan,&fr);
-            int tx=g_tv_bx-scroll, ty=g_tv_by;
-            if(st) draw_tv_static(tx,ty,g_tv_bw,g_tv_bh);                          /* "changing channels" */
-            else if(chan==0){ blit_opaque(g_tv_base,g_tv_bw,g_tv_bh,tx,ty);        /* news anchor + mouth */
-                if(g_tv_mouth[fr]) blit_indexed(g_tv_mouth[fr],g_tv_mw,g_tv_mh,g_tv_mx-scroll,g_tv_my); }
-            else { const uint8_t*cf=g_tv_chan[chan-1][fr];                         /* alt-channel program frame */
-                if(cf) blit_opaque(cf,g_tv_bw,g_tv_bh,tx,ty); } }
+        if(anim && g_tv_nimg>0) tv_draw(scroll);                                  /* TV screen: program sprites / static */
         if(anim && g_ndigit>=11){                                                  /* live LED clock (ticks) */
             int total=4*60+2+(int)(plat_ticks_200hz()/200);                        /* 4:02 (original), +1 min/sec */
             int h12=(total/60)%12; if(h12==0) h12=12; int mm=total%60;
@@ -668,7 +782,7 @@ static void draw_intro_frame(int s,int scroll,int show_cap)
     } else if(g_intro[s].pix){
         blit_opaque(g_intro[s].pix,g_intro[s].w,g_intro[s].h,(LW-g_intro[s].w)/2,(LH-g_intro[s].h)/2);
         if(g_intro[s].type==2 && g_gate){                                  /* moongate rises from the stones */
-            blit_indexed_clip(g_gate,g_gw,g_gh,g_gx,g_gate_y,0,0,LW,GATE_CLIP_Y);   /* only ABOVE the ground line */
+            blit_indexed_clip(g_gate,g_gw,g_gh,g_gx+g_gate_jx,g_gate_y,0,0,LW,GATE_CLIP_Y);   /* only ABOVE the ground line */
             if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy); }    /* ground cover drawn OVER it */
     } else clear_bb(254);
     if(show_cap && bg && s<INTRO_NCAP){
@@ -697,9 +811,14 @@ static void compose_wide(int s, uint8_t*wf)
 {
     int w=g_intro[s].w, h=g_intro[s].h;
     memcpy(wf, g_intro[s].pix, (size_t)w*h);                          /* panorama (opaque) */
-    if(g_tv_base){ blit_buf(wf,w,h,g_tv_base,g_tv_bw,g_tv_bh,g_tv_bx,g_tv_by,0);
-        int mi=g_tv_nmouth?g_tv_frame%g_tv_nmouth:0;
-        if(g_tv_mouth[mi]) blit_buf(wf,w,h,g_tv_mouth[mi],g_tv_mw,g_tv_mh,g_tv_mx,g_tv_my,0); }
+    if(g_tv_nimg>0){                                                       /* the TV's current step (frozen for the pan) */
+        if(g_tvs.stat){ for(int y=0;y<TV_H;y++) for(int x=0;x<TV_W;x++){ uint32_t r=rng_range(&g_tv_rng,4);
+                            if(g_tv_by+y<h && g_tv_bx+x<w) wf[(g_tv_by+y)*w+g_tv_bx+x]=(uint8_t)(r==0?15:(r==1?25:0)); } }
+        else for(int i=0;i<g_tvs.nspr;i++){ int im=g_tvs.spr[i].img; if(im<0||im>=g_tv_nimg||!g_tvi[im]) continue;
+            /* clip to the screen rect by hand (blit_buf has no clip) */
+            for(int y=0;y<g_tvi_h[im];y++){ int py=g_tv_by+g_tvs.spr[i].y+y; if(py<g_tv_by||py>=g_tv_by+TV_H||py>=h) continue;
+                for(int x=0;x<g_tvi_w[im];x++){ int px=g_tv_bx+g_tvs.spr[i].x+x; if(px<g_tv_bx||px>=g_tv_bx+TV_W||px>=w) continue;
+                    uint8_t v=g_tvi[im][y*g_tvi_w[im]+x]; if(v!=FE_TRANSP) wf[py*w+px]=v; } } } }
     if(g_ndigit>=11){ int total=4*60+2+(int)(plat_ticks_200hz()/200);
         int h12=(total/60)%12; if(h12==0)h12=12; int mm=total%60;
         int dg[4]={h12>=10?1:10,h12%10,mm/10,mm%10}; static const int DX[4]={0,4,0xa,0xe};
@@ -770,61 +889,136 @@ static int intro_advance(void)
 #define PAGE_MAXTICKS (10*200)   /* auto-advance a page after ~10s of no input (attract/headless) */
 static void fe_music(const char *base);   /* fwd: front-end music cue (defined with the M10 music manager) */
 
-/* STORM WINDOW scene (nuvie window_sequence, INTRO_2.SHP / PALETTES.INT 2): a curtained window
- * onto a stormy pine forest. Static scene baked; lightning = a bright random bolt over it + a
- * whole-scene palette flash; the big strike appears from page 3. 4 input-advanced pages, then the
- * DOORWAY reveal (below). Called from run_intro between the living room and the stones. Narration
- * = U.EXE pages 3..7. */
+/* STORM WINDOW scene (nuvie window_sequence + display_window, INTRO_2.SHP / PALETTES.INT 2): a
+ * curtained window onto a stormy pine forest, ANIMATED IN LAYERS every 50 ms step (nuvie runs
+ * display_window once per two 25 ms canvas updates):
+ *   sky -> two copies of the big cloud bank (img 0) scrolling right 1 px/step, wrapping at 320,
+ *   + 5 small clouds (imgs 2/3) drifting +2 px/step (re-spawned off the left edge when they leave)
+ *   -> a LIGHTNING bolt (imgs 11-18, random position, jittering 0..3 px, lasting 1..4 steps, one in
+ *   7 chance to start) drawn BEHIND the ground and trees (so it flashes among the treetops)
+ *   -> ground (@76) -> trees -> the big STRIKE (imgs 19-23 @158,114, from the 3rd page, its image
+ *   re-rolled every other step) -> up to 100 RAIN drops (imgs 4-7, +2 x +8 y per step, spawned at
+ *   an accelerating rate, recycled from the top when they leave) -> the window frame (28) -> the
+ *   glass (26, or 27 = white flash for 1..5 steps, 1-in-6 per step or while the strike is up) ->
+ *   the door leaves (24/25) once the pan brings them in -> the caption. Palette entries
+ *   0x58/0x5a/0x5c (the ground highlights) turn bright blue on a flash (1 in 4 while a bolt is up,
+ *   always while the strike is up) — "the lightning lights up the ground". Real-Falcon report
+ *   2026-08-16: our first cut had no clouds/rain, a whole-scene brighten, and the bolt in front of
+ *   the trees. 4 input-advanced pages, then the DOORWAY reveal. Narration = U.EXE pages 3..7. */
 /* Scene LAYOUT state, so one composer serves the window pages, the pan and the doorway:
- *   g_sw_ovx   x of the window overlay (glass+frame): 0 = in place, -320 = panned off left
+ *   g_sw_ovx   x of the window frame+glass: 0 = in place, -320 = panned off left
  *   g_sw_door  door-leaf spread (0 = leaves at the frame edges, >0 = sliding apart), <0 = no leaves
  *   g_sw_cap   caption page (U.EXE 3..7) or -1 for none
  *   g_sw_strk  1 = the big strike is visible (page 3 on, until halfway through the pan) */
 static int g_sw_ovx, g_sw_door=-1, g_sw_cap=-1, g_sw_strk;
 #define DOOR_L_X 320      /* nuvie: door_left  starts at x=320 (trails the frame's right edge)   */
 #define DOOR_R_X 573      /* nuvie: door_right starts at x=573 -> lands at 253 after the 320 pan */
-/* Compose the storm scene LAYERED so lightning sits BEHIND the window (matching nuvie: the strike/
- * flash sprites are drawn before the frame). Frameless forest bg + the big strike (when on) + an
- * optional random flash `bolt`, THEN the window overlay (glass+frame) at g_sw_ovx and the door
- * leaves trailing it (each occludes the lightning), then the caption parchment. bolt=NULL for no
- * flash. Falls back to the baked base (frame in the bg) only if the layered assets are missing. */
-static void storm_compose_ex(const uint8_t *bolt, int bw, int bh, int bx, int by)
+/* animation state (nuvie g_window_tbl) */
+static struct {
+    int cloud_x;                      /* big cloud bank scroll (0..319) */
+    int cl_x[5], cl_y[5], cl_img[5];  /* small clouds (img = SWL_CLOUD2/3) */
+    int lcnt, limg, lx, ly;           /* lightning: steps left, bolt index, base position */
+    int strike_img;                   /* which of the 5 strike images */
+    int flash;                        /* window-glass white flash steps left */
+    int drops, rain_delay;            /* rain spawn ramp */
+    struct { int16_t x, y; int8_t img, vis; } rain[101];
+    int pal_bright;                   /* ground highlights currently lit */
+    int glass_flash;                  /* glass 27 (1) or 26 (0) this step */
+} g_sw;
+static rng_t g_sw_rng;
+static int sw_rand(int lo,int hi){ return lo + (int)rng_range(&g_sw_rng,(uint32_t)(hi-lo+1)); }   /* nuvie math.random(lo,hi) */
+/* compose clip (the whole screen, or just the window panes while only they change) */
+static int g_sw_cx0, g_sw_cy0, g_sw_cx1=LW, g_sw_cy1=LH;
+static void sw_blit(int L,int x,int y){ if(g_swl[L]) blit_indexed_clip(g_swl[L],g_swl_w[L],g_swl_h[L],x,y,g_sw_cx0,g_sw_cy0,g_sw_cx1,g_sw_cy1); }
+static void sw_blit_opq(int L,int x,int y){ if(g_swl[L]) blit_opaque_clip(g_swl[L],g_swl_w[L],g_swl_h[L],x,y,g_sw_cx0,g_sw_cy0,g_sw_cx1,g_sw_cy1); }
+#define PANE_X0 57            /* the glass (INTRO_2 26/27) at (57,0), 201x177: everything that animates on the */
+#define PANE_Y0 0             /* window pages shows through it; the frame around it is static            */
+#define PANE_X1 (57+201)
+#define PANE_Y1 177
+static void sw_reset(void)
 {
-    if(g_forest_base && g_win_ov){
-        blit_opaque(g_forest_base,g_forest_w,g_forest_h,0,0);                 /* forest, no frame */
-        if(g_sw_strk && g_storm_nstr>0)                                       /* big strike BEHIND window */
-            blit_indexed(g_storm_str[0],g_storm_strw[0],g_storm_strh[0],g_storm_sx,g_storm_sy);
-        if(bolt) blit_indexed(bolt,bw,bh,bx,by);                             /* random flash BEHIND window */
-        if(g_sw_ovx > -g_win_ow)
-            blit_indexed(g_win_ov,g_win_ow,g_win_oh,g_sw_ovx,0);             /* frame/glass ON TOP -> occludes */
-        if(g_sw_door>=0 && g_door_l){                                        /* the doorway's two leaves */
-            blit_indexed(g_door_l,g_door_lw,g_door_lh,g_sw_ovx+DOOR_L_X-g_sw_door,0);
-            blit_indexed(g_door_r,g_door_rw,g_door_rh,g_sw_ovx+DOOR_R_X+g_sw_door,0); }
-    } else {                                                                 /* fallback: baked base */
-        blit_opaque(g_storm_base,g_storm_w,g_storm_h,0,0);
-        if(g_sw_strk && g_storm_nstr>0)
-            blit_indexed(g_storm_str[0],g_storm_strw[0],g_storm_strh[0],g_storm_sx,g_storm_sy);
-        if(bolt) blit_indexed(bolt,bw,bh,bx,by);
-    }
-    if(g_sw_cap>=0) intro_caption_page(g_sw_cap);            /* storm narration = U.EXE pages 3..7 */
+    rng_seed(&g_sw_rng, 0x570fu ^ plat_ticks_200hz());
+    g_sw.cloud_x=-400;                                        /* nuvie: the bank starts off-screen left */
+    for(int i=0;i<5;i++){ g_sw.cl_img[i]=sw_rand(2,3)==2?SWL_CLOUD2:SWL_CLOUD3; g_sw.cl_x[i]=sw_rand(0,320)-260; g_sw.cl_y[i]=sw_rand(0,30); }
+    g_sw.lcnt=0; g_sw.limg=0; g_sw.strike_img=sw_rand(0,4); g_sw.flash=0; g_sw.drops=0; g_sw.rain_delay=20;
+    for(int i=0;i<101;i++){ g_sw.rain[i].vis=0; g_sw.rain[i].img=(int8_t)sw_rand(0,3); g_sw.rain[i].x=(int16_t)sw_rand(0,320); g_sw.rain[i].y=(int16_t)sw_rand(0,200); }
+    g_sw.pal_bright=-1; g_sw.glass_flash=0;
 }
-static void storm_compose(void){ storm_compose_ex((const uint8_t*)0,0,0,0,0); }
-/* Hold the current layout for input (or PAGE_MAXTICKS), flashing random lightning bolts (behind
- * the frame/leaves) with a whole-scene palette flash. Returns 2 on Esc, 1 on advance, 0 timeout. */
-static int storm_hold(rng_t *r, const uint8_t *flashpal)
+/* apply the ground-highlight palette (0x58/0x5a/0x5c bright blue vs the storm greens) */
+static void sw_palette(int bright)
 {
-    storm_compose(); rdr_present_doubled(LH);               /* full present of this layout */
-    uint32_t t0=plat_ticks_200hz();
+    if(bright==g_sw.pal_bright) return;
+    uint8_t p[768]; memcpy(p,g_storm_pal,768);
+    if(bright){ static const uint8_t B[3]={16,37,63}; for(int k=0;k<3;k++) memcpy(p+(0x58+2*k)*3,B,3); }
+    else { static const uint8_t G[9]={8,41,32, 5,35,29, 3,29,26}; for(int k=0;k<3;k++) memcpy(p+(0x58+2*k)*3,G+3*k,3); }
+    rdr_set_palette(p,256); g_sw.pal_bright=bright;
+}
+/* one 50 ms animation step (nuvie display_window) */
+static void sw_step(void)
+{
+    for(int i=0;i<5;i++){ if(g_sw.cl_x[i]>320){ g_sw.cl_x[i]=sw_rand(0,320)-320; g_sw.cl_y[i]=sw_rand(0,30); } g_sw.cl_x[i]+=2; }
+    if(++g_sw.cloud_x==320) g_sw.cloud_x=0;
+    if(sw_rand(0,6)==0 && g_sw.lcnt==0){ g_sw.lcnt=sw_rand(1,4); g_sw.limg=sw_rand(0,g_storm_nbolt-1); g_sw.lx=sw_rand(-5,320); g_sw.ly=sw_rand(-5,200); }
+    int bright = (g_sw.lcnt>0 && sw_rand(0,3)==0) || g_sw_strk;
+    if(sw_rand(0,1)==0) g_sw.strike_img=sw_rand(0,g_storm_nstr>0?g_storm_nstr-1:0);
+    if(g_sw.flash>0){ g_sw.flash--; }
+    else if(sw_rand(0,5)==0 || g_sw_strk){ g_sw.glass_flash=1; g_sw.flash=sw_rand(1,5); }
+    else g_sw.glass_flash=0;
+    if(g_sw.drops<100 && sw_rand(0,g_sw.rain_delay)==0){
+        g_sw.rain_delay-=2; if(g_sw.rain_delay<1) g_sw.rain_delay=1;
+        int i=g_sw.drops; g_sw.rain[i].vis=1; g_sw.rain[i].img=(int8_t)sw_rand(0,3); g_sw.rain[i].y=-4; g_sw.rain[i].x=(int16_t)sw_rand(0,320); g_sw.drops=i+1; }
+    for(int i=0;i<=g_sw.drops && i<101;i++){
+        if(g_sw.rain[i].vis){ g_sw.rain[i].x+=2; g_sw.rain[i].y+=8; if(g_sw.rain[i].x>320||g_sw.rain[i].y>200) g_sw.rain[i].vis=0; }
+        else { g_sw.rain[i].vis=1; g_sw.rain[i].img=(int8_t)sw_rand(0,3); g_sw.rain[i].y=-4; g_sw.rain[i].x=(int16_t)sw_rand(0,320); } }
+    if(g_sw.lcnt>0) g_sw.lcnt--;
+    sw_palette(bright);
+}
+/* Compose the current layout + animation state into the backbuffer (nuvie's sprite order). */
+static void storm_compose(void)
+{
+    sw_blit_opq(SWL_SKY,0,0);
+    sw_blit(SWL_CLOUD,g_sw.cloud_x,-5); sw_blit(SWL_CLOUD,g_sw.cloud_x-320,-5);
+    for(int i=0;i<5;i++) sw_blit(g_sw.cl_img[i],g_sw.cl_x[i],g_sw.cl_y[i]);
+    if(g_sw.lcnt>0 && g_storm_nbolt>0){ int b=g_sw.limg; if(b<0||b>=g_storm_nbolt) b=0;   /* hotspot-relative (nuvie) */
+        blit_indexed_clip(g_storm_bolt[b],g_storm_boltw[b],g_storm_bolth[b],g_sw.lx+sw_rand(0,3)-g_storm_bolthx[b],g_sw.ly+sw_rand(0,3)-g_storm_bolthy[b],g_sw_cx0,g_sw_cy0,g_sw_cx1,g_sw_cy1); }
+    sw_blit_opq(SWL_GROUND,0,76);
+    sw_blit(SWL_TREES,0,0);
+    if(g_sw_strk && g_storm_nstr>0){ int k=g_sw.strike_img; if(k<0||k>=g_storm_nstr) k=0;   /* (158,114) = ground point */
+        blit_indexed_clip(g_storm_str[k],g_storm_strw[k],g_storm_strh[k],g_storm_sx-g_storm_strhx[k],g_storm_sy-g_storm_strhy[k],g_sw_cx0,g_sw_cy0,g_sw_cx1,g_sw_cy1); }
+    for(int i=0;i<=g_sw.drops && i<101;i++) if(g_sw.rain[i].vis) sw_blit(SWL_RAIN0+g_sw.rain[i].img,g_sw.rain[i].x,g_sw.rain[i].y);
+    if(g_sw_ovx > -LW){
+        sw_blit(SWL_FRAME,g_sw_ovx,0);
+        sw_blit(g_sw.glass_flash?SWL_GLASSF:SWL_GLASS,g_sw_ovx+57,0); }
+    if(g_sw_door>=0 && g_swl[SWL_DOORL]){                    /* the doorway's two leaves */
+        sw_blit(SWL_DOORL,g_sw_ovx+DOOR_L_X-g_sw_door,0);
+        sw_blit(SWL_DOORR,g_sw_ovx+DOOR_R_X+g_sw_door,0); }
+    if(g_sw_cap>=0 && g_sw_cy1 > LH-g_scroll_h) intro_caption_page(g_sw_cap);   /* storm narration = U.EXE pages 3..7 (whenever the clip reaches the parchment: its torn top edge shows the scene) */
+}
+static void storm_compose_full(void){ g_sw_cx0=0; g_sw_cy0=0; g_sw_cx1=LW; g_sw_cy1=LH; storm_compose(); }
+/* Draw one animated frame: apply the 50 ms steps that have elapsed (at least one; capped so a
+ * hitch doesn't warp), compose, present. Same wall-clock pace on every Atari. */
+static uint32_t g_sw_tlast; static int g_sw_fullnext=1;   /* next frame must be a full compose+present */
+static void sw_frame(void)
+{
+    uint32_t now;
+    while((now=plat_ticks_200hz())-g_sw_tlast < 10) vsync_pump();
+    int n=(int)((now-g_sw_tlast)/10); if(n>6){ n=6; g_sw_tlast=now; } else g_sw_tlast+=(uint32_t)n*10;
+    while(n-->0) sw_step();
+    /* On the window pages (frame in place, no leaves) everything that moves shows through the panes:
+     * recompose and present ONLY the pane rect (stock-Falcon budget: this halves the per-step cost;
+     * the surrounding frame + the caption are static until a page/layout change forces a full frame). */
+    if(!g_sw_fullnext && g_sw_ovx==0 && g_sw_door<0){
+        g_sw_cx0=PANE_X0&~15; g_sw_cy0=PANE_Y0; g_sw_cx1=(PANE_X1+15)&~15; g_sw_cy1=PANE_Y1;
+        storm_compose(); rdr_present_rect_doubled(g_sw_cx0,g_sw_cy0,g_sw_cx1-g_sw_cx0,g_sw_cy1-g_sw_cy0,LH); vsync_pump();
+    } else { storm_compose_full(); rdr_present_doubled(LH); g_sw_fullnext=0; }
+}
+/* Hold the current layout for input (or PAGE_MAXTICKS) while the storm animates.
+ * Returns 2 on Esc, 1 on advance, 0 timeout. */
+static int storm_hold(void)
+{
+    uint32_t t0=plat_ticks_200hz(); g_sw_fullnext=1;         /* new caption/layout: full frame first */
     for(;;){
-        if(rng_range(r,22)==0){                              /* a lightning bolt flashes */
-            int bi=(int)rng_range(r,(uint32_t)g_storm_nbolt);
-            int bx=(int)rng_range(r,300)-30, by=(int)rng_range(r,90)-10;
-            storm_compose_ex(g_storm_bolt[bi],g_storm_boltw[bi],g_storm_bolth[bi],bx,by);  /* bolt BEHIND the frame */
-            rdr_set_palette(flashpal,256); rdr_present_doubled(LH);
-            int hold=2+(int)rng_range(r,3); for(int h=0;h<hold;h++) vsync_pump();
-            storm_compose(); rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,g_storm_lc+48); rdr_present_doubled(LH);
-        }
-        vsync_pump();
+        sw_frame();
         int a=intro_advance(); if(a) return a;
         if((uint32_t)(plat_ticks_200hz()-t0)>=PAGE_MAXTICKS) return 0;
     }
@@ -835,57 +1029,57 @@ static int storm_hold(rng_t *r, const uint8_t *flashpal)
  * the storm forest between them (the strike goes out halfway through the pan; nuvie i>160). Hold
  * for input. Then the leaves slide apart (68 px each) onto the clear forest, and the "you bolt from
  * your house ... to the stones" narration (U.EXE page 7) holds over it. Nuvie paces 2 px per 50 ms
- * frame pair (8 s pan / 3.4 s doors); we step 8 px / 4 px per full present, which on the TT/Falcon
- * present rate is a comparable few seconds. Any key snaps a motion to its end. Runs at the tail
- * of storm_scene, before its fade-out. Without the leaf assets it degrades to the plain slide-off. */
-static void forest_reveal(rng_t *r, const uint8_t *flashpal)
+ * step (8 s pan) and 1 px per step for the leaves (3.4 s); we place them by wall clock at exactly
+ * that pace however many frames the machine draws. Any key snaps a motion to its end. */
+static void forest_reveal(void)
 {
-    if(!g_forest_base || !g_win_ov) return;
-    g_sw_cap=6; g_sw_door=(g_door_l?0:-1);
-    /* TIME-BASED pace (same rule as the gargoyle scene): nuvie pans 2 px per 50 ms = 40 px/s and
-     * opens the leaves 1 px per 50 ms = 20 px/s; we draw as many frames as the machine manages
-     * and place the sprites by elapsed time, so the beat lasts the same 8 s + 3.4 s everywhere. */
+    if(!g_swl[SWL_FRAME]) return;
+    g_sw_cap=6; g_sw_door=(g_swl[SWL_DOORL]?0:-1);
     { uint32_t t0=plat_ticks_200hz(); int x=0;
-      while(x>-g_win_ow){                                     /* the pan: window off left, leaves trail */
-        int nx=-(int)((plat_ticks_200hz()-t0)/5); if(nx<-g_win_ow) nx=-g_win_ow;
-        if(nx==x){ vsync_pump(); if(plat_input_raw()) nx=-g_win_ow; else continue; }
-        x=nx; g_sw_ovx=x; if(x<=-(g_win_ow/2)) g_sw_strk=0;    /* strike ends halfway (nuvie i>160)  */
-        storm_compose(); rdr_present_doubled(LH); vsync_pump();
-        if(plat_input_raw()){ x=-g_win_ow; }                  /* a keypress snaps to the doorway   */
+      while(x>-LW){                                           /* the pan: window off left, leaves trail */
+        int nx=-(int)((plat_ticks_200hz()-t0)/5); if(nx<-LW) nx=-LW;
+        x=nx; g_sw_ovx=x; if(x<=-(LW/2)) g_sw_strk=0;          /* strike ends halfway (nuvie i>160)  */
+        sw_frame();
+        if(plat_input_raw()){ x=-LW; }                        /* a keypress snaps to the doorway   */
       } }
-    g_sw_ovx=-g_win_ow; g_sw_strk=0;
+    g_sw_ovx=-LW; g_sw_strk=0;
     if(g_sw_door>=0){
-        if(storm_hold(r,flashpal)==2) return;                 /* at the doorway, caption still up  */
+        if(storm_hold()==2) return;                           /* at the doorway, caption still up  */
         g_sw_cap=-1;                                          /* nuvie: scroll hidden for the opening */
         { uint32_t t0=plat_ticks_200hz(); int d=0;
           while(d<68){                                        /* leaves slide apart onto the forest */
             int nd=(int)((plat_ticks_200hz()-t0)/10); if(nd>68) nd=68;
-            if(nd==d){ vsync_pump(); if(plat_input_raw()) nd=68; else continue; }
-            d=nd; g_sw_door=d; storm_compose(); rdr_present_doubled(LH); vsync_pump();
+            d=nd; g_sw_door=d; sw_frame();
             if(plat_input_raw()){ d=68; }
           } }
         g_sw_door=68;
     }
     g_sw_cap=7;                                               /* "...to the stones" over the clear forest */
-    (void)storm_hold(r,flashpal);
+    (void)storm_hold();
 }
 static void storm_scene(void)
 {
-    if(!g_storm_base || g_storm_nbolt<=0) return;
-    rng_t r; rng_seed(&r,0x570fu ^ plat_ticks_200hz());
-    uint8_t flashpal[768];                                    /* whole-scene lightning brighten */
-    for(int i=0;i<768;i++){ int v=(int)g_storm_pal[i]+14; flashpal[i]=(uint8_t)(v>63?63:v); }
+    if(!g_swl[SWL_SKY] || !g_swl[SWL_GROUND] || !g_swl[SWL_TREES]) return;
+    sw_reset();
     g_sw_ovx=0; g_sw_door=-1; g_sw_strk=0; g_sw_cap=3;
-    storm_compose();                                          /* fade in on page 0 (flip mode, tear-free) */
+    /* nuvie: 20 silent animation steps before the first caption, under the fade-in */
+    g_sw_tlast=plat_ticks_200hz();
+    for(int i=0;i<20;i++) sw_step();
+    storm_compose_full();                                     /* fade in on the animating storm */
     for(int k=0;k<=8;k++){ fe_fade(g_storm_pal,k); }
-    rdr_present_doubled(LH); rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,g_storm_lc+48);
+    rdr_flip_end();                                           /* single buffer: the pane-rect presents hit the visible screen */
+    g_sw_fullnext=1;
+    rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,g_storm_lc+48);
+    g_sw.pal_bright=-1;                                       /* re-assert the highlight state next step */
+    g_sw_tlast=plat_ticks_200hz();
     int esc=0;
     for(int page=0; page<3; page++){                          /* window pages 0..2 (U.EXE 3..5) */
         g_sw_cap=3+page; g_sw_strk=(page>=2);                 /* the big strike from page 3 */
-        int a=storm_hold(&r,flashpal); if(a==2){ esc=1; break; }
+        int a=storm_hold(); if(a==2){ esc=1; break; }
     }
-    if(!esc) forest_reveal(&r,flashpal);                      /* page 3 pans to the doorway -> doors -> page 7 */
+    if(!esc) forest_reveal();                                 /* page 3 pans to the doorway -> doors -> page 7 */
     for(int k=8;k>=0;k--){ fe_fade(g_storm_pal,k); }
+    rdr_flip_begin();                                         /* back to the double buffer for the next scene */
 }
 
 /* blit the narration parchment + scene `s` page `pg` (U.EXE narration, word-wrapped). */
@@ -991,13 +1185,106 @@ static void avatar_climax(int s)
     rdr_set_palette((uint8_t*)pal,256);               /* un-rotate before the scene's fade-out */
 }
 
+/* BOOT LOGOS (nuvie play(): "ORIGIN Presents" then "A Lord British Production" — INTRO_1.SHP 0x45/0x46
+ * — each faded in and out under PALETTES.INT 0 before the summoning story; missing from our intro
+ * until the real-Falcon report of 2026-08-16). Time-based fades: nuvie steps opacity 0..255 by 3
+ * per 25 ms update = ~2.1 s each way; we step the palette 0..32 over the same 2.1 s (re-presenting
+ * on LUT backends). Any key skips to the next logo / the story; Esc (return 2) skips the whole intro.
+ * Boot only — the menu's Introduction replay goes straight to the story, as nuvie's does. */
+static void logo_unrle(int k)
+{
+    const uint8_t *r=g_logo_rle[k]; int32_t n=g_logo_n[k]; int w=g_logo_w[k], h=g_logo_h[k];
+    if(!r || w<=0 || h<=0){ clear_bb(0); return; }
+    int x=0,y=0;
+    for(int32_t i=0;i+1<n && y<h;i+=2){ int run=r[i]; uint8_t v=r[i+1];
+        while(run-->0 && y<h){ if(x<LW && y<LH) ROW(y)[x]=v; if(++x>=w){ x=0; y++; } } }
+}
+static void logo_fade(const uint8_t *pal, int dir)         /* dir +1 = in, -1 = out; ~2.1 s (430 ticks) */
+{
+    uint32_t t0=plat_ticks_200hz(); int last=-1;
+    for(;;){ uint32_t e=plat_ticks_200hz()-t0; if(e>430) e=430;
+        int lvl=(int)(e*32/430); if(dir<0) lvl=32-lvl;
+        if(lvl!=last){ uint8_t p[768]; for(int i=0;i<768;i++){ int v=(int)pal[i]*lvl/32; p[i]=(uint8_t)(v>63?63:v); }
+            rdr_set_palette(p,256); if(rdr_palette_deferred()) rdr_present_doubled(LH); last=lvl; }
+        vsync_pump();
+        if(e>=430) break; }
+}
+static int logo_screens(void)                                /* returns 2 on Esc (skip the intro), else 0 */
+{
+    if(!g_logo_pal || !g_logo_rle[0] || !g_logo_rle[1]) return 0;
+    if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48);
+    { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
+    for(int k=0;k<2;k++){
+        intro_fade(g_logo_pal,0);                             /* black */
+        logo_unrle(k); rdr_present_doubled(LH);
+        int skip=0;
+        { uint32_t t0=plat_ticks_200hz(); int last=-1;         /* fade in, key-skippable */
+          for(;;){ uint32_t e=plat_ticks_200hz()-t0; if(e>430) e=430; int lvl=(int)(e*32/430);
+            if(lvl!=last){ uint8_t p[768]; for(int i=0;i<768;i++){ int v=(int)g_logo_pal[i]*lvl/32; p[i]=(uint8_t)(v>63?63:v); }
+                rdr_set_palette(p,256); if(rdr_palette_deferred()) rdr_present_doubled(LH); last=lvl; }
+            vsync_pump(); int a=intro_advance(); if(a==2) return 2; if(a){ skip=1; break; }
+            if(e>=430) break; } }
+        if(!skip){ uint32_t t0=plat_ticks_200hz();              /* hold a moment at full, then fade out */
+          for(;;){ vsync_pump(); int a=intro_advance(); if(a==2) return 2; if(a) break;
+            if(plat_ticks_200hz()-t0>=60) break; } }
+        logo_fade(g_logo_pal,-1);
+    }
+    return 0;
+}
+
+/* "CLUTCH THE STONE" beat (nuvie stones_sequence @911-955, moongate page 1 "Exultant memories wash
+ * over you as you clutch the stone..."): the hand holding the obsidian (INTRO_3 shape 6) rises from
+ * y=0xc7 to 0x44 at x=0x9b while the whole scene — bg, ground cover, gate — scrolls UP 65 px (1 px per
+ * 25 ms step; the hand 2 px), the caption holds on the scrolled scene with the crimson pulse, then
+ * everything comes back down. Draw order: bg, cover, hand, gate (nuvie sprite order). Wall-clock
+ * stepped; any key skips a motion. Returns 2 on Esc, else 0. */
+static void clutch_frame(int s,int sy,int hy,int cap)
+{
+    blit_opaque(g_intro[s].pix,g_intro[s].w,g_intro[s].h,0,-sy);
+    for(int y=LH-sy;y<LH;y++) if(y>=0) memset(ROW(y),0,LW);                     /* rows scrolled in: black */
+    if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy-sy);
+    blit_indexed(g_stn_clutch,g_stn_cw,g_stn_ch,0x9b,hy);
+    if(g_gate) blit_indexed_clip(g_gate,g_gw,g_gh,g_gx,5-sy,0,0,LW,GATE_CLIP_Y);
+    if(cap) intro_caption_page(g_intro_base[s]+1);
+}
+static int clutch_beat(int s,const uint8_t *pal)
+{
+    int cs=0, cf=0;
+    for(int dir=0; dir<2; dir++){                                               /* 0 = rise, 1 = descend */
+        uint32_t t0=plat_ticks_200hz(); int i=0;
+        while(i<66){
+            int ni=(int)((plat_ticks_200hz()-t0)/5); if(ni>66) ni=66;
+            if(ni==i){ vsync_pump(); continue; }
+            for(int k=i;k<ni;k++) if(++cf>=5){ cf=0; intro_crimson_cycle(pal,++cs); }
+            i=ni; int sy=dir?66-i:i, hy=0xc7-2*sy;
+            clutch_frame(s,sy,hy,0); rdr_present_doubled(LH);
+            int a=intro_advance(); if(a==2) return 2; if(a) i=66;
+        }
+        if(dir==0){                                                              /* hold the memory page, scrolled up */
+            clutch_frame(s,65,0xc7-130,1); rdr_present_doubled(LH);
+            uint32_t th=plat_ticks_200hz(), ts=th;
+            for(;;){ vsync_pump();
+                uint32_t now=plat_ticks_200hz(); int nst=(int)((now-ts)/5); if(nst>8){ nst=8; ts=now; } else ts+=(uint32_t)nst*5;
+                for(int k=0;k<nst;k++) if(++cf>=5){ cf=0; intro_crimson_cycle(pal,++cs); }
+                int a=intro_advance(); if(a==2) return 2; if(a) break;
+                if((uint32_t)(now-th)>=PAGE_MAXTICKS) break; }
+        }
+    }
+    clutch_frame(s,0,0xc7,0);                                                    /* hand gone below: plain scene */
+    return 0;
+}
+
+static int g_intro_logos;   /* boot: play the ORIGIN / Lord British logos before the story */
 static int g_intro_start;   /* dev aid: INTRO.REQ byte '0'..'9' = first pack scene to play (0 = the whole intro);
                              * 's' = the storm-window/doorway scene alone (capture aid, -1 => not that) */
-static void run_intro(void)
+static void run_intro_body(void)
 {
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
     g_intro_mb=0;
     fe_music("BOOTUP");                                          /* nuvie play(): bootup.m over the summoning */
+    if(g_intro_logos){ g_intro_logos=0;                          /* boot: ORIGIN / Lord British logos first */
+        if(logo_screens()==2){ rdr_set_palette(g_basepal,256);   /* Esc: skip the whole intro */
+            if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48); return; } }
     rdr_flip_begin();                                            /* tear-free double buffer */
     if(g_intro_start<0){ storm_scene(); rdr_flip_end(); rdr_set_palette(g_basepal,256);   /* INTRO.REQ 's' */
         if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48); return; }
@@ -1014,38 +1301,43 @@ static void run_intro(void)
                 draw_intro_frame(s,0,1); rdr_present_doubled(LH); }
             g_gate_y=0x5; }
         int key=0;
-        int animated = (g_intro[s].type==1 && g_tv_base && g_ndigit>=11);
+        int animated = (g_intro[s].type==1 && g_tv_nimg>0 && g_ndigit>=11);
+        if(animated) tv_reset();
         int npages = (s<INTRO_NCAP) ? g_intro_npages[s] : 1;
         if(animated){
             /* PAGE-DRIVEN, input-advanced hold. The TV/clock box is dirty-rect animated (fast);
              * a page change does one full recompose+present (its new caption). Single-buffer for
              * the whole scene so the rect present hits the visible screen. (intro_sequence.md) */
-            int bx0=(g_clk_x<g_tv_bx?g_clk_x:g_tv_bx);            /* bbox of the clock cells + full TV screen */
-            int bx1=((g_clk_x+0x12)>(g_tv_bx+g_tv_bw)?(g_clk_x+0x12):(g_tv_bx+g_tv_bw));
-            int by0=(g_clk_y<g_tv_by?g_clk_y:g_tv_by);
-            int by1=((g_clk_y+8)>(g_tv_by+g_tv_bh)?(g_clk_y+8):(g_tv_by+g_tv_bh));
+            /* bbox of the clock cells + the TV screen + the finger on the remote (shows on static) */
+            int fx0=g_finger?g_fing_x:g_tv_bx, fx1=g_finger?g_fing_x+g_fing_w:g_tv_bx, fy0=g_finger?g_fing_y:g_tv_by, fy1=g_finger?g_fing_y+g_fing_h:g_tv_by;
+            int bx0=(g_clk_x<g_tv_bx?g_clk_x:g_tv_bx); if(fx0<bx0) bx0=fx0;
+            int bx1=((g_clk_x+0x12)>(g_tv_bx+TV_W)?(g_clk_x+0x12):(g_tv_bx+TV_W)); if(fx1>bx1) bx1=fx1;
+            int by0=(g_clk_y<g_tv_by?g_clk_y:g_tv_by); if(fy0<by0) by0=fy0;
+            int by1=((g_clk_y+8)>(g_tv_by+TV_H)?(g_clk_y+8):(g_tv_by+TV_H)); if(fy1>by1) by1=fy1;
             int rx=bx0&~15, rw=((bx1+15)&~15)-rx;                 /* align x/w to 16px (c2p groups) */
             if(rx+rw>LW) rw=LW-rx;
             int ry=by0, rh=by1-by0; if(ry+rh>LH) rh=LH-ry;
-            static uint8_t holdbg[96*112];                        /* clean bg of the box (typ ~65x67) */
+            static uint8_t holdbg[160*100];                       /* clean bg of the box (typ ~144x84 with the finger) */
             if((int32_t)rw*rh > (int32_t)sizeof holdbg) rh=(int)(sizeof holdbg/(rw?rw:1));
             rdr_flip_end();                                       /* single-buffer: rect present -> visible */
             for(int page=0; page<npages && (key&0xFF)!=0x1b; page++){
                 g_intro_page=page;
                 g_hold_part=IF_BG;  draw_intro_frame(s,0,1); g_hold_part=IF_FULL;   /* bg incl this page's caption */
                 save_rect(holdbg, rx,ry,rw,rh);                   /* snapshot the clean animation box */
-                g_tv_frame=(int)(plat_ticks_200hz()/28);
                 g_hold_part=IF_ANIM; draw_intro_frame(s,0,1); g_hold_part=IF_FULL; /* initial TV over bg */
                 rdr_present_doubled(LH);                          /* full present of this page */
                 BENCH_PHASE(IPH_HOLD);
-                int last_sig=-1, last_min=-1; uint32_t t0=plat_ticks_200hz();
+                int last_min=-1; uint32_t t0=plat_ticks_200hz(), tvt=t0;
                 for(;;){
                     uint32_t now=plat_ticks_200hz();
-                    int st,chan,fr; tv_state(now,&st,&chan,&fr);
-                    g_tv_frame=(int)(now/28);                     /* for compose_wide's frozen pan frame */
                     int minute=(int)(now/200);
-                    int sig = st ? (int)now : (chan*10+fr);       /* static: redraw each frame; else on frame change */
-                    if(sig!=last_sig || minute!=last_min){
+                    int stepped=0;                                /* TV: one program step per 50 ms (nuvie) */
+                    while(now-tvt>=10){ tv_step(); tvt+=10; stepped=1; if(now-tvt>200){ tvt=now; break; } }
+                    if(stepped && g_tvs.palrot){ g_tvs.palrot=0;  /* op 8B: rotate palette 224..228 (intestines) */
+                        static uint8_t rp[768]; static int rot=0; memcpy(rp,pal,768); rot=(rot+1)%5;
+                        for(int k=0;k<5;k++){ int src=224+((k+rot)%5); memcpy(rp+(224+k)*3,pal+src*3,3); }
+                        rdr_set_palette(rp,256); }
+                    if(stepped || minute!=last_min){
                         restore_rect(holdbg, rx,ry,rw,rh);
 #ifdef BENCH
                         uint32_t tc=plat_ticks_200hz();
@@ -1055,7 +1347,7 @@ static void run_intro(void)
                         g_iph[IPH_HOLD][IPB_COMPOSE]+=plat_ticks_200hz()-tc;
 #endif
                         intro_present_rect(rx,ry,rw,rh);
-                        last_sig=sig; last_min=minute;
+                        last_min=minute;
                     }
                     vsync_pump();
                     int a=intro_advance(); if(a){ key=(a==2)?0x1b:0; break; }
@@ -1068,20 +1360,37 @@ static void run_intro(void)
             stones_pickup(s);                          /* stones: glimpse the obsidian + hand picks it up */
         } else {
             /* static scene (moongate): one present per page, input-advanced. The moongate (type 2)
-             * PULSES: rotate the crimson ramp (144..159) each few frames while it holds. */
+             * PULSES: rotate the crimson ramp (144..159) every 5th 25 ms step (nuvie stones_rotate_
+             * palette), and on the last two pages ("Abruptly, the portal quivers..." / "Desperation
+             * makes the decision...") it SHAKES: nuvie stones_shake_moongate jitters the gate to
+             * x 0x7c+rand(0,1), y 5+rand(0,3) every step (real-Falcon/ScummVM comparison 2026-08-16:
+             * "the red gate shimmers/shakes once it's up"). Dirty-rect: recompose + present the gate's
+             * rect only; single-buffer so the rect presents hit the visible screen. */
             int cyc = (g_intro[s].type==2);
+            if(cyc) rdr_flip_end();
+            rng_t sr; rng_seed(&sr, 0x6a7eu ^ plat_ticks_200hz());
             for(int page=0; page<npages && (key&0xFF)!=0x1b; page++){
                 g_intro_page=page;
+                if(cyc && page==1 && g_stn_clutch){                       /* "clutch the stone" beat (nuvie @911-955) */
+                    int r=clutch_beat(s,pal); if(r==2){ key=0x1b; break; }
+                    continue; }
+                int shake = cyc && g_gate && page>=npages-2;
+                g_gate_jx=0; g_gate_y=cyc?5:g_gate_y;
                 intro_compose(s,0,1); intro_present();
-                uint32_t t0=plat_ticks_200hz(); int cf=0, cs=0;
+                uint32_t t0=plat_ticks_200hz(), ts=t0; int cf=0, cs=0;
                 for(;;){ vsync_pump();
-                    if(cyc && ++cf>=5){ cf=0; intro_crimson_cycle(pal,++cs);
-                        if(rdr_palette_deferred() && g_gate)             /* LUT palette: re-present the gate */
-                            rdr_present_rect_doubled(g_gx&~15, g_gate_y, ((g_gw+(g_gx&15)+15)&~15), g_gh, LH); }
+                    uint32_t now=plat_ticks_200hz(); int nst=(int)((now-ts)/5); if(nst>8){ nst=8; ts=now; } else ts+=(uint32_t)nst*5;
+                    int paldirty=0;
+                    for(int k=0;k<nst && cyc;k++){ if(++cf>=5){ cf=0; intro_crimson_cycle(pal,++cs); paldirty=1; }
+                        if(shake){ g_gate_jx=(int)rng_range(&sr,2); g_gate_y=5+(int)rng_range(&sr,4); } }
+                    if(nst>0 && (shake || (paldirty && rdr_palette_deferred() && g_gate))){   /* gate rect: shake and/or LUT re-present */
+                        if(shake) intro_compose(s,0,1);                                        /* bg + jittered gate + cover (+caption) */
+                        rdr_present_rect_doubled(g_gx&~15, 5, ((g_gw+(g_gx&15)+1+15)&~15), g_gh+3, LH); }
                     int a=intro_advance(); if(a){ key=(a==2)?0x1b:0; break; }
-                    if((uint32_t)(plat_ticks_200hz()-t0) >= PAGE_MAXTICKS) break; }
+                    if((uint32_t)(now-t0) >= PAGE_MAXTICKS) break; }
             }
-            if(cyc) rdr_set_palette((uint8_t*)pal,256);   /* restore the un-rotated palette before fade-out */
+            g_gate_jx=0; if(cyc) g_gate_y=5;
+            if(cyc){ rdr_set_palette((uint8_t*)pal,256); rdr_flip_begin(); }   /* restore the un-rotated palette + double buffer */
         }
         if((key&0xFF)==0x1b){ for(int k=8;k>=0;k--){ fe_fade(pal,k); } break; }
         if(panlen>0){                                             /* pan the room away */
@@ -1112,6 +1421,19 @@ static void run_intro(void)
     rdr_flip_end();                                              /* back to single-buffer video */
     rdr_set_palette(g_basepal,256);                               /* restore game/menu palette */
     if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48);  /* ST: back to the base 16 */
+}
+
+/* The intro needs the INTRO section group (scenes, TV, gate, storm, stones, climax, logos) on top of
+ * the COMMON group: stream it in for the run (no-op when the pack is resident) and release it after —
+ * ~1 MB that must not stay resident on a 4 MB machine. (memory_streaming.md) */
+static int g_intro_bench1;   /* BENCH: run scene 0 only (set after the group is bound, so it survives streaming) */
+static void run_intro(void)
+{
+    if(!fe_group_load(FEG_INTRO,1)) return;
+    int save=g_nintro; if(g_intro_bench1 && g_nintro>1) g_nintro=1;
+    run_intro_body();
+    g_nintro=save;
+    fe_group_free(1);
 }
 
 /* ---- CHARACTER CREATION (docs/rules/character_creation.md) --------------------------------
@@ -1350,11 +1672,15 @@ static void gypsy_pour(int vial){
             g_arm_sh=1+arm2[vial]; g_arm_x=armx[vial]; g_arm_y=21;
             hnum=h3[vial]; g_hand_sh=9+hnum; g_hand_x=hx2[vial]; g_hand_y=21;
             if(g_vial_lvl[vial]==2){ if(idx==6) gypsy_start_pour(vial,g_vial_lvl[vial]); else gypsy_stop_pour(); } }
-        else { /* idx 7,8,9 */ if(g_vial_lvl[vial]>1) upd=0;
+        else if(idx>=7 && idx<=9){ if(g_vial_lvl[vial]>1) upd=0;
             g_arm_sh=1+arm2[vial]; g_arm_x=armx[vial]; g_arm_y=21;
             hnum=h4[vial]; g_hand_sh=9+hnum; g_hand_x=hx3[vial]; g_hand_y=13;
             if(g_vial_lvl[vial]==1){ if(idx==7){ gypsy_start_pour(vial,g_vial_lvl[vial]); g_vl_sh=-1; }
                                      else if(idx==9) gypsy_stop_pour(); } }
+        /* idx 16: no pose change — the set-down pose (15) simply holds one more beat, as in nuvie.
+         * (Bug fixed 2026-08-16, real-Falcon report: idx 16 fell into the 7..9 branch, so on a vial
+         * at level <= 1 the hand popped back over the jar in the pouring pose after setting the
+         * vial down — "a couple of frames with the bottle in her hand before she places it again".) */
         if(upd){
             gvl_liquid(hnum, vial, g_vial_lvl[vial], g_hand_x - hx4[vial], g_hand_y+20);
             for(int j=0;j<2;j++) gypsy_anim_frame(cap);      /* ~2 sub-frames/idx (nuvie does 8, for bubbles) */
@@ -2170,7 +2496,17 @@ out:
 }
 
 /* Run character creation: name -> gender -> portrait -> virtue tournament -> Str/Dex/Int. */
-static void run_chargen(void)
+/* keep a COPY of the chosen face (gender*6+portrait of the MONTAGE set): it doubles as the in-game
+ * Avatar portrait (status view), and the front-end art it points into is freed before play on 4 MB
+ * machines (memory_streaming.md). */
+static void cc_keep_face(void)
+{
+    g_cc_face_ok=0;
+    if(g_cc_nport>=12 && g_cc_pw==PW && g_cc_ph==PH){
+        int idx=g_cc_gender*6+g_cc_portrait; if(idx<0) idx=0; if(idx>=g_cc_nport) idx=g_cc_nport-1;
+        if(g_cc_port[idx]){ memcpy(g_cc_face, g_cc_port[idx], PW*PH); g_cc_face_ok=1; } }
+}
+static void run_chargen_body(void)
 {
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
     fe_music("CREATE");                                           /* nuvie create_character(): create.m */
@@ -2178,6 +2514,7 @@ static void run_chargen(void)
     int ok = cc_name_entry() && cc_gender() && cc_portrait();     /* name -> gender -> face; Esc/Exit abort */
     fe_cursor_show(0);                                            /* nuvie: mouse_cursor_visible(false) after Continue */
     if(!ok) return;                                               /* back to the main menu (g_cc_done stays 0) */
+    cc_keep_face();                                               /* copy the chosen face out of the FE art */
     for(int k=8;k>=0;k--) fe_fade(g_basepal,k);                   /* nuvie fade_out() before the woods */
     if(g_woods){ rdr_set_lowcolor(g_woods_lc,g_woods_lc+48);      /* forest approach (PALETTES.INT 4): fade in on the woods */
         blit_opaque(g_woods,g_woods_w,g_woods_h,0,0); intro_fade(g_woods_pal,0); rdr_present_doubled(LH);
@@ -2214,10 +2551,19 @@ static void run_chargen(void)
     run_gargoyle();                                               /* §1B: gargoyle-sacrifice opening -> Britannia */
 }
 
+/* Character creation needs the CHARGEN section group (portraits, gypsy, woods, gargoyle, vellum) on top
+ * of COMMON: stream it in for the run (no-op when resident), release it after. */
+static void run_chargen(void)
+{
+    if(!fe_group_load(FEG_CHARGEN,1)) return;
+    run_chargen_body();
+    fe_group_free(1);
+}
+
 /* Headless capture hook: the CHARGEN.REQ byte selects ONE chargen sub-screen (each draws
  * once then blocks on input, so the AVI grab holds it). '1'/default = the full interactive
  * flow. Pre-fills sample data so later screens have something to show. */
-static void chargen_capture(int which)
+static void chargen_capture_body(int which)
 {
     { const char*d="Avatar"; int i=0; while(d[i]){g_cc_name[i]=d[i];i++;} g_cc_name[i]=0; }
     g_cc_gender=1; g_cc_portrait=0;
@@ -2283,9 +2629,16 @@ static void chargen_capture(int which)
         case 'N':                            /* apply a sample character to the new game (no blocking UI) */
             { const char*nm="Milady"; int i=0; while(nm[i]){g_cc_name[i]=nm[i];i++;} g_cc_name[i]=0; }
             g_cc_gender=0; g_cc_portrait=2; g_cc_str=21; g_cc_dex=13; g_cc_int=19; g_cc_virtue=1;
-            g_cc_done=1; break;
-        default:  run_chargen();   break;    /* '1' = the whole flow */
+            g_cc_done=1; cc_keep_face(); break;
+        default:  run_chargen_body();   break;    /* '1' = the whole flow (group already loaded) */
     }
+}
+
+static void chargen_capture(int which)
+{
+    if(!fe_group_load(FEG_CHARGEN,1)) return;
+    chargen_capture_body(which);
+    fe_group_free(1);
 }
 
 /* NEW-GAME character overlay: apply the created character (g_cc_*) onto the Avatar (actor 1).
@@ -4188,10 +4541,8 @@ static void draw_status(const world_t*w,uint8_t col)
 static void resolve_name(int id, char *out, int cap)
 {
     out[0]=0;
-    const uint8_t *cf; int32_t cl; int ci;
-    if(id<g_countA){ cf=g_convA; cl=g_convAlen; ci=id; }
-    else           { cf=g_convB; cl=g_convBlen; ci=id-g_countA; }
-    int32_t elen; const uint8_t *e=lib_entry(cf,cl,ci,&elen); if(!e) return;
+    lib_t *L=(id<g_countA)?&g_lib[LIB_CONVA]:&g_lib[LIB_CONVB]; int ci=(id<g_countA)?id:id-g_countA;
+    int32_t elen; const uint8_t *e=lib_get(L,ci,&elen); if(!e) return;
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf); if(got<=0) return;
     cvm_game_t cg; cvm_game_init(&cg,1);
     cvm_init(&g_cv,g_script_buf,got,&cg,id,g_avatar_name,g_avatar_title);
@@ -4311,10 +4662,8 @@ static void se_talk(int id)
 static void talk(int id)
 {
     if(g_gamename){ se_talk(id); return; }        /* SE/MD core pack: identity-only talk */
-    const uint8_t *cf; int32_t cl; int ci;
-    if(id<g_countA){ cf=g_convA; cl=g_convAlen; ci=id; }
-    else           { cf=g_convB; cl=g_convBlen; ci=id-g_countA; }
-    int32_t elen; const uint8_t *e=lib_entry(cf,cl,ci,&elen);
+    lib_t *L=(id<g_countA)?&g_lib[LIB_CONVA]:&g_lib[LIB_CONVB]; int ci=(id<g_countA)?id:id-g_countA;
+    int32_t elen; const uint8_t *e=lib_get(L,ci,&elen);
     if(!e) return;
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf);
     if(got<=0) return;
@@ -4333,10 +4682,8 @@ static void talk(int id)
     g_have_pc=0;
     int pidx=id-1;
     if(pidx>=0){
-        const uint8_t *pf; int32_t pl; int pi;
-        if(pidx<98){ pf=g_portA; pl=g_portAlen; pi=pidx; }
-        else        { pf=g_portB; pl=g_portBlen; pi=pidx-98; }
-        int32_t pe; const uint8_t *pp=lib_entry(pf,pl,pi,&pe);
+        lib_t *P=(pidx<98)?&g_lib[LIB_PORTA]:&g_lib[LIB_PORTB]; int pi=(pidx<98)?pidx:pidx-98;
+        int32_t pe; const uint8_t *pp=lib_get(P,pi,&pe);     /* (after the script: shares the bounce) */
         if(pp && u6lzw_decompress(pp,pe,g_cur_portrait,(int32_t)sizeof g_cur_portrait)==PW*PH)
             g_have_pc=1;
     }
@@ -4854,11 +5201,8 @@ static void stat_row(int y, const char*label, const char*val, uint8_t col)
 /* decode actor id's 56x64 portrait (PORTRAIT.A for id-1<98, else .B) into buf. 1 on success. */
 static int portrait_for_actor(int id, uint8_t *buf)
 {   int pidx=id-1; if(pidx<0) return 0;
-    const uint8_t *pf; int32_t pl; int pi;
-    if(pidx<98){ pf=g_portA; pl=g_portAlen; pi=pidx; }
-    else       { pf=g_portB; pl=g_portBlen; pi=pidx-98; }
-    if(!pf) return 0;
-    int32_t pe; const uint8_t *pp=lib_entry(pf,pl,pi,&pe);
+    lib_t *P=(pidx<98)?&g_lib[LIB_PORTA]:&g_lib[LIB_PORTB]; int pi=(pidx<98)?pidx:pidx-98;
+    int32_t pe; const uint8_t *pp=lib_get(P,pi,&pe);
     return (pp && u6lzw_decompress(pp,pe,buf,PW*PH)==PW*PH); }
 
 /* CHARACTER STATUS VIEW: the viewed party member's portrait + name + (the Avatar's created)
@@ -4870,10 +5214,8 @@ static void draw_char_view(uint8_t col)
     int a=g_status_actor; if(a<1||a>=U6_MAX_ACTORS) a=1;
     int pxx=PANX+(PANW-PW)/2, pyy=MAPY+8;
     const uint8_t *face=0;                             /* Avatar: the created montage face; else PORTRAIT.A/.B */
-    if(a==1 && g_cc_nport>=12 && g_cc_pw==PW && g_cc_ph==PH){
-        int idx=g_cc_gender*6+g_cc_portrait; if(idx<0)idx=0; if(idx>=g_cc_nport)idx=g_cc_nport-1;
-        face=g_cc_port[idx];
-    } else if(portrait_for_actor(a,g_statface)) face=g_statface;
+    if(a==1 && g_cc_face_ok) face=g_cc_face;             /* the created face (copied at chargen; FE art may be freed) */
+    else if(portrait_for_actor(a,g_statface)) face=g_statface;
     if(face) draw_portrait_buf(face,pxx,pyy);          /* frames + blits the 56x64 portrait */
     else if(g_atile[a]!=0xffff) blit_tile(pxx+PW/2-8,pyy+PH/2-8,g_atile[a],0);  /* fallback: the map sprite */
 
@@ -5963,16 +6305,25 @@ static int do_save(const world_t *w)
  * chargen questions, narration, BOOK.DAT text, gypsy/woods/storm/stones/climax) from `ap`, setting
  * the g_menu_/g_intro/g_gyp_/... pointers into that buffer. Used two ways: inline from the full pack
  * (TT/Falcon), and from a streamed U6FE.PAK (ST — loaded, run, then freed). Returns the advanced ap. */
-static const uint8_t *parse_frontend(const uint8_t *ap)
+/* ===================== front-end pack (U6FE.PAK): per-section binders + loader =====================
+ * The front-end art lives in its own sectioned pack (dataformats/fepack.h). Each section keeps the
+ * byte layout the old inline block had; a BINDER points the scene globals into a section image. The
+ * loader runs the SAME binders whether the pack is RESIDENT (whole file loaded once, big-RAM
+ * machines) or STREAMED (a group of sections read into a scoped chip region, freed LIFO — 4 MB
+ * machines). docs/design/memory_streaming.md. */
+static void fe_bind_menu(const uint8_t *ap)
 {
-        /* front-end art (U6WU): [u16 mw][u16 mh][mw*mh][u16 tw][u16 th][tw*th] — point into pak */
+        /* front-end art (U6WU): [u16 mw][u16 mh][mw*mh][u16 tw][u16 th][tw*th] + [48+256 menu ST 16] */
         g_menu_w=(ap[0]<<8)|ap[1]; ap+=2; g_menu_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_menu_pix=ap; ap+=(int32_t)g_menu_w*g_menu_h;
         g_title_w=(ap[0]<<8)|ap[1]; ap+=2; g_title_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_title_pix=ap; ap+=(int32_t)g_title_w*g_title_h;
-        g_menu_lc=ap; ap+=48+256;                       /* per-scene title-screen 16 + LUT (ST; ignored on TT/Falcon) */
-        /* intro scenes (U6WV): [u8 n] + n x [u8 type][768 pal][u16 w][u16 h][w*h pix]
-         * and, for type 1 (pan), a trailing [u16 fw][fw*h fg] — all point into the pak. */
+        g_menu_lc=ap;                                   /* per-scene title-screen 16 + LUT (ST; ignored on TT/Falcon) */
+}
+static void fe_bind_intro(const uint8_t *ap)
+{
+        /* intro scenes (U6WV): [u8 n] + n x [u8 type][768 pal][48+256 lc][u16 w][u16 h][w*h pix]
+         * and, for type 1 (pan), a trailing [u16 fw][fw*h fg]; then the shared narration parchment. */
         g_nintro=*ap++; if(g_nintro>INTRO_MAX) g_nintro=INTRO_MAX;
         for(int i=0;i<g_nintro;i++){
             g_intro[i].type=*ap++;
@@ -5983,37 +6334,48 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
             if(g_intro[i].type==1){ int fw=(ap[0]<<8)|ap[1]; ap+=2;   /* only PAN scenes have an fg layer */
                 g_intro[i].fg=ap; ap+=(int32_t)fw*g_intro[i].h; }
             else g_intro[i].fg=NULL; }
+}
+static void fe_bind_scroll(const uint8_t *ap)
+{
+        /* shared narration parchment [u16 w][u16 h][w*h] (intro captions + the gargoyle scene) */
         g_scroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_scroll_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_scroll=ap; ap+=(int32_t)g_scroll_w*g_scroll_h;      /* shared narration parchment */
-        /* living-room TV anchor: base + talking-mouth frames (front-end Phase 2 anim) */
-        g_tv_bw=(ap[0]<<8)|ap[1]; ap+=2; g_tv_bh=(ap[0]<<8)|ap[1]; ap+=2;
+        g_scroll=ap;
+}
+static void fe_bind_tv(const uint8_t *ap)
+{
+        /* living-room TV: [u16 bx][u16 by][u8 nimg] + nimg x [u16 w][u16 h][pix] + finger [u16 w][u16 h][u16 x][u16 y][pix] */
         g_tv_bx=(ap[0]<<8)|ap[1]; ap+=2; g_tv_by=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_base=ap; ap+=(int32_t)g_tv_bw*g_tv_bh;
-        g_tv_mw=(ap[0]<<8)|ap[1]; ap+=2; g_tv_mh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_mx=(ap[0]<<8)|ap[1]; ap+=2; g_tv_my=(ap[0]<<8)|ap[1]; ap+=2;
-        g_tv_nmouth=*ap++; if(g_tv_nmouth>4) g_tv_nmouth=4;
-        for(int k=0;k<g_tv_nmouth;k++){ g_tv_mouth[k]=ap; ap+=(int32_t)g_tv_mw*g_tv_mh; }
-        /* TV alt-channels: [u8 nchan][u8 fpc][u16 cw][u16 ch] + nchan*fpc x [cw*ch] (cw*ch==tv base) */
-        g_tv_nchan=*ap++; if(g_tv_nchan>2) g_tv_nchan=2;
-        g_tv_fpc=*ap++; if(g_tv_fpc>2) g_tv_fpc=2;
-        { int ccw=(ap[0]<<8)|ap[1]; ap+=2; int cch=(ap[0]<<8)|ap[1]; ap+=2;
-          for(int c=0;c<g_tv_nchan;c++) for(int fr=0;fr<g_tv_fpc;fr++){
-            g_tv_chan[c][fr]=ap; ap+=(int32_t)ccw*cch; } }
+        g_tv_nimg=*ap++; if(g_tv_nimg>TV_NIMG) g_tv_nimg=TV_NIMG;
+        for(int k=0;k<g_tv_nimg;k++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_tvi_w[k]=w; g_tvi_h[k]=h; g_tvi[k]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+        for(int k=g_tv_nimg;k<TV_NIMG;k++) g_tvi[k]=0;
+        g_fing_w=(ap[0]<<8)|ap[1]; ap+=2; g_fing_h=(ap[0]<<8)|ap[1]; ap+=2;
+        g_fing_x=(ap[0]<<8)|ap[1]; ap+=2; g_fing_y=(ap[0]<<8)|ap[1]; ap+=2;
+        g_finger=(g_fing_w>0&&g_fing_h>0)?ap:0; ap+=(int32_t)g_fing_w*g_fing_h;
         /* LED clock digits (0-9 + blank) drawn over the blanked cells */
         g_clk_x=(ap[0]<<8)|ap[1]; ap+=2; g_clk_y=(ap[0]<<8)|ap[1]; ap+=2;
         g_ndigit=*ap++; if(g_ndigit>11) g_ndigit=11;
         for(int k=0;k<g_ndigit;k++){ g_dig_w[k]=(ap[0]<<8)|ap[1]; ap+=2; g_dig_h[k]=(ap[0]<<8)|ap[1]; ap+=2;
             g_digit[k]=ap; ap+=(int32_t)g_dig_w[k]*g_dig_h[k]; }
+}
+static void fe_bind_gate(const uint8_t *ap)
+{
         /* moongate rise assets (type-2 scene): gate (rises) + ground cover */
         g_gw=(ap[0]<<8)|ap[1]; ap+=2; g_gh=(ap[0]<<8)|ap[1]; ap+=2; g_gx=(ap[0]<<8)|ap[1]; ap+=2;
         g_gate=ap; ap+=(int32_t)g_gw*g_gh;
         g_cvw=(ap[0]<<8)|ap[1]; ap+=2; g_cvh=(ap[0]<<8)|ap[1]; ap+=2;
         g_cvx=(ap[0]<<8)|ap[1]; ap+=2; g_cvy=(ap[0]<<8)|ap[1]; ap+=2;
-        g_cover=ap; ap+=(int32_t)g_cvw*g_cvh;
+        g_cover=ap;
+}
+static void fe_bind_ccport(const uint8_t *ap)
+{
         /* character-creation portraits (MONTAGE 0..11): [u8 n][u16 pw][u16 ph] + n x [pw*ph] */
         g_cc_nport=*ap++; if(g_cc_nport>12) g_cc_nport=12;
         g_cc_pw=(ap[0]<<8)|ap[1]; ap+=2; g_cc_ph=(ap[0]<<8)|ap[1]; ap+=2;
         for(int k=0;k<g_cc_nport;k++){ g_cc_port[k]=ap; ap+=(int32_t)g_cc_pw*g_cc_ph; }
+}
+static void fe_bind_text(const uint8_t *ap)
+{
         /* gypsy questions (from U.EXE): [u8 nq] + nq x [u16 len][len bytes] (not NUL-term) */
         g_cc_nq=*ap++; if(g_cc_nq>28) g_cc_nq=28;
         for(int q=0;q<g_cc_nq;q++){ g_cc_qlen[q]=(ap[0]<<8)|ap[1]; ap+=2;
@@ -6027,7 +6389,7 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
         if(!g_intro_have)
             for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); }
         /* chargen ceremony text (from U.EXE): [u16 nameL][name][u16 genderL][gender]
-         * [u8 nA]+A[u16 L][b] [u8 nG]+G[u16 L][b] [u8 nF]+F[u16 L][b]. Points into the pak. */
+         * [u8 nA]+A[u16 L][b] [u8 nG]+G[u16 L][b] [u8 nF]+F[u16 L][b] [u8 nGarg]+... Points into the pak. */
         { int L;
           L=(ap[0]<<8)|ap[1]; ap+=2; g_cc_np=(const char*)ap; g_cc_np_len=L; ap+=L;
           L=(ap[0]<<8)|ap[1]; ap+=2; g_cc_gp=(const char*)ap; g_cc_gp_len=L; ap+=L;
@@ -6039,79 +6401,201 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
           for(int q=0;q<g_nftxt;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_ftxt[q]=(const char*)ap; g_ftxt_len[q]=L; ap+=L; }
           g_ngarg=*ap++; if(g_ngarg>CC_GARG_MAX) g_ngarg=CC_GARG_MAX;   /* §1B gargoyle-sacrifice opening */
           for(int q=0;q<g_ngarg;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_garg[q]=(const char*)ap; g_garg_len[q]=L; ap+=L; } }
-        /* (BOOK.DAT text moved to the RESIDENT core section U6BK — the ST frees this front-end block
-         * with U6FE, which nulled in-game reading. Parsed in the core-pack loader instead.) */
-        /* gypsy "casting" scene: [768 pal5][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll] */
+        /* (BOOK.DAT text lives in the RESIDENT core section U6BK — the front-end is freed on 4 MB machines.) */
+}
+static void fe_bind_gypsy(const uint8_t *ap)
+{
+        /* gypsy "casting" scene: [768 pal5][48+256 lc][u16 gw][u16 gh][gw*gh][u16 sw][u16 sh][sw*sh scroll]
+         * + the raw GYPSY.SHP shape table (nuvie image_load_all): [u16 nsh] + per shape [u16 w][u16 h][w*h].
+         * The engine composites the casting scene + pour animation from these (jar 16, jar_liquid
+         * 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour) by shape number. */
         g_gyp_pal=ap; ap+=768; g_gyp_lc=ap; ap+=48+256;
         g_gyp_w=(ap[0]<<8)|ap[1]; ap+=2; g_gyp_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_gyp_scene=ap; ap+=(int32_t)g_gyp_w*g_gyp_h;
         g_gscroll_w=(ap[0]<<8)|ap[1]; ap+=2; g_gscroll_h=(ap[0]<<8)|ap[1]; ap+=2;
         g_gyp_scroll=ap; ap+=(int32_t)g_gscroll_w*g_gscroll_h;
-        /* raw GYPSY.SHP shape table (nuvie image_load_all): [u16 nsh] + per shape [u16 w][u16 h][w*h].
-         * The engine composites the casting scene + pour animation from these (jar 16, jar_liquid
-         * 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour) by shape number. */
         g_ngsh=(ap[0]<<8)|ap[1]; ap+=2; if(g_ngsh>NGSH) g_ngsh=NGSH;
         for(int i=0;i<g_ngsh;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
             g_gsh_w[i]=w; g_gsh_h[i]=h; g_gsh[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
-        /* woods forest-path lead-in: [768 pal4][u16 ww][u16 wh][ww*wh panorama] */
+}
+static void fe_bind_woods(const uint8_t *ap)
+{
+        /* woods forest-path lead-in: [768 pal4][48+256 lc][u16 ww][u16 wh][ww*wh panorama] */
         g_woods_pal=ap; ap+=768; g_woods_lc=ap; ap+=48+256;
         g_woods_w=(ap[0]<<8)|ap[1]; ap+=2; g_woods_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_woods=ap; ap+=(int32_t)g_woods_w*g_woods_h;
-        /* storm window scene: [768 pal2][u16 bw][u16 bh][base][u8 nbolt]+nbolt[u16 w][u16 h][wh]
-         * [u8 nstr][u16 sx][u16 sy]+nstr[u16 w][u16 h][wh] */
+        g_woods=ap;
+}
+static void fe_bind_storm(const uint8_t *ap)
+{
+        /* storm window scene: [768 pal2][48+256 lc][u8 nbolt]+nbolt[u16 w][u16 h][u16 hx][u16 hy][wh]
+         * [u8 nstr][u16 sx][u16 sy]+nstr[u16 w][u16 h][u16 hx][u16 hy][wh] + 15 layers (below) */
         g_storm_pal=ap; ap+=768; g_storm_lc=ap; ap+=48+256;
-        g_storm_w=(ap[0]<<8)|ap[1]; ap+=2; g_storm_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_storm_base=ap; ap+=(int32_t)g_storm_w*g_storm_h;
         g_storm_nbolt=*ap++; if(g_storm_nbolt>8) g_storm_nbolt=8;
         for(int k=0;k<g_storm_nbolt;k++){ g_storm_boltw[k]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_storm_bolth[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_bolt[k]=ap;
+            g_storm_bolth[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_bolthx[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_storm_bolthy[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_bolt[k]=ap;
             ap+=(int32_t)g_storm_boltw[k]*g_storm_bolth[k]; }
         g_storm_nstr=*ap++; if(g_storm_nstr>5) g_storm_nstr=5;
         g_storm_sx=(ap[0]<<8)|ap[1]; ap+=2; g_storm_sy=(ap[0]<<8)|ap[1]; ap+=2;
         for(int k=0;k<g_storm_nstr;k++){ g_storm_strw[k]=(ap[0]<<8)|ap[1]; ap+=2;
-            g_storm_strh[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_str[k]=ap;
+            g_storm_strh[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_strhx[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_storm_strhy[k]=(ap[0]<<8)|ap[1]; ap+=2; g_storm_str[k]=ap;
             ap+=(int32_t)g_storm_strw[k]*g_storm_strh[k]; }
-        /* forest reveal: [u16 fw][u16 fh][forest base][u16 ow][u16 oh][window overlay] */
-        g_forest_w=(ap[0]<<8)|ap[1]; ap+=2; g_forest_h=(ap[0]<<8)|ap[1]; ap+=2;
-        g_forest_base=ap; ap+=(int32_t)g_forest_w*g_forest_h;
-        g_win_ow=(ap[0]<<8)|ap[1]; ap+=2; g_win_oh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_win_ov=ap; ap+=(int32_t)g_win_ow*g_win_oh;
-        /* doorway leaves: [u16 w][u16 h][left][u16 w][u16 h][right] (INTRO_2 24/25) */
-        g_door_lw=(ap[0]<<8)|ap[1]; ap+=2; g_door_lh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_door_l=ap; ap+=(int32_t)g_door_lw*g_door_lh;
-        g_door_rw=(ap[0]<<8)|ap[1]; ap+=2; g_door_rh=(ap[0]<<8)|ap[1]; ap+=2;
-        g_door_r=ap; ap+=(int32_t)g_door_rw*g_door_rh;
-        if(g_door_lw<=0||g_door_rw<=0){ g_door_l=g_door_r=0; }
-        /* stones pickup: [u16 hw][u16 hh][hand][u16 ow][u16 oh][obs][u16 bw][u16 bh][bg5] */
+        /* storm animation layers, each [u16 w][u16 h][pix]: sky, ground, trees, cloud big/2/3, rain 4..7,
+         * frame 28, glass 26, glass 27 (flash), door 24, door 25 */
+        for(int k=0;k<SWL_N;k++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_swl_w[k]=w; g_swl_h[k]=h; g_swl[k]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+}
+static void fe_bind_stones(const uint8_t *ap)
+{
+        /* stones pickup: [u16 hw][u16 hh][hand][u16 ow][u16 oh][obs][u16 bw][u16 bh][bg5][u16 cw][u16 ch][clutch] */
         g_stn_hw=(ap[0]<<8)|ap[1]; ap+=2; g_stn_hh=(ap[0]<<8)|ap[1]; ap+=2;
         g_stn_hand=ap; ap+=(int32_t)g_stn_hw*g_stn_hh;
         g_stn_ow=(ap[0]<<8)|ap[1]; ap+=2; g_stn_oh=(ap[0]<<8)|ap[1]; ap+=2;
         g_stn_obs=ap; ap+=(int32_t)g_stn_ow*g_stn_oh;
         g_stn_b5w=(ap[0]<<8)|ap[1]; ap+=2; g_stn_b5h=(ap[0]<<8)|ap[1]; ap+=2;
         g_stn_bg5=ap; ap+=(int32_t)g_stn_b5w*g_stn_b5h;
-        /* Avatar-into-gate climax: [u8 nav][u16 aw][u16 ah] + nav x [aw*ah] */
+        g_stn_cw=(ap[0]<<8)|ap[1]; ap+=2; g_stn_ch=(ap[0]<<8)|ap[1]; ap+=2;   /* clutch hand (INTRO_3 6) */
+        g_stn_clutch=(g_stn_cw>0&&g_stn_ch>0)?ap:0;
+}
+static void fe_bind_avatar(const uint8_t *ap)
+{
+        /* Avatar-into-gate climax: [u8 nav] + nav x [u16 ox][u16 oy][u16 w][u16 h][w*h] */
         g_av_n=*ap++; if(g_av_n>20) g_av_n=20;
         for(int k=0;k<g_av_n;k++){
             g_av_ox[k]=(ap[0]<<8)|ap[1]; ap+=2; g_av_oy[k]=(ap[0]<<8)|ap[1]; ap+=2;
             g_av_w[k] =(ap[0]<<8)|ap[1]; ap+=2; g_av_h[k] =(ap[0]<<8)|ap[1]; ap+=2;
             g_av_frame[k]=ap; ap+=(int32_t)g_av_w[k]*g_av_h[k]; }
+}
+static void fe_bind_garg(const uint8_t *ap)
+{
         /* §1B gargoyle-sacrifice scene: [768 pal7][48+256 ST lc][u16 nsh]+nsh x [u16 w][u16 h][w*h]
-         * + 2 x [u16 w][u16 h][w*h] (BLOCKS.SHP 0 small / 1 short scrolls). Points into the pak. */
+         * + 2 x [u16 w][u16 h][w*h] (BLOCKS.SHP 0 small / 1 short scrolls). */
         g_gg_pal=ap; ap+=768; g_gg_lc=ap; ap+=48+256;
         g_ngg=(ap[0]<<8)|ap[1]; ap+=2; if(g_ngg>GG_NSH) g_ngg=GG_NSH;
         for(int i=0;i<g_ngg;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
             g_gg_w[i]=w; g_gg_h[i]=h; g_gg[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
         for(int b=0;b<2;b++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
             g_gg_scw[b]=w; g_gg_sch[b]=h; g_gg_scroll[b]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+}
+static void fe_bind_vellum(const uint8_t *ap)
+{
         /* chargen vellum screens: [48+256 lc][u8 n=5] + n x [u16 w][u16 h][w*h] (VELLUM1 0/3/18/16/4) */
         g_vel_lc=ap; ap+=48+256;
         g_vel_n=*ap++; if(g_vel_n>5) g_vel_n=5;
         for(int i=0;i<g_vel_n;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
             g_vel_w[i]=w; g_vel_h[i]=h; g_vel[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
         for(int i=g_vel_n;i<5;i++) g_vel[i]=0;
+}
+static void fe_bind_fset(const uint8_t *ap)
+{
         /* front-end font U6.SET: [u8 h (0 = absent)][256 w][256*8 u16 row bits] (fonts.md) */
-        { int fh=*ap++; if(fh>0){ g_fset=ap; ap+=256+256*8*2; } else g_fset=0; }
-        return ap;
+        int fh=*ap++; g_fset = (fh>0) ? ap : 0;
+}
+static void fe_bind_logos(const uint8_t *ap)
+{
+        /* boot logos: [768 pal0] + 2 x [u16 w][u16 h][u32 rlelen][rle] (INTRO_1 0x45/0x46) */
+        g_logo_pal=ap; ap+=768;
+        for(int k=0;k<2;k++){ g_logo_w[k]=(ap[0]<<8)|ap[1]; ap+=2; g_logo_h[k]=(ap[0]<<8)|ap[1]; ap+=2;
+            g_logo_n[k]=((int32_t)ap[0]<<24)|((int32_t)ap[1]<<16)|((int32_t)ap[2]<<8)|ap[3]; ap+=4;
+            g_logo_rle[k]=(g_logo_n[k]>0)?ap:0; ap+=g_logo_n[k]; }
+}
+/* Bind section `id` at `ap`; NULL `ap` UNBINDS it (every pointer the runners test goes NULL/0, so
+ * a scene whose art isn't loaded degrades to "absent" instead of reading freed memory). */
+static void fe_bind(int id, const uint8_t *ap)
+{
+    switch(id){
+    case FES_MENU:   if(ap) fe_bind_menu(ap);   else { g_menu_pix=g_title_pix=g_menu_lc=0; g_menu_w=g_menu_h=0; } break;
+    case FES_INTRO:  if(ap) fe_bind_intro(ap);  else { g_nintro=0; } break;
+    case FES_SCROLL: if(ap) fe_bind_scroll(ap); else { g_scroll=0; g_scroll_w=g_scroll_h=0; } break;
+    case FES_TV:     if(ap) fe_bind_tv(ap);     else { g_tv_nimg=0; for(int k=0;k<TV_NIMG;k++) g_tvi[k]=0; g_finger=0; g_ndigit=0; } break;
+    case FES_GATE:   if(ap) fe_bind_gate(ap);   else { g_gate=g_cover=0; } break;
+    case FES_CCPORT: if(ap) fe_bind_ccport(ap); else { g_cc_nport=0; for(int k=0;k<12;k++) g_cc_port[k]=0; } break;
+    case FES_TEXT:   if(ap) fe_bind_text(ap);   else { g_cc_nq=0; g_intro_have=0; g_cc_np=g_cc_gp=0; g_cc_np_len=g_cc_gp_len=0;
+                                                       g_nappr=g_ngreet=g_nftxt=g_ngarg=0;
+                                                       for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); } } break;
+    case FES_GYPSY:  if(ap) fe_bind_gypsy(ap);  else { g_gyp_scene=g_gyp_scroll=g_gyp_pal=g_gyp_lc=0; g_ngsh=0; for(int i=0;i<NGSH;i++) g_gsh[i]=0; } break;
+    case FES_WOODS:  if(ap) fe_bind_woods(ap);  else { g_woods=g_woods_pal=g_woods_lc=0; } break;
+    case FES_STORM:  if(ap) fe_bind_storm(ap);  else { g_storm_pal=g_storm_lc=0; g_storm_nbolt=g_storm_nstr=0; for(int k=0;k<SWL_N;k++) g_swl[k]=0; } break;
+    case FES_STONES: if(ap) fe_bind_stones(ap); else { g_stn_hand=g_stn_obs=g_stn_bg5=g_stn_clutch=0; } break;
+    case FES_AVATAR: if(ap) fe_bind_avatar(ap); else { g_av_n=0; } break;
+    case FES_GARG:   if(ap) fe_bind_garg(ap);   else { g_ngg=0; for(int i=0;i<GG_NSH;i++) g_gg[i]=0; g_gg_scroll[0]=g_gg_scroll[1]=0; g_gg_pal=g_gg_lc=0; } break;
+    case FES_VELLUM: if(ap) fe_bind_vellum(ap); else { g_vel_n=0; for(int i=0;i<5;i++) g_vel[i]=0; g_vel_lc=0; } break;
+    case FES_FSET:   if(ap) fe_bind_fset(ap);   else { g_fset=0; } break;
+    case FES_LOGOS:  if(ap) fe_bind_logos(ap);  else { g_logo_rle[0]=g_logo_rle[1]=0; g_logo_pal=0; } break;
+    default: break;
+    }
+}
+
+/* ---- loader state ---- */
+static uint8_t   g_fe_hdr[FEPACK_HDR_MAX];     /* header copy: base palette / ST 16 / font / directory */
+static int       g_fe_have;                    /* U6FE.PAK present + valid (v2) */
+static uint32_t  g_fe_off[FEPACK_MAX_SEC], g_fe_len[FEPACK_MAX_SEC];
+static int32_t   g_fe_size;                    /* whole file size */
+static uint8_t  *g_fe_res;                     /* whole file when RESIDENT (NULL = streamed) */
+static plat_mark g_fe_mark[2]; static uint32_t g_fe_gmask[2];   /* LIFO groups: [0] common, [1] intro/chargen */
+static int       g_fe_missing;                 /* diagnostics: a group load failed (out of memory) */
+
+/* Read + validate the header + directory. Sizes only; no art is loaded here. */
+static int fe_open(void)
+{
+    g_fe_have=0; g_fe_size=plat_fsize_path("U6FE.PAK");
+    if(g_fe_size < FEPACK_HDR_DIR+1) return 0;
+    plat_file f=plat_fopen("U6FE.PAK",PLAT_RDONLY); if(f==PLAT_BADFILE) return 0;
+    int32_t hn = g_fe_size < (int32_t)sizeof g_fe_hdr ? g_fe_size : (int32_t)sizeof g_fe_hdr;
+    int32_t got=plat_fread(f,g_fe_hdr,hn); plat_fclose(f);
+    if(got!=hn || memcmp(g_fe_hdr,FEPACK_MAGIC,4)!=0) return 0;
+    int nsec=g_fe_hdr[FEPACK_HDR_DIR]; if(nsec>FEPACK_MAX_SEC || FEPACK_HDR_DIR+1+nsec*FEPACK_DIR_ENT>hn) return 0;
+    for(int i=0;i<FEPACK_MAX_SEC;i++){ g_fe_off[i]=0; g_fe_len[i]=0; }
+    for(int i=0;i<nsec;i++){ const uint8_t *e=g_fe_hdr+FEPACK_HDR_DIR+1+i*FEPACK_DIR_ENT; int id=e[0];
+        if(id>=FEPACK_MAX_SEC) continue;
+        g_fe_off[id]=((uint32_t)e[1]<<24)|((uint32_t)e[2]<<16)|((uint32_t)e[3]<<8)|e[4];
+        g_fe_len[id]=((uint32_t)e[5]<<24)|((uint32_t)e[6]<<16)|((uint32_t)e[7]<<8)|e[8];
+        if(g_fe_off[id]+g_fe_len[id] > (uint32_t)g_fe_size){ g_fe_off[id]=g_fe_len[id]=0; } }
+    g_fe_have=1; return 1;
+}
+static const uint8_t *fe_hdr_basepal(void){ return g_fe_hdr+FEPACK_HDR_BASEPAL; }
+static const uint8_t *fe_hdr_lc(void)     { return g_fe_hdr+FEPACK_HDR_LCPAL; }     /* [48 pal][256 lut] */
+static const uint8_t *fe_hdr_font(void)   { return g_fe_hdr+FEPACK_HDR_FONT; }
+
+/* RESIDENT: load the whole pack once (fast pool if it fits, else chip) and bind every section for good.
+ * Returns 0 if it does not fit — the caller then streams. */
+static int fe_load_resident(int prefer_fast)
+{
+    int32_t n=0;
+    g_fe_res=(uint8_t*)plat_load_file("U6FE.PAK", prefer_fast?1:0, &n);
+    if(!g_fe_res && prefer_fast) g_fe_res=(uint8_t*)plat_load_file("U6FE.PAK", 0, &n);
+    if(!g_fe_res || n!=g_fe_size){ g_fe_res=0; return 0; }
+    for(int i=0;i<FES_N;i++) fe_bind(i, g_fe_len[i] ? g_fe_res+g_fe_off[i] : 0);
+    return 1;
+}
+/* Bind the sections in `mask`: resident = already bound (no-op); streamed = read them into a scoped
+ * chip region at LIFO depth `depth` (0 = COMMON for the whole front-end, 1 = INTRO/CHARGEN per runner).
+ * Returns 0 (nothing bound, region released) if the pack is absent or the group does not fit. */
+static void fe_group_free(int depth);
+static int fe_group_load(uint32_t mask, int depth)
+{
+    if(!g_fe_have) return 0;
+    if(g_fe_res) return 1;
+    if(g_fe_gmask[depth]) fe_group_free(depth);            /* re-entry: drop the previous group at this depth */
+    g_fe_mark[depth]=plat_chip_mark(); g_fe_gmask[depth]=0;
+    plat_file f=plat_fopen("U6FE.PAK",PLAT_RDONLY); if(f==PLAT_BADFILE) return 0;
+    int ok=1;
+    for(int i=0;i<FES_N && ok;i++){ if(!(mask&(1u<<i))) continue;
+        uint32_t len=g_fe_len[i]; if(!len){ fe_bind(i,0); continue; }
+        uint8_t *p=(uint8_t*)plat_alloc_chip(len);
+        if(!p || plat_read_at(f,(int32_t)g_fe_off[i],p,(int32_t)len)!=(int32_t)len){ ok=0; break; }
+        fe_bind(i,p); g_fe_gmask[depth]|=1u<<i; }
+    plat_fclose(f);
+    if(!ok){ g_fe_missing=1; fe_group_free(depth); return 0; }
+    return 1;
+}
+static void fe_group_free(int depth)
+{
+    if(g_fe_res) return;                                       /* resident: everything stays bound */
+    for(int i=0;i<FES_N;i++) if(g_fe_gmask[depth]&(1u<<i)) fe_bind(i,0);
+    if(g_fe_gmask[depth]) plat_chip_reset(g_fe_mark[depth]);
+    g_fe_gmask[depth]=0;
 }
 
 /* ===================== M10: music — OPL2 .M sequencer -> MIDI OUT ===================== */
@@ -6237,16 +6721,25 @@ static void music_name(char *dst, const char *base, const char *ext){
 /* Start a sequencer backend (MIDI or PSG) for a .M file, driven by the steady 60 Hz Timer-A
  * tick (tempo independent of the frame rate; plays through blocking waits). `kind` = 1 MIDI /
  * 2 PSG; `load_map` pulls the MT-32 map from MIDI.DAT (MIDI only). Caller has stopped audio. */
+/* Song buffers are STATIC (BSS), not pool allocations: the U6 .M songs are tiny (<= 1.7 KB packed,
+ * <= 2.9 KB unpacked; MIDI.DAT ~1 KB) and a song change happens many times per session — bump-
+ * allocating per play both leaked the pool and, worse, could land inside the front-end's scoped
+ * streaming region and be freed under the still-running sequencer ISR. (memory_streaming.md) */
+#define MUS_RAW_CAP  4096
+#define MUS_SONG_CAP 8192
+static uint8_t g_mus_raw[MUS_RAW_CAP], g_mus_song[MUS_SONG_CAP];
+static uint8_t g_mus_dat[2048]; static int32_t g_mus_dat_len = -2;   /* MIDI.DAT cache (-2 = not tried) */
 static void music_play_seq(const char *mfile, const music_backend_t *be, int kind, int load_map){
-    int32_t rl=0; uint8_t *raw=(uint8_t*)plat_load_file(mfile, 1, &rl);
-    if(!raw || rl<=4) return;
-    int32_t usz=u6lzw_unpacked_size(raw, rl); if(usz<=0) return;
-    uint8_t *song=(uint8_t*)plat_alloc_fast((uint32_t)usz); if(!song) return;
-    int32_t got=u6lzw_decompress(raw, rl, song, usz); if(got<=0) return;
+    /* (caller music_play_song has already run music_stop_all: the ISR is off while g_mus_song changes) */
+    int32_t rl=plat_load_into(mfile, g_mus_raw, MUS_RAW_CAP);
+    if(rl<=4) return;
+    int32_t usz=u6lzw_unpacked_size(g_mus_raw, rl); if(usz<=0 || usz>MUS_SONG_CAP) return;
+    uint8_t *song=g_mus_song;
+    int32_t got=u6lzw_decompress(g_mus_raw, rl, song, usz); if(got<=0) return;
     music_map_t map[16]; int nmap=0;
-    if(load_map){ int32_t dl=0; uint8_t *dat=(uint8_t*)plat_load_file("MIDI.DAT", 1, &dl);
-      if(dat && dl>0){ char base[16]; int i=0; for(const char*p=mfile; *p && *p!='.'&&i<15; p++) base[i++]=*p; base[i]=0;
-                       int si=mus_song_index(base); if(si>=0) nmap=mus_parse_map(dat, dl, si, map); } }
+    if(load_map){ if(g_mus_dat_len==-2) g_mus_dat_len=plat_load_into("MIDI.DAT", g_mus_dat, (int32_t)sizeof g_mus_dat);
+      if(g_mus_dat_len>0){ char base[16]; int i=0; for(const char*p=mfile; *p && *p!='.'&&i<15; p++) base[i++]=*p; base[i]=0;
+                       int si=mus_song_index(base); if(si>=0) nmap=mus_parse_map(g_mus_dat, g_mus_dat_len, si, map); } }
     if(kind==1){ plat_midi_init();
         if(g_music_gm){ static const uint8_t GMRESET[6]={0xF0,0x7E,0x7F,0x09,0x01,0xF7};   /* GM System On */
             plat_midi_write(GMRESET,6); } }                       /* (an MT-32 ignores it)          */
@@ -6453,6 +6946,12 @@ int main(int argc, char **argv)
     platform_caps_t caps; platform_detect(&caps);
     Cconws("u6e loading (stage 1: memory)...\r\n");
     if (!plat_mem_init(&caps)) { Cconws("*** memory init failed\r\n"); Crawcin(); return 1; }
+    {   /* One console line of memory facts (also what a real-HW report photographs): the pools we
+         * got. Drives the resident-vs-stream policy below (docs/design/memory_streaming.md). */
+        plat_mem_info_t mi; plat_mem_get_info(&mi);
+        dbg_num("  ST-RAM pool KB = ", (int)(mi.chip_size/1024));
+        if(mi.have_altram) dbg_num("  Fast-RAM pool KB = ", (int)(mi.fast_size/1024));
+        else Cconws("  Fast-RAM: none\r\n"); }
     Cconws("stage 1b: audio...\r\n");
     plat_dma_init(&caps);       /* M10: grab an ST-RAM ring for DMA-sound music (STE/TT/Falcon) */
     music_manager_init();       /* M10: detect DMA + read the MIDI toggle default (MIDI.CFG) */
@@ -6509,43 +7008,68 @@ int main(int argc, char **argv)
         char vb=(vc&&vl>0)?((const char*)vc)[0]:0;
         rdr_prefer_truecolor(vb!='I'&&vb!='i'); }
 
-#ifdef ST_STREAM
-    /* ST: STREAM the front-end (menu/intro/chargen) off the hard drive BEFORE the gameplay core
-     * loads — the 1.35 MB U6FE.PAK can't coexist with the core on a 4 MB ST. rdr_init first
-     * (persistent buffers), then a scoped chip region holds U6FE just for this phase; the reset
-     * frees it before the core + libs load. (platform/platmem.h; docs/design/palette_lowcolor.md) */
-    if (!rdr_init(&caps)) { Cconws("no renderer\r\n"); Crawcin(); return 1; }
-    plat_input_init();
+    /* ---- VIDEO first (all targets), then the FRONT-END, then the gameplay core -----------------------
+     * The front-end (logos/intro/menu/chargen) runs BEFORE the core pack + libraries load, so on a
+     * 4 MB machine its art can be streamed through a scoped chip region and freed wholesale before
+     * the resident gameplay data arrives; on a big-RAM machine the same code keeps it resident. One
+     * boot order for ST/TT/Falcon (docs/design/memory_streaming.md). This is the last console line
+     * before the video mode switches: if the machine dies HERE (e.g. VsetScreen on the real VIDEL),
+     * "stage 2: video" is what stays on the white screen. */
+    /* ---- MEMORY PLAN: resident where the RAM permits, streamed otherwise (memory_streaming.md) ----
+     * Decided from the pools' free space (everything persistent but the video buffers is allocated by
+     * now; those are covered by VIDEO below) and the data files' sizes (Fopen/Fseek only, nothing read).
+     * Printed BEFORE the video switch so it stays readable on the console. */
+    int32_t sz_fe   = plat_fsize_path("U6FE.PAK");  if(sz_fe<0)   sz_fe=0;
+    int32_t sz_core = plat_fsize_path(PACK_NAME);   if(sz_core<0) sz_core=0;
+    int32_t sz_libs = 0; for(int i=0;i<LIB_N;i++){ int32_t z=plat_fsize_path(g_lib[i].name); if(z>0) sz_libs+=z; }
+    int fe_resident=0, fe_prefer_fast=0;
+    {   plat_mem_info_t mi; plat_mem_get_info(&mi);
+        const long VIDEO   = 256L*1024L;            /* backbuffer + screen(s): TT 3x77K, Falcon tc 77K+154K, ST ~100K */
+        const long RESERVE = 384L*1024L;            /* kept free for play: save template, misc, safety */
+        long chip_free = (long)mi.chip_size - (long)mi.chip_used - VIDEO;
+        long fast_free = mi.have_altram ? (long)mi.fast_size - (long)mi.fast_used : 0;
+        int core_in_fast = mi.have_altram && fast_free >= sz_core;
+        if (mi.have_altram && fast_free >= (long)sz_fe + sz_core &&
+            chip_free >= (long)sz_libs + RESERVE){ fe_resident=1; fe_prefer_fast=1; }      /* FE + core both in Fast RAM */
+        else if (chip_free >= (long)sz_fe + (core_in_fast ? 0 : sz_core) + sz_libs + RESERVE) fe_resident=1;   /* FE in ST-RAM */
+        Cconws(fe_resident ? "  front-end: resident\r\n" : "  front-end: streamed (tight RAM)\r\n"); }
+
+    Cconws("stage 2: video...\r\n");
+    if (!rdr_init(&caps)) {
+        Cconws("\r\n*** Renderer init failed (could not set the video mode / allocate buffers).\r\n");
+        Crawcin(); return 1; }
+    plat_input_init();                              /* fast key auto-repeat for smooth movement */
     g_bb=rdr_backbuffer(); g_W=rdr_width();
-    {   plat_mark fe_mark = plat_chip_mark();
-        /* U6FE into CHIP (fast=0): plat_chip_reset below frees CHIP, so the front-end pack MUST land there
-         * to be reclaimed. On the ST fast==chip (no alt-RAM) so this is unchanged; on TT it's the fix that
-         * lets the ~1.35 MB U6FE actually free before the gameplay core loads (was fast=1 -> TT-RAM -> leaked). */
-        int32_t felen=0; uint8_t *fe=(uint8_t*)plat_load_file("U6FE.PAK",0,&felen);
-        if (fe && felen>2356 && fe[0]=='U'&&fe[1]=='6'&&fe[2]=='F'&&fe[3]=='E'){
-            /* U6FE = [4 magic][48 pal][256 lut][2048 font][art]. Activate the game 16 so the
-             * front-end renders in colour (the core's U6WW isn't loaded yet). */
-            rdr_set_lowcolor(fe+4, fe+4+48);
-            g_fe_base_lc = fe+4;                        /* base 16 to restore between cutscene scenes */
-            g_font = fe+4+48+256;                       /* font (2048 bytes) for text */
-            parse_frontend(fe+4+48+256+2048);           /* set g_menu/g_intro/g_gyp/... into fe */
+    video_diag_log(&caps);                          /* DIAG.REQ present -> write VIDEO.LOG (real-HW triage) */
+
+    /* ---- FRONT-END: menu / intro / character creation, from the sectioned U6FE.PAK ---------------- */
+    if (fe_open()){
+        /* header: activate the game 16 (ST) so the front-end renders in colour before the core's U6WW
+         * exists; the base (U6PAL) palette for TT/Falcon; the U6.CH font for its text. */
+        rdr_set_lowcolor(fe_hdr_lc(), fe_hdr_lc()+48);
+        g_fe_base_lc = fe_hdr_lc();                     /* base 16 to restore between cutscene scenes */
+        g_font = fe_hdr_font();                         /* font (2048 bytes) for front-end text */
+        g_basepal = fe_hdr_basepal();                   /* menu/title palette until the core's replaces it */
+        rdr_set_palette(g_basepal,256);
+        int fe_ok = fe_resident ? fe_load_resident(fe_prefer_fast) : 0;
+        if (!fe_ok) fe_ok = fe_group_load(FEG_COMMON,0);   /* streamed (or resident did not fit after all) */
+        if (fe_ok){
             int32_t ml=0;
-            void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq){ int c=ml>0?((uint8_t*)ireq)[0]:0; g_intro_start=(c>='0'&&c<='9')?c-'0':(c=='s')?-1:0; run_intro(); }   /* explicit intro capture ('0'..'9' = start scene) */
+            void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq){ int c=ml>0?((uint8_t*)ireq)[0]:0; g_intro_start=(c>='0'&&c<='9')?c-'0':(c=='s')?-1:0;
+                                                                       g_intro_logos=(c=='L'); if(c=='L') g_intro_start=0; run_intro(); }   /* explicit intro capture ('0'..'9' = start scene, 'L' = logos + all) */
             void*creq=plat_load_file("CHARGEN.REQ",1,&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');
             void*mreq=plat_load_file("MENU.REQ",1,&ml);
-            if(mreq){ if(!ireq && !creq) run_intro();   /* interactive boot: auto-play the (skippable) intro FIRST */
-                      run_menu(); }                    /* then the title/main menu */
+            if(mreq){ if(!ireq && !creq){ g_intro_logos=1; run_intro(); }   /* interactive boot: logos + the (skippable) intro FIRST */
+                      run_menu(); }                    /* then the title/main menu (authentic boot order) */
         }
         {   int32_t mil=0; if(plat_load_file("MEMINFO.BIN",1,&mil)){ plat_mem_info_t mi; plat_mem_get_info(&mi);
-                dbg_num("MEM fe_loaded=", fe?1:0);
+                dbg_num("MEM fe_resident=", g_fe_res?1:0);
+                dbg_num("MEM fe_missing=", g_fe_missing);
                 dbg_num("MEM with_fe_used KB=", (int)(mi.chip_used/1024)); } }
-        plat_chip_reset(fe_mark);                       /* FREE U6FE — reclaim ~1.35 MB for gameplay */
-        g_font=NULL; g_fset=NULL;                        /* front-end font pointers dangle; core re-sets g_font.
-                                                          * (BOOK text is now in the resident core U6BK, so
-                                                          * it survives this free — no g_nbook reset.) */
-    }
-#endif
-    Cconws("stage 2: game data...\r\n");
+        fe_group_free(0);                               /* streamed: FREE the front-end region before the core loads */
+        if(!g_fe_res){ g_font=NULL; g_fset=NULL; g_basepal=NULL; }   /* header pointers stay valid (static), but the core re-sets these */
+    } else if (sz_fe>0) Cconws("  U6FE.PAK is not a v2 pack (rebuild: make world) - front-end skipped\r\n");
+    /* (no console line here: the video mode is up — text would scribble on the game screen) */
     uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
     if(!pak) pak=(uint8_t*)plat_load_file(PACK_NAME,0,&n);   /* fast pool full (tight TT-RAM) -> load into CHIP (ST-RAM);
                                                               * the tileset then reads slower but the game FITS. A stock
@@ -6555,9 +7079,10 @@ int main(int argc, char **argv)
      * game's pack; U6's magic is "U6WT". SE/MD register their own magics as they land. */
     const GameDef *gd = (pak && n>=26) ? gamedef_for_magic((const char*)pak) : NULL;
     if (!gd){
-        /* Readable failure instead of a cryptic near-blank screen: this runs BEFORE rdr_init,
-         * so it prints on the plain TOS console. Say WHICH file and WHERE we looked so a bad
+        /* Readable failure instead of a cryptic near-blank screen: restore the desktop video mode
+         * (rdr_shutdown), then print on the plain TOS console WHICH file and WHERE we looked so a bad
          * working dir / incomplete install is obvious (real-HW "white screen" root cause). */
+        music_stop_all(); rdr_shutdown();
         char cwd[80]; cwd[0]='\0'; Dgetpath(cwd, 0);
         Cconws("\r\n*** Could not load the game data file  "); Cconws(PACK_NAME); Cconws("\r\n");
         if (!pak) {
@@ -6832,11 +7357,12 @@ int main(int argc, char **argv)
                 objworld_consume(&g_ow,(uint16_t)on,99999);            /* clear the seed */
                 if(g_load_reag[b]>0) inv_add_objn(on,g_load_reag[b]); }
         }
-        /* FRONT-END art block (U6WU..avatar climax): the slim ST pack OMITS this ~1.35 MB of intro/
-         * chargen art to fit a real 4 MB ST (gameplay never uses it) and writes a "NOFE" marker in
-         * its place. Full packs (TT/Falcon) parse it as before. (docs/design/palette_lowcolor.md) */
-        if(ap+4<=pak+n && ap[0]=='N'&&ap[1]=='O'&&ap[2]=='F'&&ap[3]=='E'){ ap+=4; }   /* slim: skip */
-        else { ap = parse_frontend(ap); }   /* full pack: parse the inline front-end art block */
+        /* FRONT-END art: NEVER inline any more — it lives in the sectioned U6FE.PAK (memory_streaming.md);
+         * the core pack carries a "NOFE" marker here. An old-style full pack (art inline) can't be walked
+         * by this loader: stop the tail parse (the low-colour sections below are lost -> the ST would run
+         * on the default 16) and say so. */
+        if(ap+4<=pak+n && ap[0]=='N'&&ap[1]=='O'&&ap[2]=='F'&&ap[3]=='E'){ ap+=4; }
+        else { Cconws("U6.PAK: old full pack (front-end inline) - rebuild with make world\r\n"); ap=pak+n; }
 
         /* LOW-COLOUR ST palette + 256->16 LUT (U6WW), appended last & self-guarded by a
          * "U6WW" magic (older packs stop at EOF here). [4 magic][16 x {r,g,b} 3-bit levels]
@@ -6934,11 +7460,14 @@ int main(int argc, char **argv)
             dbg_num("MEM after_pack_used KB=", (int)(_mi.chip_used/1024));
             dbg_num("MEM after_pack_free KB=", (int)((_mi.chip_size-_mi.chip_used)/1024)); } }
 
-    g_convA=(const uint8_t*)plat_load_file("CONVERSE.A",0,&g_convAlen);
-    g_convB=(const uint8_t*)plat_load_file("CONVERSE.B",0,&g_convBlen);
-    g_portA=(const uint8_t*)plat_load_file("PORTRAIT.A",0,&g_portAlen);
-    g_portB=(const uint8_t*)plat_load_file("PORTRAIT.B",0,&g_portBlen);
-    g_countA=g_convA?lib_count(g_convA,g_convAlen):0;   /* guard: libs may fail on a tight ST pool */
+    /* CONVERSE/PORTRAIT libraries: RESIDENT if they fit the pool with headroom to spare, else ON DEMAND
+     * (offset index only; entries read per conversation). memory_streaming.md */
+    {   plat_mem_info_t mi; plat_mem_get_info(&mi);
+        long free_now = ((long)mi.chip_size - (long)mi.chip_used) + (mi.have_altram ? (long)mi.fast_size - (long)mi.fast_used : 0);
+        g_libs_resident = free_now >= (long)sz_libs + 384L*1024L;
+        g_libs_ok=1; for(int i=0;i<LIB_N;i++) if(!lib_open(&g_lib[i], g_libs_resident)) g_libs_ok=0;
+        g_libs_resident = g_libs_ok && g_lib[LIB_CONVA].data && g_lib[LIB_CONVB].data && g_lib[LIB_PORTA].data && g_lib[LIB_PORTB].data;
+        g_countA=g_lib[LIB_CONVA].count; }
 
     if(_meminfo){ plat_mem_get_info(&_mi);
         dbg_num("MEM chip(ST-RAM)_used KB=", (int)(_mi.chip_used/1024));
@@ -6947,19 +7476,10 @@ int main(int argc, char **argv)
         dbg_num("MEM fast(TT-RAM)_size KB=", (int)(_mi.fast_size/1024));
         dbg_num("MEM fast_used KB=", (int)(_mi.fast_used/1024));
         dbg_num("MEM RESIDENT total KB=", (int)((_mi.chip_used + (_mi.have_altram?_mi.fast_used:0))/1024));
-        dbg_num("MEM libs_ok=", (g_convA&&g_convB&&g_portA&&g_portB)?1:0); }
+        dbg_num("MEM libs_ok=", g_libs_ok);
+        dbg_num("MEM libs_resident=", g_libs_resident); }
 
-#ifndef ST_STREAM   /* ST did rdr_init early (before streaming the front-end); TT/Falcon do it here */
-    /* This is the last console line before the video mode switches — if the machine dies HERE
-     * (e.g. VsetScreen on the real VIDEL), "stage 3: video" is what stays on the white screen. */
-    Cconws("stage 3: video...\r\n");
-    if (!rdr_init(&caps)) {
-        Cconws("\r\n*** Renderer init failed (could not set the video mode / allocate buffers).\r\n");
-        Crawcin(); return 1; }
-    plat_input_init();                              /* fast key auto-repeat for smooth movement */
-#endif
     rdr_set_palette(palette, 256);
-    video_diag_log(&caps);                          /* DIAG.REQ present -> write VIDEO.LOG (real-HW triage) */
     /* STE 4096-colour variant: if the shifter is an STE AND the pack carries U6WS 4-bit palettes,
      * switch the backend to the 4-bit register format and hand it the 4-bit arrays from here on (the
      * front-end already ran in 3-bit, which an STE displays fine via backward compatibility). */
@@ -7039,15 +7559,6 @@ int main(int argc, char **argv)
      * plain headless scene captures still render the game). "Journey Onward" returns
      * here and play begins. INTRO.REQ plays the cutscene directly (headless capture of
      * Phase 2 without navigating the menu). (shapes.md; Phase 1/2.) */
-#ifndef ST_STREAM   /* ST ran the front-end EARLY (streamed from U6FE, then freed); TT/Falcon here */
-    { int32_t ml=0;
-      void*ireq=plat_load_file("INTRO.REQ",1,&ml); if(ireq){ int c=ml>0?((uint8_t*)ireq)[0]:0; g_intro_start=(c>='0'&&c<='9')?c-'0':(c=='s')?-1:0; run_intro(); }   /* explicit intro capture ('0'..'9' = start scene) */
-      void*creq=plat_load_file("CHARGEN.REQ",1,&ml);                          /* headless chargen capture */
-      if(creq) chargen_capture(ml>0 ? ((uint8_t*)creq)[0] : '1');             /* byte selects the sub-screen */
-      void*mreq=plat_load_file("MENU.REQ",1,&ml);
-      if(mreq){ if(!ireq && !creq) run_intro();   /* interactive boot: auto-play the (skippable) intro FIRST */
-                run_menu(); } }                    /* then the title/main menu (authentic boot order) */
-#endif
     apply_chargen();   /* if a character was created, it becomes the Avatar (name/stats) for play */
 
     /* headless NEW-GAME verification: if NEWGAME.BIN is staged, print the assembled new-game
@@ -7950,9 +8461,11 @@ int main(int argc, char **argv)
      * BENCH.BIN = 8 big-endian u32: HOLD{compose,c2p,out,frames}, PAN{compose,c2p,out,frames}. */
     {   int32_t ibl=0; void *ib=plat_load_file("IBENCH.REQ",1,&ibl);   /* 8.3 name (GEMDOS clips >8.3) */
         if(ib){
-            int save=g_nintro; if(g_nintro>1) g_nintro=1;         /* scene 0 = living room (has HOLD + PAN) */
+            fe_group_load(FEG_COMMON,0);                          /* the front-end may have been streamed + freed */
+            g_intro_bench1=1;                                     /* scene 0 only = living room (has HOLD + PAN) */
             run_intro();
-            g_nintro=save;
+            g_intro_bench1=0;
+            fe_group_free(0);
             rdr_shutdown();
             uint32_t hn=g_iph_n[IPH_HOLD], pn=g_iph_n[IPH_PAN];
             uint32_t r[8]={ g_iph[IPH_HOLD][0],g_iph[IPH_HOLD][1],g_iph[IPH_HOLD][2],hn,
