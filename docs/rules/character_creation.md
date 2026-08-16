@@ -79,9 +79,12 @@ the poured virtue colours). Remaining = polish only (gypsy setup/closing narrati
   nuvie create_character: the WORLD state is the game's SHIPPED start and character creation
   OVERLAYS just the six fields {name, gender, portrait, Str, Dex, Int} onto the Avatar (actor 1).
   - THE SHIPPED START ALREADY IS THE CANONICAL NEW GAME. The default (non-svm) mkworld build
-    (`make gamedata`→`world`) bakes the original SAVEGAME/OBJLIST into U6.PAK with the Avatar at
-    **Lord British's castle (315,367)**, noon, and the four-member party {Avatar, Dupre, Shamino,
-    Iolo}. (The "demo SAVE.000 state" only ever applied to the `-svm` capture/test builds, e.g.
+    (`make gamedata`→`world`) bakes the pristine objects (LZOBJBLK) + OBJLIST into U6.PAK with
+    the Avatar at **(307,352) — before Lord British's throne (LB on it at 307,348) — at 08:00**,
+    the OBJLIST's own start clock, and the four-member party {Avatar, Dupre, Shamino, Iolo}.
+    (CORRECTED 2026-08-15 after the real-Falcon run: the earlier default (315,367)/noon was
+    LB's noon DINING spot in the great hall — a headless auto-talk convenience, not the throne
+    room; the "demo SAVE.000 state" only ever applied to the `-svm` capture/test builds, e.g.
     `make m5-svm` — normal play was never the demo save.)
   - apply_chargen overlays: Str/Dex/Int → Avatar; name → roster + the conversation VM's player
     %token (g_avatar_name); **mana MAX recomputed** from the new Int (2×Int, magic_skills.md §3 —
@@ -96,9 +99,10 @@ the poured virtue colours). Remaining = polish only (gypsy setup/closing narrati
   - MENU FLOW: "Create a Character" (run_chargen) now drops STRAIGHT into the new game on completion
     (run_menu returns Journey Onward when g_cc_done), the authentic U6 flow — not back to the menu.
   - VALIDATED (`make newgame`, CHARGEN.REQ='N' sample 'Milady' + NEWGAME.BIN conout assert): avatar
-    'Milady' at (315,367), Str/Dex/Int 21/13/19, maxmana 38 (=2×19), sex 1 (female), party 4,
-    spellbook held 1; the game screen renders LB's castle throne room with the roster
-    {Milady,Dupre,Shamino,Iolo} and status "12:0 Lv3 MP38/38".
+    'Milady' at the pack start (then 315,367; now 307,352), Str/Dex/Int 21/13/19, maxmana 38
+    (=2×19), sex 1 (female), party 4, spellbook held 1; the game screen renders LB's castle
+    with the roster {Milady,Dupre,Shamino,Iolo} and the status line (then "12:0 Lv3 MP38/38";
+    now 08:00).
   - STATUS SCREEN — DONE (draw_char_view, validated on TT via `make status`). Clicking a party
     member in the right-panel roster opens their CHARACTER STATUS VIEW: portrait + name + (the
     Avatar's created) gender + Str/Dex/Int + HP/MP + Lev/Exp. The Avatar shows the CREATED montage

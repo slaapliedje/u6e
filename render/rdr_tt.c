@@ -122,6 +122,7 @@ static uint16_t hw_nibble(uint8_t v6)
     return (uint16_t)((v6 >> 2) & 0x0F);
 }
 
+int rdr_palette_deferred(void) { return 0; }        /* hardware CLUT */
 void rdr_set_palette(const uint8_t *rgb6, int n)
 {
     if (n > 256) n = 256;
@@ -143,7 +144,7 @@ void rdr_set_ste_mode(int on) { (void)on; }                      /* STE 4-bit pa
 void rdr_prefer_truecolor(int on) { (void)on; }                  /* TT-low stays 8-bit indexed     */
 int  rdr_is_ste(void) { return 0; }
 
-void rdr_debug_info(uint32_t out[6])
+void rdr_debug_info(uint32_t out[12])
 {
     out[0] = (uint32_t)(uintptr_t)Physbase();
     out[1] = (uint32_t)(uintptr_t)Logbase();
@@ -151,6 +152,7 @@ void rdr_debug_info(uint32_t out[6])
     out[3] = (uint32_t)(uint16_t)EgetShift();
     out[4] = (uint32_t)(uint16_t)Getrez();
     out[5] = (uint32_t)TT_SCREEN_BYTES;
+    out[6] = out[7] = out[8] = out[9] = out[10] = out[11] = 0;
 }
 
 /* C REFERENCE for c2p_span_asm (render/c2p_asm.s) — the asm must stay byte-identical

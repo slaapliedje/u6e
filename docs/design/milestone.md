@@ -1471,6 +1471,83 @@ and the Nuvie-derived spec. CONFIRMED.
 
 ---
 
+## Real-hardware log — Falcon030 (2026-08-15, first full front-end run from the ZuluSCSI HD)
+Reported by the user; each item traced + fixed under Hatari the same day, pending re-test:
+- **DMA music silent under plain TOS, garbled under MiNT** → the Falcon DAC hears DMA playback
+  only through the adder's MATRIX input (off after reset) and Devconnect handshaking varies the
+  transfer rate; the Falcon path now configures the sound system through the XBIOS (Locksnd/
+  Sndstatus/Setmode/Settracks/Setmontracks/Devconnect NO_SHAKE STE-compat/Soundcmd SETPRESCALE+
+  ADDERIN+atten/Setbuffer/Buffoper/Buffptr) — docs/formats/music.md, platform/platdma.c.
+- **"Transparency" holes** (boot soles, companions' eyes, altar band, moonstone in the hand) →
+  U6 .SHP transparency is block coverage; a covered index 0 is opaque black. Decoder prefill
+  255 + all FE blits keyed on 255 (docs/formats/shapes.md "Transparency"). Was wrong under
+  Hatari too — a real-monitor look caught it.
+- **No pointer on the menu/chargen; can't click the gypsy pages** → the front-end never drew
+  a pointer (Hatari too). U6 arrow now shown on the main menu + the A/B questions (nuvie's
+  visibility), palette 19/27 patched over the gypsy scene, live tracking while blocked, and
+  a click counts as "any input" on every ceremony page (nuvie wait_for_input).
+- **Question prose under the A/B buttons** → nuvie's image_print rule (proportional, 7..303,
+  justified, 8-px lines) — chargen_authentic.md §3f.
+- **Gargoyle scene very slow** → incremental dirty-rect compositing + rect presents + tight
+  pre-clipped blit loops (chargen_authentic.md §1B.1 engine note); palette-only effects
+  (fades, ring cycle, crimson cycle) now re-present on the truecolor path (rdr_palette_deferred).
+- **Not in LB's throne room** → the pack default (315,367)/noon was LB's noon dining spot
+  (a headless auto-talk convenience); default now the pristine OBJLIST start (307,352)/08:00
+  before the throne (character_creation.md).
+- **WHITE SCREEN with the AUTO folder active (fine with AUTO skipped)** — OPEN. gamef.prg links
+  only the VIDEL backend, so it is not the EdDI/vcard selection. The active AUTO chain on the
+  user's HD0 is XBOOT → MAPROM_C → WDIALOG → NVDI 5 → EXTENDOS (MiNT/MagiC/NVDI 2.52 as XBoot
+  sets). Leading hypothesis: a resident screen extension (NVDI 5's Falcon screen driver, or a
+  VIDEL enhancer) intercepts VsetScreen so the VIDEL keeps showing ITS (VDI-cleared, white)
+  screen while we render into ours (white = VDI background; the engine was alive — music
+  played). Hardening shipped: rdr_falcon verifies base+mode after VsetScreen (Vsync first; PAL/
+  OVERSCAN bits masked) and forces them (Setscreen base-only → VIDEL $FF8201/03/0D directly),
+  re-checks the base every full present, and a `DIAG.REQ` in the game folder makes the engine
+  write **VIDEO.LOG** (backend, cookies NVDI/EdDI/MiNT/MagX/CT60/..., monitor, requested vs
+  actual mode, physbase vs our screen, recovery flags, memory) — the next AUTO-on run on the
+  real machine reports what happened. VIDEO.CFG='I' forces the 8-bit indexed VIDEL path if the
+  16-bit mode is what the extension dislikes.
+  **Update (same day):** the user's Falcon is a **DFB1X** (68030 @ 50 MHz + 50 MHz FPU + 128 MB
+  Fast RAM); MAPROM_C is the tool that opens that Fast RAM (Maddalt-style) — so "AUTO on" =
+  Fast RAM present, "AUTO skipped" = 50 MHz 030 starved by the 16-bit ST-RAM bus (which is also
+  why the old full-recomposite gargoyle scene crawled). Hatari Falcon + `--ttram 64 --addr24
+  off --fpu 68882` boots and renders both the truecolor and the 8bpp paths (program in TT-RAM,
+  ST-RAM pool from $B9D00) — so the Fast-RAM configuration per se is fine in emulation; MAPROM's
+  real MMU/ROM mapping remains the unknown. The init ladder now also checks the VIDEL registers
+  themselves (SPSHIFT $FF8266 bit8 tc / bit4 8bpp) — if a resident patch answers the XBIOS
+  inquiry correctly but the hardware isn't in truecolor, it re-sets the mode and, failing that,
+  FALLS BACK to the 8bpp indexed mode; VIDEO.LOG prints SPSHIFT/STSHIFT/MONTYPE/LINEWIDTH/HWBASE.
+  MAPROM_C read (agranlund/tftools, old v1.9 `maprom_c`): TT-RAM at $01000000 + `_FRB`, MMU 2K pages,
+  ROM + low RAM relocated to TT-RAM, ST-RAM L1 cache ENABLED (the `_C`); the exxos DFB1X page says
+  NVDI is REQUIRED with alt-RAM (blitter can't reach 32-bit addresses). Our PRGFLAGS = 7 → GAMEF.PRG
+  loads into Fast RAM. Ran the user's actual MAPROM_C.PRG under Hatari (`--mmu on --data-cache on
+  --cpu-exact on --ttram 64`): boots + renders → not reproducible in emulation; suspects narrowed to
+  NVDI 5 / MiNT. Plan: XBoot bisection on the machine + VIDEO.LOG.
+
+### Second real-Falcon run (2026-08-15, later the same day)
+- **AUTO bisection step 1: MAPROM_C alone (+ the control panel) → the game runs.** So Fast RAM /
+  MMU / ST-RAM cache are cleared on the real machine; the white screen belongs to something later
+  in the chain (NVDI 5 / EXTENDOS-MiNT). Next: + NVDI, then the MiNT set, with VIDEO.LOG.
+  The machine's own `VIDEO.LOG` from that run (pulled off the card): backend 2, `_CPU`=30 `_FPU`=
+  00020000, `PMMU`/`_FRB` cookies present (MAPROM active), **fast=128569K** (the 128 MB), chip
+  13818K, phystop $E00000; VsetScreen'd exactly the requested mode **$0114** (VGA truecolor,
+  no PAL bit — Hatari reports $0134), physbase = logbase = our screen ($D5A00), SPSHIFT=$0100
+  (truecolor bit set), MONTYPE=$A6, recovery flags **0**. I.e. the clean-boot baseline is exactly
+  what the code expects; a later white-screen log can be diffed against it line by line.
+- **Music better but only the first ~2.6 s repeated, some roughness** → the DMA ring pump ran only
+  in the gameplay loop; every other wait (front-end, modal pages) now goes through `vsync_pump()`
+  (Vsync + pump). Adder = MATRIX only while the DMA backend plays (ADC hiss/keyclick out; restored
+  on stop); the frame counter is read from $FFFF8909/0B/0D on all three DMA machines. Hatari:
+  BOOTUP.PCM tracked linearly for 20 s of front-end (docs/formats/music.md).
+- **Transparencies fixed** (confirmed on the monitor).
+- **Missing doorway between the storm window and the forest** (user memory, confirmed in nuvie's
+  window_sequence): the 4th storm page pans the frame off with the two door LEAVES (INTRO_2 24/25)
+  trailing → hold at the doorway → leaves slide apart → "you bolt from your house" over the clear
+  forest. Shipped in the pack + `forest_reveal()` (intro_sequence.md §2/§3).
+- **Avatar enters the red moongate as a BLACK silhouette, not grey** (user memory, confirmed:
+  nuvie blacks palette entry 25 for the walk + dissolve, restores 0x74 after) → avatar_climax uses
+  a 25-blacked palette (LUT 25 → darkest slot on the ST 16) for those two phases.
+
 ## Risk register (review each milestone)
 | Risk | Mitigation | Milestone |
 |------|------------|-----------|

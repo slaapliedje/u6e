@@ -301,6 +301,7 @@ uint8_t *rdr_backbuffer(void) { return g_back; }
 /* ---- palette: load the VDI logical colour table (index -> RGB for the blit) --------
  * U6 channels are 6-bit (0..63); the VDI wants 0..1000 per channel. vro_cpyfm of our 8-bit
  * source uses this table to produce the card's true colours. (vdi_set_color is above.) */
+int rdr_palette_deferred(void) { return g_bpp > 8; }   /* truecolor cards expand at present */
 void rdr_set_palette(const uint8_t *rgb6, int n)
 {
     if (n > 256) n = 256;
@@ -403,7 +404,7 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
     blit_rect(0, 0, VW, lh);
 }
 
-void rdr_debug_info(uint32_t out[6])
+void rdr_debug_info(uint32_t out[12])
 {
     out[0] = (uint32_t)g_scr_w;
     out[1] = (uint32_t)g_scr_h;
@@ -413,6 +414,7 @@ void rdr_debug_info(uint32_t out[6])
     /* truecolour flag + per-channel bit counts (R,G,B), so the harness can verify the layout */
     out[5] = ((uint32_t)g_truecolor << 24) | ((uint32_t)(g_ch_bits[0] & 0xFF) << 16)
            | ((uint32_t)(g_ch_bits[1] & 0xFF) << 8) | (uint32_t)(g_ch_bits[2] & 0xFF);
+    out[6] = out[7] = out[8] = out[9] = out[10] = out[11] = 0;
 }
 
 RDR_MAKE_VTABLE(vcard);       /* -> const rdr_vtable rdr_be_vcard */

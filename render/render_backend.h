@@ -10,7 +10,7 @@
  * A backend .c does, right after its normal #includes:
  *     #define RDR_BACKEND st            // st | tt | falcon | vcard
  *     #include "render_backend.h"
- * which (a) macro-renames its 25 public entry points to  <RDR_BACKEND>_<name>  (unique globals) and
+ * which (a) macro-renames its 26 public entry points to  <RDR_BACKEND>_<name>  (unique globals) and
  * (b) provides RDR_MAKE_VTABLE(st) to emit the  rdr_be_st  vtable at the bottom of the file.
  */
 #ifndef U6E_RENDER_BACKEND_H
@@ -27,6 +27,7 @@ typedef struct rdr_vtable {
     int      (*height)(void);
     uint8_t *(*backbuffer)(void);
     void     (*set_palette)(const uint8_t *, int);
+    int      (*palette_deferred)(void);
     void     (*set_lowcolor)(const uint8_t *, const uint8_t *);
     void     (*set_lowcolor_bands)(int, const uint8_t *, const uint8_t *, const uint8_t *);
     void     (*lowcolor_cycle)(const uint8_t *);
@@ -69,6 +70,7 @@ extern const rdr_vtable rdr_be_vcard;
 #define rdr_height               RDR__P(rdr_height)
 #define rdr_backbuffer           RDR__P(rdr_backbuffer)
 #define rdr_set_palette          RDR__P(rdr_set_palette)
+#define rdr_palette_deferred     RDR__P(rdr_palette_deferred)
 #define rdr_set_lowcolor         RDR__P(rdr_set_lowcolor)
 #define rdr_set_lowcolor_bands   RDR__P(rdr_set_lowcolor_bands)
 #define rdr_lowcolor_cycle       RDR__P(rdr_lowcolor_cycle)
@@ -93,7 +95,8 @@ extern const rdr_vtable rdr_be_vcard;
     const rdr_vtable rdr_be_##nm = {                                               \
         .init = rdr_init, .shutdown = rdr_shutdown, .get_caps = rdr_get_caps,       \
         .width = rdr_width, .height = rdr_height, .backbuffer = rdr_backbuffer,     \
-        .set_palette = rdr_set_palette, .set_lowcolor = rdr_set_lowcolor,           \
+        .set_palette = rdr_set_palette, .palette_deferred = rdr_palette_deferred,  \
+        .set_lowcolor = rdr_set_lowcolor,                                           \
         .set_lowcolor_bands = rdr_set_lowcolor_bands, .lowcolor_cycle = rdr_lowcolor_cycle, \
         .set_ste_mode = rdr_set_ste_mode, .is_ste = rdr_is_ste,                     \
         .prefer_truecolor = rdr_prefer_truecolor, .present = rdr_present,           \

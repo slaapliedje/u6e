@@ -35,6 +35,10 @@ uint8_t *rdr_backbuffer(void);               /* chunky 8-bit, width*height */
 
 /* rgb6 = n*3 bytes, 6-bit-per-channel (U6 palette format). */
 void     rdr_set_palette(const uint8_t *rgb6, int n);
+/* 1 if a palette change is NOT visible until the next present (the Falcon 16-bit truecolor
+ * present expands indices through a LUT at present time — no hardware CLUT). Palette-only
+ * effects (fades, colour cycling) must re-present the affected area on such backends. */
+int      rdr_palette_deferred(void);
 
 /* SHIFTER (16-colour) backend only: hand it the host-quantised low-colour data from the pack
  * (U6WW, docs/design/palette_lowcolor.md). pal16 = 16 x {r,g,b} as ST 3-bit levels (0..7);
@@ -144,9 +148,11 @@ void     rdr_pcursor_show(const uint8_t *curpix, int w, int h, int ox, int oy);
 void     rdr_pcursor_hide(void);        /* restore the pixels under the cursor */
 void     rdr_pcursor_invalidate(void);  /* forget the save-under (after a full present erased it) */
 
-/* Diagnostic: out[0]=Physbase, [1]=Logbase, [2]=our screen, [3]=EgetShift,
- * [4]=Getrez, [5]=our screen byte size. */
-void     rdr_debug_info(uint32_t out[6]);
+/* Diagnostic: out[0]=Physbase, [1]=Logbase, [2]=our screen, [3]=EgetShift/VsetMode,
+ * [4]=Getrez/VgetMonitor, [5]=our screen byte size, [6]/[7] backend-specific (Falcon: requested
+ * mode|truecolor, init recovery flags; [8..11] raw VIDEL SPSHIFT/(STSHIFT<<8|montype)/linewidth/base).
+ * Backends that don't use [6..11] leave them 0. */
+void     rdr_debug_info(uint32_t out[12]);
 
 /* Which backend the runtime dispatcher (render.c) selected: 0=ST/STE shifter, 1=TT, 2=Falcon,
  * 3=graphics-card/VDI, -1=none yet. Valid after rdr_init (or the first rdr_prefer_truecolor). */

@@ -107,3 +107,11 @@ const char *platform_video_name(video_class_t v)
     default:           return "unknown";
     }
 }
+
+int plat_cookie(uint32_t tag, uint32_t *val)
+{
+    long v = 0;
+    if (Getcookie((long)tag, &v) != C_FOUND) return 0;      /* Getcookie: mint/cookie.h jar walk */
+    if (val) *val = (uint32_t)v;
+    return 1;
+}

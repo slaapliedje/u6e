@@ -88,6 +88,33 @@ static short falcon_mode(void)
     return (short)(TV | PAL | depth | COL40);              /* 8bpp 0x023 / 16bpp 0x024 */
 }
 
+static uint32_t g_diag;        /* init recovery flags: 1 base mismatch 2 forced HW base 4 mode mismatch 8 mode still wrong
+                                * 0x10 base drifted later 0x20 forced HW later 0x40 tc not in SPSHIFT 0x80 tc never took
+                                * (fell back to 8bpp) 0x100 8bpp not in SPSHIFT; hi16 = raw first VsetMode inquiry */
+static short    g_req_mode;    /* the VIDEL mode word we asked for */
+static uint32_t g_hw[4];       /* raw VIDEL state (Supexec read): SPSHIFT, (STSHIFT<<8)|MONTYPE, LINEWIDTH, screen base */
+/* read the VIDEL registers that tell the TRUTH about the mode, independent of what a resident XBIOS
+ * patch reports: SPSHIFT $FFFF8266 (bit8 truecolour, bit4 8-bitplane), STSHIFT $FFFF8260, monitor
+ * $FFFF8006, line width $FFFF8210, screen base $FFFF8201/03/0D (corpus V11 "FALCON VIDEL REGISTERS"). */
+static long videl_read(void)
+{
+    g_hw[0] = *(volatile uint16_t *)0xFFFF8266UL;
+    g_hw[1] = ((uint32_t)*(volatile uint8_t *)0xFFFF8260UL << 8) | *(volatile uint8_t *)0xFFFF8006UL;
+    g_hw[2] = *(volatile uint16_t *)0xFFFF8210UL;
+    g_hw[3] = ((uint32_t)*(volatile uint8_t *)0xFFFF8201UL << 16) | ((uint32_t)*(volatile uint8_t *)0xFFFF8203UL << 8)
+            |  *(volatile uint8_t *)0xFFFF820DUL;
+    return 0;
+}
+/* write the VIDEL screen base registers directly (Falcon: $FFFF8201 hi, $FFFF8203 mid, $FFFF820D lo). */
+static long videl_force_base(void)
+{
+    uint32_t a = (uint32_t)(uintptr_t)g_screen;
+    *(volatile uint8_t *)0xFFFF8201UL = (uint8_t)(a >> 16);
+    *(volatile uint8_t *)0xFFFF8203UL = (uint8_t)(a >> 8);
+    *(volatile uint8_t *)0xFFFF820DUL = (uint8_t)(a);
+    return 0;
+}
+
 bool rdr_init(const platform_caps_t *caps)
 {
     (void)caps;
@@ -115,7 +142,37 @@ bool rdr_init(const platform_caps_t *caps)
     g_old_phys = Physbase();
     g_old_log  = Logbase();
 
-    VsetScreen(g_screen, g_screen, 3, falcon_mode());   /* rez==3 => Falcon mode */
+    /* VsetScreen (XBIOS 5, rez 3 = Falcon mode word): log+phys base + VIDEL mode in one call. Then
+     * VERIFY the OS actually did it — under NVDI 5 / other AUTO-folder screen extensions the call can
+     * be intercepted (real-Falcon 2026-08-15: white screen with the engine alive = the VIDEL kept
+     * showing the extension's own, VDI-cleared screen while we rendered into ours). Recovery ladder:
+     * Setscreen(base only, XBIOS 5 rez -1) -> VsetMode (XBIOS 88) -> the VIDEL base registers
+     * $FFFF8201/03/0D written directly (Supexec, XBIOS 38). g_diag records which rung was needed. */
+    { short mode = falcon_mode();
+      VsetScreen(g_screen, g_screen, 3, mode);
+      Vsync();                                                          /* the switch lands at the VBL */
+      g_diag = 0;
+      if (Physbase() != (void *)g_screen) { g_diag |= 1;
+          Setscreen(g_screen, g_screen, -1);                            /* base only */
+          if (Physbase() != (void *)g_screen) { g_diag |= 2; (void)Supexec(videl_force_base); } }
+      { short inq = VsetMode(VM_INQUIRE);
+        g_diag |= (uint32_t)(uint16_t)inq << 16;                        /* raw first inquiry (diag) */
+        /* compare only the bits we choose (BPS 0x7 | COL80 0x8 | VGA 0x10 | STMODES 0x80 | VERTFLAG
+         * 0x100): TOS reflects PAL (0x20) / OVERSCAN (0x40) from the video system into the inquiry. */
+        if ((inq & 0x019F) != (mode & 0x019F)) { g_diag |= 4;
+            VsetMode(mode);
+            if ((VsetMode(VM_INQUIRE) & 0x019F) != (mode & 0x019F)) g_diag |= 8; } }
+      g_req_mode = mode;
+      /* HARDWARE truth: does SPSHIFT agree with the depth we asked for? A resident patch can answer
+       * the XBIOS inquiry with what we asked and still not have programmed the VIDEL that way. */
+      (void)Supexec(videl_read);
+      if (g_tc && !(g_hw[0] & 0x100)) { g_diag |= 0x40;
+          VsetMode(mode); Vsync(); (void)Supexec(videl_read);
+          if (!(g_hw[0] & 0x100)) {                                     /* truecolor won't take: use 8bpp */
+              g_diag |= 0x80; g_tc = 0; mode = falcon_mode(); g_req_mode = mode;
+              VsetScreen(g_screen, g_screen, 3, mode); Vsync(); (void)Supexec(videl_read); } }
+      if (!g_tc && !(g_hw[0] & 0x010)) g_diag |= 0x100;
+    }
 
     /* Hide the AES mouse sprite: like the TT backend, we run fullscreen non-GEM
      * pointing VIDEL at our own ST-RAM buffer; the still-live AES mouse VBL
@@ -148,6 +205,7 @@ static inline uint32_t exp6(uint8_t v6)
     return (v << 2) | (v >> 4);
 }
 
+int rdr_palette_deferred(void) { return g_tc; }   /* truecolor: LUT at present */
 void rdr_set_palette(const uint8_t *rgb6, int n)
 {
     if (n > 256) n = 256;
@@ -180,7 +238,7 @@ int  rdr_is_ste(void) { return 0; }
 void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut)
 { (void)nb; (void)y0; (void)pal; (void)lut; }
 
-void rdr_debug_info(uint32_t out[6])
+void rdr_debug_info(uint32_t out[12])
 {
     out[0] = (uint32_t)(uintptr_t)Physbase();
     out[1] = (uint32_t)(uintptr_t)Logbase();
@@ -188,6 +246,10 @@ void rdr_debug_info(uint32_t out[6])
     out[3] = (uint32_t)(uint16_t)VsetMode(VM_INQUIRE);
     out[4] = (uint32_t)(uint16_t)VgetMonitor();
     out[5] = (uint32_t)g_screen_bytes;
+    out[6] = ((uint32_t)(uint16_t)g_req_mode << 16) | (g_tc ? 1u : 0u);   /* requested mode | truecolor */
+    out[7] = g_diag;                                                       /* init recovery flags */
+    (void)Supexec(videl_read);
+    out[8] = g_hw[0]; out[9] = g_hw[1]; out[10] = g_hw[2]; out[11] = g_hw[3];   /* raw VIDEL now */
 }
 
 /* truecolor: expand `npix` indexed pixels src[] -> 16-bit RGB565 dst[] via the palette LUT */
@@ -243,6 +305,11 @@ void rdr_present_doubled(int lh)
 {
     if (lh < 1) lh = 1;
     if (lh > FH - g_yoff) lh = FH - g_yoff;
+    /* self-heal: if something re-pointed the display away from our screen (a resident screen
+     * extension reinitialising), put it back — Setscreen base-only, then the VIDEL registers. */
+    if (Physbase() != (void *)g_screen) { g_diag |= 0x10;
+        Setscreen(g_screen, g_screen, -1);
+        if (Physbase() != (void *)g_screen) { g_diag |= 0x20; (void)Supexec(videl_force_base); } }
     if (g_tc) {
         tc_span(g_back, (uint16_t *)g_screen + (int32_t)g_yoff * FW, FW * lh);
         falcon_clear_bands();

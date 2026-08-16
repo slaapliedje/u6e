@@ -50,6 +50,12 @@ typedef struct {
  * cookie jar (degrades to MACHINE_ST / VIDEO_ST / cpu 68000). */
 void platform_detect(platform_caps_t *caps);
 
+/* Raw cookie-jar lookup (Getcookie via the MiNT libc helper): 1 + *val if `tag` (a 4-char
+ * FOURCC packed big-endian, e.g. 0x4E564449 'NVDI') is present, else 0. For diagnostics
+ * (which system extensions are loaded: NVDI/EdDI/MiNT/MagX/CT60 ...) — engine logic keys off
+ * platform_caps, not raw cookies. */
+int  plat_cookie(uint32_t tag, uint32_t *val);
+
 /* Human-readable names for the self-test / logging. */
 const char *platform_machine_name(machine_t m);
 const char *platform_video_name(video_class_t v);

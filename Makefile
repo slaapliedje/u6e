@@ -586,10 +586,15 @@ bench-intro: world $(BUILD)/bench.prg
 	  if(hn==0&&pn==0) print "no BENCH.BIN (intro bench did not complete — raise --run-vbls?)" }' || echo "no BENCH.BIN"
 
 # ---- M5 game demo: a walkable world on the TT --------------------------------
-# Default start: just west of Lord British's noon throne spot (316,367) so the
-# headless capture auto-talks him (real portrait + name + greeting via the VM).
-GX ?= 315
-GY ?= 367
+# Default start = the CANONICAL U6 NEW GAME: the pristine OBJLIST puts the Avatar at
+# (307,352) — before Lord British's throne (LB sits at 307,348) — with the clock at
+# 08:00 (mkworld takes the time of day from the OBJLIST too, so LB is ON the throne).
+# The old default (315,367) was LB's NOON dining spot in the great hall, chosen so a
+# headless capture could auto-talk him; that scene is still available for the harness:
+#   make m5 GX=315 GY=367 START_MIN=720
+# (perf figures in docs/design/performance.md were measured on that noon scene).
+GX ?= 307
+GY ?= 352
 MKWORLD_SRC := dataformats/u6lzw.c dataformats/u6lzc.c dataformats/u6lib.c dataformats/u6pal.c dataformats/u6tile.c dataformats/u6obj.c dataformats/u6shape.c dataformats/u6map.c engine/combat.c engine/rng.c
 $(BUILD)/mkworld: tools/mkworld.c $(MKWORLD_SRC)
 	@mkdir -p $(BUILD)
@@ -1034,7 +1039,7 @@ m5: gamedata $(BUILD)/game.prg
 	@echo "wrote $(BUILD)/game_screen.png"
 
 # NEW-GAME overlay validation (front-end -> gameplay). The DEFAULT non-svm build (gamedata ->
-# world) bakes the shipped U6 start — Lord British's castle @ (315,367), four-member party — into
+# world) bakes the shipped U6 start — before LB's throne @ (307,352), 08:00, four-member party — into
 # U6.PAK; character creation OVERLAYS name/gender/portrait/Str/Dex/Int onto the Avatar. Stage
 # CHARGEN.REQ='N' (applies the deterministic 'Milady' sample, no blocking UI) + NEWGAME.BIN (the
 # engine prints the assembled new-game state). --conout 2 mirrors the assertions to this terminal.

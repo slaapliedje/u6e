@@ -335,8 +335,11 @@ static int load_intpal(const char *dir, int idx, uint8_t out[768])
 typedef struct { int idx, dx, dy; } ishape_t;
 
 /* Composite a list of shapes from a U6 .SHP onto a cw x ch canvas: each block at
- * (dx+leftX+blockx, dy+upperY+blocky), index 0 transparent. Rebuilds whole intro
- * scenes (base + overlays, or a wide pan panorama) at build time. (shapes.md; nuvie.) */
+ * (dx+leftX+blockx, dy+upperY+blocky). Block pixels are written LITERALLY (a covered
+ * index 0 is opaque black); only pixels no block covers stay as the caller's prefill
+ * (0 = black for a full-screen background, U6SHAPE_TRANSPARENT for an overlay layer).
+ * Rebuilds whole intro scenes (base + overlays, or a wide pan panorama) at build
+ * time. (shapes.md "Transparency"; nuvie.) */
 static void compose_shapes(const char *dir, const char *file, const ishape_t *shp, int nsh,
                            uint8_t *canvas, int cw, int ch)
 {
@@ -365,11 +368,11 @@ static void compose_shapes(const char *dir, const char *file, const ishape_t *sh
             while(wrote<blen && p<end){
                 if(flag){ int b=*p++, cnt=b>>1;
                     if(b&1){ uint8_t v=(p<end)?*p++:0;
-                        for(int i=0;i<cnt;i++){ if(v&&(unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
+                        for(int i=0;i<cnt;i++){ if((unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
                     else   { for(int i=0;i<cnt&&p<end;i++){ uint8_t v=*p++;
-                        if(v&&(unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
+                        if((unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
                     wrote+=cnt;
-                } else { uint8_t v=*p++; if(v&&(unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; wrote++; }
+                } else { uint8_t v=*p++; if((unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; wrote++; }
             }
         }
     }
@@ -933,6 +936,7 @@ static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, ui
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     for (int i=0;i<npix;i++) freq[pix[i]]++;
+    freq[U6SHAPE_TRANSPARENT]=0;                 /* uncovered/transparent pixels never reach the screen */
     static CCol col[256]; int ncol=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
         col[ncol].r=RGB6TO8(pal6[i*3]); col[ncol].g=RGB6TO8(pal6[i*3+1]); col[ncol].b=RGB6TO8(pal6[i*3+2]);
@@ -1131,8 +1135,9 @@ static int convert_faces(const char *dir, const char *name, uint8_t marker, FILE
         memset(cell, 0, (size_t)FW * FH);
         int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
         int w = 0, h = 0;
-        if (p && u6shape_decode(p, sz, 0, &w, &h, px, sizeof px) && w <= FW && h <= FH)
-            for (int y = 0; y < h; y++) memcpy(cell + (size_t)y * FW, px + (size_t)y * w, (size_t)w);
+        if (p && u6shape_decode(p, sz, 0, &w, &h, px, sizeof px) && w <= FW && h <= FH){
+            for (int i = 0; i < w * h; i++) if (px[i] == U6SHAPE_TRANSPARENT) px[i] = 0;   /* opaque cell */
+            for (int y = 0; y < h; y++) memcpy(cell + (size_t)y * FW, px + (size_t)y * w, (size_t)w); }
         fwrite(cell, 1, (size_t)FW * FH, out);
     }
     printf("  +CFAC: %s -> %d slots %dx%d (%d present, %d B)\n",
@@ -1610,12 +1615,14 @@ int main(int argc, char **argv)
     if (svm){ startx=actx[1]; starty=acty[1];     /* start where the Avatar (actor 1) stands */
         printf("ScummVM-save mode: start at avatar (%d,%d)\n", startx, starty); }
 
-    /* game-time of day: from the save's OBJLIST clock (U6 stores it at objlist+0x1bf3
-     * = minute, +0x1bf4 = hour). Starting at the save's real time keeps NPCs at their
-     * schedule-correct spots (e.g. Lord British on his throne at 08:00 instead of
-     * walking to his noon destination). Default noon for the non-save demo world. */
+    /* game-time of day: from the OBJLIST clock (U6 stores it at objlist+0x1bf3 = minute,
+     * +0x1bf4 = hour) — the pristine new-game OBJLIST says 08:00, a save its own time.
+     * Starting at the real time keeps NPCs at their schedule-correct spots (e.g. Lord
+     * British ON his throne at 08:00 for the canonical (307,352) start, instead of
+     * walking to his noon dining spot). Noon only if there is no OBJLIST at all;
+     * $START_MIN below overrides either. */
     int start_min = 12*60;
-    if (svm && objl && oln > 0x1bf5){
+    if (objl && oln > 0x1bf5){
         int mm=objl[0x1bf3], hh=objl[0x1bf4];
         if (mm<60 && hh<24){ start_min = hh*60 + mm;
             printf("save clock: %02d:%02d (start_min=%d)\n", hh, mm, start_min); }
@@ -1838,7 +1845,7 @@ int main(int argc, char **argv)
     /* INTRO SCENES (U6WV): [u8 n] then per scene [u8 type][768B pal(6-bit)] + layers.
      *   type 0 (static hold): [u16 w=320][u16 h=200][320*200 idx]
      *   type 1 (horizontal pan): [u16 pw=640][u16 h=200][640*200 panorama]
-     *                            [u16 fw=320][320*200 foreground (idx0 transparent)]
+     *                            [u16 fw=320][320*200 foreground (255 = transparent)]
      * Each scene ships its own PALETTES.INT palette (living room=1, stones/moongate=3).
      * The living room PANS (nuvie scroll_lounge): the room panorama scrolls 1x, the
      * avatar/remote foreground 2x (parallax). Others are static. (shapes.md; intro.lua.) */
@@ -1849,8 +1856,10 @@ int main(int argc, char **argv)
          * it in as a slow parallax layer; we bake it behind the window so it's not black).
          * Foreground = avatar/chair(13@0,63) + remote(14@143,91), pans at 2x. */
         {"INTRO_1.SHP", {{15,450,20},{0,0,0},{1,320,0}}, 3, {{13,0,63},{14,143,91}}, 2, 1, 1},
-        {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 0},   /* ring of standing stones */
-        {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 2},   /* gate RISES from the stones (shape2 + cover4) */
+        {"INTRO_3.SHP", {{0,0,0}}, 1, {{0,0,0}}, 0, 3, 0},   /* ring of standing stones (lightning-lit, obsidian present) */
+        {"INTRO_3.SHP", {{5,0,0}}, 1, {{0,0,0}}, 0, 3, 2},   /* gate RISES: bg = shape 5 (obsidian gone, scene re-lit by the
+                                                                gate's glow — nuvie sets bg.image=img[5] before the rise; the
+                                                                gate_cover strip (shape 4) is a cut-out of THIS ground) */
       };
       int nsc = (int)(sizeof SC/sizeof SC[0]);
       fputc(nsc, fe);
@@ -1867,7 +1876,7 @@ int main(int argc, char **argv)
           printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
         } else {
           static uint8_t pano[640*200], fg[320*200];
-          memset(pano,0,sizeof pano); memset(fg,0,sizeof fg);
+          memset(pano,0,sizeof pano); memset(fg,U6SHAPE_TRANSPARENT,sizeof fg);   /* fg = overlay layer */
           compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, pano, 640, 200);
           compose_shapes(dir, SC[i].file, SC[i].fg, SC[i].nfg, fg,   320, 200);
           /* blank the 4 LED digit cells (over the baked "88:88") so the engine can draw
@@ -1881,7 +1890,7 @@ int main(int argc, char **argv)
           printf("intro scene %d: PAN %s pal %d (640 panorama + 320 fg)\n", i, SC[i].file, SC[i].pal);
         } }
       /* shared narration parchment scroll (BLOCKS.SHP shape 2, 320x48) drawn at the
-       * bottom over the scene, index 0 = torn/transparent edges. [u16 w][u16 h][w*h]. */
+       * bottom over the scene, 255 = torn/transparent edges. [u16 w][u16 h][w*h]. */
       { int sw=0,sh=0; uint8_t *scr=load_shape(dir,"BLOCKS.SHP",2,&sw,&sh);
         be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
         if(scr&&sw>0&&sh>0) fwrite(scr,1,(size_t)sw*sh,fe);
@@ -1932,10 +1941,12 @@ int main(int argc, char **argv)
       /* CHARACTER-CREATION portraits (MONTAGE.SHP 0..11 = 6 female @0..5, 6 male @6..11,
        * each 56x64; montage index = gender*6 + portrait_num — nuvie create_character). The
        * new-game portrait picker renders these OPAQUELY under the boot palette (portrait skin
-       * tones match; PALETTES.INT 0). [u8 n][u16 pw][u16 ph] + n x [pw*ph idx]. */
+       * tones match; PALETTES.INT 0), and the created face doubles as the in-game Avatar
+       * portrait — so uncovered pixels are baked BLACK here. [u8 n][u16 pw][u16 ph] + n x [pw*ph idx]. */
       { int nmp=12, pw0=0,ph0=0; uint8_t *p0=load_shape(dir,"MONTAGE.SHP",0,&pw0,&ph0);
         fputc(nmp,fe); be16(fe,(unsigned)pw0); be16(fe,(unsigned)ph0); free(p0);
         for(int k=0;k<nmp;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"MONTAGE.SHP",k,&w,&h);
+          if(mp) for(int i=0;i<w*h;i++) if(mp[i]==U6SHAPE_TRANSPARENT) mp[i]=0;   /* opaque consumer */
           if(mp&&w==pw0&&h==ph0) fwrite(mp,1,(size_t)w*h,fe);
           else { static uint8_t z[56*64]; memset(z,0,sizeof z); fwrite(z,1,(size_t)pw0*ph0,fe); }
           free(mp); }
@@ -1991,7 +2002,7 @@ int main(int argc, char **argv)
         int sw=0,sh=0; uint8_t*sc=load_shape(dir,"BLOCKS.SHP",3,&sw,&sh);
         be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
         if(sc&&sw>0&&sh>0) fwrite(sc,1,(size_t)sw*sh,fe); free(sc);
-        /* RAW GYPSY.SHP shape table 0..GYP_NSH-1: [u16 nsh] + per shape [u16 w][u16 h][w*h idx0-
+        /* RAW GYPSY.SHP shape table 0..GYP_NSH-1: [u16 nsh] + per shape [u16 w][u16 h][w*h, 255 =
          * transparent]. The engine composites the casting scene + the pour animation from these
          * (jar 16, jar_liquid 9..15, vial glass 20/23, vial_liquid 0x42+.., arm 1..6, hand 9+.., pour). */
         { enum { GYP_NSH = 200 }; be16(fe, GYP_NSH); int nshipped=0;
@@ -2035,17 +2046,25 @@ int main(int argc, char **argv)
         /* FOREST REVEAL (nuvie window_sequence tail @685): after the 4 storm pages the window
          * frame slides off to reveal the FRAMELESS storm forest (same sky/trees/ground, no glass/
          * frame — the "into the forest, down the path, to the stones" bg). Ship the forest base
-         * (opaque) + the window overlay (glass 26@57 + frame 28, index 0 transparent) so the engine
+         * (opaque) + the window overlay (glass 26@57 + frame 28, 255 = transparent) so the engine
          * can slide the frame off a static forest. [u16 fw][u16 fh][fw*fh][u16 ow][u16 oh][ow*oh]. */
         static uint8_t fbase[320*200]; memset(fbase,0,sizeof fbase);
         static const ishape_t FOR[]={{1,0,0},{8,0,0},{10,0,76}};
         compose_shapes(dir,"INTRO_2.SHP",FOR,(int)(sizeof FOR/sizeof FOR[0]),fbase,320,200);
         be16(fe,320); be16(fe,200); fwrite(fbase,1,sizeof fbase,fe);
-        static uint8_t wov[320*200]; memset(wov,0,sizeof wov);
+        static uint8_t wov[320*200]; memset(wov,U6SHAPE_TRANSPARENT,sizeof wov);   /* overlay layer */
         static const ishape_t WOV[]={{26,57,0},{28,0,0}};
         compose_shapes(dir,"INTRO_2.SHP",WOV,(int)(sizeof WOV/sizeof WOV[0]),wov,320,200);
         be16(fe,320); be16(fe,200); fwrite(wov,1,sizeof wov,fe);
-        printf("storm window: base 320x200 pal2 + %d bolts + %d strikes + forest reveal (bg+frame overlay)\n", nbolt, nstk); }
+        /* DOORWAY (nuvie window_sequence @706-749): the pan doesn't land on open forest — the two
+         * door LEAVES (img 24 = left, 66x200, starts at x=320; img 25 = right, 67x200, at x=573)
+         * trail the sliding frame, so after the 320-px pan they sit at the screen edges (0..66 and
+         * 253..320) framing the doorway; then they slide apart (68 px each) onto the clear forest.
+         * Shipped as-is (opaque leaves): [u16 w][u16 h][left][u16 w][u16 h][right]. */
+        { static const int DOOR[]={24,25};
+          for(int k=0;k<2;k++){ int w=0,h=0; uint8_t*dp=load_shape(dir,"INTRO_2.SHP",DOOR[k],&w,&h);
+            be16(fe,(unsigned)w); be16(fe,(unsigned)h); if(dp&&w>0) fwrite(dp,1,(size_t)w*h,fe); free(dp); } }
+        printf("storm window: base 320x200 pal2 + %d bolts + %d strikes + forest reveal (bg+frame overlay+door leaves)\n", nbolt, nstk); }
       /* STONES obsidian-pickup assets (INTRO_3.SHP, palette 3 — nuvie stones_sequence): the hand
        * (img 1) rises into the circle to grab the obsidian stone (img 3); afterwards the stone is
        * gone (bg img 5). The engine animates the hand rising over the stones bg. Layout:
@@ -2059,21 +2078,21 @@ int main(int argc, char **argv)
         printf("stones pickup: hand %dx%d + obsidian %dx%d + bg5 %dx%d\n", hw,hh, ow,oh, bw,bh); }
       /* AVATAR-into-gate climax (INTRO_3.SHP frames 7..26 — nuvie stones_sequence tail): the Avatar
        * walks up into the risen moongate and dissolves. The source shapes are full 320x200 canvases
-       * that are ~empty (index 0 = transparent) except for the small figure, so each is CROPPED to
-       * its non-zero bounding box + a per-frame (ox,oy) offset — else 20x64000B blows the fast pool.
+       * that are ~empty (uncovered = transparent) except for the small figure, so each is CROPPED to
+       * its covered bounding box + a per-frame (ox,oy) offset — else 20x64000B blows the fast pool.
        * Engine draws each at (ox-2, oy + 0x12 - 3*i). [u8 nav] + nav x [u16 ox][u16 oy][u16 w][u16 h][w*h]. */
       { int nav=20; long apre=ftell(fe);
         fputc(nav,fe);
         long tot=0;
         for(int k=0;k<nav;k++){ int w=0,h=0; uint8_t*ap=load_shape(dir,"INTRO_3.SHP",7+k,&w,&h);
           int x0=w,y0=h,x1=-1,y1=-1;
-          if(ap) for(int y=0;y<h;y++) for(int x=0;x<w;x++) if(ap[y*w+x]){
+          if(ap) for(int y=0;y<h;y++) for(int x=0;x<w;x++) if(ap[y*w+x]!=U6SHAPE_TRANSPARENT){
             if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
           if(x1<0){ x0=y0=0; x1=y1=0; }                       /* empty frame -> 1x1 at (0,0) */
           int cw=x1-x0+1, ch=y1-y0+1;
           be16(fe,(unsigned)x0); be16(fe,(unsigned)y0); be16(fe,(unsigned)cw); be16(fe,(unsigned)ch);
           for(int y=0;y<ch;y++) if(ap) fwrite(ap+(size_t)(y0+y)*w+x0,1,(size_t)cw,fe);
-                                else { uint8_t z=0; fwrite(&z,1,1,fe); }
+                                else { uint8_t z=U6SHAPE_TRANSPARENT; fwrite(&z,1,1,fe); }
           tot+=(long)cw*ch; free(ap); }
         printf("avatar climax: %d cropped frames, %ld px total (%ld bytes)\n", nav, tot, ftell(fe)-apre); } }
       /* GARGOYLE-SACRIFICE opening (§1B, docs/design/chargen_authentic.md §1B.1): the RAW 13-shape

@@ -3,12 +3,17 @@
  *
  * Portable C (host + m68k): operates on the DECOMPRESSED shape file — LZW-
  * decompress the raw .shp with u6lzw first, then call these. Pixels are U6PAL
- * palette indices; background/uncovered = 0.
+ * palette indices. A shape is a set of pixel BLOCKS; canvas pixels not covered
+ * by any block are TRANSPARENT and come back as U6SHAPE_TRANSPARENT (255 — the
+ * same key the tiles/cursor use). Block pixels are literal, so index 0 inside a
+ * block is opaque black. (Verified: no U6 .SHP uses 255 inside a block.)
  */
 #ifndef U6E_U6SHAPE_H
 #define U6E_U6SHAPE_H
 
 #include <stdint.h>
+
+#define U6SHAPE_TRANSPARENT 255
 
 /* Number of shapes in the decompressed file d[0..len), or 0 if malformed. */
 int u6shape_count(const uint8_t *d, int32_t len);

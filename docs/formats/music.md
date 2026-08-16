@@ -198,3 +198,34 @@ CONFIRMED: `tools/mdump` reaches a clean END on all 12 `.M`; the engine sequence
 tools/m2pcm, YM2149 PSG) were written from this spec and validated end-to-end (`make musictest`
 sequences all 12; cross-checked against ScummVM/Nuvie `midiparser_m`/`mididrv_m_*`). The pitch
 F-number table + 11-byte operator layout are pinned by the working synth.
+
+### Falcon DMA playback — real-hardware finding (2026-08-15)
+The first real-Falcon run gave **silence under plain TOS and garbled audio under MiNT** from
+the DMA (`.PCM`) backend, while Hatari had been forgiving. Cause (Atari Compendium 4.7 + the
+Falcon XBIOS reference): the Falcon's DAC only hears DMA playback through the 16-bit ADDER's
+**matrix** input, which is disabled after `Sndstatus(1)` and which our bare
+`Devconnect(DMAPLAY,DAC,CLK25M,CLK12K,handshake=0)` never enabled; and Devconnect
+**handshaking** makes the transfer rate variable ("may negatively affect digital sound").
+Fix = configure the whole path through the XBIOS (all trap #14): Locksnd 128 → Sndstatus(1) 140
+→ Setmode(MONO8) 132 → Settracks(0,0) 133 → Setmontracks(0) 134 → Devconnect(DMAPLAY, DAC,
+CLK25M, **CLKOLD**, **NO_SHAKE**) 139 → Soundcmd(SETPRESCALE, PRE640) 130 (= the STE-exact
+**12517 Hz** our PCM is rendered at; native CLK12K would be 12292) → Soundcmd(ADDERIN,
+MATIN) 130 → Soundcmd(LTATTEN/RTATTEN, 0) → Setbuffer(SR_PLAY, ring, end) 131 →
+Buffoper(SB_PLA_ENA|SB_PLA_RPT) 136. Hatari (Falcon TOS 4.04): backend=2, continuous smooth
+audio. See platform/platdma.c.
+
+**Second real-Falcon run (2026-08-15):** music audible and recognisable but it played only its
+first ~2.6 s over and over, with some residual roughness. Cause 1 = the pump: the DMA loops a
+32 KB ST-RAM ring (2.6 s @ 12517) that `plat_dma_music_pump()` refills from disk, and the pump
+was called ONLY from the gameplay loop — the whole front-end (intro/menu/chargen/gargoyle) and
+the in-game modal pages (book, map) waited on a bare `Vsync()`, so the hardware simply re-looped
+the primed ring. Fix: `vsync_pump()` (Vsync #37 + pump) is now the frame wait everywhere outside
+the gameplay loop. Hatari check: the recorded audio tracks BOOTUP.PCM linearly for 20+ s (corr
+≈ 0.98 at 4/8/12/16/20 s) instead of self-correlating at the ring period. Cause 2 (probable, for
+the roughness) = the ADC leg of the adder: `ADDERIN = ADCIN|MATIN` mixed the YM/PSG + microphone
+A/D path (its analogue hiss + TOS keyclick) into the DAC; while the DMA backend plays the PSG is
+unused, so the adder now takes the MATRIX only (restored to ADCIN|MATIN — the STE-compatible boot
+mix — on stop). The play position is read from the DMA frame counter $FFFF8909/0B/0D (read-only,
+same on STE/TT/Falcon per the Falcon register addendum) via Supexec on all three machines — one
+validated path — rather than Buffptr 141; per corpus BUG84 the counter is only valid after a DMA
+cycle has begun, so start() Vsyncs once and the first pump ignores an implausible read.

@@ -21,9 +21,11 @@
 > - Confidence   : confirmed (all quoted text; menu options; chargen step order; A/B & portrait
 >                  UI) / probable (which cutscene the "Introduction" item replays; the
 >                  "Welcome, O Seeker!" placement).
-> - Last updated : 2026-08-12 (added §1B.1: INTRO.SHP shape catalog from our own dump +
->                  gargoyle-scene choreography; flow read from nuvie intro.lua, spec'd here,
->                  implemented from this spec)
+> - Last updated : 2026-08-15 (real-Falcon feedback: §3f question-text layout rule + pointer
+>                  visibility/palette fix; shape transparency = block coverage, see
+>                  docs/formats/shapes.md "Transparency"). 2026-08-12: §1B.1 INTRO.SHP catalog
+>                  + gargoyle choreography (flow read from nuvie intro.lua, implemented from
+>                  this spec).
 
 ## 0. Scope & how the pieces fit
 This is the authoritative on-screen text + sequence for U6's **front end**: boot logos, the
@@ -207,7 +209,15 @@ scene; every text hold after the priest arrives runs the idle sway + gate cycle)
 
 Engine note: shipped as the RAW 13-shape table (like GYPSY.SHP) + PALETTES.INT 7 + BLOCKS.SHP
 0/1 (2 already ships); the engine composites the sprite list per frame — no baked scenes,
-because nearly every layer moves independently.
+because nearly every layer moves independently. Since 2026-08-15 the compositing is
+INCREMENTAL (dirty rects): each frame recomposes and presents only the union of the old+new
+rectangles of the sprites that moved (plus a caption that appeared/vanished, and the gate's
+rect after a ring-colour cycle on the Falcon's truecolor path, where a palette write only
+shows at the next present). A full recomposite + 320×200 present cost ~200 ms per step on a
+16 MHz Falcon (the real-hardware "really slow" report); a moving horde or companion touches
+~15–25 % of the screen. Shape pixels: covered index 0 is opaque black, uncovered = 255
+transparent (docs/formats/shapes.md "Transparency" — the boot-sole/eye/altar-band holes seen
+on hardware were the old 0-key).
 
 > ⚠️ TRIGGER UNCERTAINTY (probable, not confirmed): In nuvie, `play()` (boot) shows **1A**,
 > and the **"Introduction" menu item** replays **1B** (the gargoyle scene). On the original
@@ -330,9 +340,22 @@ Int** (U6 has no class). It is done entirely on-screen; there is no disk step. O
   7 Humility): shuffle 8 → ask 4 → shuffle winners → ask 2 → ask 1. Each question pits two
   virtues; the answer picks which virtue wins and advances.
 - **Presentation:** the question prose is drawn on the tall parchment scroll (BLOCKS.SHP shape
-  3). Two **on-screen buttons** appear at the lower-right: **`A`** = GYPSY.SHP shape 7 at
+  3, at y=120) with the cutscene text rule (nuvie `image_print(scroll, q, 7, 303, 8, 9)`):
+  proportional U6 font, pen starts at (8, 120+9), words filled greedily onto a line while it
+  fits a **303-px** line width measured from x=7, every FULL line **justified** (slack split
+  evenly between its words), the last line left-aligned, **8-px** line advance, ink 0x3e.
+  (Our first pass centred a 38-column monospaced wrap, which is wider than the proportional
+  font and ran under the buttons on real hardware — fixed 2026-08-15.) Two **on-screen
+  buttons** appear at the lower-right: **`A`** = GYPSY.SHP shape 7 at
   (279,174), **`B`** = GYPSY.SHP shape 8 at (296,174), with a 2px underline highlight (color
-  248) under the selected one. The mouse cursor is shown. There is **no "question N of 7"
+  248) under the selected one. **The mouse pointer (U6MCGA.PTR arrow) is shown for the
+  questions only** — nuvie `mouse_cursor_visible(true)` right before the A/B buttons appear
+  and `false` after the 7th answer; it is hidden for the rest of character creation and the
+  intro, and shown on the main menu. Before showing it over the gypsy palette nuvie patches
+  palette entries **19 → (200,200,200)** and **27 → (68,68,68)** ("fix mouse cursor": the
+  arrow's grey pixels use those indices, which PALETTES.INT 5 colours differently). Any
+  "wait for input" page in the ceremony advances on a key OR a mouse click (nuvie
+  `wait_for_input()`). There is **no "question N of 7"
   counter in the original** (our engine adds one — a deliberate, non-authentic aid; drop it for
   strict fidelity).
 - **Input — BOTH keyboard and mouse:** `A`/`a` or `B`/`b` choose directly; Left/Right move the

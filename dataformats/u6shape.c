@@ -29,7 +29,11 @@ int u6shape_decode(const uint8_t *d, int32_t len, int idx,
     if (W <= 0 || H <= 0 || W > 2048 || H > 2048) return 0;
     if ((int32_t)W * H > outcap) return 0;
 
-    for (int32_t i = 0; i < (int32_t)W * H; i++) out[i] = 0;   /* background */
+    /* TRANSPARENCY = "not covered by any pixel block": prefill the canvas with 255 (the
+     * transparent key; no U6 shape uses 255 inside a block) and copy block pixels LITERALLY —
+     * index 0 inside a block is OPAQUE BLACK (eyes, boot soles, the altar's dark band ...).
+     * shapes.md "Transparency". */
+    for (int32_t i = 0; i < (int32_t)W * H; i++) out[i] = U6SHAPE_TRANSPARENT;
     const uint8_t *p = sh + 8;
     while (p + 6 <= end) {
         uint16_t dl = le16(p); p += 2;

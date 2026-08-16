@@ -103,6 +103,7 @@ int      rdr_width(void)                          { return g_be->width(); }
 int      rdr_height(void)                         { return g_be->height(); }
 uint8_t *rdr_backbuffer(void)                     { return g_be->backbuffer(); }
 void     rdr_set_palette(const uint8_t *p, int n) { g_be->set_palette(p, n); }
+int      rdr_palette_deferred(void)                { return g_be->palette_deferred(); }
 void     rdr_set_lowcolor(const uint8_t *p16, const uint8_t *lut) { g_be->set_lowcolor(p16, lut); }
 void     rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *p, const uint8_t *lut)
                                                   { g_be->set_lowcolor_bands(nb, y0, p, lut); }
@@ -121,4 +122,4 @@ bool     scroll_begin(const uint8_t *c, int cw, int ch) { return g_be->scrl_begi
 void     scroll_pan(int px)                       { g_be->scrl_pan(px); }
 void     scroll_end(void)                         { g_be->scrl_end(); }
 void     rdr_scroll_left16(const uint8_t *c, int cw, int lh, int px) { g_be->scroll_left16(c, cw, lh, px); }
-void     rdr_debug_info(uint32_t out[6])          { g_be->debug_info(out); }
+void     rdr_debug_info(uint32_t out[12])          { g_be->debug_info(out); }

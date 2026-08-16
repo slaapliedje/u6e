@@ -168,6 +168,7 @@ uint8_t *rdr_backbuffer(void) { return g_back; }
  * via rdr_set_lowcolor; a 256-colour update can't be honoured on 16-colour hardware, so it is a
  * no-op here. (Per-scene low-colour palettes + reserving slots for colour cycling are the next
  * step — docs/design/palette_lowcolor.md.) */
+int rdr_palette_deferred(void) { return 0; }        /* hardware palette */
 void rdr_set_palette(const uint8_t *rgb6, int n) { (void)rgb6; (void)n; }
 
 /* Load the pack's host-quantised low-colour data: pal16 = 16 x {r,g,b} levels (3-bit on ST, 4-bit
@@ -313,7 +314,7 @@ void rdr_lowcolor_cycle(const uint8_t *pal16)
     Setpalette(g_stpal);
 }
 
-void rdr_debug_info(uint32_t out[6])
+void rdr_debug_info(uint32_t out[12])
 {
     out[0] = (uint32_t)(uintptr_t)Physbase();
     out[1] = (uint32_t)(uintptr_t)Logbase();
@@ -321,6 +322,7 @@ void rdr_debug_info(uint32_t out[6])
     out[3] = 0;
     out[4] = (uint32_t)(uint16_t)Getrez();
     out[5] = (uint32_t)ST_SCREEN_BYTES;
+    out[6] = out[7] = out[8] = out[9] = out[10] = out[11] = 0;
 }
 
 /* Full-screen present: LUT-remap + c2p the whole 320x200 backbuffer to the 4-plane screen. */

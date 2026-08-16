@@ -18,7 +18,7 @@ engine's DOS/VGA asset path — REFDATA = refdata/dos/u6.)
 >   / Journey Onward") and TITLES.SHP shape 0 renders the blue "Ultima VI" logo,
 >   both correct in the U6PAL palette (build/menu_00.png, build/titles_00.png).
 > - Confidence   : confirmed (container + shape header + RLE pixel blocks).
-> - Last updated : 2026-07-08
+> - Last updated : 2026-08-15
 
 ## Container (whole-file LZW; then an offset table)
 
@@ -63,10 +63,22 @@ Then a stream of **pixel blocks**, until a terminator:
   byte `b`, `count = b >> 1`; if `b & 1` (odd) the next ONE pixel byte repeats
   `count` times, else the next `count` bytes are literal pixels.
 
-Pixels are **U6PAL** palette indices (palette.md). Index 0 = background/black for
-these full images (transparency for sprites is per-tile — see masktype in
-tiles.md; the menu/title/intro screens are opaque). Multi-shape files (INTRO,
+Pixels are **U6PAL** palette indices (palette.md). Multi-shape files (INTRO,
 GYPSY) are ANIMATION FRAMES / element sets shown in sequence.
+
+## Transparency (VERIFIED 2026-08-15)
+A shape is a set of pixel BLOCKS; **transparency is "not covered by any block"**.
+Block pixels are literal — **index 0 inside a block is OPAQUE black** (eyes, boot
+soles, the sacrifice altar's dark band, the LED-clock "off" segments). Decoders
+therefore prefill the W×H canvas with a key that never occurs inside a block and
+copy block pixels verbatim; we use **255** (`U6SHAPE_TRANSPARENT`, the same key
+as tiles/cursor; Nuvie's U6Shape does the same). Evidence (own `shpstat` over the
+user's data): no U6 `.SHP` uses 255 inside a block, while INTRO.SHP alone has
+Dupre 218 / altar 196 / bound Avatar 178 / priest head 134 covered index-0 pixels
+and coverage as low as 33% (Avatar) — keying on 0 (our first pass) punched holes
+through all of those on real hardware. Full-screen backgrounds composed at build
+time (mkworld `compose_shapes`) prefill 0 = black for the uncovered remainder;
+overlay layers prefill 255.
 
 ## Validation method
 tools/shapedump decompresses, walks the offset table, decodes each shape into a
@@ -77,8 +89,7 @@ the original screens (golden images above).
 - INTRO/GYPSY frame TIMING + which frames compose vs animate (the front-end
   sequencer decides; screen positions for sub-shapes come from the intro logic,
   not the file).
-- Exact background/transparent index convention per screen (0 works for the
-  validated menus).
+- (resolved) transparency convention — see "Transparency" above.
 
 ## Status
 VERIFIED (container + shape header + plain/RLE pixel blocks; golden-validated on

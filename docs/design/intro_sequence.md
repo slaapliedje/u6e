@@ -10,7 +10,7 @@
 >                  questions, character_creation.md). Page counts + scene structure only.
 > - Validated by : side-by-side DOSBox capture (each scene + narration page identified).
 > - Confidence   : confirmed (sequence/assets) / probable (exact frame timings).
-> - Last updated : 2026-07-11
+> - Last updated : 2026-08-15 (doorway reveal + black silhouette, real-Falcon feedback)
 
 ## Advance model (IMPORTANT — differs from our current build)
 The original is **input-advanced**, NOT time-advanced. Each narration page holds indefinitely
@@ -36,20 +36,30 @@ Close-up of a curtained, mullioned window onto a stormy twilight pine forest. La
 load_window / intro_2.shp indices): sky(1), scrolling clouds(0,2,3), trees(8), ground(10@y0x4c),
 rain drops(4-7, spawn+fall), random **lightning flashes**(11-18, brief, random x/y), big **strike**(19-23
 @158,114), window glass(26 normal / **27 = white flash** on a strike), window frame/mullions(28),
-sliding **curtains** left(24)/right(25). The whole window **flashes white** (glass 26→27) when
-lightning hits. **4 narration pages** ("…storm is upon you", "Tongues of lightning lash the sky…",
-"…bolt of searing blue fire strikes the earth!" [strike appears], "Lightning among the stones!…").
-Ends by **scrolling** the window out (curtains slide across) → next scene.
+and the two **door leaves** left(24, 66×200)/right(25, 67×200) — NOT curtains: they are the leaves of
+the house's DOORWAY, parked off-screen right (x=320 / x=573) until the pan. The whole window
+**flashes white** (glass 26→27) when lightning hits. **4 narration pages** ("…storm is upon you",
+"Tongues of lightning lash the sky…", "…bolt of searing blue fire strikes the earth!" [strike
+appears], "Lightning among the stones!…"). On the 4th page the view **pans** 320 px left (2 px per
+frame pair): frame + glass slide off and the two leaves trail them, so the pan lands on the DOORWAY
+(leaves at the screen edges, 0..66 and 253..320, the storm forest between them; the strike goes out
+halfway). Hold for input. Then the leaves slide APART (68 px each side, 1 px per frame pair) onto the
+clear forest → §3.
 
-### 3. Forest path  (twilight pines)   — ✅ DONE (forest reveal)
+### 3. Forest path  (twilight pines)   — ✅ DONE (doorway reveal, corrected 2026-08-15)
 The Avatar runs through the storm to the stones. Confirmed on decode: this is NOT a separate asset —
 it's the storm window's own bg (INTRO_2.SHP sky 1 + trees 8 + ground 10) revealed once the window
 frame slides off. `forest_reveal()` (tail of storm_scene): the frameless forest (a twilight pine
 forest with a **path winding to the horizon**) is drawn static while the window overlay (glass 26 +
-frame 28) slides left off-screen (16px steps), then the "You bolt from thy house… into the forest,
-down the path, to the stones." narration holds over it (input/auto-advanced). mkworld ships the
-forest base (opaque) + the window overlay (index-0 transparent) so the reveal is seamless (forest
-stays put). Validated by TT capture. Text = our paraphrase (Phase 4 = U.EXE).
+frame 28) pans left off-screen (8 px steps) with the two DOOR LEAVES (24/25) trailing it — the pan
+lands on the doorway (leaves at both screen edges, forest between), holds for input with the
+"Lightning among the stones!" caption still up, then the leaves slide apart (4 px steps, 68 px each)
+and the "You bolt from your house… into the forest, down the path… to the stones." narration
+(U.EXE page 7) holds over the clear forest. Real-Falcon feedback 2026-08-15: our first cut slid the
+frame straight off onto open forest — the doorway beat was missing (the user remembered it). mkworld
+ships the forest base (opaque) + the window overlay (255 = transparent) + the two leaves. Lightning
+keeps flashing behind the frame/leaves during the holds. Validated by Falcon capture (INTRO.REQ 's'
+= storm scene alone).
 
 ### 4. The stones  (INTRO_3.SHP, PALETTES.INT 3)   — ✅ DONE (obsidian + hand)
 Ring of standing stones (angled/overhead). Beats: glimpse the tiny **obsidian stone** in the circle
@@ -68,8 +78,18 @@ g_intro_npages[moongate]=5). We have: the rise ✅, the crimson glow cycle ✅ (
 144..159), all 5 narration pages ✅ (validated on TT), and the
 **Avatar-into-gate climax ✅** (avatar_climax(): the figure = INTRO_3.SHP frames 7..26 walks up at
 (-2, 0x12-3*i), dissolves via a Bayer dither, then the gate sinks 0x5→0x64). The "figure" is the
-AVATAR, not a gargoyle. Validated by TT capture (walk → dither dissolve into the crimson gate → gate
-sinks). NB the source frames are full 320x200 canvases that are ~all transparent (index 0) except
+AVATAR, not a gargoyle. **It is a BLACK silhouette** (real-Falcon feedback 2026-08-15): the frames
+are drawn entirely in palette index 25, which PALETTES.INT 3 holds as a mid grey; nuvie sets that
+entry to black for the walk + the dissolve and restores the grey (0x74) afterwards. We do the same
+(palette copy with 25 blacked on 256-colour targets; LUT 25 → the scene's darkest slot on the ST 16). Validated by TT capture (walk → dither dissolve into the crimson gate → gate
+sinks). **Real-Falcon correction (2026-08-15):** (a) the gate sprite is **clipped to rows 0..0x65**
+(nuvie moon_gate clip_h = 0x66) — it is only ever visible ABOVE the ground line, which is what makes
+it ascend from the earth; unclipped, its foot showed below the ground band during the rise. (b) The
+gate-rise scene's background is INTRO_3 **shape 5** (the ring re-lit by the gate's red glow, obsidian
+gone — nuvie sets bg.image = img[5] before the rise), NOT shape 0: shape 0's teal lightning-lit ground
+under the warm-brown gate_cover strip (a cut-out of shape 5) read as a mismatched "box" on hardware.
+The gate itself IS an opaque red rectangle (74×98, fully block-covered) — that is the original art.
+NB the source frames are full 320x200 canvases that are ~all transparent (uncovered) except
 the small figure, so mkworld CROPS each to its bbox + a per-frame (ox,oy) offset — else 20×64000B
 blew the ~4 MB TT-RAM fast pool (U6.PAK failed to load). CONVERSE/PORTRAIT also moved to ST-RAM to
 keep the fast pool for the pack + backbuffer.
