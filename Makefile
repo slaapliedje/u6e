@@ -76,6 +76,15 @@ $(SELFTEST_PRG): $(SELFTEST_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "built $@"
 
+# ---- MIDITEST.PRG: stand-alone MIDI port/cable check (plain 68000, runs on any Atari) ----
+# OUT: GM reset + a piano scale/chord on channel 1; IN: decodes what the instrument sends;
+# T = thru; Esc quits. See platform/miditest.c. Copy build/MIDITEST.PRG next to the game.
+miditest: $(BUILD)/MIDITEST.PRG
+$(BUILD)/MIDITEST.PRG: platform/miditest.c
+	@mkdir -p $(BUILD)
+	$(CC) -m68000 -std=gnu11 -Os -Wall -Wextra -o $@ $<
+	@echo "built $@"
+
 # --- run targets: EmuTOS works on every machine; real TOS for accuracy ---
 run: run-st
 

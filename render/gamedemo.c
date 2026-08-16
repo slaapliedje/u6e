@@ -272,6 +272,8 @@ static const uint8_t *g_gate, *g_cover; static int g_gw,g_gh,g_gx, g_cvw,g_cvh,g
                             * seen ABOVE the ground line, which is what makes it "ascend from the earth"; the ground
                             * cover strip (shape 4 @ 0x5e,0x66) then redraws the band the gate's foot would cross. */
 static const uint8_t *g_cc_port[12]; static int g_cc_pw, g_cc_ph, g_cc_nport;  /* MONTAGE.SHP 0..11: chargen portraits (6 female @0..5, 6 male @6..11) */
+static const uint8_t *g_vel[5]; static int g_vel_w[5], g_vel_h[5], g_vel_n; static const uint8_t *g_vel_lc;  /* VELLUM1: 0 parchment, 1 Sex, 2 Portrait, 3 Continue, 4 Exit */
+static const uint8_t *g_fset;                /* U6.SET front-end font: [256 w][256*8 u16 rows]; NULL -> U6.CH trimmed */
 static const char *g_cc_qtext[28]; static int g_cc_qlen[28], g_cc_nq;          /* gypsy question prose, extracted from U.EXE into the pack (canonical order; NOT NUL-terminated) */
 /* CHARGEN CEREMONY TEXT (extracted from U.EXE into the pack; NOT NUL-terminated; %s = player name).
  * When a section is empty the engine falls back to its committed PARAPHRASE (clean-room: real text
@@ -457,10 +459,15 @@ static void ui_text(int x,int y,const char*s,uint8_t col)
     for(int gy=0;gy<8;gy++){uint8_t b=g[gy];for(int gx=0;gx<8;gx++) if(b&(0x80>>gx)) ui_px(x+gx,y+gy,col);}} }
 static int ui_textw(const char*s){int n=0;while(*s++)n++;return n*8;}
 
-/* PROPORTIONAL U6.CH rendering (the original trims each glyph to its used columns) — used for the
- * intro narration so long pages pack into fewer lines, matching the DOS layout. pglyph_w = used
- * columns + 1px gap (space = 4). Global ui_text stays fixed-width (in-game layouts depend on it). */
+/* PROPORTIONAL front-end text. The original's intro/menu/chargen text is set in U6.SET — a
+ * proportional typeface distinct from the 8x8 U6.CH game font (docs/formats/fonts.md "U6.SET"):
+ * per-glyph advance = its own width (one blank column leads each glyph, space = 4). When the pack
+ * ships it (g_fset) all front-end text — narration pages, gypsy questions, chargen screens — is
+ * drawn with it, so wrapping/centring match the DOS layouts pixel for pixel. Without it (old pack)
+ * we fall back to U6.CH trimmed to its used columns + 1px gap. Global ui_text stays fixed-width
+ * 8x8 U6.CH (in-game layouts depend on it). */
 static int pglyph_w(unsigned char c){
+    if(g_fset) return g_fset[c];
     if(c==' ') return 4;
     const uint8_t*g=g_font+(int)c*8; int mx=0;
     for(int gy=0;gy<8;gy++){ uint8_t b=g[gy]; for(int gx=0;gx<8;gx++) if(b&(0x80>>gx)){ if(gx+1>mx) mx=gx+1; } }
@@ -469,6 +476,10 @@ static int pglyph_w(unsigned char c){
 static int ptextw(const char*s){ int w=0; for(;*s;s++) w+=pglyph_w((unsigned char)*s); return w; }
 static void ptext(int x,int y,const char*s,uint8_t col){
     for(;*s;s++){ unsigned char c=(unsigned char)*s;
+        if(g_fset){ int w=g_fset[c]; const uint8_t*r=g_fset+256+((int)c*8)*2;
+            for(int gy=0;gy<8;gy++,r+=2){ unsigned bits=((unsigned)r[0]<<8)|r[1]; if(!bits) continue;
+                for(int gx=0;gx<w;gx++) if(bits&(0x8000u>>gx)) ui_px(x+gx,y+gy,col); }
+            x+=w; continue; }
         if(c!=' '){ const uint8_t*g=g_font+(int)c*8;
             for(int gy=0;gy<8;gy++){ uint8_t b=g[gy]; for(int gx=0;gx<8;gx++) if(b&(0x80>>gx)) ui_px(x+gx,y+gy,col); } }
         x+=pglyph_w(c); } }
@@ -755,6 +766,8 @@ static int intro_advance(void)
 }
 #define PAGE_MAXTICKS (10*200)   /* auto-advance a page after ~10s of no input (attract/headless) */
 static void fe_music(const char *base);   /* fwd: front-end music cue (defined with the M10 music manager) */
+static void music_cycle_pref(void);        /* fwd: F1 music-source cycle (music manager) */
+static const char *music_pref_label(void); /* fwd: its label */
 
 /* STORM WINDOW scene (nuvie window_sequence, INTRO_2.SHP / PALETTES.INT 2): a curtained window
  * onto a stormy pine forest. Static scene baked; lightning = a bright random bolt over it + a
@@ -1585,110 +1598,159 @@ static int fe_scroll_page(const uint8_t *sc, int scw, int sch, int sx, int sy, c
     return fe_getkey();                                      /* the advancing key (Esc lets callers skip) */
 }
 
-/* name entry: type a name (letters/space, backspace, Enter). Fills g_cc_name. */
-static void cc_name_entry(void)
+/* ---- CHARGEN VELLUM SCREENS (nuvie create_character; chargen_authentic.md §3a-3c) ------------
+ * The name / gender / portrait screens are the "Ultima VI" title logo (still up from the main
+ * menu) over the VELLUM1 parchment (284x118 at 16,80), text in the U6.SET font, ink 0x48 (nuvie's
+ * U6 default text colour), the menu palette; the pointer stays visible (the menu leaves it on;
+ * nuvie hides it only after Continue). Screen 1: "By what name shalt thou be called?" at parchment
+ * (36,24); the name is typed at (52,120), then centred (16 + (284-w)/2) once entered; "And art thou
+ * Male, or Female?" at parchment (52,56) with the chosen M/F letter at (154,152). Screen 2: a fresh
+ * parchment, the name centred at y=89 over a rule (parchment x 14..277, y 19), the four VELLUM1
+ * label buttons — Sex (94,112) / Portrait (62,129) / Continue (86,146) / Exit (80,163) — the
+ * MONTAGE face at (195,118) and a 2px underline (palette 248) under the active button.
+ * Real-Falcon feedback 2026-08-15: our first cut drew these as text-only screens of our own
+ * wording ("Character Creation", "Choose Thy Likeness"...) — replaced by the original art/layout.
+ * Esc anywhere / Exit = abort back to the menu (the functions return 0). */
+#define VEL_X 16
+#define VEL_Y 80
+#define VEL_INK 0x48
+static void vel_base(void)                       /* title logo + blank parchment (menu palette) */
+{
+    clear_bb(0);
+    if(g_vel_lc) rdr_set_lowcolor(g_vel_lc,g_vel_lc+48);
+    if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,(LW-g_title_w)/2,12);
+    if(g_vel[0]) blit_indexed(g_vel[0],g_vel_w[0],g_vel_h[0],VEL_X,VEL_Y);
+}
+/* Front-end key read for TYPING: one event per press even under the fast walking auto-repeat
+ * (a slow present lets a held key queue several repeats), WITHOUT dropping a quick different key:
+ * identical repeats behind the read key are drained; the first different key is kept pending. */
+static int g_fe_pend;
+static int fe_readkey(void)
+{
+    int k=g_fe_pend; g_fe_pend=0;
+    if(!k) k=plat_input_raw();
+    if(!k) return 0;
+    for(;;){ int d=plat_input_raw(); if(!d) break;
+        if((d&0xFFFF)!=(k&0xFFFF)){ g_fe_pend=d; break; } }     /* different key: keep it */
+    return k;
+}
+static int cc_name_ok(int ch){                   /* nuvie g_keycode_tbl: letters digits space ' , - . */
+    return (ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||(ch>='0'&&ch<='9')||ch==' '||ch=='\''||ch==','||ch=='-'||ch=='.'; }
+static void vel_page1(const char *prompt, int name_centred, const char *gprompt, int gletter)
+{
+    vel_base();
+    ptext(VEL_X+36, VEL_Y+24, prompt, VEL_INK);
+    int nx = name_centred ? VEL_X + (284 - ptextw(g_cc_name))/2 : 0x34;
+    ptext(nx, 0x78, g_cc_name, VEL_INK);
+    if(gprompt) ptext(VEL_X+52, VEL_Y+56, gprompt, VEL_INK);
+    if(gletter){ char l[2]={(char)gletter,0}; ptext(154,152,l,VEL_INK); }
+    fe_cursor_blit(); rdr_present_doubled(LH);
+}
+/* name entry (nuvie collect_name_string): type up to 13 chars; Backspace/Left delete; Up/Down turn
+ * the last letter through the wheel ' ' 0..9 A..Z a..z (an empty name gets 'A' / 'Z'); Right appends
+ * 'a'; Enter (non-empty) confirms; Esc aborts. Returns 1 / 0 (abort). */
+static int cc_name_entry(void)
 {
     char prompt[80];                                             /* real U.EXE prompt, else paraphrase */
     if(g_cc_np_len>0 && g_cc_np_len<(int)sizeof prompt){ memcpy(prompt,g_cc_np,(size_t)g_cc_np_len); prompt[g_cc_np_len]=0; }
-    else { const char*fb="By what name art thou known?"; int i=0; while(fb[i]){prompt[i]=fb[i];i++;} prompt[i]=0; }
-    int len=0; g_cc_name[0]=0;
+    else { const char*fb="By what name shalt thou be called?"; int i=0; while(fb[i]){prompt[i]=fb[i];i++;} prompt[i]=0; }
+    int len=0, ci=0; g_cc_name[0]=0; g_fe_pend=0;
     for(;;){
-        clear_bb(0);
-        ui_text((LW-ui_textw("Character Creation"))/2, 24, "Character Creation", 15);
-        ui_text((LW-ui_textw(prompt))/2, 70, prompt, 15);
-        char nm[18]; int i=0; for(;i<len;i++) nm[i]=g_cc_name[i]; nm[i++]='_'; nm[i]=0;
-        ui_text((LW-ui_textw(nm))/2, 110, nm, 14);
-        ui_text((LW-ui_textw("(type a name, Enter when done)"))/2, 168, "(type a name, Enter when done)", 24);
-        rdr_present_doubled(LH);
-        int key=fe_getkey();
-        int ch=key&0xFF;
-        if(ch==0x0d && len>0) break;                              /* Enter (needs a name) */
-        else if(ch==0x08 && len>0) g_cc_name[--len]=0;            /* backspace */
-        else if(len<13 && ((ch>='A'&&ch<='Z')||(ch>='a'&&ch<='z')||ch==' ')){
-            g_cc_name[len++]=(char)ch; g_cc_name[len]=0; }
-    }
-}
-
-/* gender select (M/F, or arrows + Enter). Fills g_cc_gender (1=male, 0=female). */
-static void cc_gender(void)
-{
-    char prompt[80];                                             /* real U.EXE prompt, else paraphrase */
-    if(g_cc_gp_len>0 && g_cc_gp_len<(int)sizeof prompt){ memcpy(prompt,g_cc_gp,(size_t)g_cc_gp_len); prompt[g_cc_gp_len]=0; }
-    else { const char*fb="Art thou Male, or Female?"; int i=0; while(fb[i]){prompt[i]=fb[i];i++;} prompt[i]=0; }
-    int sel=1;
-    for(;;){
-        clear_bb(0);
-        ui_text((LW-ui_textw("Character Creation"))/2, 24, "Character Creation", 15);
-        ui_text((LW-ui_textw(prompt))/2, 70, prompt, 15);
-        ui_text((LW-ui_textw("Male"))/2, 108, "Male", sel==1?14:33);
-        ui_text((LW-ui_textw("Female"))/2, 128, "Female", sel==0?14:33);
-        rdr_present_doubled(LH);
-        int key=fe_getkey();
+        vel_page1(prompt,0,0,0);
+        int key;
+        while(!(key=fe_readkey())){ fe_cursor_track(); vsync_pump(); }
         int ch=key&0xFF, sc=(key>>8)&0xFF;
-        if(ch=='m'||ch=='M'){ g_cc_gender=1; return; }
-        if(ch=='f'||ch=='F'){ g_cc_gender=0; return; }
-        if(sc==0x48) sel=1; else if(sc==0x50) sel=0;              /* up=male, down=female */
-        else if(ch==0x0d||ch==' '){ g_cc_gender=sel; return; }
+        if(ch==0x1b) return 0;
+        if((ch==8 || sc==0x4b) && len>0){ g_cc_name[--len]=0; ci = len ? (unsigned char)g_cc_name[len-1] : 0; }
+        else if(ch==0x0d && len>0) break;
+        else if(cc_name_ok(ch) && len<13){ g_cc_name[len++]=(char)ch; g_cc_name[len]=0; ci=ch; }
+        else if(sc==0x48 || sc==0x50){                            /* up / down: the letter wheel */
+            if(sc==0x48){
+                if(ci==0) ci = len>0 ? 'a' : 'A';
+                else if(ci<=32) ci=48; else if(ci>=57&&ci<65) ci=65; else if(ci>=90&&ci<97) ci=97;
+                else if(ci>=122) ci=32; else ci++;
+            } else {
+                if(ci==0) ci = len>0 ? 'z' : 'Z';
+                else if(ci==65) ci=57; else if(ci==97) ci=90; else if(ci<=32) ci=122;
+                else if(ci<=48) ci=32; else ci--;
+            }
+            if(len>0) len--;
+            if(len<13){ g_cc_name[len++]=(char)ci; g_cc_name[len]=0; }
+        }
+        else if(sc==0x4d && len<13){ ci='a'; g_cc_name[len++]='a'; g_cc_name[len]=0; }   /* right: append 'a' */
+    }
+    return 1;
+}
+
+/* gender prompt (same parchment, under the centred name): M/F pick directly; Up/Down toggle the
+ * shown letter and Enter confirms; Esc aborts. Fills g_cc_gender (1 = male, 0 = female). */
+static int cc_gender(void)
+{
+    char prompt[80], gp[80];
+    if(g_cc_np_len>0 && g_cc_np_len<(int)sizeof prompt){ memcpy(prompt,g_cc_np,(size_t)g_cc_np_len); prompt[g_cc_np_len]=0; }
+    else { const char*fb="By what name shalt thou be called?"; int i=0; while(fb[i]){prompt[i]=fb[i];i++;} prompt[i]=0; }
+    if(g_cc_gp_len>0 && g_cc_gp_len<(int)sizeof gp){ memcpy(gp,g_cc_gp,(size_t)g_cc_gp_len); gp[g_cc_gp_len]=0; }
+    else { const char*fb="And art thou Male, or Female?"; int i=0; while(fb[i]){gp[i]=fb[i];i++;} gp[i]=0; }
+    int gender=0, letter=0; g_fe_pend=0;
+    for(;;){
+        vel_page1(prompt,1,gp,letter);
+        int key;
+        while(!(key=fe_readkey())){ fe_cursor_track(); vsync_pump(); }
+        int ch=key&0xFF, sc=(key>>8)&0xFF;
+        if(ch==0x1b) return 0;
+        if(ch=='m'||ch=='M'){ g_cc_gender=1; return 1; }
+        if(ch=='f'||ch=='F'){ g_cc_gender=0; return 1; }
+        if(sc==0x48||sc==0x50){ gender=!gender; letter = gender ? 'M' : 'F'; }
+        else if(ch==0x0d && letter){ g_cc_gender=gender; return 1; }
     }
 }
 
-/* portrait pick (nuvie create_character): cycle the 6 MONTAGE portraits for the chosen
- * gender; 'S'/up/down flips gender (montage index = gender*6 + portrait_num). Left/right or
- * space cycle; Enter confirms. Fills g_cc_portrait (and may adjust g_cc_gender). */
-/* portrait + gender picker (authentic §3c): the live MONTAGE portrait with four labelled buttons —
- * Sex (re-pick gender), Portrait (cycle the 6 faces), Continue (confirm), Exit — driven by keyboard
- * (Up/Down move the highlight + Enter, or the s/p/c hotkeys) AND the mouse (hover highlights, click
- * activates), the active button carrying a 2px underline (palette 248). Because Sex re-toggles gender
- * HERE, you can change your mind after the initial pick (the gap you hit). Fills g_cc_portrait (and
- * possibly g_cc_gender). VELLUM1 parchment/button ART is a later cosmetic pass. */
-static void cc_portrait(void)
+/* portrait + gender picker (nuvie create_character screen 2): the live MONTAGE face with the four
+ * VELLUM1 label buttons — Sex (toggle gender: this is where you can change your mind), Portrait
+ * (cycle the six faces of that gender), Continue, Exit — Up/Down move the underline + Enter, hotkeys
+ * S/P/C, Esc = Exit, or click a label (nuvie's mouse rects). Fills g_cc_portrait (and possibly
+ * g_cc_gender); returns 1 on Continue, 0 on Exit/Esc (abort to the menu). */
+static int cc_portrait(void)
 {
-    if(g_cc_nport<12){ g_cc_portrait=0; return; }         /* no montage shipped -> skip */
-    static const char *const BLAB[4] = { "Sex", "Portrait", "Continue", "Exit" };
-    const int BY[4] = { 70, 95, 120, 145 }, BX = 44;
+    static const int BX[4]={94,62,86,80}, BY[4]={112,129,146,163};      /* nuvie sprite positions */
+    if(g_cc_nport<12){ g_cc_portrait=0; return 1; }         /* no montage shipped -> skip */
     int p=g_cc_portrait; if(p<0||p>5) p=0;
-    int btn=2;                                            /* highlighted button (default Continue) */
+    int btn=0; g_fe_pend=0;                                 /* nuvie: the Sex button starts highlighted */
     for(;;){
-        clear_bb(0);
-        ui_text((LW-ui_textw("Choose Thy Likeness"))/2, 16, "Choose Thy Likeness", 15);
+        vel_base();
+        int nx = VEL_X + (284 - ptextw(g_cc_name))/2;
+        ptext(nx, 0x59, g_cc_name, VEL_INK);
+        for(int x=VEL_X+14; x<=VEL_X+277; x++) ui_px(x, VEL_Y+19, VEL_INK);      /* rule under the name */
+        for(int i=0;i<4;i++) if(g_vel[i+1]) blit_indexed(g_vel[i+1],g_vel_w[i+1],g_vel_h[i+1],BX[i],BY[i]);
         int idx=g_cc_gender*6 + p; if(idx<0)idx=0; if(idx>=g_cc_nport)idx=g_cc_nport-1;
-        int px=180, py=56;
-        blit_opaque(g_cc_port[idx], g_cc_pw, g_cc_ph, px, py);   /* live portrait */
-        for(int t=-1;t<=g_cc_pw;t++){ int xx=px+t; if(xx<0)xx=0; if(xx>=LW)xx=LW-1;
-            ROW(py-1)[xx]=14; ROW(py+g_cc_ph)[xx]=14; }         /* thin frame */
-        const char*g = g_cc_gender ? "Male" : "Female";
-        ui_text(px+(g_cc_pw-ui_textw(g))/2, py+g_cc_ph+6, g, 14);
-        char lbl[20]; { int n=0; const char*a="Face "; for(const char*q=a;*q;q++)lbl[n++]=*q;
-            lbl[n++]=(char)('1'+p); const char*b=" of 6"; for(const char*q=b;*q;q++)lbl[n++]=*q; lbl[n]=0; }
-        ui_text(px+(g_cc_pw-ui_textw(lbl))/2, py+g_cc_ph+18, lbl, 33);
-        for(int i=0;i<4;i++){                                   /* the four buttons + active underline */
-            ui_text(BX, BY[i], BLAB[i], i==btn?14:33);
-            if(i==btn){ int w=ui_textw(BLAB[i]), uy=BY[i]+9;
-                if(uy+1<LH) for(int t=0;t<w && BX+t<LW;t++){ ROW(uy)[BX+t]=248; ROW(uy+1)[BX+t]=248; } }
-        }
-        ui_text((LW-ui_textw("arrows + Enter or click   S sex   P face"))/2, 186, "arrows + Enter or click   S sex   P face", 24);
+        blit_opaque(g_cc_port[idx], g_cc_pw, g_cc_ph, 195, 118);              /* live portrait */
+        { int w=g_vel[btn+1]?g_vel_w[btn+1]:60, uy=BY[btn]+14;                  /* 2px underline, palette 248 */
+          for(int t=0;t<w && BX[btn]+t<LW;t++){ ROW(uy)[BX[btn]+t]=248; ROW(uy+1)[BX[btn]+t]=248; } }
+        fe_cursor_blit();
         rdr_present_doubled(LH);
 
-        int mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);        /* hover highlights, click activates */
-        int over=-1;
-        for(int i=0;i<4;i++){ int w=ui_textw(BLAB[i]);
-            if(mux>=BX-2 && mux<BX+w+2 && muy>=BY[i]-1 && muy<BY[i]+10){ over=i; btn=i; break; } }
-        int act = (mclick && over>=0) ? over : -1;
-        int key=plat_input_raw();
-        if(key){ { int d; while((d=plat_input_raw())){ (void)d; } }
-            int ch=key&0xFF, sc=(key>>8)&0xFF;
-            if(sc==0x48) btn=(btn+3)%4;                         /* up   */
-            else if(sc==0x50) btn=(btn+1)%4;                    /* down */
+        int mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);   /* nuvie's click rects (x<152) */
+        int act=-1;
+        if(mclick && mux<152){
+            if(mux>93 && muy>111 && muy<128) act=0;
+            else if(mux>61 && muy>128 && muy<145) act=1;
+            else if(mux>85 && muy>145 && muy<162) act=2;
+            else if(mux>79 && muy>162 && muy<179) act=3; }
+        int key=fe_readkey();
+        if(key){ int ch=key&0xFF, sc=(key>>8)&0xFF;
+            if(sc==0x48 && btn>0) btn--;                        /* up   */
+            else if(sc==0x50 && btn<3) btn++;                   /* down */
             else if(ch=='s'||ch=='S') act=0;                    /* hotkeys */
             else if(ch=='p'||ch=='P') act=1;
             else if(ch=='c'||ch=='C') act=2;
             else if(ch==0x1b)        act=3;                     /* Esc -> Exit */
-            else if(ch==0x0d||ch==' ') act=btn;
+            else if(ch==0x0d)        act=btn;
         }
         if(act<0){ vsync_pump(); continue; }
         if(act==0) g_cc_gender=!g_cc_gender;                    /* Sex: re-pick gender */
         else if(act==1) p=(p+1)%6;                             /* Portrait: cycle the six faces */
-        else { g_cc_portrait=p; return; }                      /* Continue / Exit: accept + proceed */
+        else if(act==2){ g_cc_portrait=p; return 1; }          /* Continue */
+        else return 0;                                          /* Exit: back to the menu */
     }
 }
 
@@ -2071,10 +2133,15 @@ static void run_chargen(void)
 {
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
     fe_music("CREATE");                                           /* nuvie create_character(): create.m */
-    cc_name_entry();
-    cc_gender();
-    cc_portrait();
-    if(g_woods){ rdr_set_palette((uint8_t*)g_woods_pal,256), rdr_set_lowcolor(g_woods_lc,g_woods_lc+48); cc_woods_intro(); }   /* forest approach (PALETTES.INT 4) */
+    fe_cursor_show(1);                                            /* the menu's pointer stays on for the vellum screens */
+    int ok = cc_name_entry() && cc_gender() && cc_portrait();     /* name -> gender -> face; Esc/Exit abort */
+    fe_cursor_show(0);                                            /* nuvie: mouse_cursor_visible(false) after Continue */
+    if(!ok) return;                                               /* back to the main menu (g_cc_done stays 0) */
+    for(int k=8;k>=0;k--) fe_fade(g_basepal,k);                   /* nuvie fade_out() before the woods */
+    if(g_woods){ rdr_set_lowcolor(g_woods_lc,g_woods_lc+48);      /* forest approach (PALETTES.INT 4): fade in on the woods */
+        blit_opaque(g_woods,g_woods_w,g_woods_h,0,0); intro_fade(g_woods_pal,0); rdr_present_doubled(LH);
+        for(int k=0;k<=8;k++) fe_fade(g_woods_pal,k);
+        cc_woods_intro(); }
     int use_gypsy = (g_gyp_scene!=NULL);
     if(use_gypsy){ rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48); cc_gypsy_intro(); }  /* enter the gypsy's parlour (PALETTES.INT 5) */
     int v[8]; for(int i=0;i<8;i++) v[i]=i;                        /* shuffle the 8 virtues */
@@ -2115,9 +2182,9 @@ static void chargen_capture(int which)
     g_cc_gender=1; g_cc_portrait=0;
     g_cc_str=17; g_cc_dex=16; g_cc_int=18; g_cc_virtue=2;   /* sample stats for the summary */
     switch(which){
-        case 'n': cc_name_entry(); break;
-        case 'g': cc_gender();     break;
-        case 'p': cc_portrait();   break;
+        case 'n': fe_cursor_show(1); (void)cc_name_entry(); fe_cursor_show(0); break;
+        case 'g': fe_cursor_show(1); (void)cc_gender();     fe_cursor_show(0); break;
+        case 'p': fe_cursor_show(1); (void)cc_portrait();   fe_cursor_show(0); break;
         case 'W': if(g_woods_pal) rdr_set_palette((uint8_t*)g_woods_pal,256), rdr_set_lowcolor(g_woods_lc,g_woods_lc+48); cc_woods_intro(); break;  /* forest lead-in */
         case 'G': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48); cc_gypsy_intro(); break;  /* gypsy scene lead-in */
         case 'q': if(g_gyp_pal) rdr_set_palette((uint8_t*)g_gyp_pal,256), rdr_set_lowcolor(g_gyp_lc,g_gyp_lc+48);   /* Justice vs Compassion on the gypsy scene */
@@ -2256,7 +2323,8 @@ static int run_menu(void)
         if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
         blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
         menu_highlight(mx,my,mw,g_menu_h,sel,rowh);         /* yellow->orange distance tint */
-        if(note) ui_text((LW-ui_textw("Not yet available."))/2, my+g_menu_h+10, "Not yet available.", 15);
+        if(note==1) ui_text((LW-ui_textw("Not yet available."))/2, my+g_menu_h+10, "Not yet available.", 15);
+        else if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
         fe_cursor_show(1); fe_cursor_blit();                /* nuvie: pointer visible on the main menu */
         rdr_present_doubled(LH);
 
@@ -2272,7 +2340,8 @@ static int run_menu(void)
         if(key){
             { int d; while((d=plat_input_raw())){ (void)d; } }   /* drain auto-repeat: one press = one action */
             int a=key&0xFF, sc=(key>>8)&0xFF; note=0;
-            if(sc==0x48) sel=(sel+nopt-1)%nopt;              /* up   */
+            if(sc==0x3B){ music_cycle_pref(); note=2; }      /* F1: cycle the music source (saved to MIDI.CFG) */
+            else if(sc==0x48) sel=(sel+nopt-1)%nopt;         /* up   */
             else if(sc==0x50) sel=(sel+1)%nopt;              /* down */
             else if(a=='i'||a=='I') act=0;                   /* first-letter hotkeys (spec §2) */
             else if(a=='c'||a=='C') act=1;
@@ -5993,6 +6062,14 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
             g_gg_w[i]=w; g_gg_h[i]=h; g_gg[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
         for(int b=0;b<2;b++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
             g_gg_scw[b]=w; g_gg_sch[b]=h; g_gg_scroll[b]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+        /* chargen vellum screens: [48+256 lc][u8 n=5] + n x [u16 w][u16 h][w*h] (VELLUM1 0/3/18/16/4) */
+        g_vel_lc=ap; ap+=48+256;
+        g_vel_n=*ap++; if(g_vel_n>5) g_vel_n=5;
+        for(int i=0;i<g_vel_n;i++){ int w=(ap[0]<<8)|ap[1]; ap+=2; int h=(ap[0]<<8)|ap[1]; ap+=2;
+            g_vel_w[i]=w; g_vel_h[i]=h; g_vel[i]=(w>0&&h>0)?ap:0; ap+=(int32_t)w*h; }
+        for(int i=g_vel_n;i<5;i++) g_vel[i]=0;
+        /* front-end font U6.SET: [u8 h (0 = absent)][256 w][256*8 u16 row bits] (fonts.md) */
+        { int fh=*ap++; if(fh>0){ g_fset=ap; ap+=256+256*8*2; } else g_fset=0; }
         return ap;
 }
 
@@ -6001,7 +6078,32 @@ static const uint8_t *parse_frontend(const uint8_t *ap)
  * ticked from a Timer interrupt (below), where Midiws (XBIOS) is unsafe — so we QUEUE the
  * MIDI bytes (plat_midi_queue) and the ISR drains them to the ACIA. Later the OPL2->DMA and
  * YM2149-PSG backends implement the same music_backend_t. */
-static void mus_program (int ch,int prog){ uint8_t x[2]={(uint8_t)(0xC0|(ch&15)),(uint8_t)(prog&127)}; plat_midi_queue(x,2); }
+/* MIDI OUT to a GENERAL MIDI instrument (a GM keyboard / module rather than an MT-32): U6's MIDI.DAT
+ * names MT-32 factory timbres, whose program numbers mean different instruments on a GM device, so
+ * in GM mode each program change is translated through this MT-32 -> GM table. Our own conversion,
+ * nearest instrument by kind, from the two PUBLIC patch lists (the MT-32's 128 factory timbres and
+ * the GM Level-1 sound set) — docs/formats/music.md "General MIDI". Index = MT-32 patch 0-based
+ * (= MIDI.DAT prog-1), value = GM program 0-based. */
+static const uint8_t MT32_TO_GM[128] = {
+  /*  1 AcouPiano1..8 Honkytonk        */   0,  1,  0,  4,  5,  4,  5,  3,
+  /*  9 ElecOrg1..16 Accordion         */  16, 17, 18, 16, 19, 19, 20, 21,
+  /* 17 Harpsi1..24 Celesta2           */   6,  6,  6,  7,  7,  7,  8,  8,
+  /* 25 SynBrass1..32 SynBass4         */  62, 63, 62, 63, 38, 39, 38, 39,
+  /* 33 Fantasy..40 FunnyVox           */  88, 89, 52, 98, 97, 99,100, 85,
+  /* 41 EchoBell..48 SquareWave        */ 100, 96, 68, 95, 87, 84,  8, 80,
+  /* 49 StrSect1..56 Cello2            */  48, 49, 50, 45, 40, 40, 42, 42,
+  /* 57 Contrabass..64 Sitar           */  43, 46, 46, 24, 25, 26, 27,104,
+  /* 65 AcouBass1..72 Fretless2        */  32, 32, 33, 34, 36, 37, 35, 35,
+  /* 73 Flute1..80 Sax2                */  73, 73, 72, 72, 74, 75, 64, 65,
+  /* 81 Sax3..88 Harmonica             */  66, 67, 71, 71, 68, 69, 70, 22,
+  /* 89 Trumpet1..96 BrsSect1          */  56, 56, 57, 57, 60, 60, 58, 61,
+  /* 97 BrsSect2..104 Xylophone        */  61, 11, 11, 12,112,  9, 14, 13,
+  /*105 Marimba..112 Breathpipe        */  12,107, 20, 77, 78, 78, 76, 76,
+  /*113 Timpani..120 Cymbal            */  47,117,118,118,118,116,116,119,
+  /*121 Castanets..128 JungleTune      */ 115,112, 55,124,123, 55, 98,122 };
+static int g_music_gm;          /* MIDI OUT speaks General MIDI (pref 4): map programs, GM reset */
+static void mus_program (int ch,int prog){ if(g_music_gm) prog=MT32_TO_GM[prog&127];
+    uint8_t x[2]={(uint8_t)(0xC0|(ch&15)),(uint8_t)(prog&127)}; plat_midi_queue(x,2); }
 static void mus_note_on (int ch,int n,int v){ uint8_t x[3]={(uint8_t)(0x90|(ch&15)),(uint8_t)(n&127),(uint8_t)(v&127)}; plat_midi_queue(x,3); }
 static void mus_note_off(int ch,int n){ uint8_t x[3]={(uint8_t)(0x80|(ch&15)),(uint8_t)(n&127),0}; plat_midi_queue(x,3); }
 static void mus_reset   (void){ plat_midi_all_off(); }   /* queues all-notes-off (ISR-safe) */
@@ -6077,7 +6179,7 @@ static int mus_parse_map(const uint8_t *dat, int32_t len, int idx, music_map_t *
  *   DMA   -> 8-bit DMA sound (BASE.PCM, host pre-rendered), STE / TT / Falcon
  *   PSG   -> YM2149 3-voice square (BASE.M re-voiced), any Atari — the plain-ST default
  * The engine calls music_play_song(base); it never picks a backend itself. */
-static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI, 2 DMA, 3 PSG          */
+static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI (MT-32), 2 DMA, 3 PSG, 4 MIDI (General MIDI) */
 static int  g_music_dma_ok;     /* 8-bit DMA sound present (STE/MegaSTE/TT/Falcon) */
 static int  g_music_active;     /* backend chosen for the current song: 1 MIDI 2 DMA 3 PSG */
 static char g_music_cur[16];    /* current song base name ("" = none)             */
@@ -6104,7 +6206,9 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
     if(load_map){ int32_t dl=0; uint8_t *dat=(uint8_t*)plat_load_file("MIDI.DAT", 1, &dl);
       if(dat && dl>0){ char base[16]; int i=0; for(const char*p=mfile; *p && *p!='.'&&i<15; p++) base[i++]=*p; base[i]=0;
                        int si=mus_song_index(base); if(si>=0) nmap=mus_parse_map(dat, dl, si, map); } }
-    if(kind==1) plat_midi_init();
+    if(kind==1){ plat_midi_init();
+        if(g_music_gm){ static const uint8_t GMRESET[6]={0xF0,0x7E,0x7F,0x09,0x01,0xF7};   /* GM System On */
+            plat_midi_write(GMRESET,6); } }                       /* (an MT-32 ignores it)          */
     music_seq_start(&g_music, song, got, map, nmap, be);
     g_music_on=1; g_music_be_kind=kind;
     plat_timer_start(music_isr_tick, 60);
@@ -6138,7 +6242,8 @@ static void music_play_song(const char *base){
     { int i=0; while(base[i] && base[i]!='.' && i<15){ g_music_cur[i]=base[i]; i++; } g_music_cur[i]=0; }
     if(!g_music_cur[0]) return;
     /* resolve the backend: explicit preference wins; auto = DMA if present, else PSG (MIDI is opt-in). */
-    int use = (g_music_pref==1) ? 1 :               /* MIDI */
+    g_music_gm = (g_music_pref==4);
+    int use = (g_music_pref==1 || g_music_pref==4) ? 1 :   /* MIDI (MT-32 map / GM-translated) */
               (g_music_pref==3) ? 3 :               /* PSG  */
                                   (g_music_dma_ok?2:3);   /* DMA-pref or auto: DMA if present, else PSG */
     char nm[20];
@@ -6162,21 +6267,47 @@ static void fe_music(const char *base){
     music_play_song(base);
 }
 
-/* set the backend preference at runtime (0 auto / 1 MIDI / 2 DMA / 3 PSG) and re-cue the current
- * song. The working control today is the MIDI.CFG default (authentic: the original chose the synth
- * in config, not in-game); this is the API the front-end settings screen will call to switch live. */
-__attribute__((unused))
+/* set the backend preference at runtime (0 auto / 1 MIDI MT-32 / 2 DMA / 3 PSG / 4 MIDI GM) and
+ * re-cue the current song. The MIDI.CFG byte is the boot default (authentic: the original chose the
+ * synth in config, not in-game); F1 on the title menu / in game cycles it live and writes it back. */
 static void music_set_pref(int pref){
-    if(pref<0 || pref>3) pref=0;
+    if(pref<0 || pref>4) pref=0;
     if(pref == g_music_pref) return;
     g_music_pref = pref;
     if(g_music_cur[0]){ char b[16]; int i=0; while(g_music_cur[i]){ b[i]=g_music_cur[i]; i++; } b[i]=0; music_play_song(b); }
 }
 static int music_active_backend(void){ return g_music_active; }   /* 1 MIDI 2 DMA 3 PSG */
+/* Persist the preference: MIDI.CFG = one byte '0'..'4' in the game folder (GEMDOS Fcreate 0x3C /
+ * Fwrite 0x40 via the platform layer). '0' reads back as auto. */
+static void music_save_pref(void){
+    plat_file f = plat_fcreate("MIDI.CFG");
+    if(f != PLAT_BADFILE){ char b=(char)('0'+g_music_pref); plat_fwrite(f,&b,1); plat_fclose(f); }
+}
+/* F1: step to the next music source — auto -> MIDI (MT-32) -> MIDI (General MIDI) -> DMA (only
+ * where the hardware has it) -> PSG -> auto — re-cue the song on it and save the choice. */
+static void music_cycle_pref(void){
+    int p = g_music_pref;
+    for(int guard=0; guard<6; guard++){
+        p = (p==0)?1 : (p==1)?4 : (p==4)?2 : (p==2)?3 : 0;
+        if(p==2 && !g_music_dma_ok) continue;              /* no DMA sound on this machine */
+        break; }
+    music_set_pref(p);
+    music_save_pref();
+}
+/* Human-readable current source, for the message scroll / menu note */
+static const char *music_pref_label(void){
+    switch(g_music_pref){
+        case 1:  return "Music: MIDI out (Roland MT-32)";
+        case 4:  return "Music: MIDI out (General MIDI)";
+        case 2:  return "Music: DMA sound (AdLib render)";
+        case 3:  return "Music: PSG chiptune";
+        default: return g_music_active==2 ? "Music: automatic (DMA sound)" : "Music: automatic (PSG chiptune)"; }
+}
 
-/* detect DMA + read the backend preference from MIDI.CFG (byte0 '1'=MIDI, '2'=DMA, '3'=PSG;
- * absent/other => auto: DMA if present, else PSG). MIDI stays opt-in since most players have no
- * MT-32; the owner selects it. Also silence the PSG so a leftover tone doesn't drone at boot. */
+/* detect DMA + read the backend preference from MIDI.CFG (byte0 '1'=MIDI MT-32, '2'=DMA, '3'=PSG,
+ * '4'=MIDI General MIDI; absent/other => auto: DMA if present, else PSG). MIDI stays opt-in since
+ * most players have no synth; the owner selects it (F1 cycles + saves). Also silence the PSG so a
+ * leftover tone doesn't drone at boot. */
 static void music_manager_init(void){
     g_music_dma_ok = plat_dma_available();
     g_music_cur[0] = 0;
@@ -6186,7 +6317,7 @@ static void music_manager_init(void){
     for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
     int32_t cl=0; void *c=plat_load_file("MIDI.CFG", 1, &cl);
     char b = (c && cl>0) ? ((const char*)c)[0] : 0;
-    g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : 0;
+    g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : (b=='4')?4 : 0;
 }
 
 /* ---- per-area music: pick the song GROUP for the current game context, switch on change ----
@@ -6368,7 +6499,7 @@ int main(int argc, char **argv)
                 dbg_num("MEM fe_loaded=", fe?1:0);
                 dbg_num("MEM with_fe_used KB=", (int)(mi.chip_used/1024)); } }
         plat_chip_reset(fe_mark);                       /* FREE U6FE — reclaim ~1.35 MB for gameplay */
-        g_font=NULL;                                     /* front-end font pointer dangles; core re-sets it.
+        g_font=NULL; g_fset=NULL;                        /* front-end font pointers dangle; core re-sets g_font.
                                                           * (BOOK text is now in the resident core U6BK, so
                                                           * it survives this free — no g_nbook reset.) */
     }
@@ -8088,6 +8219,7 @@ int main(int argc, char **argv)
                                   g_pending_verb=0; g_show_inv=0; redraw=1; }
                     else if (a==0x1b) { g_pending_verb=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
                 }
+                else if (((key>>8)&0xFF)==0x3B) { music_cycle_pref(); msgcat(0, music_pref_label()); redraw=1; }  /* F1: music source */
                 else if (a=='a'||a=='A') { g_pending_verb='A'; g_msg[0]=0; g_show_inv=0; redraw=1; }  /* A)ttack */
                 else if (a=='c'||a=='C') { open_cast_menu(); redraw=1; }                              /* C)ast: open the spell menu */
                 else if (a=='b'||a=='B') { g_combat_mode=!g_combat_mode; g_show_inv=0;                /* B)attle: combat-mode toggle (moved off 'c') */

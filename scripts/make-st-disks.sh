@@ -170,10 +170,16 @@ README="$STAGE/README.TXT"
   printf '\r\n'
   printf '%s\r\n' "MUSIC"
   printf '%s\r\n' "  Plays as YM2149 chiptune by default (any Atari)."
-  printf '%s\r\n' "  Roland MT-32 owners: put a 1-byte file MIDI.CFG containing"
-  printf '%s\r\n' "  the character 1 in this folder + connect the MT-32 to MIDI."
+  printf '%s\r\n' "  Press F1 (title menu or in game) to step through the music"
+  printf '%s\r\n' "  sources - automatic / MIDI out (Roland MT-32) / MIDI out"
+  printf '%s\r\n' "  (General MIDI keyboard or module) / DMA sound / PSG - the"
+  printf '%s\r\n' "  choice is shown and saved to MIDI.CFG (one byte: 0 auto,"
+  printf '%s\r\n' "  1 MT-32, 2 DMA, 3 PSG, 4 General MIDI)."
   printf '%s\r\n' "  AdLib digital audio (STE/TT/Falcon): copy the pre-rendered"
   printf '%s\r\n' "  *.PCM files into this folder (see the project docs)."
+  printf '%s\r\n' "  MIDITEST.PRG checks the MIDI port + cables: it plays a"
+  printf '%s\r\n' "  piano scale out (Atari OUT -> instrument IN) and prints"
+  printf '%s\r\n' "  what the instrument sends back (instrument OUT -> Atari IN)."
 } > "$README"
 
 # MENU.REQ: presence (non-empty) tells the engine to show the U6 title/main menu
@@ -239,6 +245,14 @@ for a in "${AUX[@]}"; do
   place_whole "$STAGE/$a" "$a"
   printf 'OUT %s\nSRC %d %s\n' "$a" "$CUR" "$a" >> "$MAN"
 done
+
+# MIDITEST.PRG (platform/miditest.c, `make miditest`): stand-alone MIDI port/cable check —
+# tiny, ships whole when built, installed next to the game.
+if [ -f "$BUILD/MIDITEST.PRG" ]; then
+  cp "$BUILD/MIDITEST.PRG" "$STAGE/MIDITEST.PRG"
+  place_whole "$STAGE/MIDITEST.PRG" MIDITEST.PRG
+  printf 'OUT MIDITEST.PRG\nSRC %d MIDITEST.PRG\n' "$CUR" >> "$MAN"
+fi
 
 printf 'END\n' >> "$MAN"
 NDISKS=$CUR

@@ -2121,6 +2121,44 @@ int main(int argc, char **argv)
           free(sc); }
         printf("gargoyle scene: pal7 + %d/%d raw INTRO.SHP shapes + blocks 0/1 (%ld bytes, animated §1B)\n",
                nshipped, GG_NSH, ftell(fe)-gpre); } }
+      /* CHARGEN VELLUM screens (nuvie create_character; chargen_authentic.md §3a-3c): VELLUM1.SHP
+       * shape 0 = the 284x118 parchment drawn at (16,80) under the title logo, + the four button
+       * LABELS of the portrait screen: 3 Sex (58x16 @94,112), 18 Portrait (90x16 @62,129),
+       * 16 Continue (66x16 @86,146), 4 Exit (72x16 @80,163). Menu palette (U6PAL ~ PALETTES.INT 0).
+       * [48+256 ST lc][u8 n=5] + n x [u16 w][u16 h][w*h] (255 = transparent). */
+      { static const int VEL[5]={0,3,18,16,4}; static const int VX[5]={16,94,62,86,80}, VY[5]={80,112,129,146,163};
+        static uint8_t vsc[320*200]; memset(vsc,0,sizeof vsc);
+        uint8_t *vp[5]; int vw[5],vh[5];
+        for(int k=0;k<5;k++){ vw[k]=vh[k]=0; vp[k]=load_shape(dir,"VELLUM1.SHP",VEL[k],&vw[k],&vh[k]);
+          if(vp[k]) for(int y=0;y<vh[k];y++) for(int x=0;x<vw[k];x++){ uint8_t v=vp[k][y*vw[k]+x];
+            int sx=VX[k]+x, sy=VY[k]+y; if(v!=U6SHAPE_TRANSPARENT && sx<320 && sy<200) vsc[sy*320+sx]=v; } }
+        { int mw=0,mh=0; uint8_t *m0=load_shape(dir,"MONTAGE.SHP",0,&mw,&mh);   /* + a face at (195,118) */
+          if(m0){ for(int y=0;y<mh;y++) for(int x=0;x<mw;x++){ int sx=195+x, sy=118+y; if(sx<320&&sy<200) vsc[sy*320+sx]=(m0[y*mw+x]==U6SHAPE_TRANSPARENT)?0:m0[y*mw+x]; } free(m0); } }
+        for(int k=0;k<400;k++) vsc[k]=0x48;                     /* weight the parchment ink (0x48) */
+        { uint8_t lc[48+256]; build_scene_lc(palb, vsc, 320*200, lc); fwrite(lc,1,sizeof lc,fe); }
+        fputc(5,fe);
+        for(int k=0;k<5;k++){ be16(fe,(unsigned)vw[k]); be16(fe,(unsigned)vh[k]);
+          if(vp[k]&&vw[k]>0&&vh[k]>0) fwrite(vp[k],1,(size_t)vw[k]*vh[k],fe); free(vp[k]); }
+        printf("chargen vellum: VELLUM1.SHP parchment %dx%d + 4 button labels\n", vw[0], vh[0]); }
+      /* FRONT-END FONT: U6.SET (docs/formats/fonts.md "U6.SET"), the proportional font nuvie's
+       * cutscene/chargen text uses (image_print) — a DIFFERENT typeface from the 8x8 U6.CH (60 of 94
+       * printable glyphs differ) with per-glyph widths (1 leading blank column, 0 trailing; space=4).
+       * Shipped decoded: [u8 height (0 = absent)][256 x u8 width][256 x 8 x u16 row bits, BE, bit15 =
+       * leftmost]. The engine's proportional text (ptext/pwrap/fe_print) uses it for ALL front-end
+       * text; U6.CH stays the in-game font. */
+      { long sn=0; uint8_t *sraw=slurp(dir,"U6.SET",&sn); int ok=0;
+        if(sraw && sn>4){ int32_t un=u6lzw_unpacked_size(sraw,(int32_t)sn);
+          if(un>=0x304){ uint8_t *sd=malloc((size_t)un); int32_t got=u6lzw_decompress(sraw,(int32_t)sn,sd,un);
+            if(got==un && sd[0]>0 && sd[0]<=8){ int h=sd[0], ink=sd[2];
+              fputc(h,fe); for(int c=0;c<256;c++) fputc(sd[4+c],fe);
+              for(int c=0;c<256;c++){ int w=sd[4+c]; long g=sd[0x104+c]|((long)sd[0x204+c]<<8);
+                for(int r=0;r<8;r++){ unsigned bits=0;
+                  if(r<h) for(int x=0;x<w&&x<16;x++){ long o=g+(long)r*w+x; if(o<un && sd[o]==ink) bits|=0x8000u>>x; }
+                  fputc((bits>>8)&0xFF,fe); fputc(bits&0xFF,fe); } }
+              ok=1; printf("front-end font: U6.SET %d px, %d bytes decoded (ink %d)\n", h, un, ink); }
+            free(sd); } }
+        free(sraw);
+        if(!ok){ fputc(0,fe); printf("front-end font: U6.SET missing/undecodable -> engine falls back to U6.CH\n"); } }
     }   /* end front-end/intro art block */
     if(fe!=f) fclose(fe);   /* slim: close the separate U6FE.PAK */
 

@@ -1547,6 +1547,13 @@ Reported by the user; each item traced + fixed under Hatari the same day, pendin
 - **Avatar enters the red moongate as a BLACK silhouette, not grey** (user memory, confirmed:
   nuvie blacks palette entry 25 for the walk + dissolve, restores 0x74 after) → avatar_climax uses
   a 25-blacked palette (LUT 25 → darkest slot on the ST 16) for those two phases.
+- **Chargen name/gender/portrait screens looked made-up and text-only** — they were (our own
+  wording on black). Now the real thing: title logo + VELLUM1 parchment, the four VELLUM1 label
+  buttons ("New Sex" / "New Portrait" / "Continue" / "ESC-Abort"), montage face, underline, nuvie's
+  coordinates/keys/click rects, Exit back to the menu (chargen_authentic.md §3a–3c). Along the way:
+  the front-end text was set in U6.CH — a different typeface from the original's **U6.SET**
+  (60/94 glyphs differ, other advances) — so mkworld now ships U6.SET decoded and every
+  front-end string (narration, questions, chargen) renders in the true font (fonts.md).
 
 ## Risk register (review each milestone)
 | Risk | Mitigation | Milestone |

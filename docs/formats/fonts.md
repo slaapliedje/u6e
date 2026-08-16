@@ -9,13 +9,15 @@ scroll, party panel, status line, books/signs, and conversations.
 > - Tools        : host glyph dumper (render each glyph as text), tools/uipreview.c (renders real strings in this font to PNG).
 > - Validated by  : rendered ASCII text ("Thou art in Britannia.", mixed case + digits) produces correct, recognisable U6 letterforms (build/uipreview.png).
 > - Confidence   : confirmed
-> - Last updated : 2026-06-24
+> - Last updated : 2026-08-15 (U6.SET front-end font section added)
 
 ## Which file (IMPORTANT)
-The game font is **`U6.CH`**, NOT `U6.SET`. `U6.CH` is a raw 2048-byte file with
-no compression and no size header. (`U6.SET` is a *different*, LZW-compressed
-file and is **not** this 8×8 font — do not confuse them. An earlier decode pass
-wasted effort assuming U6.SET was the font; it is out of scope here.)
+The in-GAME font is **`U6.CH`**, NOT `U6.SET`. `U6.CH` is a raw 2048-byte file with
+no compression and no size header. `U6.SET` is a *different* file — the LZW-compressed
+**proportional front-end font** (intro narration, main menu text, character creation:
+everything nuvie's cutscene `image_print` draws) — see "U6.SET" below. The two are
+distinct typefaces (60 of the 94 printable glyphs differ), so front-end text set in
+U6.CH — even trimmed to proportional widths — is NOT what the original shows.
 
 **U6 only** ships `U6.CH`. Savage Empire and Martian Dreams instead use a
 **proportional "WOU" font** (`SAVAGE.FNT` / `FONTS.LZC`) — a different format,
@@ -54,6 +56,40 @@ A glyph is drawn into the chunky 8-bit backbuffer pixel-by-pixel; set bits get
 the foreground palette index, clear bits are left untouched (transparent). See
 `render/gamedemo.c::ui_text` and `tools/uipreview.c::text` — both iterate rows
 and test `bits & (0x80 >> col)`.
+
+## U6.SET — the U6 front-end (cutscene / chargen) proportional font
+
+Provenance: refdata/dos/u6/U6.SET decoded with our `u6lzw` + a host glyph dumper (2026-08-15);
+nuvie `fonts/wou_font.cpp` READ to learn which header bytes mean what (`WOUFont` is the class
+nuvie's `ScriptCutscene` uses for U6, initialised from `u6.set`); validated by rendering the
+intro narration, the gypsy questions and the chargen vellum screens on the emulated Falcon —
+letterforms + line breaks match the DOS captures. Confidence: **confirmed**.
+
+- **Container**: bare U6 [LZW](lzw.md) (4-byte size header): 1168 B packed → **7004 B**.
+- **Layout = the WOU layout below** (same family as SE/MD's fonts), with U6 values:
+  | Offset | Size | Field | U6.SET value |
+  |--------|------|-------|--------------|
+  | 0 | 1 | glyph height | 8 |
+  | 1 | 1 | — | 0 |
+  | 2 | 1 | **ink pixel value** — a glyph byte equal to this is INK; anything else is transparent | 15 |
+  | 3 | 1 | — | 0 |
+  | 4..259 | 256 | width[ch] (advance = bitmap width) | 3..9 (`' '`=4, `'i'`=5, `'A'`=7, `'m'`/`'W'`=8) |
+  | 260..515 | 256 | glyph offset LOW byte | |
+  | 516..771 | 256 | glyph offset HIGH byte (`off = lo | hi<<8`, absolute) | |
+  | off[ch] | w×8 | glyph pixels, row-major, 1 byte per pixel | |
+- Every printable glyph has exactly **one blank leading column and no trailing column** (the
+  advance IS the width; a 1-px inter-glyph gap is built into each glyph). Default text colour
+  in nuvie for U6 = palette **0x48** (dark parchment ink); highlight 0x0c.
+- Note the SE/MD convention below reads the *background* value at byte 3 (ink = anything
+  else); for U6.SET use byte 2 as the ink value (glyphs contain only 0 and 15).
+
+**Pack (`tools/mkworld.c`)**: shipped decoded in the front-end block after the vellum
+section: `[u8 height (0 = absent)][256 × u8 width][256 × 8 × u16 row bits, big-endian, bit 15 =
+leftmost column]` (4353 B). Engine: `g_fset` — `pglyph_w`/`ptext`/`ptextw`/`pwrap`/`fe_print`
+draw with it whenever the pack has it (else the old U6.CH-trimmed fallback), so ALL front-end
+text (narration pages, menu notes, gypsy questions, chargen screens) is set in the true font;
+`ui_text` (in-game HUD/scroll) stays 8×8 U6.CH. On the ST the pointer is nulled with the rest of
+the front-end when U6FE is freed.
 
 ## Savage / Martian: the WOU proportional font (`SAVAGE.FNT` / `FONTS.LZC`)
 

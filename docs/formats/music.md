@@ -176,6 +176,47 @@ engine will extract `MIDI.DAT` into the pack (like BOOK.DAT) and ship it for the
 channel routing) into the exported SMF — so it drives a real MT-32 with the authentic timbres.
 - **Channel map**: 9 data channels → MIDI channels, avoiding the drum channel; a direct 0..8 map works.
 
+### General MIDI devices (2026-08-16)
+The MIDI-OUT path was MT-32-only: MIDI.DAT's programs are MT-32 factory-timbre numbers, which
+mean other instruments on a General MIDI keyboard/module (the user's Falcon has a GM keyboard on
+the MIDI port). A **General MIDI mode** (MIDI.CFG `4`) translates every program change through an
+MT-32 → GM table and sends *GM System On* (`F0 7E 7F 09 01 F7`, ignored by an MT-32) when a song
+starts; notes/channels are unchanged (MIDI.DAT uses channels 2–6, never the GM drum channel 10).
+The table (`render/gamedemo.c MT32_TO_GM`, 128 entries, MT-32 patch 0-based → GM program 0-based)
+is our own nearest-instrument conversion from the two PUBLIC patch lists (the MT-32's factory
+timbres and the GM Level-1 set) — for the patches U6 actually uses:
+
+| MT-32 (MIDI.DAT prog) | timbre | GM program |
+|-----|-------------|-----|
+| 2 / 7 / 6 | Acou Piano 2 / Elec Piano 4 / Elec Piano 3 | 1 Bright Piano / 5 E.Piano 2 / 4 E.Piano 1 |
+| 13 | Pipe Organ 1 | 19 Church Organ |
+| 17 / 19 | Harpsi 1 / 3 | 6 Harpsichord |
+| 25 / 26 / 27 / 28 | Syn Brass 1–4 | 62 / 63 / 62 / 63 Synth Brass 1–2 |
+| 33 / 34 | Fantasy / Harmo Pan | 88 Pad 1 (new age) / 89 Pad 2 (warm) |
+| 38 / 39 | Atmosphere / Warm Bell | 99 FX 4 (atmosphere) / 100 FX 5 (brightness) |
+| 50 / 51 | Str Sect 2 / 3 | 49 String Ens 2 / 50 Synth Strings 1 |
+| 56 | Cello 2 | 42 Cello |
+| 60 / 61 / 62 | Guitar 1 / Guitar 2 / Elec Gtr 1 | 24 Nylon / 25 Steel / 26 Jazz guitar |
+| 88 | Harmonica | 22 Harmonica |
+| 95 | Tuba | 58 Tuba |
+| 114 / 118 | Melodic Tom / Taiko | 117 Melodic Tom / 116 Taiko Drum |
+
+Confidence: probable (musical judgement, not a decoded table). Verified in Hatari (`--trace
+midi_raw`): BOOTUP in GM mode transmits `F0 7E 7F 09 01 F7 · C1 63 · C2 64 · 91 26 48 …` — the
+reset, MT-32 38/39 → GM 99/100 on channels 2/3, then the notes.
+
+**Selecting the source at runtime:** MIDI.CFG (one byte: `0` auto, `1` MIDI MT-32, `2` DMA,
+`3` PSG, `4` MIDI General MIDI; absent = auto) is the boot default, and **F1** on the title menu
+or in the game steps auto → MT-32 → GM → DMA (where present) → PSG → auto, re-cues the current
+song on the new sink, shows the choice (menu note line / message scroll) and writes MIDI.CFG back
+(`music_cycle_pref` / `music_save_pref`, GEMDOS Fcreate 0x3C + Fwrite 0x40 via platfile).
+
+**MIDITEST.PRG** (`platform/miditest.c`, `make miditest`; shipped next to the game): a stand-alone
+port/cable check — GM reset + a piano scale/chord out (Atari OUT → instrument IN: you hear it),
+then the Hurrian Hymn on a GM harp (the author's Royal Game of Ur title melody), then it decodes
+MIDI IN (instrument OUT → Atari IN: your playing prints as Note On/Off lines; T = thru). Uses
+Midiws #12 / Bconstat(3) #1 / Bconin(3) #2. Hatari `--trace midi_raw` confirmed the byte stream.
+
 ## The `.DRV` device drivers (context, not decoded)
 `U6ADLIB.DRV` (OPL2/AdLib), `U6ROLAND.DRV` (Roland MT-32), `U6TANDY/U6CMS/U6COVOX/U6INNOVA`,
 `U6TMUS`, plus `U6CGA/EGA/MCGA.DRV` (video). These are Origin/Miles AIL device drivers — the

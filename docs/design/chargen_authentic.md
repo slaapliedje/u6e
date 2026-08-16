@@ -21,7 +21,8 @@
 > - Confidence   : confirmed (all quoted text; menu options; chargen step order; A/B & portrait
 >                  UI) / probable (which cutscene the "Introduction" item replays; the
 >                  "Welcome, O Seeker!" placement).
-> - Last updated : 2026-08-15 (real-Falcon feedback: §3f question-text layout rule + pointer
+> - Last updated : 2026-08-15 (real-Falcon feedback: §3a–3c vellum screens implemented for real
+>                  + the whole front-end now set in U6.SET; §3f question-text layout rule + pointer
 >                  visibility/palette fix; shape transparency = block coverage, see
 >                  docs/formats/shapes.md "Transparency"). 2026-08-12: §1B.1 INTRO.SHP catalog
 >                  + gargoyle choreography (flow read from nuvie intro.lua, implemented from
@@ -308,6 +309,21 @@ Int** (U6 has no class). It is done entirely on-screen; there is no disk step. O
   - **Exit** = abort to menu. Esc (or Enter when Exit is highlighted).
   - Keyboard Up/Down move the button highlight (0..3); mouse clicks the button's rect.
 - On Continue: fade out.
+
+> **Implemented 2026-08-15 (real-Falcon feedback: our first cut of §3a–3c was text-only screens
+> of our own wording).** `vel_base()` = the title logo (still up from the menu, same place) +
+> VELLUM1 shape 0 at (16,80) under the menu palette; text in **U6.SET** (fonts.md), ink 0x48.
+> §3a: prompt at parchment (36,24), the name typed at (52,120), left-aligned while typing, centred
+> once entered; Backspace/Left, the Up/Down letter wheel (' ' 0–9 A–Z a–z; empty → 'A'/'Z'), Right
+> appends 'a', 13 chars, allowed set = letters digits space `' , - .`; Esc aborts to the menu.
+> §3b: prompt at parchment (52,56), the M/F letter at (154,152), M/F direct or Up/Down + Enter.
+> §3c: fresh parchment, name centred at y=89, rule (30..293, 99), labels VELLUM1 3/18/16/4 at
+> their nuvie spots (they read "New Sex" / "New Portrait" / "Continue" / "ESC-Abort"), MONTAGE
+> face at (195,118), 2-px underline (248) under the active label, Sex starts highlighted;
+> keys Up/Down/Enter/S/P/C/Esc + nuvie's click rects; Exit returns to the menu; Continue fades
+> out and the woods fade in. Pointer visible on all three (nuvie hides it after Continue).
+> Typing uses `fe_readkey()` (drains identical auto-repeats behind a key, keeps a different
+> key pending) so fast typing on the real machine's fast Kbrate neither doubles nor drops.
 
 ### 3d. The approach (woods → wagon), scrolling narration
 - Fade in on **`WOODS.SHP`** (shapes 0 + 1 form a wide forest-path panorama), **PALETTES.INT
