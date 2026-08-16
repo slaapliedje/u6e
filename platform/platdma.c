@@ -58,6 +58,7 @@
 
 #define RING_SIZE  32768u          /* ST-RAM ring: ~2.6 s at 12517 Hz (power of two) */
 #define HDR_SIZE   16              /* U6PC header bytes before the PCM body          */
+#define PUMP_CHUNK 4096            /* refill granularity: fewer, larger, aligned disk reads */
 
 static int       g_avail;
 static uint8_t  *g_ring;           /* DMA-safe ST-RAM ring buffer                    */
@@ -194,9 +195,19 @@ void plat_dma_music_pump(void){
         g_fresh = 0;
         if(consumed > (int32_t)(g_ring_size/2)) return;
     }
-    if(consumed <= 0) return;
-    stream_into(g_last_off, consumed);      /* refill the region the DMA just played */
-    g_last_off = g_cur_off;
+    /* CHUNKED refill (real-Falcon 2026-08-16: a tiny Fseek+Fread EVERY frame audibly ground the
+     * machine and slowed the intro — each one is a SCSI transaction with ms of fixed overhead).
+     * Let ~PUMP_CHUNK bytes accumulate, then read them in ONE call whose file offset ENDS on a
+     * 512-byte boundary, so every following read starts sector-aligned and GEMDOS can DMA the
+     * whole thing straight into the ring (no partial-sector bounce). Slack stays ample: the DMA
+     * is at most CHUNK+a frame ahead of the unfilled region of a 32 KB ring (>= 1 s at 25 kHz). */
+    if(consumed < PUMP_CHUNK) return;
+    int32_t n = consumed;
+    int32_t fpos = HDR_SIZE + g_frame_pos;              /* file offset the next byte comes from */
+    { int32_t end = (fpos + n) & ~511; n = end - fpos; } /* stop on a sector boundary */
+    if(n <= 0) return;
+    stream_into(g_last_off, n);             /* refill (part of) the region the DMA just played */
+    g_last_off += n; if(g_last_off >= (int32_t)g_ring_size) g_last_off -= (int32_t)g_ring_size;
 }
 
 void plat_dma_music_stop(void){

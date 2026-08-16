@@ -33,7 +33,10 @@ each page. (For headless capture, advance on the sentinel/injected input or a lo
 
 ### 2. Window / storm  (INTRO_2.SHP, PALETTES.INT 2)   — MISSING (the "lightning" scene)
 Close-up of a curtained, mullioned window onto a stormy twilight pine forest. Layers (nuvie
-load_window / intro_2.shp indices): sky(1), scrolling clouds(0,2,3), trees(8), ground(10@y0x4c),
+load_window / intro_2.shp indices, in DRAW ORDER — the ground is drawn BEFORE the trees, whose
+lower rows cover the ground image's opaque black top band; drawn the other way round that band
+shows as a black gap between forest and ground — real-Falcon report 2026-08-16, fixed in mkworld):
+sky(1), scrolling clouds(0,2,3), ground(10@y0x4c), trees(8),
 rain drops(4-7, spawn+fall), random **lightning flashes**(11-18, brief, random x/y), big **strike**(19-23
 @158,114), window glass(26 normal / **27 = white flash** on a strike), window frame/mullions(28),
 and the two **door leaves** left(24, 66×200)/right(25, 67×200) — NOT curtains: they are the leaves of
@@ -55,7 +58,8 @@ frame 28) pans left off-screen (8 px steps) with the two DOOR LEAVES (24/25) tra
 lands on the doorway (leaves at both screen edges, forest between), holds for input with the
 "Lightning among the stones!" caption still up, then the leaves slide apart (4 px steps, 68 px each)
 and the "You bolt from your house… into the forest, down the path… to the stones." narration
-(U.EXE page 7) holds over the clear forest. Real-Falcon feedback 2026-08-15: our first cut slid the
+(U.EXE page 7) holds over the clear forest. Pace is TIME-BASED (2026-08-16): the pan runs at
+nuvie's 40 px/s and the leaves at 20 px/s by wall clock however many frames the machine draws. Real-Falcon feedback 2026-08-15: our first cut slid the
 frame straight off onto open forest — the doorway beat was missing (the user remembered it). mkworld
 ships the forest base (opaque) + the window overlay (255 = transparent) + the two leaves. Lightning
 keeps flashing behind the frame/leaves during the holds. Validated by Falcon capture (INTRO.REQ 's'

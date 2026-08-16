@@ -270,3 +270,8 @@ mix — on stop). The play position is read from the DMA frame counter $FFFF8909
 same on STE/TT/Falcon per the Falcon register addendum) via Supexec on all three machines — one
 validated path — rather than Buffptr 141; per corpus BUG84 the counter is only valid after a DMA
 cycle has begun, so start() Vsyncs once and the first pump ignores an implausible read.
+**Third run (2026-08-16):** with the pump now running every frame, the music "ground against the
+CPU" and the intro slowed — a tiny Fseek+Fread EVERY frame is a SCSI transaction with ms of fixed
+overhead. The pump now lets ~4 KB accumulate and reads it in one call that ends on a 512-byte file
+boundary, so subsequent reads are sector-aligned (GEMDOS DMAs straight into the ring); Hatari
+tracking check: recording ↔ BOOTUP.PCM constant −0.26 s offset, corr ≈ 1.0 for 24 s.

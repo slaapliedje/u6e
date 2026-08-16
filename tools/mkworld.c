@@ -2031,7 +2031,10 @@ int main(int argc, char **argv)
       { uint8_t p2[768]; if(!load_intpal(dir,2,p2)) memset(p2,0,sizeof p2);
         fwrite(p2,1,768,fe);
         static uint8_t sbase[320*200]; memset(sbase,0,sizeof sbase);
-        static const ishape_t WIN[]={{1,0,0},{8,0,0},{10,0,76},{26,57,0},{28,0,0}};
+        /* z-order = nuvie load_window: sky, ground(@76), TREES OVER THE GROUND (the trees' lower rows
+         * cover the ground image's opaque black top band — drawn under the ground that band showed
+         * as a black gap between forest and ground on the real Falcon, 2026-08-16), glass, frame. */
+        static const ishape_t WIN[]={{1,0,0},{10,0,76},{8,0,0},{26,57,0},{28,0,0}};
         compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
         { uint8_t lc[48+256]; build_scene_lc(p2,sbase,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* storm ST 16 */
         be16(fe,320); be16(fe,200); fwrite(sbase,1,sizeof sbase,fe);
@@ -2049,7 +2052,7 @@ int main(int argc, char **argv)
          * (opaque) + the window overlay (glass 26@57 + frame 28, 255 = transparent) so the engine
          * can slide the frame off a static forest. [u16 fw][u16 fh][fw*fh][u16 ow][u16 oh][ow*oh]. */
         static uint8_t fbase[320*200]; memset(fbase,0,sizeof fbase);
-        static const ishape_t FOR[]={{1,0,0},{8,0,0},{10,0,76}};
+        static const ishape_t FOR[]={{1,0,0},{10,0,76},{8,0,0}};   /* sky, ground, trees on top (see WIN) */
         compose_shapes(dir,"INTRO_2.SHP",FOR,(int)(sizeof FOR/sizeof FOR[0]),fbase,320,200);
         be16(fe,320); be16(fe,200); fwrite(fbase,1,sizeof fbase,fe);
         static uint8_t wov[320*200]; memset(wov,U6SHAPE_TRANSPARENT,sizeof wov);   /* overlay layer */

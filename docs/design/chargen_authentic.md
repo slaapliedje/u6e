@@ -218,7 +218,14 @@ shows at the next present). A full recomposite + 320×200 present cost ~200 ms p
 16 MHz Falcon (the real-hardware "really slow" report); a moving horde or companion touches
 ~15–25 % of the screen. Shape pixels: covered index 0 is opaque black, uncovered = 255
 transparent (docs/formats/shapes.md "Transparency" — the boot-sole/eye/altar-band holes seen
-on hardware were the old 0-key).
+on hardware were the old 0-key). PACE (2026-08-16, second real-Falcon report: "fast until the
+companions' rescue"): every motion is now stepped by WALL TIME — nuvie advances each move one
+step per 25 ms canvas update, and we used to advance one step per presented frame, so the
+sections whose dirty rects are large (the vault / pull-back / gate-sink beats move three
+companions plus both swaying hordes ≈ most of the screen) ran at a third of the original speed
+on a slow-framing machine. `gg_steps()` returns the number of 25 ms steps elapsed since the last
+call (waiting the remainder on a fast machine, capped at 8 after a hitch); each loop applies
+that many steps, then draws once — so the scene lasts the same seconds on every Atari.
 
 > ⚠️ TRIGGER UNCERTAINTY (probable, not confirmed): In nuvie, `play()` (boot) shows **1A**,
 > and the **"Introduction" menu item** replays **1B** (the gargoyle scene). On the original

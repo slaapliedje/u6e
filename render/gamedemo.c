@@ -586,6 +586,8 @@ static void intro_caption_page(int gp);           /* fwd: parchment + page gp (d
  * played only its first 2.6 s over and over — the front-end waited on a bare vsync_pump() and never
  * pumped, so the hardware just re-looped the primed ring. XBIOS Vsync (#37). */
 static void vsync_pump(void){ Vsync(); plat_dma_music_pump(); }
+static void music_cycle_pref(void);        /* fwd: F1 music-source cycle (music manager) */
+static const char *music_pref_label(void); /* fwd: its label */
 
 /* set the scene palette scaled by num/8 (0=black .. 8=full) — for fade in/out. */
 static void intro_fade(const uint8_t*pal,int num)
@@ -759,6 +761,7 @@ static int g_intro_mb;
 static int intro_advance(void)
 {
     int key=plat_input_raw();
+    if(key && ((key>>8)&0xFF)==0x3B){ music_cycle_pref(); return 0; }   /* F1: music source, not a page turn */
     if(key){ if((key&0xFF)==0x1b) return 2; return 1; }
     int mx,my,mb; plat_mouse(&mx,&my,&mb);
     int adv = (mb && !g_intro_mb); g_intro_mb=mb;
@@ -766,8 +769,6 @@ static int intro_advance(void)
 }
 #define PAGE_MAXTICKS (10*200)   /* auto-advance a page after ~10s of no input (attract/headless) */
 static void fe_music(const char *base);   /* fwd: front-end music cue (defined with the M10 music manager) */
-static void music_cycle_pref(void);        /* fwd: F1 music-source cycle (music manager) */
-static const char *music_pref_label(void); /* fwd: its label */
 
 /* STORM WINDOW scene (nuvie window_sequence, INTRO_2.SHP / PALETTES.INT 2): a curtained window
  * onto a stormy pine forest. Static scene baked; lightning = a bright random bolt over it + a
@@ -841,19 +842,28 @@ static void forest_reveal(rng_t *r, const uint8_t *flashpal)
 {
     if(!g_forest_base || !g_win_ov) return;
     g_sw_cap=6; g_sw_door=(g_door_l?0:-1);
-    for(int x=-8; x>=-g_win_ow; x-=8){                        /* the pan: window off left, leaves trail */
-        g_sw_ovx=x; if(x<=-(g_win_ow/2)) g_sw_strk=0;         /* strike ends halfway (nuvie i>160)  */
+    /* TIME-BASED pace (same rule as the gargoyle scene): nuvie pans 2 px per 50 ms = 40 px/s and
+     * opens the leaves 1 px per 50 ms = 20 px/s; we draw as many frames as the machine manages
+     * and place the sprites by elapsed time, so the beat lasts the same 8 s + 3.4 s everywhere. */
+    { uint32_t t0=plat_ticks_200hz(); int x=0;
+      while(x>-g_win_ow){                                     /* the pan: window off left, leaves trail */
+        int nx=-(int)((plat_ticks_200hz()-t0)/5); if(nx<-g_win_ow) nx=-g_win_ow;
+        if(nx==x){ vsync_pump(); if(plat_input_raw()) nx=-g_win_ow; else continue; }
+        x=nx; g_sw_ovx=x; if(x<=-(g_win_ow/2)) g_sw_strk=0;    /* strike ends halfway (nuvie i>160)  */
         storm_compose(); rdr_present_doubled(LH); vsync_pump();
         if(plat_input_raw()){ x=-g_win_ow; }                  /* a keypress snaps to the doorway   */
-    }
+      } }
     g_sw_ovx=-g_win_ow; g_sw_strk=0;
     if(g_sw_door>=0){
         if(storm_hold(r,flashpal)==2) return;                 /* at the doorway, caption still up  */
         g_sw_cap=-1;                                          /* nuvie: scroll hidden for the opening */
-        for(int d=4; d<=68; d+=4){                            /* leaves slide apart onto the forest */
-            g_sw_door=d; storm_compose(); rdr_present_doubled(LH); vsync_pump();
+        { uint32_t t0=plat_ticks_200hz(); int d=0;
+          while(d<68){                                        /* leaves slide apart onto the forest */
+            int nd=(int)((plat_ticks_200hz()-t0)/10); if(nd>68) nd=68;
+            if(nd==d){ vsync_pump(); if(plat_input_raw()) nd=68; else continue; }
+            d=nd; g_sw_door=d; storm_compose(); rdr_present_doubled(LH); vsync_pump();
             if(plat_input_raw()){ d=68; }
-        }
+          } }
         g_sw_door=68;
     }
     g_sw_cap=7;                                               /* "...to the stones" over the clear forest */
@@ -1501,7 +1511,9 @@ static int fe_getkey(void)
     }
     /* then block for a fresh keystroke — OR a mouse click (nuvie wait_for_input(): input_poll()
      * returns for a button press too, so every "any input" page also advances on a click). */
-    for(;;){ if((k = plat_input_raw())) return k;
+    for(;;){ if((k = plat_input_raw())){
+            if(((k>>8)&0xFF)==0x3B){ music_cycle_pref(); continue; }   /* F1: music source (not "any key") */
+            return k; }
         if(fe_click_edge()) return FE_KEY_CLICK;
         fe_cursor_track(); vsync_pump(); }
 }
@@ -1961,22 +1973,46 @@ static void gg_reset(void)
     g_gg_valid=0; g_gg_paldirty=0; g_gg_capS=0; g_gg_capL=g_gg_capW=g_gg_capX=g_gg_capY=0;
 }
 
+/* TIME-BASED animation stepping (real-Falcon feedback 2026-08-16: the rescue half of the scene
+ * "seemed slow"). Nuvie advances every motion by one step per 25 ms canvas update; we used to
+ * advance one step per PRESENTED FRAME, so on a machine whose frame takes 60-100 ms the vault /
+ * pull-back / gate-sink beats crawled at a third of the original pace. gg_steps() returns how many
+ * 25 ms steps have elapsed since the last call (waiting out the remainder of a step on a fast
+ * machine so nothing runs FASTER than the original either; capped at 8 so a hitch doesn't warp),
+ * and each loop applies that many steps before it draws. Same wall-clock pace on every Atari. */
+#define GGF_SWAY 1
+#define GGF_CYC  2
+#define GG_STEP_TICKS 5                          /* 25 ms = nuvie's cutscene update interval */
+static uint32_t g_gg_tlast;
+static void gg_steps_reset(void){ g_gg_tlast=plat_ticks_200hz(); }
+static int gg_steps(void)
+{
+    uint32_t now;
+    while((now=plat_ticks_200hz())-g_gg_tlast < GG_STEP_TICKS) vsync_pump();   /* not yet: wait a frame */
+    int n=(int)((now-g_gg_tlast)/GG_STEP_TICKS);
+    if(n>8){ n=8; g_gg_tlast=now; } else g_gg_tlast+=(uint32_t)n*GG_STEP_TICKS;
+    return n;
+}
+/* per-step idle animation: hordes sway, moongate ring cycles every 2nd step */
+static void gg_idle_step(int flags)
+{
+    if(flags&GGF_SWAY) gg_sway();
+    if(flags&GGF_CYC){ if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); } }
+}
+
 /* one narration page + hold: compose scene + caption, present, then wait for input while running
  * the idle animations (GGF_SWAY hordes, GGF_CYC gate palette). Auto-advances after PAGE_MAXTICKS
  * (attract/headless). Returns 0 = advance, 1 = Esc (abort the scene). */
-#define GGF_SWAY 1
-#define GGF_CYC  2
 static int gg_page(int k,int which,int px,int py,int flags)
 {
     const char *s = (k>=0 && k<g_ngarg) ? g_garg[k] : 0;
     int len = s ? g_garg_len[k] : 0;
     gg_frame(s,len,which,px,py,0);
-    uint32_t t0=plat_ticks_200hz();
+    uint32_t t0=plat_ticks_200hz(); gg_steps_reset();
     for(;;){
         int a=intro_advance(); if(a) return a==2;
         if((uint32_t)(plat_ticks_200hz()-t0)>=PAGE_MAXTICKS) return 0;
-        if(flags&GGF_SWAY) gg_sway();
-        if(flags&GGF_CYC){ if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); } }
+        int n=gg_steps(); while(n-->0) gg_idle_step(flags);
         if(!gg_frame(s,len,which,px,py,0)) vsync_pump();              /* redraws only what moved */
     }
 }
@@ -2010,9 +2046,11 @@ static void run_gargoyle(void)
     if(gg_page(1, 2,1,152, 0)) goto out;                           /* "...a slow, deathlike song..." */
     /* horde approach: left per 6-step move table; right (from step 24) at double speed */
     { static const int8_t LMX[6]={1,1,0,1,1,1}, LMY[6]={0,0,-1,0,0,-1}, RMY[6]={-1,-1,0,-1,-1,-1};
-      for(int i=0;i<96;i++){
-        g_ggs[GS_HL].x+=LMX[i%6]; g_ggs[GS_HL].y+=LMY[i%6];
-        if(i>23){ g_ggs[GS_HR].x-=2; g_ggs[GS_HR].y+=RMY[i%6]*2; }
+      gg_steps_reset();
+      for(int i=0;i<96;){
+        for(int n=gg_steps(); n>0 && i<96; n--,i++){
+            g_ggs[GS_HL].x+=LMX[i%6]; g_ggs[GS_HL].y+=LMY[i%6];
+            if(i>23){ g_ggs[GS_HR].x-=2; g_ggs[GS_HR].y+=RMY[i%6]*2; } }
         gg_frame(0,0,0,0,0,0);
         int a=intro_advance(); if(a==2) goto out;
         if(a){ g_ggs[GS_HL].x=-4; g_ggs[GS_HL].y=77;               /* skip -> snap to arrived */
@@ -2024,13 +2062,11 @@ static void run_gargoyle(void)
     /* the winged nightmare steps forward (hordes settle +4y; priest walks up from lower right) */
     g_ggs[GS_HL].y+=4; g_ggs[GS_HR].y+=4;
     g_ggs[GS_PBODY].vis=1; g_ggs[GS_PHEAD].vis=1;
-    { int skip=0;
-      for(int i=0;i<23 && !skip;i++){
-        g_ggs[GS_PBODY].x-=3; g_ggs[GS_PBODY].y-=3; g_ggs[GS_PHEAD].x-=3; g_ggs[GS_PHEAD].y-=3;
-        gg_frame(0,0,0,0,0,0);
-        int a=intro_advance(); if(a==2) goto out; if(a) skip=1; }
-      for(int i=0;i<14 && !skip;i++){
-        g_ggs[GS_PBODY].y-=3; g_ggs[GS_PHEAD].y-=3;
+    { int skip=0; gg_steps_reset();
+      for(int i=0;i<37 && !skip;){                                 /* 23 diagonal steps, then 14 straight up */
+        for(int n=gg_steps(); n>0 && i<37; n--,i++){
+            if(i<23){ g_ggs[GS_PBODY].x-=3; g_ggs[GS_PHEAD].x-=3; }
+            g_ggs[GS_PBODY].y-=3; g_ggs[GS_PHEAD].y-=3; }
         gg_frame(0,0,0,0,0,0);
         int a=intro_advance(); if(a==2) goto out; if(a) skip=1; }
       g_ggs[GS_PBODY].x=144; g_ggs[GS_PBODY].y=30;                 /* settle behind the altar */
@@ -2041,17 +2077,17 @@ static void run_gargoyle(void)
     /* "You close your eyes" holds while the moongate RISES (ring palette cycling from here on) */
     g_ggs[GS_GATE].vis=1;
     { const char *s8=(8<g_ngarg)?g_garg[8]:0; int l8=s8?g_garg_len[8]:0;
-      for(int gy=120; gy>58; gy--){
-        g_ggs[GS_GATE].y=gy;
-        if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+      gg_steps_reset();
+      for(int gy=120; gy>58;){
+        for(int n=gg_steps(); n>0 && gy>58; n--){ gy--; g_ggs[GS_GATE].y=gy; gg_idle_step(GGF_CYC); }
         gg_frame(s8,l8,1,1,160,0);
         int a=intro_advance(); if(a==2) goto out; if(a) break; }
       g_ggs[GS_GATE].y=58;
       gg_frame(s8,l8,1,1,160,0);                                   /* risen gate + page 8 hold */
-      { uint32_t t0=plat_ticks_200hz();
+      { uint32_t t0=plat_ticks_200hz(); gg_steps_reset();
         for(;;){ int a=intro_advance(); if(a==2) goto out; if(a) break;
           if((uint32_t)(plat_ticks_200hz()-t0)>=PAGE_MAXTICKS) break;
-          if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+          for(int n=gg_steps(); n>0; n--) gg_idle_step(GGF_CYC);
           if(!gg_frame(s8,l8,1,1,160,0)) vsync_pump(); } } }
     /* fade to black -> the four blind-terror interlude pages, each faded in/out on its own */
     for(int k=8;k>=0;k--){ fe_fade(g_gg_pal,k); }
@@ -2074,23 +2110,25 @@ static void run_gargoyle(void)
     g_ggs[GS_PHEAD].shp=10;                                        /* quarrel in the barren forehead */
     if(gg_page(13, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Silent red light..." */
     /* the priest falls */
-    { int skip=0;
-      for(int i=0;i<43 && !skip;i++){
-        int jx=(int)rng_range(&g_gg_rng,4)-1;                      /* x jitter -1..+2 */
-        g_ggs[GS_PBODY].x+=jx; g_ggs[GS_PBODY].y+=3;
-        g_ggs[GS_PHEAD].x+=jx; g_ggs[GS_PHEAD].y+=3;
-        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+    { int skip=0; gg_steps_reset();
+      for(int i=0;i<43 && !skip;){
+        for(int n=gg_steps(); n>0 && i<43; n--,i++){
+            int jx=(int)rng_range(&g_gg_rng,4)-1;                  /* x jitter -1..+2 */
+            g_ggs[GS_PBODY].x+=jx; g_ggs[GS_PBODY].y+=3;
+            g_ggs[GS_PHEAD].x+=jx; g_ggs[GS_PHEAD].y+=3;
+            gg_idle_step(GGF_SWAY|GGF_CYC); }
         gg_frame(0,0,0,0,0,0);
         int a=intro_advance(); if(a==2) goto out; if(a) skip=1; }
       g_ggs[GS_PBODY].vis=0; g_ggs[GS_PHEAD].vis=0; }
     /* friendly faces vault from the newborn moongate */
     g_ggs[GS_IOLO].vis=1; g_ggs[GS_DUPRE].vis=1; g_ggs[GS_SHAM].vis=1;
-    { int skip=0;
-      for(int i=0;i<83 && !skip;i++){
-        g_ggs[GS_DUPRE].x += (i>33)?2:1;  g_ggs[GS_DUPRE].y -= 1;
-        if(i>13){ g_ggs[GS_SHAM].x += (i>36)?2:1; g_ggs[GS_SHAM].y -= 1; }
-        if(i>10){ g_ggs[GS_IOLO].x += 1;  g_ggs[GS_IOLO].y -= (i>14)?2:1; }
-        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+    { int skip=0; gg_steps_reset();
+      for(int i=0;i<83 && !skip;){
+        for(int n=gg_steps(); n>0 && i<83; n--,i++){
+            g_ggs[GS_DUPRE].x += (i>33)?2:1;  g_ggs[GS_DUPRE].y -= 1;
+            if(i>13){ g_ggs[GS_SHAM].x += (i>36)?2:1; g_ggs[GS_SHAM].y -= 1; }
+            if(i>10){ g_ggs[GS_IOLO].x += 1;  g_ggs[GS_IOLO].y -= (i>14)?2:1; }
+            gg_idle_step(GGF_SWAY|GGF_CYC); }
         gg_frame(0,0,0,0,0,0);
         int a=intro_advance(); if(a==2) goto out;
         if(a){ g_ggs[GS_DUPRE].x=99;  g_ggs[GS_DUPRE].y=40;        /* skip -> snap beside the gate */
@@ -2099,13 +2137,14 @@ static void run_gargoyle(void)
     if(gg_page(14, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Friendly faces vault..." */
     /* bonds cut: the ropes vanish; the party pulls back into the gate, the Avatar slides off */
     g_ggs[GS_ROPES].vis=0;
-    { int skip=0;
-      for(int i=0;i<83 && !skip;i++){
-        g_ggs[GS_DUPRE].x-=1; g_ggs[GS_DUPRE].y+=2;
-        g_ggs[GS_SHAM].x-=1;  g_ggs[GS_SHAM].y+=2;
-        g_ggs[GS_IOLO].x-=1;  g_ggs[GS_IOLO].y+=2;
-        g_ggs[GS_AVATAR].y+=1;                                     /* pulled down behind the altar */
-        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+    { int skip=0; gg_steps_reset();
+      for(int i=0;i<83 && !skip;){
+        for(int n=gg_steps(); n>0 && i<83; n--,i++){
+            g_ggs[GS_DUPRE].x-=1; g_ggs[GS_DUPRE].y+=2;
+            g_ggs[GS_SHAM].x-=1;  g_ggs[GS_SHAM].y+=2;
+            g_ggs[GS_IOLO].x-=1;  g_ggs[GS_IOLO].y+=2;
+            g_ggs[GS_AVATAR].y+=1;                                 /* pulled down behind the altar */
+            gg_idle_step(GGF_SWAY|GGF_CYC); }
         gg_frame(0,0,0,0,0,0);
         int a=intro_advance(); if(a==2) goto out;
         if(a){ g_ggs[GS_DUPRE].vis=0; g_ggs[GS_SHAM].vis=0;
@@ -2114,9 +2153,11 @@ static void run_gargoyle(void)
     if(gg_page(16, 2,1,152, GGF_SWAY|GGF_CYC)) goto out;           /* "Snatching the fallen priest's book..." */
     /* "The gate wanes rapidly..." holds while the gate SINKS behind the altar */
     { const char *s17=(17<g_ngarg)?g_garg[17]:0; int l17=s17?g_garg_len[17]:0;
-      for(int i=0;i<151;i++){
-        if(i&1) g_ggs[GS_GATE].y+=1;
-        gg_sway(); if(++g_gg_cf>=2){ g_gg_cf=0; gg_gate_cycle(++g_gg_cyc); }
+      gg_steps_reset();
+      for(int i=0;i<151;){
+        for(int n=gg_steps(); n>0 && i<151; n--,i++){
+            if(i&1) g_ggs[GS_GATE].y+=1;
+            gg_idle_step(GGF_SWAY|GGF_CYC); }
         gg_frame(s17,l17,1,1,160,0);
         int a=intro_advance(); if(a==2) goto out;
         if(a){ g_ggs[GS_GATE].vis=0; break; } } }
