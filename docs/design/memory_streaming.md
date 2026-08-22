@@ -161,10 +161,15 @@ The last thing that streamed from disk during play on a big machine was the DMA 
 pump refills a 32 KB ST-RAM ring from the song's `.PCM` (1–3 MB each, 21 MB for U6's twelve)
 in 4 KB sector-aligned reads. `platform/platdma.c` now has a **resident song cache**:
 
-- At the end of boot (everything else loaded), `main()` hands the backend an **arena** = the
-  bigger pool's remaining free space minus a 512 KB reserve, capped at 24 MB, Fast RAM preferred
-  (`plat_dma_music_cache_init`). Stock 4 MB machines have nothing left → no arena → streaming
-  exactly as before. Measured: Falcon 14 MB → **7976 KB** arena; DFB1X-like → 24 MB (all songs).
+- On the resident tier the **arena is allocated in the memory plan — before the front-end** — so
+  the front-end's own songs (BOOTUP/ULTIMA/CREATE/INTRO) cache on their first play too. It is
+  sized from the plan's per-pool predictions (each pool's free space minus the fe/core/libs/save
+  loads still to come + a 512 KB reserve, bigger pool wins, Fast RAM preferred, cap 24 MB), so
+  the later loads cannot fail. A late fallback at the end of boot (cache_init self-guards)
+  covers borderline machines where the front-end streamed but RAM is left over. Stock 4 MB
+  machines get no arena → streaming exactly as before. Measured: Falcon 14 MB → **7561 KB**
+  arena, core+libs still resident, 926 KB free at play; DFB1X-like → 24 MB in Fast RAM (all
+  songs); 4 MB → 0.
 - Songs are placed by a **ring allocator** (head advances, wrapping to 0 evicts whatever the new
   extent overlaps — the oldest first). Up to 16 entries; each keeps the header facts (rate,
   length, loop point).
@@ -190,9 +195,6 @@ Validation (Hatari Falcon 14 MB, `--conout 2`, AVI audio vs the PCM): BRIT.PCM (
 - The 1.4 MB BSS: `g_blocked/g_sightblk/g_indoor/g_dimcache` (4 × 128 K), `g_wobj` 216 K,
   `s_stub_paper` 64 K (core packs only) are static and could become pool allocations sized per game.
 - SAVE.000 template stays a whole-file load when present (optional dev file).
-- The front-end's own songs (BOOTUP/ULTIMA/CREATE/INTRO) play before the arena exists, so they
-  stream once and are not cached; if a "return to the menu" ever lands, allocate the arena
-  before the front-end on the resident tier.
 - PCM quality/size knobs already exist and are header-driven (`make m2pcm PCM_RATE=25033`
   renders 25 kHz; the backend programs the STE mode bits / Falcon prescaler from the header) —
   the shipped default stays 12517 Hz 8-bit mono (21 MB set).

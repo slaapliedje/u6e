@@ -275,8 +275,10 @@ CPU" and the intro slowed — a tiny Fseek+Fread EVERY frame is a SCSI transacti
 overhead. The pump now lets ~4 KB accumulate and reads it in one call that ends on a 512-byte file
 boundary, so subsequent reads are sector-aligned (GEMDOS DMAs straight into the ring); Hatari
 tracking check: recording ↔ BOOTUP.PCM constant −0.26 s offset, corr ≈ 1.0 for 24 s.
-**Resident song cache (2026-08-16):** on machines with RAM to spare the backend gets an arena
-(`plat_dma_music_cache_init`, end of boot) and songs become resident as they are first heard —
+**Resident song cache (2026-08-16, arena moved before the front-end 2026-08-22):** on machines
+with RAM to spare the backend gets an arena (`plat_dma_music_cache_init`, allocated in the boot
+memory plan so the front-end cues BOOTUP/ULTIMA/CREATE/INTRO cache too; late fallback at end of
+boot) and songs become resident as they are first heard —
 the first pass streams and fills the slot, from the first loop wrap on the ring is refilled by
 memcpy and the file is closed; replays open no file. Stock 4 MB machines stream as before.
 docs/design/memory_streaming.md "DMA music".

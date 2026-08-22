@@ -7024,6 +7024,7 @@ int main(int argc, char **argv)
     int32_t sz_fe   = plat_fsize_path("U6FE.PAK");  if(sz_fe<0)   sz_fe=0;
     int32_t sz_core = plat_fsize_path(PACK_NAME);   if(sz_core<0) sz_core=0;
     int32_t sz_libs = 0; for(int i=0;i<LIB_N;i++){ int32_t z=plat_fsize_path(g_lib[i].name); if(z>0) sz_libs+=z; }
+    int32_t sz_save = plat_fsize_path("SAVE.000");  if(sz_save<0) sz_save=0;   /* optional dev template (chip) */
     int fe_resident=0, fe_prefer_fast=0;
     {   plat_mem_info_t mi; plat_mem_get_info(&mi);
         const long VIDEO   = 256L*1024L;            /* backbuffer + screen(s): TT 3x77K, Falcon tc 77K+154K, ST ~100K */
@@ -7034,7 +7035,27 @@ int main(int argc, char **argv)
         if (mi.have_altram && fast_free >= (long)sz_fe + sz_core &&
             chip_free >= (long)sz_libs + RESERVE){ fe_resident=1; fe_prefer_fast=1; }      /* FE + core both in Fast RAM */
         else if (chip_free >= (long)sz_fe + (core_in_fast ? 0 : sz_core) + sz_libs + RESERVE) fe_resident=1;   /* FE in ST-RAM */
-        Cconws(fe_resident ? "  front-end: resident\r\n" : "  front-end: streamed (tight RAM)\r\n"); }
+        Cconws(fe_resident ? "  front-end: resident\r\n" : "  front-end: streamed (tight RAM)\r\n");
+        /* Resident tier: allocate the DMA SONG ARENA now — BEFORE the front-end — so the front-end's
+         * own songs (BOOTUP/ULTIMA/CREATE/INTRO) cache on their first play too, not only the in-game
+         * areas. Sized from what this plan already knows is still to load per pool, so the later
+         * fe/core/libs loads cannot fail: subtract each pool's predicted loads + the reserves, take
+         * the bigger remainder (Fast RAM preferred), cap 24 MB. The streamed (4 MB) tier skips this —
+         * nothing would be left — and keeps the late fallback at end of boot. (memory_streaming.md) */
+        if (fe_resident && plat_dma_available()){
+            const long MUS_RESERVE = 512L*1024L, CAP = 24L*1024L*1024L;
+            long pred_chip = (fe_prefer_fast ? 0 : sz_fe) + (core_in_fast ? 0 : sz_core)
+                           + sz_libs + sz_save + RESERVE;
+            long pred_fast = (fe_prefer_fast ? sz_fe : 0) + (core_in_fast ? sz_core : 0);
+            long chip_arena = chip_free - pred_chip - MUS_RESERVE;
+            long fast_arena = mi.have_altram ? fast_free - pred_fast - MUS_RESERVE : -1;
+            int  use_fast   = fast_arena > chip_arena;
+            long arena      = use_fast ? fast_arena : chip_arena;
+            if (arena > CAP) arena = CAP;
+            if (arena >= 1024L*1024L){
+                plat_dma_music_cache_init((uint32_t)arena, use_fast);
+                dbg_num("  music arena KB = ", (int)(plat_dma_music_cache_size()/1024)); }
+        } }
 
     Cconws("stage 2: video...\r\n");
     if (!rdr_init(&caps)) {
@@ -7557,10 +7578,11 @@ int main(int argc, char **argv)
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n"); }
 
-    /* DMA MUSIC, resident tier (memory_streaming.md "DMA music"): everything the game keeps is
-     * loaded by now, so whatever the bigger pool still has beyond a reserve becomes the song
-     * arena — songs turn resident as they are first heard and the disk goes quiet. On the stock
-     * 4 MB machines nothing is left and the music simply streams, as before. */
+    /* DMA MUSIC song arena, late fallback (memory_streaming.md "DMA music"): normally allocated in
+     * the memory plan above (before the front-end, so its songs cache too) — cache_init self-guards,
+     * so this re-try only acts when the early one didn't run (front-end streamed / borderline RAM):
+     * everything the game keeps is loaded by now, so whatever the bigger pool still has beyond a
+     * reserve becomes the arena. On the stock 4 MB machines nothing is left = pure streaming. */
     if(plat_dma_available()){ plat_mem_info_t mi; plat_mem_get_info(&mi);
         long chip_free=(long)mi.chip_size-(long)mi.chip_used;
         long fast_free=mi.have_altram?(long)mi.fast_size-(long)mi.fast_used:0;
