@@ -140,8 +140,11 @@ deterministic RNG seam so golden-transcript tests are reproducible.
       the quest flag (0x1bf1) and knows-Gargish (0x1c5f) are read from the save template at boot
       and by an in-game load, and written by S)ave (engine/save.c sav_set/get_talk_state;
       LOAD.REQ '4' round-trips them). Numbered vars are script locals and stay unsaved.
-- [ ] Wire the remaining mutation opcodes to real systems: HEAL/CURE/RESURRECT and WORKTYPE act
-      on the VM's view only (inventory/gold/party/karma already sync to the engine).
+- [x] HEAL/CURE/RESURRECT wired (2026-09-30): before each conversation turn the party's real
+      health goes into the VM (dead = 0 HP, poisoned; WOUNDED/POISONED read it); after the turn a
+      cured member loses the poison, a resurrected one stands at 1 HP, a HEALed one is at full HP
+      (`healed_full` records the op). INVSYNC.BIN prints the HEALSYNC round trip.
+- [ ] WORKTYPE still acts on the VM's view only (NPC schedule changes by conversation).
 - [ ] DATA/DPRINT data-block strings (some answers reference indexed strings).
 - [ ] Per-game opcode deltas (Savage/Martian) behind a RuleSet hook.
 - [ ] Interactive keyword TYPING on-target (line input); INPUT/INPUTNUM vars.

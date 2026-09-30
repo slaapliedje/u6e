@@ -58,7 +58,7 @@ static void set_svar(cvm_t*vm,unsigned idx,const char*s){ idx=SVI(idx); int k=0;
 
 void cvm_game_init(cvm_game_t*g,uint32_t seed){
     for(int i=0;i<256;i++){ g->talk_flags[i]=0; g->in_party[i]=0;
-        g->poisoned[i]=0; g->dead[i]=0; g->worktype[i]=0; g->player_obj[i]=0; }
+        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->player_obj[i]=0; }
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
     g->gold=0; g->karma=0; g->avatar_num=0; g->portrait_npc=-1; g->mutations=0;
@@ -348,7 +348,7 @@ static void do_ctrl(cvm_t*vm){
                        if(is_player(vm,np)){ int v=vm->g->player_obj[o&0xff]-(int)q; vm->g->player_obj[o&0xff]=(int16_t)(v<0?0:v);
                                              if((o&0xff)==CVM_OBJ_GOLD){ int gv=vm->g->gold-(int)q; vm->g->gold=gv<0?0:gv; } }
                        vm->g->mutations++; } break;
-      case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->mutations++; } break;
+      case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
       case OP_RESURRECT:{ int np=npc_num(vm,ARG())&0xff; vm->g->dead[np]=0; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
       case OP_PORTRAIT: vm->g->portrait_npc=npc_num(vm,ARG()); break;

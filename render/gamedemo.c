@@ -4577,6 +4577,21 @@ static void sync_party_in(void)
 {
     for(int i=0;i<256;i++) g_cg.in_party[i]=0;
     for(int i=0;i<g_nparty;i++){ int a=g_party[i].actor; if(a>=0&&a<256) g_cg.in_party[a]=1; }
+    /* health the script can ask about (WOUNDED/POISONED) and mend (HEAL/CURE/RESURRECT): the
+     * party's real state goes in; sync_health_out applies what a healer did (usecode_vm.md §6) */
+    for(int i=0;i<256;i++){ g_cg.dead[i]=(uint8_t)(g_atile[i]!=0xffff && g_ahp[i]==0); g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
+        g_cg.healed_full[i]=0; }
+    g_cg.avatar_hp=(int16_t)g_ahp[1];
+}
+/* after a conversation turn: a HEAL/CURE/RESURRECT on a party member becomes real — poison
+ * cured, a dead member back at 1 HP (the original's resurrection), a healed one at full HP */
+static void sync_health_out(void)
+{
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        if(g_poison[a] && !g_cg.poisoned[a]) g_poison[a]=0;
+        if(g_ahp[a]==0 && !g_cg.dead[a]){ g_ahp[a]=1; }
+        if(g_cg.healed_full[a] && g_ahp[a]<g_amaxhp[a]){ g_ahp[a]=g_amaxhp[a]; g_cg.healed_full[a]=0; } }
+    sync_party_hp();
 }
 
 /* pull conversation JOIN/LEAVE (the VM's in_party[]) back into the roster — this
@@ -4697,7 +4712,7 @@ static void talk(int id)
     { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
       while(*q && *q!='"') q++;
       tappend(0, *q?q:gt); }
-    sync_party_out(); sync_inv_out();           /* greeting may JOIN/LEAVE or give/take items */
+    sync_party_out(); sync_inv_out(); sync_health_out();   /* greeting may JOIN/LEAVE, give/take items, heal */
 
     /* portrait: index id-1, library A for <98 else B (PORTRAIT.A holds 98) */
     g_have_pc=0;
@@ -4731,7 +4746,7 @@ static void submit_input(void)
     tappend(tl,cvm_text(&g_cv));
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);
-    sync_party_out(); sync_inv_out();            /* a keyword may change the party OR give/take items/gold */
+    sync_party_out(); sync_inv_out(); sync_health_out();   /* a keyword may change the party, give/take items/gold, heal */
 }
 
 /* index of an NPC orthogonally/diagonally adjacent to the avatar at g_hour,
@@ -8591,6 +8606,17 @@ int main(int argc, char **argv)
      * (sync_inv_out), and print the reconciled engine inventory + gold to --conout 2. */
     {   int32_t ivl=0; void*ivb=plat_load_file("INVSYNC.BIN",1,&ivl);
         if(ivb){
+            /* HEAL/CURE/RESURRECT wiring (usecode_vm.md §6): a poisoned, wounded member and a dead one */
+            { int a2=g_party[1].actor, a3=g_party[2].actor; uint8_t hp2=g_ahp[a2];
+              g_ahp[a2]=5; g_poison[a2]=3; g_ahp[a3]=0;
+              sync_party_in();
+              dbg_num("HEALSYNC vm sees poisoned=", g_cg.poisoned[a2]); dbg_num("HEALSYNC vm sees dead=", g_cg.dead[a3]);
+              g_cg.poisoned[a2]=0; g_cg.healed_full[a2]=1;                /* as HEAL(a2) would */
+              g_cg.dead[a3]=0;                                            /* as RESURRECT(a3) would */
+              sync_health_out();
+              dbg_num("HEALSYNC a2 hp full=", g_ahp[a2]==g_amaxhp[a2]); dbg_num("HEALSYNC a2 poison gone=", g_poison[a2]==0);
+              dbg_num("HEALSYNC a3 alive=", g_ahp[a3]==1);
+              g_ahp[a2]=hp2; g_ahp[a3]=g_amaxhp[a3]; sync_party_hp(); }
             g_ow.ninv=0; inv_add_objn(65,3); inv_add_objn(129,1); g_cg.gold=50;   /* 3 ginseng + 1 food, 50 gold */
             dbg_num("INVSYNC before ginseng=", 3); dbg_num("INVSYNC before gold=", g_cg.gold);
             sync_inv_in();

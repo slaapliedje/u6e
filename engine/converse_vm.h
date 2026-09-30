@@ -39,6 +39,7 @@ typedef struct {
     int16_t  avatar_hp;        /* var 0x19: avatar health                       */
     uint8_t  poisoned[256];    /* per-NPC poison status (CURE clears)           */
     uint8_t  dead[256];        /* 1 = dead until RESURRECT                      */
+    uint8_t  healed_full[256]; /* 1 = HEAL ran on this NPC this conversation (host restores HP) */
     uint8_t  worktype[256];    /* per-NPC schedule worktype (WORKTYPE)          */
     int16_t  player_obj[256];  /* player's count per object number             */
     uint8_t  hour;             /* game-clock hour 0..23, for the $T greeting    */
