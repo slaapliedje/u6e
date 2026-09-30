@@ -101,4 +101,19 @@ void sav_set_trailer_date(uint8_t *d, int32_t n, int year, int month, int day, i
  * Returns 0 on success, negative on error. */
 int sav_write_file(const char *path, const uint8_t *buf, int32_t n);
 
+/* ---- streaming REBUILD writer (docs/rules/save_load.md §6) ----------------------------------
+ * Writes the save to `path` from the template buffer `d`, REPLACING the party's inventory: every
+ * record held by an actor with held[a]=1 (carried/readied by it, or contained in something it
+ * carries) is left out of every chunk, and `nparty` fresh records (`party`, 8 bytes each — the
+ * live readied gear, pooled pack, gold, spellbook) are appended to the actor-inventory chunk.
+ * Chunk counts and chunk-local container links are re-indexed; the eggs, dungeon and objlist
+ * regions are copied; a ScummVM trailer's header offset is fixed up. In-container links inside
+ * `party` are indices relative to its first record. Nothing is allocated: records stream through
+ * a small buffer. Returns 0 on success (and the written length), negative on error. */
+int sav_write_rebuilt(const char *path, const uint8_t *d, int32_t n, const uint8_t *party, int nparty,
+                      const uint8_t *held, int nact, int32_t *out_len);
+
+/* Encode one 8-byte object record (nuvie_save.md): a carried/readied record has owner in x. */
+void sav_encode_record(uint8_t *r, int status, int x, int y, int z, int obj_n, int frame, int qty, int quality);
+
 #endif /* U6E_SAVE_H */

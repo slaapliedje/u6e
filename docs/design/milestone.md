@@ -1606,6 +1606,15 @@ becomes the template. Verified by LOAD.REQ modes 2/3 (two save→load cycles) on
 Still open on the writer: stack consumption / gold spent / items received in conversation (need a
 real inventory-chunk rebuild).
 
+### Inventory rebuild closed (2026-09-30)
+The save FILE is now a streaming rebuild (save_load.md §6): every chunk copied minus the pooled
+party's records, the inventory chunk regenerated from the live model (readied per member, pooled
+pack as the Avatar's, gold, spellbook + known spells), links re-indexed, trailer offset shifted —
+no allocation on target. Consumed stacks, spent gold and conversation-received items persist;
+the pack gains a U6W5 stackable bitmap (correct qty16), the boot absorbs the party's real pack from
+the template, and the template carries 16 KB headroom so a load can adopt a larger file.
+Verified by LOAD.REQ '4' on TT + 4 MB Falcon and by ScummVM loading a rebuilt file.
+
 ### Dungeon depth closed (2026-09-30)
 Per-level objects, live transition triggers and level persistence (docs/rules/map_levels.md §4b):
 the save template (every save carries all 5 dungeon chunks) is the object store for every level;

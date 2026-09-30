@@ -1805,6 +1805,11 @@ int main(int argc, char **argv)
         free(inv); }
       long endq=ftell(f); fseek(f,npos,SEEK_SET); be16(f,(unsigned)nact_q); fseek(f,endq,SEEK_SET);
       printf("readied lists (U6WQ): %d actors, %d items\n", nact_q, nitems_q); }
+    /* STACKABLE object types (U6W5, magic-guarded): 1024-bit bitmap by obj_n (bit set = the type
+     * stacks, its record count is qty16 = quality<<8 | qty — objblk.md §2). The on-target save
+     * writer needs it to emit correct pack records (save_load.md §6). */
+    { fwrite("U6W5",1,4,f);
+      for(int o=0;o<1024;o+=8){ int b=0; for(int k=0;k<8;k++) if(stackable[o+k]) b|=1<<k; fputc(b,f); } }
 
     /* per-actor hostile-by-alignment flag (U6WM): 256 x u8 (combat.md §7 / CB4) */
     { int nh=0; for (int i=0;i<NACT;i++){ fputc(ahostile[i],f); nh+=ahostile[i]; }

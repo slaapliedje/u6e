@@ -148,6 +148,10 @@ written save** (with our fully-reconstructed surface chunks) and renders the wor
   `latest_save` slot (3 on this machine), which silently voided the check for months.
   Verified 2026-09-29 with the slot pinned: the synthesized pristine save (name + moved
   avatar visible) AND a target-written save (dropped plate mail on the throne-room carpet).
+- **Streaming rebuild** (`sav_write_rebuilt`, 2026-09-30): the file is written chunk by chunk
+  from the template minus the pooled party's records, with the party's inventory regenerated
+  from the live model (docs/rules/save_load.md §6); `sav_encode_record` is the record encoder.
+  Chunk counts change, so the trailer's header offset is shifted by the growth.
 - **On-target writer** (engine/save.c): the engine loads `SAVE.000` as a TEMPLATE at
   runtime (the synthesized pristine save above, or after an in-game load the loaded file),
   patches the regions it models with **byte-wise

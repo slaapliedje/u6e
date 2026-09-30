@@ -355,3 +355,115 @@ int sav_write_file(const char *path, const uint8_t *buf, int32_t n)
     plat_fclose(f);
     return (w == n) ? 0 : -1;
 }
+
+/* ---- streaming REBUILD writer (save.h; docs/rules/save_load.md §6) ------------------------- */
+
+void sav_encode_record(uint8_t *r, int status, int x, int y, int z, int obj_n, int frame, int qty, int quality)
+{
+    r[0] = (uint8_t)status;
+    r[1] = (uint8_t)(x & 0xff);
+    r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
+    r[3] = (uint8_t)(((y >> 6) & 0x0f) | ((z & 0x0f) << 4));
+    r[4] = (uint8_t)(obj_n & 0xff);
+    r[5] = (uint8_t)(((obj_n >> 8) & 3) | ((frame & 0x3f) << 2));
+    r[6] = (uint8_t)qty;
+    r[7] = (uint8_t)quality;
+}
+
+typedef struct { plat_file f; uint8_t buf[2048]; int n; int err; int32_t total; } wr_t;
+static void wr_flush(wr_t *w)
+{
+    if (w->n && !w->err){ if (plat_fwrite(w->f, w->buf, w->n) != w->n) w->err = 1; }
+    w->n = 0;
+}
+static void wr_put(wr_t *w, const uint8_t *p, int32_t len)
+{
+    while (len > 0 && !w->err){
+        int room = (int)sizeof w->buf - w->n;
+        if (room == 0){ wr_flush(w); continue; }
+        int take = (len < room) ? (int)len : room;
+        for (int i = 0; i < take; i++) w->buf[w->n + i] = p[i];
+        w->n += take; p += take; len -= take; w->total += take;
+    }
+}
+static void wr_u16(wr_t *w, int v){ uint8_t b[2] = { (uint8_t)v, (uint8_t)(v >> 8) }; wr_put(w, b, 2); }
+
+#define REMAP_MAX 4096
+static uint16_t g_remap[REMAP_MAX];   /* chunk-local old index -> new index (0xffff = dropped) */
+
+/* Copy one chunk at d[pos] minus the party-held records (links re-indexed), then `nextra`
+ * appended records whose links are relative to the first extra. Returns the next chunk's
+ * offset in d, or -1 on a bad layout / oversized chunk. */
+static int32_t write_chunk_filtered(wr_t *w, const uint8_t *d, int32_t n, int32_t pos,
+                                    const uint8_t *held, int nact, const uint8_t *extra, int nextra)
+{
+    if (pos < 0 || pos + 2 > n) return -1;
+    int cnt = le16(d + pos); int32_t base = pos + 2;
+    if (cnt > REMAP_MAX || base + (int32_t)cnt * 8 > n) return -1;
+    int nkept = 0;
+    for (int k = 0; k < cnt; k++){
+        const uint8_t *r = d + base + k * 8; int direct;
+        int holder = rec_holder(d, base, cnt, r, held, nact, &direct);
+        g_remap[k] = (holder >= 0) ? 0xffff : (uint16_t)nkept++;
+    }
+    wr_u16(w, nkept + nextra);
+    for (int k = 0; k < cnt; k++){
+        if (g_remap[k] == 0xffff) continue;
+        const uint8_t *r = d + base + k * 8; uint8_t out[8];
+        for (int i = 0; i < 8; i++) out[i] = r[i];
+        if ((r[0] & 0x18) == 0x08){                          /* re-index the container link */
+            int rx = r[1] | ((r[2] & 3) << 8), ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+            int link = ((ry & 0x3f) << 10) | rx;
+            int p = (link < cnt && g_remap[link] != 0xffff) ? g_remap[link] : 0;
+            out[1] = (uint8_t)(p & 0xff);
+            out[2] = (uint8_t)(((p >> 8) & 3) | (((p >> 10) & 0x3f) << 2));
+            out[3] = (uint8_t)(out[3] & 0xf0);
+        }
+        wr_put(w, out, 8);
+    }
+    for (int k = 0; k < nextra; k++){
+        const uint8_t *r = extra + k * 8; uint8_t out[8];
+        for (int i = 0; i < 8; i++) out[i] = r[i];
+        if ((r[0] & 0x18) == 0x08){
+            int rx = r[1] | ((r[2] & 3) << 8), ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+            int p = (((ry & 0x3f) << 10) | rx) + nkept;
+            out[1] = (uint8_t)(p & 0xff);
+            out[2] = (uint8_t)(((p >> 8) & 3) | (((p >> 10) & 0x3f) << 2));
+            out[3] = (uint8_t)(out[3] & 0xf0);
+        }
+        wr_put(w, out, 8);
+    }
+    return base + (int32_t)cnt * 8;
+}
+
+int sav_write_rebuilt(const char *path, const uint8_t *d, int32_t n, const uint8_t *party, int nparty,
+                      const uint8_t *held, int nact, int32_t *out_len)
+{
+    int32_t ol = sav_objlist_off(d, n); if (ol < 0 || n < 8) return -1;
+    wr_t w; w.f = plat_fcreate(path); w.n = 0; w.err = 0; w.total = 0;
+    if (w.f == PLAT_BADFILE) return -1;
+    wr_put(&w, d, 4);                                                   /* version + game tag */
+    int32_t pos = 4;
+    pos = write_chunk_filtered(&w, d, n, pos, held, nact, party, nparty);   /* actor inventories + party */
+    for (int c = 0; c < 1 + 64 + 5 && pos > 0; c++)                     /* eggs, surface, dungeons */
+        pos = write_chunk_filtered(&w, d, n, pos, held, nact, 0, 0);
+    if (pos < 0 || pos + 4 > n){ wr_flush(&w); plat_fclose(w.f); return -2; }
+    int32_t osz = (int32_t)(d[pos] | (d[pos+1] << 8) | ((uint32_t)d[pos+2] << 16) | ((uint32_t)d[pos+3] << 24));
+    int32_t tail = pos + 4 + osz;                                       /* start of any trailer */
+    if (tail > n){ wr_flush(&w); plat_fclose(w.f); return -2; }
+    int32_t delta = w.total - pos;                                      /* how much the object region grew */
+    wr_put(&w, d + pos, 4 + osz);                                       /* objlist size + objlist */
+    if (tail + 4 <= n){                                                 /* ScummVM trailer: fix its header offset */
+        const uint8_t *e = d + n - 4;
+        int32_t hp = (int32_t)(e[0] | (e[1] << 8) | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24));
+        int valid = (hp >= tail && hp + 6 <= n - 4 && d[hp] == 'S' && d[hp+1] == 'V' && d[hp+2] == 'M' && d[hp+3] == 'C' && d[hp+4] == 'R');
+        wr_put(&w, d + tail, n - tail - 4);
+        int32_t np = valid ? hp + delta : hp;
+        uint8_t b[4] = { (uint8_t)np, (uint8_t)(np >> 8), (uint8_t)(np >> 16), (uint8_t)(np >> 24) };
+        wr_put(&w, b, 4);
+    } else wr_put(&w, d + tail, n - tail);
+    wr_flush(&w);
+    plat_fclose(w.f);
+    if (out_len) *out_len = w.total;
+    return w.err ? -3 : 0;
+}

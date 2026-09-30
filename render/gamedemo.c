@@ -101,6 +101,9 @@ static uint8_t        g_ahp[U6_MAX_ACTORS], g_astr[U6_MAX_ACTORS];  /* per-actor
 static uint8_t        g_adex[U6_MAX_ACTORS], g_aint[U6_MAX_ACTORS];
 static uint16_t       g_aweapon[U6_MAX_ACTORS];/* readied weapon obj_n (0=none) — folded from g_aready */
 static uint16_t       g_aready[U6_MAX_ACTORS][EQ_NSLOTS]; /* readied items per actor (U6WQ + live E)quip; equipment.md) */
+static uint8_t        g_stackable[128];        /* 1024-bit bitmap by obj_n: the type stacks (pack U6W5; objblk.md §2) */
+static uint8_t        g_pooled[U6_MAX_ACTORS];  /* 1 = this actor's carried records were absorbed into the pooled pack */
+static int is_stackable(int on){ return (on>=0 && on<1024) ? (g_stackable[on>>3]>>(on&7))&1 : 0; }
 static uint8_t        g_aac[U6_MAX_ACTORS];    /* readied armour class (combat.md CB3b)        */
 static uint8_t        g_align_hostile[U6_MAX_ACTORS]; /* 1 = monster type hostile on sight (U6WM, CB4) */
 static uint8_t        g_coward[U6_MAX_ACTORS]; /* 1 = coward (worktype COMBAT_RETREAT): flees until struck (U6WN) */
@@ -154,6 +157,8 @@ static uint8_t        g_castlist[SPELL_COUNT];/* castable spell indices, in menu
 static int            g_ncast=0;             /* number of spells in g_castlist                  */
 static int            g_savestate;            /* 1 = world built from a (ScummVM) save state */
 static uint8_t       *g_savetmpl;             /* template ScummVM save (SAVE.000), patched on save */
+static int32_t        g_savetmpl_cap;         /* its buffer capacity (file size + SAVETMPL_HEADROOM) */
+#define SAVETMPL_HEADROOM 16384
 static int32_t        g_savetmpl_len;         /* template byte length                          */
 static int32_t        g_objlist_off;          /* objlist offset within the template (-1 = none) */
 
@@ -6371,6 +6376,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
 /* Seed the Avatar's spellbook + a starter reagent stock at world load (§4). The
  * Avatar knows every spell whose circle its Intelligence can reach; U6 begins the
  * game with reagents in the pack, so we stock 10 of each (we ship no save data). */
+static void magic_seed_items(void);
 static void magic_init(void){
     /* the Avatar knows the spells whose EFFECTS we implement (the menu lists only
      * spells that actually do something; circle-gating still hides too-high ones). */
@@ -6383,6 +6389,10 @@ static void magic_init(void){
                               "Peer","Wizard Eye","Reveal","Invisibility","Mass Invisibility",0};
     for(int s=0;s<SPELL_COUNT;s++) g_known[s]=0;
     for(int i=0;impl[i];i++){ int s=magic_find(impl[i]); if(s>=0) g_known[s]=1; }
+    magic_seed_items();
+}
+/* the starter stock + spellbook (guarded: never duplicates what the pack already holds) */
+static void magic_seed_items(void){
     /* reagents seed ONLY for a game that has them (g_wko.reagent_base != 0). U6 => 65 (== magic_reagent_objn,
      * byte-identical); SE/MD => 0, so this loop is skipped and they don't get spurious U6 reagents (magic_init
      * runs before the is_core gate). */
@@ -6557,6 +6567,79 @@ static int objects_reconcile(const world_t *w)
             o->dirty=WOBJ_DIRTY_STATE; patched++; } }
     return patched;
 }
+/* Absorb the party's inventories from a save buffer's actor-inventory chunk into the live model
+ * (save_load.md §1): carried (0x10) items → the pooled pack (a bag's contents flattened, ≤8 hops;
+ * stackables as qty16), readied (0x18) items → the wearer's slots, coins (88) → the gold pool,
+ * a spellbook's spells (58, quality = spell number, 255 = all) → the known-spell set. Marks the
+ * absorbed actors `g_pooled` so the save writer replaces exactly their records (§6). */
+static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol)
+{
+    int32_t iv = sav_inv_off(d, n);
+    for(int i = 0; i < U6_MAX_ACTORS; i++){ for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[i][sl] = 0; g_pooled[i] = 0; }
+    g_cg.gold = 0; g_ow.ninv = 0;
+    for(int i = 1; i < U6_MAX_ACTORS; i++) if(d[ol + 0x800 + i] & 0x80) g_pooled[i] = 1;
+    const uint8_t *inv = d + iv; int cnt = inv[0] | (inv[1] << 8);
+    const uint8_t *rec = inv + 2;
+    if(iv + 2 + (int32_t)cnt*8 <= n) for(int o = 0; o < cnt; o++){
+        const uint8_t *b = rec + o*8;
+        int loc = b[0] & 0x18, hops = 0;
+        const uint8_t *cur = b;
+        while(loc == 0x08 && hops++ < 8){                    /* nested container: walk up to the holder */
+            int pl = ((((cur[2] >> 2) | ((cur[3] & 0xf) << 6)) & 0x3f) << 10) | (cur[1] | ((cur[2] & 3) << 8));
+            if(pl < 0 || pl >= cnt) break;
+            cur = rec + pl*8; loc = cur[0] & 0x18; }
+        if(loc != 0x10 && loc != 0x18) continue;
+        int owner = cur[1] | ((cur[2] & 3) << 8);
+        if(owner < 1 || owner >= U6_MAX_ACTORS || !g_pooled[owner]) continue;   /* party only */
+        int on = b[4] | ((b[5] & 3) << 8);
+        int direct = (cur == b);
+        if(direct && loc == 0x18){                            /* readied on the holder itself */
+            (void)equip_ready(g_aready[owner], on); continue; }
+        if(on == 88){ int q = (b[7] << 8) | b[6]; g_cg.gold += q; continue; }   /* coins -> the gold pool */
+        if(on == 58){                                         /* a spell in the spellbook -> known */
+            int q = b[7];
+            for(int sp = 0; sp < SPELL_COUNT; sp++) if(q == 255 || magic_spell_num(sp) == q) g_known[sp] = 1;
+            continue; }
+        { invitem_t it; it.obj_n = (uint16_t)on; it.tile = (uint16_t)(basetile(on) + ((b[5] & 0xfc) >> 2));
+          if(is_stackable(on)){ int q = (b[7] << 8) | b[6]; it.qty = (uint16_t)(q ? q : 1); it.quality = 0; }
+          else { it.qty = b[6] ? b[6] : 1; it.quality = b[7]; }
+          int done = 0;
+          for(int k = 0; k < g_ow.ninv; k++) if(g_ow.inv[k].obj_n == it.obj_n && g_ow.inv[k].quality == it.quality){
+              g_ow.inv[k].qty = (uint16_t)(g_ow.inv[k].qty + it.qty); done = 1; break; }
+          if(!done && g_ow.ninv < OBJ_INV_MAX) g_ow.inv[g_ow.ninv++] = it; } }
+    for(int p = 0; p < g_nparty; p++){ int a = g_party[p].actor; if(a >= 0 && a < U6_MAX_ACTORS) equip_refold(a); }
+}
+
+/* The party's inventory as save records, from the live model (save_load.md §6): each member's
+ * readied items, the pooled pack carried by the Avatar (a stackable as one qty16 record, a
+ * non-stackable stack as up to 8 single records), the gold as coins, the spellbook with one spell
+ * record per known spell as its contents (links relative to the first record). Returns the count. */
+#define PARTY_REC_MAX 640
+static int build_party_records(uint8_t *out)
+{
+    int nr = 0, book = -1;
+    for(int p = 0; p < g_nparty && nr < PARTY_REC_MAX; p++){ int a = g_party[p].actor;
+        if(a < 1 || a >= U6_MAX_ACTORS) continue;
+        for(int sl = 0; sl < EQ_NSLOTS && nr < PARTY_REC_MAX; sl++) if(g_aready[a][sl])
+            sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], 0, 0, 0); }
+    for(int k = 0; k < g_ow.ninv && nr < PARTY_REC_MAX; k++){ const invitem_t *it = &g_ow.inv[k];
+        int on = it->obj_n, fr = (int)it->tile - basetile(on); if(fr < 0 || fr > 63) fr = 0;
+        if(on == 58) continue;                                /* spells are written from the known set */
+        if(g_wko.spellbook && on == g_wko.spellbook && book < 0){ book = nr;
+            sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, on, fr, 0, 0); continue; }
+        if(is_stackable(on)){ int q = it->qty > 65535 ? 65535 : it->qty;
+            sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, on, fr, q & 0xff, q >> 8); }
+        else { int copies = it->qty < 1 ? 1 : (it->qty > 8 ? 8 : it->qty);
+            for(int c = 0; c < copies && nr < PARTY_REC_MAX; c++)
+                sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, on, fr, 0, it->quality); } }
+    if(g_cg.gold > 0 && nr < PARTY_REC_MAX){ int q = g_cg.gold > 65535 ? 65535 : g_cg.gold;
+        sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 88, 0, q & 0xff, q >> 8); }
+    if(book >= 0) for(int sp = 0; sp < SPELL_COUNT && nr < PARTY_REC_MAX; sp++) if(g_known[sp]){
+        int q = magic_spell_num(sp); if(q < 0) continue;      /* contents of the book: link = its index */
+        sav_encode_record(out + 8*nr++, 0x09, book & 0x3ff, (book >> 10) & 0x3f, 0, 58, 0, 0, q); }
+    return nr;
+}
+
 static int do_save(const world_t *w)
 {
     if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No save template (SAVE.000)."); return 0; }
@@ -6586,7 +6669,10 @@ static int do_save(const world_t *w)
     (void)objects_reconcile(w);
     { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
       sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
-    if(sav_write_file("SAVED.000", d, n)==0){ msgcat(0,"Game saved."); return 1; }
+    /* the FILE: every chunk minus the pooled actors' records + the party's inventory rebuilt from
+     * the live model (§6) — consumption, spent gold and received items persist */
+    {   static uint8_t party[PARTY_REC_MAX * 8]; int np = build_party_records(party); int32_t wl = 0;
+        if(sav_write_rebuilt("SAVED.000", d, n, party, np, g_pooled, U6_MAX_ACTORS, &wl)==0){ msgcat(0,"Game saved."); return 1; } }
     msgcat(0,"Save failed."); return 0;
 }
 
@@ -6688,7 +6774,7 @@ static int load_game(world_t *w)
     int32_t n = 0; uint8_t *d = (uint8_t*)plat_load_file("SAVED.000", 0, &n);
     if(!d){ plat_chip_reset(mk); msgcat(0,"No saved game (SAVED.000)."); return 0; }
     int32_t ol = sav_objlist_off(d, n), so = sav_surface_off(d, n), se = sav_surface_end(d, n);
-    int32_t iv = sav_inv_off(d, n), ive = sav_inv_end(d, n);
+    int32_t ive = sav_inv_end(d, n);
     if(ol < 0 || so < 0 || se <= so || ive < 0){ plat_chip_reset(mk); msgcat(0,"Save file is damaged."); return 0; }
 
     if(g_talking) end_talk();
@@ -6739,38 +6825,14 @@ static int load_game(world_t *w)
                 else resolve_name(i, g_party[g_nparty].name, 16); }
             g_nparty++; } }
 
-    /* 4) pooled pack + readied gear + gold, from the actor-inventory super-chunk */
-    {   for(int i = 0; i < U6_MAX_ACTORS; i++) for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[i][sl] = 0;
-        g_cg.gold = 0;
-        const uint8_t *inv = d + iv; int cnt = inv[0] | (inv[1] << 8);
-        const uint8_t *rec = inv + 2;
-        if(iv + 2 + (int32_t)cnt*8 <= n) for(int o = 0; o < cnt; o++){
-            const uint8_t *b = rec + o*8;
-            int loc = b[0] & 0x18, hops = 0;
-            const uint8_t *cur = b;
-            while(loc == 0x08 && hops++ < 8){                    /* nested container: walk up to the holder */
-                int pl = ((((cur[2] >> 2) | ((cur[3] & 0xf) << 6)) & 0x3f) << 10) | (cur[1] | ((cur[2] & 3) << 8));
-                if(pl < 0 || pl >= cnt) break;
-                cur = rec + pl*8; loc = cur[0] & 0x18; }
-            if(loc != 0x10 && loc != 0x18) continue;
-            int owner = cur[1] | ((cur[2] & 3) << 8);
-            if(owner < 1 || owner >= U6_MAX_ACTORS || !(d[ol + 0x800 + owner] & 0x80)) continue;   /* party only */
-            int on = b[4] | ((b[5] & 3) << 8);
-            int direct = (cur == b);
-            if(direct && loc == 0x18){                            /* readied on the holder itself */
-                (void)equip_ready(g_aready[owner], on); continue; }
-            if(on == 88){ int q = (b[7] << 8) | b[6]; g_cg.gold += q; continue; }   /* coins -> the gold pool */
-            { invitem_t it; it.obj_n = (uint16_t)on; it.tile = (uint16_t)(basetile(on) + ((b[5] & 0xfc) >> 2));
-              it.qty = b[6] ? b[6] : 1; it.quality = b[7];
-              int done = 0;
-              for(int k = 0; k < g_ow.ninv; k++) if(g_ow.inv[k].obj_n == it.obj_n && g_ow.inv[k].quality == it.quality){
-                  g_ow.inv[k].qty = (uint16_t)(g_ow.inv[k].qty + it.qty); done = 1; break; }
-              if(!done && g_ow.ninv < OBJ_INV_MAX) g_ow.inv[g_ow.ninv++] = it; } }
-        for(int p = 0; p < g_nparty; p++){ int a = g_party[p].actor; if(a >= 0 && a < U6_MAX_ACTORS) equip_refold(a); } }
+    /* 4) pooled pack + readied gear + gold + spellbook, from the actor-inventory super-chunk */
+    pool_from_inventory(d, n, ol);
+    magic_seed_items();
 
     /* the loaded file is now the SAVE TEMPLATE too: the next do_save patches this state, not the
      * boot-time SAVE.000 (our own writer keeps the layout, so the sizes match) */
-    if(n == g_savetmpl_len) memcpy(g_savetmpl, d, (size_t)n);
+    if(g_savetmpl && n <= g_savetmpl_cap){ memcpy(g_savetmpl, d, (size_t)n); g_savetmpl_len = n;
+        g_objlist_off = sav_objlist_off(g_savetmpl, n); }
     plat_chip_reset(mk);                                          /* free the file + temp arrays */
     build_blocked();
     g_tmpdm_invalidate();
@@ -7845,6 +7907,9 @@ int main(int argc, char **argv)
                 equip_fold(g_aready[a], &g_aweapon[a], &g_aac[a]);
             }
         }
+        /* STACKABLE object types (U6W5, magic-guarded): 1024-bit bitmap by obj_n (objblk.md §2) */
+        if(ap+4+128<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='5'){
+            memcpy(g_stackable, ap+4, 128); ap+=4+128; }
         /* per-actor alignment-hostile flag (U6WM): 256 x u8 */
         for(int i=0;i<U6_MAX_ACTORS;i++) g_align_hostile[i]=ap[i];
         ap+=U6_MAX_ACTORS;
@@ -8071,12 +8136,20 @@ int main(int argc, char **argv)
      * engine can WRITE a ScummVM-loadable save by patching it with live state.
      * Optional: absent in non-save builds (then 'S' reports no template). */
     g_objlist_off=-1;
-    g_savetmpl=(uint8_t*)plat_load_file("SAVE.000",0,&g_savetmpl_len);  /* CHIP: read-mostly template; spares the fast pool */
+    /* CHIP: read-mostly template; spares the fast pool. Allocated with HEADROOM: a rebuilt save
+     * (save_load.md §6) can be larger than the template, and an in-game load must be able to make
+     * the loaded file the template (map_levels.md §4b: it is the object store of every level). */
+    {   int32_t fs=plat_fsize_path("SAVE.000");
+        if(fs>0){ g_savetmpl_cap=fs+SAVETMPL_HEADROOM; g_savetmpl=(uint8_t*)plat_alloc_chip((uint32_t)g_savetmpl_cap);
+            if(g_savetmpl){ g_savetmpl_len=plat_load_into("SAVE.000", g_savetmpl, g_savetmpl_cap);
+                if(g_savetmpl_len<=0){ g_savetmpl=NULL; g_savetmpl_len=0; } } } }
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n");
+        else { pool_from_inventory(g_savetmpl, g_savetmpl_len, g_objlist_off);   /* the party's real pack (§6) */
+               magic_seed_items(); }
         /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
          * a created character (g_cc_done) keeps the name it was given */
-        else if(!g_cc_done && g_savetmpl[g_objlist_off+0xf00]){ int o=0;
+        if(g_objlist_off>=0 && !g_cc_done && g_savetmpl[g_objlist_off+0xf00]){ int o=0;
             while(o<13 && g_savetmpl[g_objlist_off+0xf00+o]){ g_avatar_name[o]=(char)g_savetmpl[g_objlist_off+0xf00+o]; o++; }
             g_avatar_name[o]=0;
             for(int p=0;p<g_nparty;p++) if(g_party[p].actor==1){ int k=0;
@@ -8299,6 +8372,22 @@ int main(int argc, char **argv)
                 { int gi=(dx_>=0)?objworld_at(&g_ow,dx_,dy_):-1;
                   dbg_num("PERSIST body on ground=", gi>=0 && g_wobj[gi].obj_n==(uint16_t)body); }
                 dbg_num("PERSIST body in pack=", body?objworld_count(&g_ow,(uint16_t)body):-1); } }
+        else if(lq && ll>0 && lq[0]=='4'){
+            /* INVENTORY REBUILD round trip (save_load.md §6): consume part of a stackable stack, spend
+             * gold, receive an item nobody's records carried, save, load — twice. */
+            int st=-1; for(int k=0;k<g_ow.ninv;k++) if(is_stackable(g_ow.inv[k].obj_n) && g_ow.inv[k].qty>=4){ st=k; break; }
+            int son=(st>=0)?g_ow.inv[st].obj_n:0, sq0=(st>=0)?g_ow.inv[st].qty:0, g0=g_cg.gold, ninv0=g_ow.ninv;
+            dbg_num("REBUILD stack obj=", son); dbg_num("REBUILD stack qty0=", sq0); dbg_num("REBUILD gold0=", g0); dbg_num("REBUILD ninv0=", ninv0);
+            if(son) objworld_consume(&g_ow,(uint16_t)son,3);
+            g_cg.gold-=25; inv_add_objn(38,1);                                       /* a dagger from a friend */
+            int spells0=0; for(int sp=0;sp<SPELL_COUNT;sp++) spells0+=g_known[sp];
+            for(int cyc=1;cyc<=2;cyc++){
+                do_save(&w); dbg_num("REBUILD cycle=", cyc); dbg_num("REBUILD load ok=", load_game(&w));
+                dbg_num("REBUILD stack qty=", son?objworld_count(&g_ow,(uint16_t)son):-1);
+                dbg_num("REBUILD gold=", g_cg.gold); dbg_num("REBUILD dagger=", objworld_count(&g_ow,38));
+                dbg_num("REBUILD ninv=", g_ow.ninv);
+                { int sp1=0; for(int sp=0;sp<SPELL_COUNT;sp++) sp1+=g_known[sp]; dbg_num("REBUILD spells match=", sp1==spells0); }
+                dbg_num("REBUILD a2 ac=", g_aac[2]); dbg_num("REBUILD nobjs=", (int)g_ow.nobjs); } }
         else if(lq){
             int sx, sy; uint32_t sclk;
             for(int i=0;i<3;i++){ world_try_move(&w,0,1); step_npcs(&w); }   /* walk 3 south */

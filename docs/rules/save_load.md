@@ -73,15 +73,14 @@ back on load; the trailer is date-stamped for ScummVM's load menu.
 - Every level persists (2026-09-30, map_levels.md §4b): the writer addresses records by level
   and load decodes the Avatar's level; changes on other levels were reconciled into the
   template when the party left them. Eggs are still opaque (carried byte-wise).
-- Pack stack CONSUMPTION (torches burnt, food eaten, reagents cast) and gold SPENT are not
-  written back: the save's carried records keep their counts. Bought/received items from
-  conversations likewise (no record exists to patch). These need record insertion/removal,
-  i.e. a real inventory-chunk rebuild — the next step for this writer.
+- Pack stack consumption, gold spent and received items DO persist since 2026-09-30: the file
+  is written as a rebuild (§6). What the pooled model cannot say — which companion carries what
+  — is written as "the Avatar carries the pack" (companions keep only their readied gear).
 - Spellbook known-spells / reagent seeds keep their session state (reagent ITEMS in the
   pack reload fine and are what casting consumes).
-- A bag carried in the pack is flattened on load (its contents become loose pack items);
-  dropping such a bag relocates it WITH its contents, so its former contents then exist
-  both on the map (in the bag) and in the pack until the next load resolves it.
+- A bag carried in the pack is flattened on load (its contents become loose pack items) and
+  written back loose (§6). A companion who JOINS after the load keeps their template records
+  untouched (they are pooled at the next load); one who LEAVES leaves their items in the pool.
 
 ## 4. Test hook + validation
 
@@ -100,6 +99,9 @@ back on load; the trailer is date-stamped for ScummVM's load menu.
   every line holds in both cycles (helm 3 on the avatar, plate 22 on the ground, skiff at the
   sailed position with the party aboard; the second cycle proves the loaded file became the
   template). Needs the save-derived pack (`make world-svm`) so the party has gear to change.
+- `'4'`: inventory REBUILD round trip (§6): consume part of a stackable stack, spend gold,
+  receive an item, save → load twice; prints `REBUILD stack qty / gold / dagger / ninv / spells
+  match / a2 ac / nobjs`.
 - `'3'`: as '2' without the boat, so the party stays put and the written SAVED.000 shows the
   drop when loaded elsewhere. `tools/savecheck.sh build/SAVED.000` (Xvfb; run with
   `env -u WAYLAND_DISPLAY SDL_VIDEODRIVER=x11`) loaded that file in real ScummVM: "Game Loaded",
@@ -139,5 +141,34 @@ Steps 1, 2 and 4 address a record by LEVEL (surface super-chunk by x/y, or dunge
 a drop is relocated with the level's z). The same reconcile (`objects_reconcile`) runs before
 every level switch, so the template always holds every level's current state.
 
+## 6. The written file: a streaming rebuild (2026-09-30)
+
+In-place patching (§5) keeps the in-memory template consistent as the object store of every
+level (map_levels.md §4b), but it cannot add or remove records — so the FILE is written as a
+rebuild (`sav_write_rebuilt`, engine/save.c), streamed through a 2 KB buffer with no allocation:
+
+- header copied; then every chunk (inventory, eggs, 64 surface, 5 dungeon) copied record by
+  record MINUS every record held by a POOLED actor (`g_pooled`: the party members whose
+  inventories the live model absorbed — carried/readied by them, or contained in something
+  they carry, chunk-local links followed), counts and links re-indexed;
+- the actor-inventory chunk then gets the party's inventory FROM THE LIVE MODEL
+  (`build_party_records`): each member's readied items (0x19, owner = member), the pooled pack
+  carried by the Avatar (0x11; a stackable type — pack section U6W5, objblk.md §2 — as one
+  qty16 record, a non-stackable stack as up to 8 single records), the gold as one coins record
+  (obj 88, qty16), the spellbook (57) with one spell record (58, quality = spell number) per
+  known spell as its contents;
+- objlist copied; a ScummVM trailer copied with its header offset shifted by the growth.
+
+The template itself is allocated with 16 KB of headroom so an in-game load can adopt a larger
+rebuilt file as the new template. At boot the party's pack is likewise absorbed from the
+template's inventory chunk (`pool_from_inventory`), so a fresh game carries its real starting
+items (reagent/spellbook seeds only top up what is missing).
+
+VERIFIED 2026-09-30: `LOAD.REQ '4'` (consume 3 of a 14-stack, spend 25 gold, receive a dagger,
+save → load, twice) on emulated TT and the stock 4 MB Falcon: 11 / 85 / 1, known spells and
+readied AC intact, 8343 surface objects; a rebuilt file (183 inventory records = 96 NPC
+records kept + the party's) loads in real ScummVM with the earlier dropped plate mail still
+on the carpet.
+
 ## Status
-VERIFIED (v1 scope above; §5 write-back added 2026-09-29).
+VERIFIED (v1 scope above; §5 write-back added 2026-09-29; §6 rebuild 2026-09-30).
