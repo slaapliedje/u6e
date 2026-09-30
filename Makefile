@@ -755,7 +755,7 @@ uipreview: world $(BUILD)/uipreview
 GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
             platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
-            engine/combat.c engine/magic.c engine/music.c engine/equip.c \
+            engine/combat.c engine/magic.c engine/music.c engine/equip.c engine/monsters.c \
             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6obj.c \
             render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # 020-OPTIMIZED, FPU-FREE build (resolves the no-FPU vs -m68020-60 conflict).

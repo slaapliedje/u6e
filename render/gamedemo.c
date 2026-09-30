@@ -27,6 +27,7 @@
 #include "rng.h"
 #include "combat.h"
 #include "magic.h"
+#include "monsters.h"
 #include "equip.h"             /* readied-equipment slots (docs/rules/equipment.md) */
 #include "platmidi.h"          /* M10: MIDI OUT */
 #include "platdma.h"           /* M10: STE/TT/Falcon 8-bit DMA sound (pre-rendered PCM streaming) */
@@ -130,6 +131,7 @@ static uint8_t        g_charm[U6_MAX_ACTORS];    /* turns charmed (pacified: not
 /* MAGIC summoning (docs/rules/magic_skills.md §5c): a summoned creature + its lifetime. */
 static uint8_t        g_summon[U6_MAX_ACTORS];    /* 0=not summoned, 1=allied summon, 2=hostile summon */
 static uint8_t        g_summon_life[U6_MAX_ACTORS];/* turns before the summon vanishes           */
+static uint8_t        g_temp[U6_MAX_ACTORS];      /* 1 = hatched from an egg (temporary; eggs.md §5) */
 static int            g_gate_dest=0;              /* Gate Travel: which moonstone to gate to next (§5d) */
 /* hostile if struck (always) OR enemy-aligned. g_align_hostile is now the AUTHENTIC per-actor
  * U6 alignment (objlist status 0x800 bit 0x20 = EVIL/CHAOTIC), so a post-treaty (NEUTRAL/GOOD)
@@ -5082,6 +5084,9 @@ static int      g_horse_moved=-1;    /* last horse actor left somewhere new (dis
 static int g_tmpdm_invalidate(void){ g_tmp_valid=0; g_dm_valid=0; return 0; }   /* teleport: full view rebuild */
 static int use_transition_object(world_t *w, int idx);   /* ladders/holes (defined with the level code below) */
 static int step_triggers(world_t *w);
+static void eggs_update(const world_t *w, int teleport); /* eggs.md §2 (defined with the egg code below) */
+static void eggs_load_level(const uint8_t *d, int32_t n, int level);
+static void temp_actors_clear(void);
 
 /* Boats are the only map objects that MOVE. Their save records are located by position
  * (save_load.md §5), so each boarded part remembers where its record still says it is; do_save
@@ -6119,6 +6124,125 @@ static int summon_creature(int x,int y,uint16_t obj_n,uint8_t mode,uint8_t life,
     g_align_hostile[s]=(mode==2)?1:0; g_hostile[s]=0; g_alert[s]=(mode==2)?1:0; g_charm[s]=0;
     return s;
 }
+
+/* ===================== EGGS: monster / object spawning (docs/rules/eggs.md) =====================
+ * The save template's eggs chunk is the source: each egg (obj 335, invisible) is followed by its
+ * embryos. The current level's eggs live in a small table; the party's 8x8 block is watched and
+ * a block change (or a teleport / level change / load) runs the hatch check (§2). */
+#define EGG_MAX 700
+#define EMB_MAX 1200
+typedef struct { uint16_t x, y; uint8_t quality, chance, active, nemb; uint16_t emb, rec; } egg_t;
+typedef struct { uint16_t obj_n; uint8_t qty, quality, status; } embryo_t;
+static egg_t    g_eggs[EGG_MAX];
+static embryo_t g_emb[EMB_MAX];
+static int      g_neggs, g_nemb;
+static int      g_egg_blk_x=-1, g_egg_blk_y=-1, g_egg_blk_z=-1;
+static rng_t    g_egg_rng;
+static int      g_egg_checked, g_egg_hatched, g_egg_nofree;   /* last check's counters (test hooks) */
+
+static void eggs_load_level(const uint8_t *d, int32_t n, int level)
+{
+    static int16_t map[2048];
+    g_neggs=0; g_nemb=0; g_egg_blk_x=g_egg_blk_y=g_egg_blk_z=-1;
+    int32_t pos=sav_inv_end(d,n); if(pos<0||pos+2>n) return;
+    int cnt=d[pos]|(d[pos+1]<<8); const uint8_t*rec=d+pos+2;
+    if(pos+2+(int32_t)cnt*8>n) return;
+    if(cnt>2048) cnt=2048;
+    for(int k=0;k<cnt;k++){ const uint8_t*b=rec+k*8; int loc=b[0]&0x18;
+        int x=b[1]|((b[2]&3)<<8), y=(b[2]>>2)|((b[3]&0xf)<<6), z=b[3]>>4, on=b[4]|((b[5]&3)<<8);
+        map[k]=-1;
+        if(loc==0 && on==335){ if(z!=level || g_neggs>=EGG_MAX) continue;
+            egg_t*e=&g_eggs[g_neggs]; e->x=(uint16_t)x; e->y=(uint16_t)y; e->quality=b[7]; e->chance=b[6];
+            e->active=(uint8_t)((b[0]&0x40)?1:0);                      /* already hatched on this approach (saved) */
+            e->nemb=0; e->emb=(uint16_t)g_nemb; e->rec=(uint16_t)k; map[k]=(int16_t)g_neggs++; }
+        else if(loc==0x08){ int link=((y&0x3f)<<10)|x;                  /* an embryo follows its egg */
+            if(link<k && map[link]>=0){ egg_t*e=&g_eggs[map[link]];
+                if(g_nemb<EMB_MAX && e->emb+e->nemb==g_nemb && e->nemb<255){
+                    g_emb[g_nemb].obj_n=(uint16_t)on; g_emb[g_nemb].qty=b[6]; g_emb[g_nemb].quality=b[7];
+                    g_emb[g_nemb].status=b[0]; g_nemb++; e->nemb++; } } } }
+}
+/* write the eggs' active bits back into the template's eggs chunk (status 0x40), so a save
+ * remembers which eggs have hatched on this approach and a load does not hatch them again */
+static void eggs_sync_template(uint8_t *d, int32_t n)
+{
+    int32_t pos=sav_inv_end(d,n); if(pos<0||pos+2>n) return;
+    int cnt=d[pos]|(d[pos+1]<<8); uint8_t*rec=d+pos+2;
+    for(int e=0;e<g_neggs;e++){ int k=g_eggs[e].rec; if(k>=cnt) continue;
+        if(g_eggs[e].active) rec[k*8]|=0x40; else rec[k*8]&=(uint8_t)~0x40; }
+}
+static void temp_actors_clear(void)
+{   for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i]){ g_atile[i]=0xffff; g_temp[i]=0; } }
+
+static int wrap_dist(int a,int b,int span){ int d=a>b?a-b:b-a; return d<span-d?d:span-d; }
+/* a creature hatches into a free actor slot at the egg (or a free tile in the 5x5 around it) */
+static int hatch_creature(const world_t*w,int x,int y,int obj_n,int align)
+{
+    int s=summon_alloc(); if(s<0) return -1;
+    int span=(w->level==0)?U6_SURFACE_TILES:256, fx=x, fy=y, found=0;
+    for(int r=0;r<=2 && !found;r++) for(int dy=-r;dy<=r && !found;dy++) for(int dx=-r;dx<=r && !found;dx++){
+        if(r && dx!=-r && dx!=r && dy!=-r && dy!=r) continue;
+        int tx=(x+dx)&(span-1), ty=(y+dy)&(span-1);
+        if(npc_at(w,tx,ty)<0 && world_is_passable(w,tx,ty)){ fx=tx; fy=ty; found=1; } }
+    int base; int tpd=npc_base_fc(basetile(obj_n),&base);
+    mon_base_t mb; monster_base(obj_n,&mb); if(align==ALIGN_DEFAULT) align=mb.align;
+    int hp=monster_roll_stat(mb.hp,&g_egg_rng); if(hp<1) hp=1; if(hp>255) hp=255;
+    g_atile[s]=(uint16_t)base; g_abase[s]=(uint16_t)base; g_atpd[s]=(uint8_t)tpd; g_facing[s]=2; g_walkf[s]=0;
+    g_actx[s]=(uint16_t)fx; g_acty[s]=(uint16_t)fy; g_actz[s]=(uint8_t)w->level;
+    g_ahp[s]=(uint8_t)hp; g_amaxhp[s]=(uint8_t)hp;
+    g_astr[s]=(uint8_t)monster_roll_stat(mb.str,&g_egg_rng); g_adex[s]=(uint8_t)monster_roll_stat(mb.dex,&g_egg_rng);
+    g_aint[s]=(uint8_t)monster_roll_stat(mb.intel,&g_egg_rng);
+    { int lv=(hp+29)/30; if(lv<1) lv=1; if(lv>8) lv=8; g_alevel[s]=(int8_t)lv; }
+    g_aexp[s]=100; g_amaxmana[s]=(uint8_t)magic_max_mana(g_aint[s],0); g_amana[s]=g_amaxmana[s];
+    g_aweapon[s]=0; g_aac[s]=0; g_aflee[s]=0; g_asleep[s]=g_paralyze[s]=0; g_ainvis[s]=0;
+    g_summon[s]=0; g_summon_life[s]=0; g_temp[s]=1; g_charm[s]=0;
+    { int h=align_is_hostile(align); g_align_hostile[s]=(uint8_t)h; g_hostile[s]=0; g_alert[s]=(uint8_t)h; }
+    return s;
+}
+/* a plain-object embryo hatches as a temporary map object at the egg's tile (once per hatch) */
+static void hatch_object(int x,int y,int obj_n,int quality)
+{
+    int at=objworld_at(&g_ow,x,y); if(at>=0 && g_wobj[at].obj_n==(uint16_t)obj_n) return;   /* still lying there */
+    int slot=-1;
+    if(g_ow.nobjs<MAXWOBJ) slot=(int)g_ow.nobjs++;
+    else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE && !g_wobj[j].dirty){ slot=j; break; }
+    if(slot<0) return;
+    wobj_t*o=&g_wobj[slot];
+    o->obj_n=(uint16_t)obj_n; o->tile=(uint16_t)basetile(obj_n); o->qty=1; o->quality=(uint8_t)quality;
+    o->x=(uint16_t)x; o->y=(uint16_t)y; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE;
+    o->alive=1; o->dirty=0;                                        /* temporary: never written back */
+}
+static void eggs_update(const world_t *w, int teleport)
+{
+    int bx=w->px>>3, by=w->py>>3, bz=w->level;
+    if(!teleport && bx==g_egg_blk_x && by==g_egg_blk_y && bz==g_egg_blk_z) return;
+    g_egg_blk_x=bx; g_egg_blk_y=by; g_egg_blk_z=bz;
+    g_egg_checked=0; g_egg_hatched=0; g_egg_nofree=0;
+    int span=(w->level==0)?U6_SURFACE_TILES:256, day=(g_hour>=6 && g_hour<19), added=0;
+    for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff){          /* far-away temporaries go */
+        if(wrap_dist(g_actx[i],w->px,span)>=24 || wrap_dist(g_acty[i],w->py,span)>=24 || (int)g_actz[i]!=w->level){
+            g_atile[i]=0xffff; g_temp[i]=0; } }
+    for(int e=0;e<g_neggs;e++){ egg_t*eg=&g_eggs[e];
+        int dx=wrap_dist(eg->x,w->px,span), dy=wrap_dist(eg->y,w->py,span);
+        if(eg->active && (dx>=20||dy>=20)) eg->active=0;               /* re-armed for the next approach */
+        if(dx>=20 || dy>=20 || eg->active || !(dx>8 || dy>8 || teleport)) continue;
+        eg->active=1; g_egg_checked++;
+        int period=eg->quality/10, align=eg->quality%10;
+        if(!(period==0 || period==3 || (period==1 && day) || (period==2 && !day))) continue;
+        int roll=rng_range(&g_egg_rng,100)+1;
+        if(!(eg->chance==100 || roll<=eg->chance)) continue;
+        g_egg_hatched++;
+        for(int k=0;k<eg->nemb;k++){ const embryo_t*em=&g_emb[eg->emb+k];
+            int on=em->obj_n, qty=em->qty;
+            if(on==413) qty=1; else if(eg->chance!=100 && qty>1) qty=rng_range(&g_egg_rng,qty)+1;
+            if(qty<1) qty=1;
+            int creature=(on>=342 || on==98 || em->quality!=0);
+            int al=align;
+            if((on==362||on==363) && (objworld_count(&g_ow,76)>0 || is_party_member(164))) al=ALIGN_NEUTRAL;   /* treaty */
+            for(int c=0;c<qty;c++){
+                if(creature){ if(hatch_creature(w,eg->x,eg->y,on,al)>=0) added++; else g_egg_nofree++; }
+                else hatch_object(eg->x,eg->y,on,em->quality); } }
+        if(added) build_blocked(); }
+}
 /* nearest living hostile to (x,y) within `maxd`, or -1 (fills *tx,*ty). */
 static int nearest_hostile(int x,int y,int maxd,int*tx,int*ty){
     int best=-1,bd=maxd+1;
@@ -6184,6 +6308,7 @@ static void teleport_party(world_t*w,int x,int y){
         if(!placed){ g_actx[a]=(uint16_t)x; g_acty[a]=(uint16_t)y; g_actz[a]=(uint8_t)w->level; }   /* no room: stack on the Avatar */
     }
     g_tmp_valid=0;   /* a jump is NOT a 1-tile scroll — force a full compose at the destination */
+    eggs_update(w,1);                                              /* eggs near the destination hatch (eggs.md §2) */
 }
 /* Telekinesis (§5e): apply the Use dispatcher to the first object along (dx,dy).
  * Returns 1 if an object was operated (a door blocks_sight but IS the object, so
@@ -6532,6 +6657,7 @@ static int objects_reconcile(const world_t *w)
     if(!g_savetmpl) return 0;
     uint8_t *d=g_savetmpl; int32_t n=g_savetmpl_len, surf=sav_surface_off(d, n); int patched=0, lv=w->level;
     if(surf<0) return 0;
+    eggs_sync_template(d, n);                                      /* which eggs have hatched (eggs.md §2) */
     uint8_t in_party[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) in_party[i]=0;
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=1 && a<U6_MAX_ACTORS) in_party[a]=1; }
     /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
@@ -6728,6 +6854,8 @@ static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pa
         objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable);   /* empties the pooled pack */
         if(!reset_pack){ memcpy(g_ow.inv, keep_inv, sizeof keep_inv); g_ow.ninv = keep_n; } }
     g_nobjs = nk; g_nmoved = 0;                                   /* indices are new; records are at their positions */
+    temp_actors_clear();                                          /* what hatched here is gone (eggs.md §5) */
+    eggs_load_level(d, n, level);
     return nk;
 }
 /* Change map level through a transition (kind WL_DOWN/WL_UP/WL_HOLE from the Avatar's tile; the
@@ -6763,6 +6891,7 @@ static int use_transition_object(world_t *w, int idx)
 /* after a successful step: standing on a cave mouth (326) or a hole (308) descends (§4 PASS triggers) */
 static int step_triggers(world_t *w)
 {
+    eggs_update(w,0);                                              /* a new 8x8 block? (eggs.md §2) */
     if(g_veh_kind) return 0;
     int idx=objworld_at(&g_ow, w->px, w->py); if(idx<0) return 0;
     int on=g_wobj[idx].obj_n;
@@ -6789,6 +6918,7 @@ static int load_game(world_t *w)
     g_show_inv = 0; g_show_status = 0; g_pending_verb = 0;
     g_veh_kind = 0; g_veh_horse = -1; g_avatar_hide = 0; g_avatar_ovr = 0;   /* re-boarded below if the save says so */
     g_nmoved = 0; g_horse_moved = -1;                                        /* every record is at its saved position again */
+    for(int i = 0; i < U6_MAX_ACTORS; i++) g_temp[i] = 0;                    /* hatched creatures are not saved */
 
     /* 2) ACTORS from the objlist (objlist.md; all little-endian) */
     for(int i = 0; i < U6_MAX_ACTORS; i++){
@@ -8109,6 +8239,7 @@ int main(int argc, char **argv)
     g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);  /* place NPCs by the game clock */
     init_npcs();                                          /* seed NPC positions/facing for schedule-walking */
     rng_seed(&g_crng, 0x6e0c0de ^ (uint32_t)g_start_min); /* combat RNG (docs/rules/combat.md) */
+    rng_seed(&g_egg_rng, 0xe66e66u ^ (uint32_t)g_start_min);  /* egg hatch RNG (docs/rules/eggs.md) */
     if(g_aweapon[1]) g_avatar_weapon=g_aweapon[1];        /* the avatar's actual readied weapon (CB3b) */
     for(int i=0;i<U6_MAX_ACTORS;i++){                     /* per-actor level = maxHP/30 (party leveling) */
         int lv=(g_amaxhp[i]>=30)?(g_amaxhp[i]/30):1; if(lv>8) lv=8; g_alevel[i]=(int8_t)lv; }
@@ -8157,7 +8288,8 @@ int main(int argc, char **argv)
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n");
         else { pool_from_inventory(g_savetmpl, g_savetmpl_len, g_objlist_off);   /* the party's real pack (§6) */
                magic_seed_items();
-               talk_state_from_save(g_savetmpl, g_objlist_off); }               /* what NPCs already told us */
+               talk_state_from_save(g_savetmpl, g_objlist_off);                 /* what NPCs already told us */
+               eggs_load_level(g_savetmpl, g_savetmpl_len, 0); }                /* the surface's eggs (eggs.md) */
         /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
          * a created character (g_cc_done) keeps the name it was given */
         if(g_objlist_off>=0 && !g_cc_done && g_savetmpl[g_objlist_off+0xf00]){ int o=0;
@@ -8342,6 +8474,7 @@ int main(int argc, char **argv)
     /* "Journey Onward" resumes the last save when one exists (a chargen run starts FRESH —
      * g_cc_done wins). Headless LOAD.REQ: save -> move away -> restore -> print the round-trip. */
     if(g_menu_journey && !g_cc_done && plat_fsize_path("SAVED.000")>0) (void)load_game(&w);
+    eggs_update(&w,1);                                             /* the eggs around the start (like the original's load) */
     {   int32_t ll=0; uint8_t*lq=(uint8_t*)plat_load_file("LOAD.REQ",1,&ll);
         if(lq && ll>0 && (lq[0]=='2'||lq[0]=='3')){
             /* PERSISTENCE round-trip (save_load.md §5): a ready change, a dropped item and a sailed
@@ -8404,6 +8537,7 @@ int main(int argc, char **argv)
                 dbg_num("REBUILD a2 ac=", g_aac[2]); dbg_num("REBUILD nobjs=", (int)g_ow.nobjs); } }
         else if(lq){
             int sx, sy; uint32_t sclk;
+            { int n=0; for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) n++; dbg_num("LOAD hatched at start=", n); }
             for(int i=0;i<3;i++){ world_try_move(&w,0,1); step_npcs(&w); }   /* walk 3 south */
             sx=w.px; sy=w.py; sclk=(uint32_t)clock_minutes(&w);
             do_save(&w);
@@ -8417,7 +8551,11 @@ int main(int argc, char **argv)
             dbg_num("LOAD gold=", g_cg.gold);
             dbg_num("LOAD ninv=", g_ow.ninv);
             dbg_num("LOAD a1 weapon=", g_aweapon[1]); dbg_num("LOAD a1 ac=", g_aac[1]);
-            dbg_num("LOAD a2 weapon=", g_aweapon[2]); dbg_num("LOAD a2 ac=", g_aac[2]); } }
+            dbg_num("LOAD a2 weapon=", g_aweapon[2]); dbg_num("LOAD a2 ac=", g_aac[2]);
+            { int n=0, act=0; eggs_update(&w,1);                             /* as the start of play would */
+              for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) n++;
+              for(int e=0;e<g_neggs;e++) if(g_eggs[e].active) act++;
+              dbg_num("LOAD hatched after load=", n); dbg_num("LOAD active eggs=", act); } } }
 
     if(g_savestate && plat_fsize_path("SAVEDEMO.REQ")>0){
         /* Headless SAVE-WRITER demo (SAVEDEMO.REQ sentinel; `make save-engine`): walk a few
@@ -9302,6 +9440,39 @@ int main(int argc, char **argv)
                       { int at=(gx>=0)?objworld_at(&g_ow,gx,gy):-1;
                         dbg_num("DNG taken still gone=", gi<0 || at<0 || g_wobj[at].obj_n!=(uint16_t)gon); } } } }
           dg_done=1; } }
+    /* EGG.REQ (eggs.md §6): '1' hatch a surface egg 12 tiles away by a block change; '2' stand ON an
+     * egg (must not hatch); '3' enter level 1 and count what hatched near the cave. */
+    {   int32_t el=0; const uint8_t*eq=(const uint8_t*)plat_load_file("EGG.REQ",1,&el);
+        if(eq && el>0){
+            int mode=eq[0];
+            temp_actors_clear(); for(int e=0;e<g_neggs;e++) g_eggs[e].active=0;   /* a clean slate after the boot hatch */
+            if(mode=='1'||mode=='2'){
+                int best=-1, bd=1<<30;
+                for(int e=0;e<g_neggs;e++){ const egg_t*eg=&g_eggs[e]; int cre=0;
+                    for(int k=0;k<eg->nemb;k++){ int on=g_emb[eg->emb+k].obj_n; if(on>=342||on==98) cre=1; }
+                    if(!cre || eg->chance<50 || (eg->quality/10)==2) continue;
+                    int dx=wrap_dist(eg->x,w.px,U6_SURFACE_TILES), dy=wrap_dist(eg->y,w.py,U6_SURFACE_TILES), d=dx*dx+dy*dy;
+                    if(d<bd){ bd=d; best=e; } }
+                dbg_num("EGG found=", best>=0);
+                if(best>=0){ const egg_t*eg=&g_eggs[best];
+                    dbg_num("EGG chance=", eg->chance); dbg_num("EGG quality=", eg->quality); dbg_num("EGG nemb=", eg->nemb);
+                    dbg_num("EGG embryo obj=", g_emb[eg->emb].obj_n); dbg_num("EGG embryo qty=", g_emb[eg->emb].qty);
+                    int px=(mode=='1')?(eg->x+12)&(U6_SURFACE_TILES-1):eg->x, py=eg->y;
+                    w.px=(uint16_t)px; w.py=(uint16_t)py; g_tmp_valid=0; g_dm_valid=0;
+                    g_egg_blk_x=-1; eggs_update(&w,0);                     /* a block change, not a teleport */
+                    int n=0, near=-1, nd=999;
+                    for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff){ n++;
+                        int d=wrap_dist(g_actx[i],w.px,U6_SURFACE_TILES); if(d<nd){ nd=d; near=i; } }
+                    dbg_num("EGG hatched=", n); dbg_num("EGG active=", eg->active);
+                    if(near>=0){ dbg_num("EGG nearest tile=", g_atile[near]); dbg_num("EGG nearest dist=", nd);
+                        dbg_num("EGG nearest hp=", g_ahp[near]); dbg_num("EGG nearest hostile=", g_align_hostile[near]); } } }
+            else if(mode=='3'){
+                int ci=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==326){ ci=i; break; }
+                if(ci>=0){ teleport_party(&w, g_wobj[ci].x, g_wobj[ci].y); (void)step_triggers(&w); }
+                dbg_num("EGG level=", w.level); dbg_num("EGG level eggs=", g_neggs);
+                dbg_num("EGG checked=", g_egg_checked); dbg_num("EGG eggs hatched=", g_egg_hatched); dbg_num("EGG no free slot=", g_egg_nofree);
+                int n=0; for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) n++;
+                dbg_num("EGG hatched below=", n); } } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
     /* DEBUG: TALKTEST.REQ (holding an actor number, or empty = nearest NPC) opens

@@ -1606,6 +1606,16 @@ becomes the template. Verified by LOAD.REQ modes 2/3 (two save→load cycles) on
 Still open on the writer: stack consumption / gold spent / items received in conversation (need a
 real inventory-chunk rebuild).
 
+### Eggs closed (2026-09-30)
+Monster/object spawning (docs/rules/eggs.md): eggs (obj 335 + embryos) from the save template's
+eggs chunk, one table per level; the party's 8x8 block is watched and a block change / teleport /
+level change / load runs the hatch check (Chebyshev < 20, > 8 unless teleported, period by hour,
+chance roll, embryo counts); creatures become temporary actors in free slots with stats rolled from
+the creature table (engine/monsters.c — str/dex/int/hp/dmg/alignment for 60 types), alignment →
+hostility; plain-object embryos become temporary map objects; the ACTIVE bit persists in the
+template so a reload doesn't re-hatch. The game now opens with U6's real first fight: three
+gargoyles hatching before Lord British's throne. Verified by EGG.REQ 1/2/3 on TT + 4 MB Falcon.
+
 ### Inventory rebuild closed (2026-09-30)
 The save FILE is now a streaming rebuild (save_load.md §6): every chunk copied minus the pooled
 party's records, the inventory chunk regenerated from the live model (readied per member, pooled

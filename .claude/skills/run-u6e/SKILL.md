@@ -65,7 +65,9 @@ Everything goes through the driver. Screenshots land in `build/`.
 
 Then **look at the PNG** (e.g. Read `build/water.png`). A correct frame shows the
 papyrus U6 border, an 11×11 map window on the left, the party roster + message
-box on the right, the clock, and the command bar.
+box on the right, the clock, and the command bar. At the default start (307,352)
+three gargoyles stand before Lord British's throne — that is U6's real opening
+battle, hatched from the throne-room egg (docs/rules/eggs.md), not a bug.
 
 | command | what it does |
 |---|---|
