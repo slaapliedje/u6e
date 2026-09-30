@@ -34,6 +34,8 @@ nuvie_save.md) and rebuilds the LIVE state:
   → `g_start_min` (turn clock rebased to 0); gender 0x1c71, karma 0x1bf9.
 - **Party**: rebuilt from the objlist status bit 0x80 (names kept when already known,
   else resolved from CONVERSE).
+- **Conversation state**: per-NPC talk flags (0x17f1), quest flag (0x1bf1), knows-Gargish
+  (0x1c5f) → the conversation VM's game state (also absorbed from the template at boot).
 - **Pack + equipment + gold**: from the actor-inventory super-chunk (offset 4) — carried
   (status 0x10) party items → the pooled pack (nested container contents flattened by
   walking the record-index chain, ≤8 hops); readied (0x18) items → the owner's slot set

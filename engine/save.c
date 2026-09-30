@@ -321,6 +321,19 @@ void sav_set_player(uint8_t *d, int32_t off, int gender, int portrait, int karma
     d[off + 0x1bf9] = (uint8_t)karma;
 }
 
+void sav_set_talk_state(uint8_t *d, int32_t off, const uint8_t *talk_flags, int on_quest, int knows_gargish)
+{
+    for (int i = 0; i < 256; i++) d[off + 0x17f1 + i] = talk_flags[i];
+    d[off + 0x1bf1] = (uint8_t)on_quest;
+    d[off + 0x1c5f] = (uint8_t)knows_gargish;
+}
+void sav_get_talk_state(const uint8_t *d, int32_t off, uint8_t *talk_flags, int *on_quest, int *knows_gargish)
+{
+    for (int i = 0; i < 256; i++) talk_flags[i] = d[off + 0x17f1 + i];
+    if (on_quest) *on_quest = d[off + 0x1bf1];
+    if (knows_gargish) *knows_gargish = d[off + 0x1c5f];
+}
+
 void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana)
 {
     d[off + 0xff1  + actor] = (uint8_t)level;

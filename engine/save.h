@@ -87,6 +87,11 @@ void sav_set_clock(uint8_t *d, int32_t off, int minute, int hour);
 /* Patch the avatar identity (0x1c71 gender, 0x1c72 portrait, 0x1bf9 karma). */
 void sav_set_player(uint8_t *d, int32_t off, int gender, int portrait, int karma);
 
+/* Conversation state (objlist.md): per-NPC talk flags (0x17f1 + npc, 256 bytes), the player's
+ * quest flag (0x1bf1) and knows-Gargish (0x1c5f). */
+void sav_set_talk_state(uint8_t *d, int32_t off, const uint8_t *talk_flags, int on_quest, int knows_gargish);
+void sav_get_talk_state(const uint8_t *d, int32_t off, uint8_t *talk_flags, int *on_quest, int *knows_gargish);
+
 /* Patch actor `actor`'s level (objlist 0xff1 + actor) and current magic points (0x13f1 + actor). */
 void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana);
 

@@ -6572,6 +6572,13 @@ static int objects_reconcile(const world_t *w)
  * stackables as qty16), readied (0x18) items → the wearer's slots, coins (88) → the gold pool,
  * a spellbook's spells (58, quality = spell number, 255 = all) → the known-spell set. Marks the
  * absorbed actors `g_pooled` so the save writer replaces exactly their records (§6). */
+/* conversation state from a save's objlist: talk flags, quest flag, knows-Gargish (usecode_vm.md) */
+static void talk_state_from_save(const uint8_t *d, int32_t ol)
+{
+    int q = 0, g = 0;
+    sav_get_talk_state(d, ol, g_cg.talk_flags, &q, &g);
+    g_cg.on_quest = (uint8_t)(q ? 1 : 0); g_cg.knows_gargish = (uint8_t)(g ? 1 : 0);
+}
 static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol)
 {
     int32_t iv = sav_inv_off(d, n);
@@ -6659,6 +6666,7 @@ static int do_save(const world_t *w)
         sav_set_actor_level_mana(d, off, a, g_alevel[a], g_amana[a]);
     }
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
+    sav_set_talk_state(d, off, g_cg.talk_flags, g_cg.on_quest, g_cg.knows_gargish);   /* conversation state */
     /* the horse we ride (absorbed: it is where we are) or last left somewhere new (vehicles.md §4) */
     if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, w->level);
     else if(g_horse_moved>=0){ int h=g_horse_moved;
@@ -6825,9 +6833,11 @@ static int load_game(world_t *w)
                 else resolve_name(i, g_party[g_nparty].name, 16); }
             g_nparty++; } }
 
-    /* 4) pooled pack + readied gear + gold + spellbook, from the actor-inventory super-chunk */
+    /* 4) pooled pack + readied gear + gold + spellbook, from the actor-inventory super-chunk;
+     *    conversation state (talk flags / quest / Gargish) from the objlist */
     pool_from_inventory(d, n, ol);
     magic_seed_items();
+    talk_state_from_save(d, ol);
 
     /* the loaded file is now the SAVE TEMPLATE too: the next do_save patches this state, not the
      * boot-time SAVE.000 (our own writer keeps the layout, so the sizes match) */
@@ -8146,7 +8156,8 @@ int main(int argc, char **argv)
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n");
         else { pool_from_inventory(g_savetmpl, g_savetmpl_len, g_objlist_off);   /* the party's real pack (§6) */
-               magic_seed_items(); }
+               magic_seed_items();
+               talk_state_from_save(g_savetmpl, g_objlist_off); }               /* what NPCs already told us */
         /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
          * a created character (g_cc_done) keeps the name it was given */
         if(g_objlist_off>=0 && !g_cc_done && g_savetmpl[g_objlist_off+0xf00]){ int o=0;
@@ -8381,8 +8392,11 @@ int main(int argc, char **argv)
             if(son) objworld_consume(&g_ow,(uint16_t)son,3);
             g_cg.gold-=25; inv_add_objn(38,1);                                       /* a dagger from a friend */
             int spells0=0; for(int sp=0;sp<SPELL_COUNT;sp++) spells0+=g_known[sp];
+            g_cg.talk_flags[62]|=0x04; g_cg.talk_flags[7]|=0x81; g_cg.on_quest=1;    /* as if NPCs 62/7 told us things */
             for(int cyc=1;cyc<=2;cyc++){
-                do_save(&w); dbg_num("REBUILD cycle=", cyc); dbg_num("REBUILD load ok=", load_game(&w));
+                do_save(&w); dbg_num("REBUILD cycle=", cyc); g_cg.talk_flags[62]=0; g_cg.on_quest=0;
+                dbg_num("REBUILD load ok=", load_game(&w));
+                dbg_num("REBUILD talk flags=", (g_cg.talk_flags[62]&0x04) && (g_cg.talk_flags[7]&0x81)==0x81 && g_cg.on_quest==1);
                 dbg_num("REBUILD stack qty=", son?objworld_count(&g_ow,(uint16_t)son):-1);
                 dbg_num("REBUILD gold=", g_cg.gold); dbg_num("REBUILD dagger=", objworld_count(&g_ow,38));
                 dbg_num("REBUILD ninv=", g_ow.ninv);

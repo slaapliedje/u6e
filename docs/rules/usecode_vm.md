@@ -136,7 +136,12 @@ deterministic RNG seam so golden-transcript tests are reproducible.
 - On-target: `make m5` runs the VM on the TT (greeting + keyword response).
 
 ## 6. Open questions
-- [ ] Wire game-mutation opcodes to real systems (inventory/party/karma/heal).
+- [x] Conversation STATE PERSISTS (2026-09-30): the per-NPC talk flags (objlist 0x17f1+npc),
+      the quest flag (0x1bf1) and knows-Gargish (0x1c5f) are read from the save template at boot
+      and by an in-game load, and written by S)ave (engine/save.c sav_set/get_talk_state;
+      LOAD.REQ '4' round-trips them). Numbered vars are script locals and stay unsaved.
+- [ ] Wire the remaining mutation opcodes to real systems: HEAL/CURE/RESURRECT and WORKTYPE act
+      on the VM's view only (inventory/gold/party/karma already sync to the engine).
 - [ ] DATA/DPRINT data-block strings (some answers reference indexed strings).
 - [ ] Per-game opcode deltas (Savage/Martian) behind a RuleSet hook.
 - [ ] Interactive keyword TYPING on-target (line input); INPUT/INPUTNUM vars.
