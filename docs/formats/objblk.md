@@ -20,7 +20,12 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M6
 ## 1. Container
 Objects are grouped by SUPERCHUNK (128×128 tiles = 16×16 chunks). There are 69
 blocks: 64 surface superchunks (8×8 grid) + 5 dungeon levels.
-- DOS: **LZOBJBLK** = all 69 blocks concatenated, then LZW (see lzw.md).
+- DOS: **LZOBJBLK** = the 64 SURFACE blocks concatenated, then LZW (see lzw.md);
+  **LZDNGBLK** = the 5 DUNGEON blocks followed by the pristine **OBJLIST** (7283 B,
+  little-endian) in one LZW stream — exactly the pair Nuvie's new-game path reads
+  (CORRECTED 2026-09-29: this file used to claim LZOBJBLK held all 69 blocks; the
+  dungeon blocks and the DOS objlist live in LZDNGBLK, which is why the GOG DOS
+  copy has no SAVEGAME/OBJLIST file). tools/mksave consumes both.
 - ST:  **SAVEGAME/OBJBLKxx** = the blocks as separate files (xx = AA, AB, …).
 
 Each block: `[u16 count][count × 8-byte object record]`. count is little-endian.

@@ -1570,6 +1570,60 @@ Reported by the user; each item traced + fixed under Hatari the same day, pendin
   region; CONVERSE/PORTRAIT indexed + read per talk; static music buffers; eager flip screens).
   Stock 4 MB Falcon now boots and plays with 634 KB free; big machines keep everything resident.
 
+### Playability blockers closed (2026-09-20)
+The audit's three remaining verb blockers landed the same day, spec-first (clean-room refs read,
+rules re-expressed in /docs/rules, implemented from the specs):
+- **E)quip** (equipment.md): 8-slot body model + the original's readiable set/two-handed/ring rules
+  (engine/equip.c, 22 host asserts in `make equiptest`); U6WQ pack section ships each actor's actual
+  readied items; E readies pooled-pack items to a member (1-5), the status view unreadies by digit;
+  combat re-folds weapon/AC live. READY.REQ 1-3 validated on TT.
+- **Vehicles** (vehicles.md): skiff/ship/horse. Water = tileflags1 Wet (already shipped as U6WG),
+  ship restricted to open water (map tiles 16-47 = shorelines block it); U)se boards/disembarks
+  (adjacent-land N/E/S/W), deed check, ship boards via any part (centre found from the 3-part facing
+  geometry), the three parts move/re-face as a unit; horses mount 430→431 and back. VEHICLE.REQ 1-4
+  validated on TT (skiff sails the moat; ship on open sea; horse round-trip). Raft/balloon/wind,
+  costs, cannons deferred.
+- **In-game Load** (save_load.md): Ctrl-R and menu "Journey Onward" restore SAVED.000 — full surface
+  object reload (u6obj now compiled on target), actors/party/clock/player from the objlist, pooled
+  pack + readied gear + gold from the inventory chunk, all through a transient chip mark/reset region
+  (~415 KB). LOAD.REQ round-trip identical on TT AND the stock 4 MB Falcon; the target's readied fold
+  matches mkworld's host fold byte-for-byte (independent parser parity).
+Also from the audit: `make check` is self-contained from clean (per-arch selftest objects + header
+deps — a stale-object mix had produced a phantom ST plat_mem_init failure), and the run-u6e skill doc
+now documents the real capture gotchas (ffmpeg -update on a kill-9'd AVI can return an early black
+frame — use the chunk-scanning avi2png.py or a SHOT.REQ pixel dump before chasing "corruption").
+
+### Save write-back closed (2026-09-29)
+S)ave now reconciles everything the surface game mutates (save_load.md §5, still in-place patching —
+no record is added/removed, unknown status bits survive): readied gear (party readied bits demoted
+then one carried record per live slot marked readied by its wearer), dropped items (the carried
+record(s) relocated onto the map at the drop tile), sailed boats (records re-anchored via a
+board-time position table; party saved AT the boat, re-boarded on load; ridden/dismounted horse
+position), and a real bug: after an in-game load, do_save had kept patching the boot-time SAVE.000,
+so a save-after-load silently reverted the previous session's object changes — the loaded file now
+becomes the template. Verified by LOAD.REQ modes 2/3 (two save→load cycles) on TT and the stock
+4 MB Falcon, and by loading the target-written file in real ScummVM (tools/savecheck.sh under Xvfb).
+Still open on the writer: stack consumption / gold spent / items received in conversation (need a
+real inventory-chunk rebuild).
+
+### Save template closed (2026-09-29)
+The bigger finding of the day — the SHIPPED disks carried no SAVE.000 (a dev file copied from the
+user's ScummVM save), so S)ave/Load were dev-only, and the pristine `world` pack had an unarmed,
+empty-pack party — is closed: `tools/mksave` synthesizes the pristine new-game save in ScummVM
+layout from the player's own LZOBJBLK (64 surface blocks) + LZDNGBLK (5 dungeon blocks + the DOS
+OBJLIST — a correction to objblk.md), re-bucketed exactly as Nuvie's own save is (parity vs the
+user's real ScummVM save: inventory 142 / eggs 1978 / all dungeon chunks / 63 of 64 surface chunks
+identical, the throne-room chunk differing only by their played objects). `make world` now builds
+the pack FROM that file (party gear/gold/reagents/actors all from one state; GX/GY still override
+the start) and the disks/card ship it (disk 3). The file carries a ScummVM extended-save trailer
+(SVMCR v4 + a 16x10 thumbnail, ~400 B instead of ScummVM's 32 KB) which the target date-stamps
+via Tgetdate/Tgettime; the writer also persists the player's name / level / magic points and load
+reads them back. Proven in real ScummVM AFTER fixing tools/savecheck.sh (Nuvie's "Journey Onward"
+loads the config's `latest_save` slot, 3 here, not the slot the script swapped — every ScummVM
+cross-check since July had been loading the wrong file): the pristine save (planted name + moved
+avatar visible) and a target-written save (dropped plate mail on the carpet) both load. The old
+"SAVE.000 present → auto-walk-and-save" demo is now hook-gated (SAVEDEMO.REQ).
+
 ## Risk register (review each milestone)
 | Risk | Mitigation | Milestone |
 |------|------------|-----------|

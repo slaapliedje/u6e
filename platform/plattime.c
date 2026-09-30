@@ -50,6 +50,18 @@ void plat_timer_stop(void)
 }
 
 uint32_t plat_ticks_200hz(void) { return (uint32_t)Supexec(read_hz200); }
+
+/* Wall-clock date/time from GEMDOS: Tgetdate() opcode $2A (bits 15-9 year-1980, 8-5 month,
+ * 4-0 day) and Tgettime() opcode $2C (bits 15-11 hour, 10-5 minute, 4-0 sec/2). */
+void plat_date(int *year, int *month, int *day, int *hour, int *minute)
+{
+    unsigned d = (unsigned)Tgetdate() & 0xffffu, t = (unsigned)Tgettime() & 0xffffu;
+    if (year)   *year   = (int)(d >> 9) + 1980;
+    if (month)  *month  = (int)((d >> 5) & 0x0f);
+    if (day)    *day    = (int)(d & 0x1f);
+    if (hour)   *hour   = (int)(t >> 11);
+    if (minute) *minute = (int)((t >> 5) & 0x3f);
+}
 uint32_t plat_vbl_count(void)   { return (uint32_t)Supexec(read_vbclock); }
 
 /* 200 Hz -> ms: each tick is 5 ms. Wraps with the 32-bit counter (~248 days). */

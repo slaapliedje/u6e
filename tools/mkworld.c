@@ -1631,8 +1631,9 @@ int main(int argc, char **argv)
     }
     if (!objl) printf("warning: OBJLIST not found (NPCs will be absent)\n");
     if (!schd) printf("warning: SCHEDULE not found (NPCs will be absent)\n");
-    if (svm){ startx=actx[1]; starty=acty[1];     /* start where the Avatar (actor 1) stands */
+    if (svm && startx==0 && starty==0){ startx=actx[1]; starty=acty[1];   /* start where the Avatar (actor 1) stands */
         printf("ScummVM-save mode: start at avatar (%d,%d)\n", startx, starty); }
+    else if (svm) printf("ScummVM-save mode: start overridden to (%d,%d) (avatar at %d,%d)\n", startx, starty, actx[1], acty[1]);
 
     /* game-time of day: from the OBJLIST clock (U6 stores it at objlist+0x1bf3 = minute,
      * +0x1bf4 = hour) — the pristine new-game OBJLIST says 08:00, a save its own time.
@@ -1782,6 +1783,28 @@ int main(int argc, char **argv)
     { static uint16_t gw[256]; static uint8_t gac[256];
       build_actor_gear(svm_inv, gw, gac);
       for (int i=0;i<256;i++){ be16(f,gw[i]); fputc(gac[i],f); } }
+
+    /* per-actor READIED ITEM LIST (U6WQ, magic-guarded — docs/rules/equipment.md §6): the actual
+     * items each actor has equipped in the source save, so the engine can ready/unready live
+     * (U6WL above stays as the folded weapon/AC for older engines; the engine re-folds from this).
+     * [4 "U6WQ"][u16 n] + n x [u8 actor][u8 count][count x u16 obj_n]. */
+    { fwrite("U6WQ",1,4,f);
+      long npos=ftell(f); be16(f,0);
+      int nact_q=0, nitems_q=0;
+      if(svm_inv){ long invn; uint8_t *inv=slurp_path(svm_inv,NULL,&invn);
+        if(inv && invn>=2){ int icount=inv[0]|(inv[1]<<8);
+          for(int a=0;a<256;a++){ uint16_t items[8]; int ni=0;
+            long q=2;
+            for(int o=0;o<icount && q+8<=invn;o++,q+=8){ const uint8_t*b=inv+q;
+              if((b[0]&0x18)!=0x18) continue;                    /* readied only (objlist.md §3b) */
+              int owner=b[1]|((b[2]&0x03)<<8); if(owner!=a) continue;
+              int obj_n=b[4]|((b[5]&0x03)<<8);
+              if(ni<8) items[ni++]=(uint16_t)obj_n; }
+            if(ni){ fputc(a,f); fputc(ni,f); for(int k=0;k<ni;k++) be16(f,items[k]);
+                    nact_q++; nitems_q+=ni; } } }
+        free(inv); }
+      long endq=ftell(f); fseek(f,npos,SEEK_SET); be16(f,(unsigned)nact_q); fseek(f,endq,SEEK_SET);
+      printf("readied lists (U6WQ): %d actors, %d items\n", nact_q, nitems_q); }
 
     /* per-actor hostile-by-alignment flag (U6WM): 256 x u8 (combat.md §7 / CB4) */
     { int nh=0; for (int i=0;i<NACT;i++){ fputc(ahostile[i],f); nh+=ahostile[i]; }

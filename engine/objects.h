@@ -27,8 +27,10 @@ typedef struct {
                                    * survives get() so the save can locate its in-container record. */
     uint8_t  quality;             /* per-object datum: KEY ID on locks/keys (objblk.md §2) */
     uint8_t  alive;               /* 1 = present ON the map (contained objects load 0) */
-    uint8_t  dirty;               /* 1 = frame/state changed since load -> re-serialize on save (nuvie_save.md) */
+    uint8_t  dirty;               /* WOBJ_DIRTY_*: changed since load -> re-serialize on save (nuvie_save.md) */
 } wobj_t;
+#define WOBJ_DIRTY_STATE   1      /* frame/quality/position changed (its save record exists: patch it) */
+#define WOBJ_DIRTY_DROPPED 2      /* placed on the map from the pack: its record is a CARRIED one (relocate it) */
 typedef struct { uint16_t obj_n, tile, qty; uint8_t quality; } invitem_t;
 
 typedef struct {

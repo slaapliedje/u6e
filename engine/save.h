@@ -25,9 +25,39 @@ void sav_set_actor_pos(uint8_t *d, int32_t objlist_off, int actor, int x, int y,
 /* Offset of the 64 surface super-chunks within a template save (or -1). */
 int32_t sav_surface_off(const uint8_t *d, int32_t n);
 
-/* Patch the frame of the on-map object at (x,y) with `obj_n` (in-place; nuvie_save.md).
- * Returns 1 if a matching record was found + patched. */
-int sav_patch_obj_frame(uint8_t *d, int32_t n, int32_t surf_off, int x, int y, int obj_n, int frame);
+/* READ side (in-game load): the actor-inventory super-chunk offset, and the end of the
+ * 64 surface super-chunks (= where the 5 dungeon chunks begin). */
+int32_t sav_inv_off(const uint8_t *d, int32_t n);
+int32_t sav_inv_end(const uint8_t *d, int32_t n);      /* end of the inventory chunk (= the eggs chunk) */
+int32_t sav_surface_end(const uint8_t *d, int32_t n);
+
+/* Patch the on-map object whose record sits at its ORIGINAL position (ox,oy) with `obj_n`
+ * (in-place; nuvie_save.md): new position x,y (a sailed boat), frame (doors, boat facing) and
+ * quality (a bought boat's cleared price tag; <0 keeps the record's). Returns 1 if patched. */
+int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int ox, int oy, int obj_n,
+                        int x, int y, int frame, int quality);
+
+/* ---- carried-record RECONCILIATION (docs/rules/save_load.md §5) ----------------------------
+ * These walk EVERY record of the object region [4, surface_end): the actor-inventory chunk, the
+ * eggs chunk and the 64 surface chunks (a GET-flipped record stays in its surface chunk).
+ * Records are patched in place; the chunk framing never changes (nothing is added or removed).
+ * `in_party[a]` (nact entries) is 1 for the actors whose inventories the engine pools. */
+
+/* Readied reconcile, pass 0: every READIED record (loc 0x18) owned by a party actor becomes
+ * plain carried (0x10). Returns the number changed. */
+int sav_unready_party(uint8_t *d, int32_t n, const uint8_t *in_party, int nact);
+
+/* Readied reconcile, pass 1: mark ONE record of `obj_n` as readied by `actor`. Candidates: a
+ * carried record owned by any party actor (this actor's own preferred, single items preferred)
+ * or a contained record whose container chain roots at a party actor (a bag in the pack).
+ * Returns 1 if a record was found. */
+int sav_ready_item(uint8_t *d, int32_t n, int actor, int obj_n, const uint8_t *in_party, int nact);
+
+/* D)rop persistence: relocate EVERY party-carried record of (obj_n, quality) onto the map at
+ * (x,y, z=0) with `frame`. Each record keeps its own stack count — the pooled stack the player
+ * dropped IS their union. Returns the number relocated. */
+int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int frame,
+                  const uint8_t *in_party, int nact);
 
 /* Persist a TAKEN item: flip the on-map record at (x,y,obj_n) to in-inventory, owner `owner`.
  * Returns 1 if patched (no-ops for non-on-map records). */
@@ -50,6 +80,16 @@ void sav_set_clock(uint8_t *d, int32_t off, int minute, int hour);
 
 /* Patch the avatar identity (0x1c71 gender, 0x1c72 portrait, 0x1bf9 karma). */
 void sav_set_player(uint8_t *d, int32_t off, int gender, int portrait, int karma);
+
+/* Patch actor `actor`'s level (objlist 0xff1 + actor) and current magic points (0x13f1 + actor). */
+void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana);
+
+/* Patch the player's name (objlist 0xf00: up to 13 characters + NUL, Nuvie's new-game field). */
+void sav_set_avatar_name(uint8_t *d, int32_t off, const char *name);
+
+/* Date-stamp the ScummVM extended-save trailer (if the buffer carries one: "SVMCR" at the
+ * offset stored in the last u32; nuvie_save.md) so ScummVM's load menu shows when we saved. */
+void sav_set_trailer_date(uint8_t *d, int32_t n, int year, int month, int day, int hour, int minute);
 
 /* Write a full save buffer to `path` via the platform file layer.
  * Returns 0 on success, negative on error. */

@@ -34,7 +34,11 @@ BUILD := build
 # ---- self-test (M0 detect + M1 mem/file/timing) --------------------------
 SELFTEST_SRC := platform/detect.c platform/platmem.c platform/platfile.c \
                 platform/plattime.c platform/selftest.c
-SELFTEST_OBJ := $(patsubst %.c,$(BUILD)/%.o,$(SELFTEST_SRC))
+# Objects live in a PER-ARCH dir (obj_self / obj_self_020): the 68000 and -m68020-60 selftests
+# used to share build/platform/*.o, so switching ARCH linked stale wrong-CPU objects — and with
+# no header deps, a struct change in platform.h left detect.o and platmem.o disagreeing about
+# platform_caps_t (audit 2026-09-20: "mxalloc: no" then a fatal Mxalloc call on TOS 1.04).
+SELFTEST_OBJ := $(patsubst %.c,$(BUILD)/obj_self$(SUFFIX)/%.o,$(SELFTEST_SRC))
 SELFTEST_PRG := $(BUILD)/selftest$(SUFFIX).prg
 
 # ---- emulator (Hatari) ---------------------------------------------------
@@ -65,9 +69,11 @@ HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
 all: $(SELFTEST_PRG)
 
-$(BUILD)/%.o: %.c
+# -MMD -MP: emit + include header dependencies, so a platform.h change rebuilds every object.
+$(BUILD)/obj_self$(SUFFIX)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+-include $(SELFTEST_OBJ:.o=.d)
 
 # Link the DEFAULT 68000 soft-float libc (no checkcpu FPU gate). The objects keep their
 # per-ARCH codegen — so the TT/Falcon (-m68020-60) selftest is hybrid 020/no-FPU like
@@ -139,6 +145,16 @@ check-st: all
 	@echo "### self-test: ST (ST-RAM fallback path) ###"
 	$(HL) $(HATARI) --machine st --tos '$(TOS_ST)' $(HATARI_COMMON) \
 	          --conout 2 --fast-forward on --run-vbls 2500 2>/dev/null
+
+# check-tt builds its own -m68020-60 selftest via ONE recursive ARCH=tt make (SUFFIX/_020 and the
+# per-arch object dir come from that invocation) — `make check` is self-contained from clean. The
+# recursive rule exists only in non-020 invocations, so the sub-make links via the normal rule.
+ifneq ($(SUFFIX),_020)
+$(BUILD)/selftest_020.prg: selftest-020-force
+	@$(MAKE) --no-print-directory ARCH=tt all
+.PHONY: selftest-020-force
+selftest-020-force: ;
+endif
 
 check-tt: $(BUILD)/selftest_020.prg
 	@echo "### self-test: TT (Alt-RAM path) ###"
@@ -453,6 +469,13 @@ $(BUILD)/combattest: tools/combattest.c engine/combat.c engine/rng.c
 combattest: $(BUILD)/combattest
 	$(BUILD)/combattest
 
+# equipment slot-model unit test (docs/rules/equipment.md)
+$(BUILD)/equiptest: tools/equiptest.c engine/equip.c engine/combat.c engine/rng.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
+equiptest: $(BUILD)/equiptest
+	$(BUILD)/equiptest
+
 $(BUILD)/magictest: tools/magictest.c engine/magic.c engine/objects.c engine/magic.h engine/objects.h
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ tools/magictest.c engine/magic.c engine/objects.c
@@ -490,7 +513,7 @@ BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/p
              platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
              engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
              engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c \
-             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
+             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6obj.c \
              render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # Hybrid 020/no-FPU build (same as game.prg) + -DBENCH: runs on a stock FPU-less TT.
 $(BUILD)/bench.prg: $(BENCH_SRC)
@@ -625,8 +648,13 @@ roof-extract:
 # sectioned front-end/intro art, ~1.8 MB) — one data set for ST/TT/Falcon; the engine keeps the
 # front-end resident or streams it by section group depending on the machine's RAM
 # (docs/design/memory_streaming.md). world-st / world-tt are aliases kept for the older targets.
-world: $(BUILD)/mkworld roof-extract
-	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(GX) $(GY)
+# The pack is built FROM THE PRISTINE NEW-GAME SAVE (mksave synthesizes it from LZOBJBLK +
+# LZDNGBLK, the same inputs Nuvie's new game reads): objects, actors, party inventories and
+# readied gear, gold, spellbook, reagents all come from that one state, and the SAME file ships
+# as the SAVE.000 template the on-target writer patches. GX/GY override the objlist start.
+world: $(BUILD)/mkworld $(BUILD)/nuviesave save-template roof-extract
+	$(BUILD)/nuviesave $(BUILD)/SAVE.000 $(BUILD)/new.objblk $(BUILD)/new.objlist $(BUILD)/new.inv
+	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(GX) $(GY) $(BUILD)/new.objblk $(BUILD)/new.objlist $(BUILD)/new.inv
 world-st world-tt: world
 gamedata-st gamedata-tt: world
 
@@ -668,6 +696,16 @@ coredump-md: $(BUILD)/coredump world-md
 $(BUILD)/nuviesave: tools/nuviesave.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+# synthesize the PRISTINE new-game save (ScummVM layout) from the user's LZOBJBLK + LZDNGBLK:
+# the SAVE.000 template the on-target writer patches, and the state the shipped pack is built from
+$(BUILD)/mksave: tools/mksave.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+# Always regenerated (ms): `world-svm` / `save-engine` overwrite build/SAVE.000 with the user's
+# ScummVM save, and the pristine pack must never be built from that by accident.
+.PHONY: save-template
+save-template: $(BUILD)/mksave
+	$(BUILD)/mksave $(REFDATA) $(BUILD)/SAVE.000
 # dump the objlist's per-actor stat arrays (HP/str/dex/int/party) for verification
 $(BUILD)/statprobe: tools/statprobe.c
 	@mkdir -p $(BUILD)
@@ -685,6 +723,7 @@ SCUMMVM_SAVE ?= $(HOME)/.local/share/scummvm/saves/ultima6.000
 world-svm: $(BUILD)/mkworld $(BUILD)/nuviesave roof-extract
 	$(BUILD)/nuviesave "$(SCUMMVM_SAVE)" $(BUILD)/svm.objblk $(BUILD)/svm.objlist $(BUILD)/svm.inv
 	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK 0 0 $(BUILD)/svm.objblk $(BUILD)/svm.objlist $(BUILD)/svm.inv
+	cp '$(SCUMMVM_SAVE)' $(BUILD)/SAVE.000          # the matching save template (pack + template = one state)
 
 # save-WRITE validation: byte-identical round-trip + a move-avatar modification,
 # then prove ScummVM loads the written save (swaps it in, captures, restores).
@@ -716,8 +755,8 @@ uipreview: world $(BUILD)/uipreview
 GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
             platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
-            engine/combat.c engine/magic.c engine/music.c \
-            dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c \
+            engine/combat.c engine/magic.c engine/music.c engine/equip.c \
+            dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6obj.c \
             render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # 020-OPTIMIZED, FPU-FREE build (resolves the no-FPU vs -m68020-60 conflict).
 # Compile each source with -m68020-60 (68020+ integer codegen — bitfield ops, 32-bit
@@ -856,7 +895,7 @@ run-game-falcon: gamedata $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # bug-hunt rig (no TT letterbox / 2x doubling). Stock Falcon, no FPU, real TOS 4.04.
 m5-svm-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
-	rm -f $(BUILD)/gamef.avi $(BUILD)/gamef_screen.png $(BUILD)/SAVE.000   # no template => static render
+	rm -f $(BUILD)/gamef.avi $(BUILD)/gamef_screen.png $(BUILD)/SAVEDEMO.REQ   # no save demo => static render
 	$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 3500 \
@@ -869,7 +908,7 @@ m5-svm-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # (16-bit direct colour), so this validates the 565 expand-present path (not just the backbuffer).
 m5-svm-falcon-tc: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
-	rm -f $(BUILD)/gameftc.avi $(BUILD)/gameftc_screen.png $(BUILD)/SAVE.000   # no template => static render
+	rm -f $(BUILD)/gameftc.avi $(BUILD)/gameftc_screen.png $(BUILD)/SAVEDEMO.REQ   # no save demo => static render
 	printf 'T' > $(BUILD)/VIDEO.CFG                                            # request truecolor present
 	$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
@@ -885,7 +924,7 @@ m5-svm-falcon-tc: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # rig for tile-alignment / bug-hunt work. Runs on the stock Falcon (no FPU).
 shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
-	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot.png $(BUILD)/SAVEDEMO.REQ
 	printf 'x' > $(BUILD)/SHOT.REQ                         # stage the dump sentinel (non-empty: load_file rejects 0-byte)
 	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
@@ -901,7 +940,7 @@ shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # No CONVERSE/PORTRAIT (SE has none) -> idle conversation panel; that's expected.
 shot-se: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK                     # engine loads PACK_NAME (=U6.PAK)
-	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png $(BUILD)/SAVEDEMO.REQ
 	printf 'x' > $(BUILD)/SHOT.REQ
 	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
@@ -915,7 +954,7 @@ shot-se: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 # Kurak village populated with NPCs + party. Verifies the CACT load + actor render.
 shot-se-svm: world-se-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK
-	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png $(BUILD)/SAVEDEMO.REQ
 	printf 'x' > $(BUILD)/SHOT.REQ
 	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
@@ -1046,7 +1085,7 @@ m5: gamedata $(BUILD)/game.prg
 # engine prints the assembled new-game state). --conout 2 mirrors the assertions to this terminal.
 .PHONY: newgame
 newgame: gamedata $(BUILD)/game.prg
-	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVEDEMO.REQ
 	printf N > $(BUILD)/CHARGEN.REQ                 # apply the 'Milady' sample character (non-blocking)
 	printf 1 > $(BUILD)/NEWGAME.BIN                 # non-empty: plat_load_file rejects 0-byte sentinels
 	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
@@ -1062,7 +1101,7 @@ newgame: gamedata $(BUILD)/game.prg
 # the 'Milady' sample character; STATUS.REQ's byte = the actor id to show (1 = the Avatar).
 .PHONY: status
 status: gamedata $(BUILD)/game.prg
-	rm -f $(BUILD)/game.avi $(BUILD)/status_screen.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/game.avi $(BUILD)/status_screen.png $(BUILD)/SAVEDEMO.REQ
 	printf N > $(BUILD)/CHARGEN.REQ                 # apply the 'Milady' sample character
 	printf '\001' > $(BUILD)/STATUS.REQ             # open the status view for actor 1 (the Avatar)
 	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
@@ -1078,7 +1117,7 @@ status: gamedata $(BUILD)/game.prg
 # over the jar), 'q' = 8 vials at distinct drain levels + jar, 'D' = 3 full pours (vial 3->0, jar 0->3).
 .PHONY: gypsy-pour
 gypsy-pour: gamedata $(BUILD)/game.prg
-	rm -f $(BUILD)/game.avi $(BUILD)/pour_frame.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/game.avi $(BUILD)/pour_frame.png $(BUILD)/SAVEDEMO.REQ
 	printf P > $(BUILD)/CHARGEN.REQ                 # held mid-pour frame (P); use q or D for the others
 	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
@@ -1092,7 +1131,7 @@ gypsy-pour: gamedata $(BUILD)/game.prg
 # world object (sign/book/plaque) and open its BOOK.DAT text; byte>0 = show entry (byte-1) directly.
 .PHONY: read
 read: gamedata $(BUILD)/game.prg
-	rm -f $(BUILD)/game.avi $(BUILD)/read_screen.png $(BUILD)/SAVE.000
+	rm -f $(BUILD)/game.avi $(BUILD)/read_screen.png $(BUILD)/SAVEDEMO.REQ
 	printf '\000' > $(BUILD)/READ.BIN               # 0 = read the first readable object in the world
 	-$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --conout 2 \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
@@ -1131,7 +1170,7 @@ lowcol: gamedata $(BUILD)/game.prg
 # same capture, but built from the ScummVM SAVE state (world-svm) for comparison
 m5-svm: world-svm $(BUILD)/game.prg
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
-	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVE.000   # no template => static render (matches ScummVM)
+	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVEDEMO.REQ   # no save demo => static render (matches ScummVM)
 	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 5000 \
@@ -1144,7 +1183,7 @@ m5-svm: world-svm $(BUILD)/game.prg
 # via GEMDOS — then verify the write is localized + ScummVM LOADS the engine's save.
 save-engine: world-svm $(BUILD)/game.prg
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
-	cp '$(SCUMMVM_SAVE)' $(BUILD)/SAVE.000          # save template for the on-target writer
+	printf '1' > $(BUILD)/SAVEDEMO.REQ              # hook: walk + door + takes, then write SAVED.000
 	rm -f $(BUILD)/game.avi $(BUILD)/game_screen.png $(BUILD)/SAVED.000
 	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
@@ -1166,7 +1205,7 @@ ANIM_X ?= 64
 ANIM_Y ?= 32
 m6-anim: $(BUILD)/mkworld $(BUILD)/game.prg
 	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(ANIM_X) $(ANIM_Y) | grep -E "animdata|start\("
-	rm -f $(BUILD)/SAVE.000 $(BUILD)/game.avi $(BUILD)/anim_phase_1.png $(BUILD)/anim_phase_2.png
+	rm -f $(BUILD)/SAVEDEMO.REQ $(BUILD)/game.avi $(BUILD)/anim_phase_1.png $(BUILD)/anim_phase_2.png
 	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga \
 	          --tos '$(TOS_TT)' --harddrive $(BUILD) --auto 'c:\game.prg' \
 	          --fast-forward on --run-vbls 4000 \
@@ -1186,7 +1225,7 @@ NPC_Y ?= 434
 m6-npc: $(BUILD)/mkworld $(BUILD)/game.prg
 	$(BUILD)/mkworld $(REFDATA) $(BUILD)/U6.PAK $(NPC_X) $(NPC_Y) | grep -E "start\("
 	cp '$(REFDATA)/CONVERSE.A' '$(REFDATA)/CONVERSE.B' '$(REFDATA)/PORTRAIT.A' '$(REFDATA)/PORTRAIT.B' $(BUILD)/
-	rm -f $(BUILD)/SAVE.000
+	rm -f $(BUILD)/SAVEDEMO.REQ
 	printf '\112' > $(BUILD)/NPCWALK.BIN            # turn 74 (mid-walk for NPC 17)
 	rm -f $(BUILD)/game.avi
 	$(HL) $(HATARI) --machine tt --ttram 4 --addr24 off --monitor vga --tos '$(TOS_TT)' \

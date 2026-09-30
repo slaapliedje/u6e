@@ -38,13 +38,29 @@ int32_t sav_surface_off(const uint8_t *d, int32_t n)
     return pos;
 }
 
-/* Patch the FRAME of the on-map object at (x,y) with the given obj_n, in its row-major super-chunk.
- * The object database is a flat fixed record set — open/close changes only the record's frame in
- * place (no add/remove), so counts and all following offsets are preserved (nuvie_save.md). The
- * frame is the top 6 bits of record byte 5. Returns 1 if a matching record was found + patched. */
-int sav_patch_obj_frame(uint8_t *d, int32_t n, int32_t surf_off, int x, int y, int obj_n, int frame)
+/* ---- READ side (in-game load; docs/rules/save_load.md) --------------------------------- */
+/* The actor-inventory super-chunk starts right after the two u16 header words. */
+int32_t sav_inv_off(const uint8_t *d, int32_t n){ (void)d; (void)n; return 4; }
+int32_t sav_inv_end(const uint8_t *d, int32_t n){ return skip_chunk(d, n, 4); }
+/* End of the 64 surface super-chunks (= start of the 5 dungeon chunks). */
+int32_t sav_surface_end(const uint8_t *d, int32_t n)
 {
-    int chunk = ((y >> 7) & 7) * 8 + ((x >> 7) & 7);
+    int32_t pos = sav_surface_off(d, n); if (pos < 0) return -1;
+    for (int i = 0; i < 64; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return -1; }
+    return pos;
+}
+
+/* Patch the STATE of the on-map object whose record sits at its ORIGINAL position (ox,oy) with
+ * the given obj_n, in that position's row-major super-chunk. The object database is a flat fixed
+ * record set — a door toggle, a sailed boat or a bought boat changes only the record's frame /
+ * position / quality in place (no add/remove), so counts and all following offsets are preserved
+ * (nuvie_save.md). Loaders place a record by its own x/y, not by the chunk it sits in, so a boat
+ * that sailed into another super-chunk is still found by everyone. The frame is the top 6 bits of
+ * byte 5; z (byte 3 high nibble) is kept. Returns 1 if a matching record was found + patched. */
+int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int ox, int oy, int obj_n,
+                        int x, int y, int frame, int quality)
+{
+    int chunk = ((oy >> 7) & 7) * 8 + ((ox >> 7) & 7);
     int32_t pos = surf_off;
     for (int i = 0; i < chunk; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return 0; }
     if (pos + 2 > n) return 0;
@@ -56,12 +72,118 @@ int sav_patch_obj_frame(uint8_t *d, int32_t n, int32_t surf_off, int x, int y, i
         int rx = r[1] | ((r[2] & 3) << 8);
         int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
         int ron = r[4] | ((r[5] & 3) << 8);
-        if (rx == x && ry == y && ron == obj_n){
+        if (rx == ox && ry == oy && ron == obj_n){
+            r[1] = (uint8_t)(x & 0xff);
+            r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
+            r[3] = (uint8_t)((r[3] & 0xf0) | ((y >> 6) & 0x0f));
             r[5] = (uint8_t)((ron >> 8) & 3) | (uint8_t)((frame & 0x3f) << 2);  /* keep obj_n high, set frame */
+            if (quality >= 0) r[7] = (uint8_t)quality;    /* <0 = keep (a stackable's byte 7 is its count's high byte) */
             return 1;
         }
     }
     return 0;
+}
+
+/* ---- carried-record reconciliation (save.h; docs/rules/save_load.md §5) ------------------- */
+
+/* Iterate every record of the object region: the actor-inventory chunk (offset 4), the eggs
+ * chunk and the 64 surface chunks. A container link is CHUNK-LOCAL (objblk.md §2), so the
+ * iterator exposes the current chunk's base offset + record count for link resolution. */
+typedef struct { uint8_t *d; int32_t n, pos, end, base; int cnt, k; } rec_it;
+
+static void it_start(rec_it *it, uint8_t *d, int32_t n)
+{
+    it->d = d; it->n = n; it->pos = 4; it->end = sav_surface_end(d, n);
+    it->base = 0; it->cnt = 0; it->k = 0;
+}
+/* next record, or NULL at the end of the region (it->k-1 is its index within it->base's chunk) */
+static uint8_t *it_next(rec_it *it)
+{
+    while (it->k >= it->cnt){
+        if (it->end < 0 || it->pos + 2 > it->end) return 0;
+        it->cnt = le16(it->d + it->pos); it->base = it->pos + 2; it->k = 0;
+        it->pos = it->base + (int32_t)it->cnt * 8;
+        if (it->pos > it->end) return 0;
+    }
+    return it->d + it->base + (it->k++) * 8;
+}
+
+/* The party actor holding record r: its owner when carried/readied, else the owner at the root
+ * of its container chain (<= 8 hops, chunk-local links). -1 when the root is on the map or the
+ * holder isn't in the party. Sets *direct when r itself is the carried/readied record. */
+static int rec_holder(const uint8_t *d, int32_t base, int cnt, const uint8_t *r,
+                      const uint8_t *in_party, int nact, int *direct)
+{
+    *direct = 1;
+    for (int hops = 0; hops < 8; hops++){
+        int loc = r[0] & 0x18;
+        if (loc == 0x10 || loc == 0x18){
+            int owner = r[1] | ((r[2] & 3) << 8);
+            return (owner >= 0 && owner < nact && in_party[owner]) ? owner : -1;
+        }
+        if (loc != 0x08) return -1;                    /* on-map root: not carried by anyone */
+        int rx = r[1] | ((r[2] & 3) << 8), ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int link = ((ry & 0x3f) << 10) | rx;
+        if (link >= cnt) return -1;
+        r = d + base + link * 8; *direct = 0;
+    }
+    return -1;
+}
+
+static int rec_obj_n(const uint8_t *r){ return r[4] | ((r[5] & 3) << 8); }
+
+int sav_unready_party(uint8_t *d, int32_t n, const uint8_t *in_party, int nact)
+{
+    rec_it it; uint8_t *r; int changed = 0;
+    it_start(&it, d, n);
+    while ((r = it_next(&it))){
+        if ((r[0] & 0x18) != 0x18) continue;
+        int owner = r[1] | ((r[2] & 3) << 8);
+        if (owner >= nact || !in_party[owner]) continue;
+        r[0] = (uint8_t)((r[0] & ~0x18) | 0x10); changed++;
+    }
+    return changed;
+}
+
+int sav_ready_item(uint8_t *d, int32_t n, int actor, int obj_n, const uint8_t *in_party, int nact)
+{
+    rec_it it; uint8_t *r, *best = 0; int best_score = -1, best_direct = 1;
+    it_start(&it, d, n);
+    while ((r = it_next(&it))){
+        if (rec_obj_n(r) != obj_n) continue;
+        int loc = r[0] & 0x18;
+        if (loc != 0x10 && loc != 0x08) continue;      /* already readied (claimed) or on the map */
+        int direct; int holder = rec_holder(d, it.base, it.cnt, r, in_party, nact, &direct);
+        if (holder < 0) continue;
+        int score = (holder == actor ? 4 : 0) + (r[6] <= 1 ? 2 : 0) + (direct ? 1 : 0);
+        if (score > best_score){ best_score = score; best = r; best_direct = direct; }
+    }
+    if (!best) return 0;
+    best[0] = (uint8_t)((best[0] & ~0x18) | 0x18);
+    best[1] = (uint8_t)(actor & 0xff);
+    if (best_direct) best[2] = (uint8_t)((best[2] & ~0x03) | ((actor >> 8) & 3));
+    else { best[2] = (uint8_t)((actor >> 8) & 3); best[3] = 0; }   /* was a container link: clear it */
+    return 1;
+}
+
+int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int frame,
+                  const uint8_t *in_party, int nact)
+{
+    rec_it it; uint8_t *r; int moved = 0;
+    it_start(&it, d, n);
+    while ((r = it_next(&it))){
+        if (rec_obj_n(r) != obj_n || r[7] != (uint8_t)quality) continue;
+        int loc = r[0] & 0x18;
+        if (loc != 0x10 && loc != 0x08) continue;      /* readied records stay with their wearer */
+        int direct; if (rec_holder(d, it.base, it.cnt, r, in_party, nact, &direct) < 0) continue;
+        r[0] = (uint8_t)(r[0] & ~0x18);                /* location -> on the map */
+        r[1] = (uint8_t)(x & 0xff);
+        r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
+        r[3] = (uint8_t)((y >> 6) & 0x0f);             /* z = 0: surface */
+        r[5] = (uint8_t)(((obj_n >> 8) & 3) | ((frame & 0x3f) << 2));
+        moved++;
+    }
+    return moved;
 }
 
 /* Persist a TAKEN item: flip the on-map record at (x,y,obj_n) to IN-INVENTORY (status location
@@ -182,6 +304,32 @@ void sav_set_player(uint8_t *d, int32_t off, int gender, int portrait, int karma
     d[off + 0x1c71] = (uint8_t)gender;
     d[off + 0x1c72] = (uint8_t)portrait;
     d[off + 0x1bf9] = (uint8_t)karma;
+}
+
+void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana)
+{
+    d[off + 0xff1  + actor] = (uint8_t)level;
+    d[off + 0x13f1 + actor] = (uint8_t)mana;
+}
+
+void sav_set_avatar_name(uint8_t *d, int32_t off, const char *name)
+{
+    int i = 0;
+    for (; i < 13 && name[i]; i++) d[off + 0xf00 + i] = (uint8_t)name[i];
+    for (; i < 14; i++) d[off + 0xf00 + i] = 0;
+}
+
+void sav_set_trailer_date(uint8_t *d, int32_t n, int year, int month, int day, int hour, int minute)
+{
+    if (n < 24) return;
+    const uint8_t *e = d + n - 4;
+    int32_t hp = (int32_t)(e[0] | (e[1] << 8) | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24));
+    if (hp <= 0 || hp + 13 > n - 4) return;
+    uint8_t *h = d + hp;
+    if (h[0] != 'S' || h[1] != 'V' || h[2] != 'M' || h[3] != 'C' || h[4] != 'R' || h[5] != 0) return;
+    uint32_t date = ((uint32_t)(day & 0xff) << 24) | ((uint32_t)(month & 0xff) << 16) | (uint32_t)(year & 0xffff);
+    h[7] = (uint8_t)date; h[8] = (uint8_t)(date >> 8); h[9] = (uint8_t)(date >> 16); h[10] = (uint8_t)(date >> 24);
+    h[11] = (uint8_t)(minute & 0xff); h[12] = (uint8_t)(hour & 0xff);
 }
 
 int sav_write_file(const char *path, const uint8_t *buf, int32_t n)

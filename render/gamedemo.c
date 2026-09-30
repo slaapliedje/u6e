@@ -19,6 +19,7 @@
 #include "converse_vm.h"
 #include "u6actor.h"
 #include "u6lzw.h"
+#include "u6obj.h"             /* save-load: decode the save's object super-chunks (objblk.md) */
 #include "fepack.h"           /* U6FE.PAK section ids + header layout (front-end streaming) */
 #include "objects.h"
 #include <string.h>            /* memcpy/memmove for the incremental map-scroll buffer */
@@ -26,6 +27,7 @@
 #include "rng.h"
 #include "combat.h"
 #include "magic.h"
+#include "equip.h"             /* readied-equipment slots (docs/rules/equipment.md) */
 #include "platmidi.h"          /* M10: MIDI OUT */
 #include "platdma.h"           /* M10: STE/TT/Falcon 8-bit DMA sound (pre-rendered PCM streaming) */
 #include "platpsg.h"           /* M10: YM2149 PSG (plain-ST 3-voice fallback) */
@@ -96,7 +98,8 @@ static uint8_t        g_amoved[U6_MAX_ACTORS];/* 1 = stepped this turn (walk fra
 static uint8_t        g_hostile[U6_MAX_ACTORS];/* 1 = ASSAULT the party (set when attacked) (combat.md CB2) */
 static uint8_t        g_ahp[U6_MAX_ACTORS], g_astr[U6_MAX_ACTORS];  /* per-actor stats (U6WC) */
 static uint8_t        g_adex[U6_MAX_ACTORS], g_aint[U6_MAX_ACTORS];
-static uint16_t       g_aweapon[U6_MAX_ACTORS];/* readied weapon obj_n (0=none) (U6WL) */
+static uint16_t       g_aweapon[U6_MAX_ACTORS];/* readied weapon obj_n (0=none) — folded from g_aready */
+static uint16_t       g_aready[U6_MAX_ACTORS][EQ_NSLOTS]; /* readied items per actor (U6WQ + live E)quip; equipment.md) */
 static uint8_t        g_aac[U6_MAX_ACTORS];    /* readied armour class (combat.md CB3b)        */
 static uint8_t        g_align_hostile[U6_MAX_ACTORS]; /* 1 = monster type hostile on sight (U6WM, CB4) */
 static uint8_t        g_coward[U6_MAX_ACTORS]; /* 1 = coward (worktype COMBAT_RETREAT): flees until struck (U6WN) */
@@ -234,6 +237,8 @@ static uint16_t       g_lsbkt_idx[MAXWOBJ];
 #define TMP_T (VT*16)
 static uint8_t        g_tmp_map[TMP_T*TMP_T];
 static int            g_tmp_valid=0, g_tmp_px=-30000, g_tmp_py=-30000;
+static int            g_avatar_hide;   /* vehicles: 1 = draw no avatar sprite (the boat IS the visual) */
+static uint16_t       g_avatar_ovr;    /* vehicles: nonzero = draw this tile at centre (horse-with-rider) */
 static int            g_idle_allow=0;  /* set by the caller ONLY for an animation-tick recompose (view fixed,
                                         * nothing but animation changed) -> enables the idle-incremental static
                                         * path. Cleared for every action/scroll compose (which may mutate static
@@ -410,6 +415,7 @@ static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a t
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
 static int            g_travel_tx, g_travel_ty;  /* the click-to-travel destination tile  */
 static int            g_show_inv;          /* 1 = inventory list shown in the panel */
+static int            g_menu_journey;      /* "Journey Onward" chosen -> resume SAVED.000 at boot if present */
 static int            g_inv_sel;            /* selected inventory row (for D)rop; cycled by 'D' while armed) */
 static int            g_show_status;        /* 1 = character status view shown in the panel */
 static int            g_status_actor=1;     /* which actor the status view shows (1 = Avatar) */
@@ -2748,7 +2754,8 @@ static int run_menu(void)
         if(act<0){ vsync_pump(); continue; }
 
         sel=act; note=0; fe_cursor_show(0);                /* sub-flows hide it (nuvie: selected_*()) */
-        if(act==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; }  /* Journey Onward -> play */
+        if(act==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48);
+                    g_menu_journey=1; return 4; }    /* Journey Onward -> play (load SAVED.000 if present) */
         else if(act==0) run_intro();                     /* Introduction -> cutscene, then back */
         else if(act==1){ run_chargen(); if(g_cc_done){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; } }  /* Create -> new game */
         else note=1;                                     /* Transfer / Acknowledgements -> not yet */
@@ -3669,7 +3676,10 @@ static void mark_dyn_anim(const world_t*w,int32_t left,int32_t top){
           for(int ox=(f&0x80)?vx-1:vx; ox<=vx; ox++)
             if(ox>=0&&ox<VT&&oy>=0&&oy<VT) g_dyn_anim[oy*VT+ox]=1;
     }
-    { int aon=g_wko.avatar; int at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0;   /* avatar (per-game obj_n) at view centre */
+    { int at;                                             /* avatar (or its vehicle stand-in) at view centre */
+      if(g_avatar_hide) at=0;
+      else if(g_avatar_ovr) at=g_avatar_ovr;
+      else { int aon=g_wko.avatar; at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0; }
       if(at>0&&at<2048&&g_anim_idx[at]>=0){                    /* anchor drawn RAW, but extras cycle -> over-mark safely */
         int f=g_tflags[at];
         for(int oy=(f&0x40)?VT/2-1:VT/2; oy<=VT/2; oy++)
@@ -4193,7 +4203,10 @@ static void compose_map(const world_t*w)
                                               NPC anchored 1 cell off the right/bottom edge bleeds in (see
                                               draw_view_objects); draw_multi clips the off-view anchor */
     }
-    { int aon=g_wko.avatar; int at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0;   /* avatar (per-game obj_n) at centre */
+    { int at;                                             /* avatar at centre — unless a vehicle IS the visual */
+      if(g_avatar_hide) at=0;                              /* aboard a boat: the boat objects draw themselves */
+      else if(g_avatar_ovr) at=g_avatar_ovr;               /* mounted: horse-with-rider sprite (vehicles.md §4) */
+      else { int aon=g_wko.avatar; at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0; }
       if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,-1); }
     SUB_ADD(g_ph1_actors);
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
@@ -5047,6 +5060,166 @@ static void overview_view(const world_t*w,int cx,int cy,int pannable)
     }
 }
 
+
+/* ===================== VEHICLES: skiff / ship / horse (docs/rules/vehicles.md) =====================
+ * The boats stay ordinary map objects; boarding attaches the player to them (no "vehicle actor").
+ * Water = tileflags1 bit0 (Wet) of the ORIGINAL map tile (the pack's U6WG section); the ship is
+ * additionally barred from the shoreline tile band 16..47 (§2). Surface only. */
+static int      g_veh_kind;          /* 0 none / 414 skiff / 412 ship / 431 mounted horse */
+static int      g_veh_o[3];          /* wobj indices: [0] skiff-or-CENTRE, [1] front, [2] back */
+static int      g_veh_face;          /* 0 N, 1 E, 2 S, 3 W (§1)                            */
+static int      g_veh_phase;         /* frame animation phase (toggles per step)            */
+static uint8_t  g_veh_pz[MAXPARTY];  /* hidden party members' saved z (aboard a boat)       */
+static int      g_veh_horse=-1;      /* the absorbed horse's actor id while mounted         */
+static uint8_t  g_veh_hz;            /* its saved z                                          */
+static int      g_horse_moved=-1;    /* last horse actor left somewhere new (dismount) -> its position is saved */
+static int g_tmpdm_invalidate(void){ g_tmp_valid=0; g_dm_valid=0; return 0; }   /* teleport: full view rebuild */
+
+/* Boats are the only map objects that MOVE. Their save records are located by position
+ * (save_load.md §5), so each boarded part remembers where its record still says it is; do_save
+ * patches the record there and re-anchors it. Cleared by a load (positions match the save again). */
+#define MOVED_MAX 24
+static struct { uint16_t idx, ox, oy; } g_moved[MOVED_MAX];
+static int g_nmoved;
+static void moved_register(int idx)
+{   if(idx<0) return;
+    for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)idx) return;
+    if(g_nmoved<MOVED_MAX){ g_moved[g_nmoved].idx=(uint16_t)idx;
+        g_moved[g_nmoved].ox=g_wobj[idx].x; g_moved[g_nmoved].oy=g_wobj[idx].y; g_nmoved++; } }
+
+static const signed char VDX[4]={0,1,0,-1}, VDY[4]={-1,0,1,0};      /* N E S W (§3 exit order) */
+static int veh_face_of(int dx,int dy){ if(dy<0)return 0; if(dy>0)return 2; return dx>0?1:3; }
+
+static int tile_is_water(const world_t*w,int x,int y)
+{ return w->level==0 && (g_tflags1[world_tile(w,x,y)]&1); }
+/* an object on the target tile blocks a vehicle (§2) — our own parts excluded (they move too) */
+static int veh_obj_blocks(int x,int y)
+{   int i=objworld_at(&g_ow, x&(U6_SURFACE_TILES-1), y&(U6_SURFACE_TILES-1));
+    if(i<0) return 0;
+    if(g_veh_kind) for(int k=0;k<3;k++) if(i==g_veh_o[k]) return 0;
+    return 1; }
+static int veh_can_enter(const world_t*w,int x,int y,int deep)
+{   if(!tile_is_water(w,x,y)) return 0;
+    if(deep){ int t=world_tile(w,x,y); if(t>=16 && t<=47) return 0; }   /* ship: open water only */
+    return !veh_obj_blocks(x,y); }
+
+/* re-derive the part frames from facing + phase (§1: front 0-7, centre 8-15, back 16-23) */
+static void veh_set_tiles(void)
+{   if(g_veh_kind==414){ wobj_t*o=&g_wobj[g_veh_o[0]];
+        o->tile=(uint16_t)(basetile(414)+g_veh_face*2+g_veh_phase); o->dirty=1; }
+    else if(g_veh_kind==412){ int bt=basetile(412);
+        g_wobj[g_veh_o[1]].tile=(uint16_t)(bt+   g_veh_face*2+g_veh_phase);
+        g_wobj[g_veh_o[0]].tile=(uint16_t)(bt+ 8+g_veh_face*2+g_veh_phase);
+        g_wobj[g_veh_o[2]].tile=(uint16_t)(bt+16+g_veh_face*2+g_veh_phase);
+        for(int k=0;k<3;k++) g_wobj[g_veh_o[k]].dirty=1; } }
+
+/* party sprites vanish into the vehicle (§3.6) and reappear at the landing tile */
+static void veh_hide_party(void)
+{   for(int p=0;p<g_nparty && p<MAXPARTY;p++){ int a=g_party[p].actor;
+        if(a<=1||a>=U6_MAX_ACTORS){ g_veh_pz[p]=0; continue; }
+        g_veh_pz[p]=g_actz[a]; g_actz[a]=0xff; }
+    g_avatar_hide=1; }
+static void veh_show_party(const world_t*w,int lx,int ly)
+{   for(int p=0;p<g_nparty && p<MAXPARTY;p++){ int a=g_party[p].actor;
+        if(a<=1||a>=U6_MAX_ACTORS) continue;
+        g_actz[a]=g_veh_pz[p]; g_actx[a]=(uint16_t)lx; g_acty[a]=(uint16_t)ly; }
+    (void)w; g_avatar_hide=0; }
+
+static int wobj_boat_at(int obj_n,int x,int y)
+{   for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
+        if(o->alive && o->obj_n==(uint16_t)obj_n && o->x==(uint16_t)(x&(U6_SURFACE_TILES-1))
+           && o->y==(uint16_t)(y&(U6_SURFACE_TILES-1))) return i; }
+    return -1; }
+
+/* (U)se while aboard: disembark next to land, N/E/S/W (§3.1). Returns recompose. */
+static int vehicle_exit(world_t*w)
+{   for(int d=0;d<4;d++){
+        int lx=(w->px+VDX[d])&(U6_SURFACE_TILES-1), ly=(w->py+VDY[d])&(U6_SURFACE_TILES-1);
+        if(world_is_passable(w,lx,ly)){
+            veh_show_party(w,lx,ly);
+            g_veh_kind=0; g_avatar_ovr=0;
+            w->px=(uint16_t)lx; w->py=(uint16_t)ly;
+            (void)g_tmpdm_invalidate();
+            msgcat(0,"You disembark.");
+            return 1; } }
+    msgcat(0,"Only next to land.");
+    return 1; }
+
+/* (U)se a skiff/ship object: board it (§3 checks in order). Returns recompose. */
+static int use_boat(world_t*w,int idx)
+{   wobj_t*o=&g_wobj[idx]; int on=o->obj_n;
+    if(on==414 && !tile_is_water(w,o->x,o->y)){ msgcat(0,"You must place it in water first."); return 1; }
+    int ci=idx;
+    if(on==412){                                   /* any part -> the CENTRE object (§3.3) */
+        int fr=(int)o->tile-basetile(412), face=(fr&7)/2, cx=o->x, cy=o->y;
+        if(fr<8){ cx-=VDX[face]; cy-=VDY[face]; }             /* front: centre lies behind  */
+        else if(fr>=16){ cx+=VDX[face]; cy+=VDY[face]; }      /* back:  centre lies ahead   */
+        ci=wobj_boat_at(412,cx,cy);
+        if(ci<0){ msgcat(0,"Ship not usable."); return 1; }
+        { int cf=(int)g_wobj[ci].tile-basetile(412);
+          if(cf<8||cf>=16){ msgcat(0,"Ship not usable."); return 1; } } }
+    wobj_t*c=&g_wobj[ci];
+    if(c->quality!=0){                             /* for sale: needs the matching SHIP DEED (§3.4) */
+        if(!objworld_has(&g_ow,149,c->quality)){ msgcat(0,"A deed is required."); return 1; }
+        c->quality=0; c->dirty=1; }
+    int face=(((int)c->tile-basetile(on))&7)/2, fi=-1, bi=-1;
+    if(on==412){
+        fi=wobj_boat_at(412,c->x+VDX[face],c->y+VDY[face]);
+        bi=wobj_boat_at(412,c->x-VDX[face],c->y-VDY[face]);
+        if(fi<0||bi<0){ msgcat(0,"Ship not usable."); return 1; } }
+    g_veh_kind=on; g_veh_o[0]=ci; g_veh_o[1]=fi; g_veh_o[2]=bi;
+    moved_register(ci); moved_register(fi); moved_register(bi);   /* their records stay findable after sailing */
+    g_veh_face=face; g_veh_phase=0;
+    w->px=c->x; w->py=c->y;                        /* the player now IS the vehicle (camera follows) */
+    veh_hide_party();
+    (void)g_tmpdm_invalidate();
+    msgcat(0,on==412?"You board the ship.":"You board the skiff.");
+    return 1; }
+
+/* one vehicle step: all target tiles must pass the §2 water rules; parts move + re-face as a unit */
+static int vehicle_try_move(world_t*w,int dx,int dy)
+{   int nface=veh_face_of(dx,dy);
+    int nx=(w->px+dx)&(U6_SURFACE_TILES-1), ny=(w->py+dy)&(U6_SURFACE_TILES-1);
+    if(g_veh_kind==414){
+        if(!veh_can_enter(w,nx,ny,0)) return 0;
+        g_wobj[g_veh_o[0]].x=(uint16_t)nx; g_wobj[g_veh_o[0]].y=(uint16_t)ny;
+    } else {
+        int fx=(nx+VDX[nface])&(U6_SURFACE_TILES-1), fy=(ny+VDY[nface])&(U6_SURFACE_TILES-1);
+        int bx=(nx-VDX[nface])&(U6_SURFACE_TILES-1), by=(ny-VDY[nface])&(U6_SURFACE_TILES-1);
+        if(!veh_can_enter(w,nx,ny,1) || !veh_can_enter(w,fx,fy,1) || !veh_can_enter(w,bx,by,1)) return 0;
+        g_wobj[g_veh_o[0]].x=(uint16_t)nx; g_wobj[g_veh_o[0]].y=(uint16_t)ny;
+        g_wobj[g_veh_o[1]].x=(uint16_t)fx; g_wobj[g_veh_o[1]].y=(uint16_t)fy;
+        g_wobj[g_veh_o[2]].x=(uint16_t)bx; g_wobj[g_veh_o[2]].y=(uint16_t)by; }
+    g_veh_face=nface; g_veh_phase^=1; veh_set_tiles();
+    w->px=(uint16_t)nx; w->py=(uint16_t)ny;
+    w->turns++; w->clock+=10;                      /* same turn cost as a walked step (world.c) */
+    build_blocked();                               /* objects moved -> rebuild buckets/blocking */
+    return 1; }
+
+/* horses (§4): a wandering horse actor at (x,y)? (its tile sits in obj 430's frame range) */
+static int horse_actor_at(int x,int y)
+{   int bt=basetile(430); if(bt<=0) return -1;
+    for(int i=2;i<U6_MAX_ACTORS;i++)
+        if(g_actz[i]!=0xff && g_atile[i]!=0xffff &&
+           g_actx[i]==(uint16_t)(x&(U6_SURFACE_TILES-1)) && g_acty[i]==(uint16_t)(y&(U6_SURFACE_TILES-1)) &&
+           (int)g_atile[i]>=bt && (int)g_atile[i]<bt+8) return i;
+    return -1; }
+static int horse_mount(world_t*w,int i)
+{   if(g_veh_kind){ msgcat(0,"Not while aboard!"); return 1; }
+    g_veh_horse=i; g_veh_hz=g_actz[i]; g_actz[i]=0xff;      /* absorb the horse actor */
+    g_veh_kind=431; g_veh_face=2; g_veh_phase=0;
+    w->px=g_actx[i]; w->py=g_acty[i];
+    g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase);
+    (void)g_tmpdm_invalidate();
+    msgcat(0,"You mount the horse.");
+    return 1; }
+static int horse_dismount(world_t*w)
+{   int i=g_veh_horse;
+    if(i>=0){ g_actz[i]=g_veh_hz; g_actx[i]=(uint16_t)w->px; g_acty[i]=(uint16_t)w->py;
+              g_atile[i]=(uint16_t)basetile(430); g_horse_moved=i; }   /* a plain horse again, right here */
+    g_veh_horse=-1; g_veh_kind=0; g_avatar_ovr=0;
+    msgcat(0,"You dismount.");
+    return 1; }
 static int do_verb(world_t*w,int verb,int dx,int dy)
 {
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1));
@@ -5103,7 +5276,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
                     wobj_t*o=&g_wobj[slot];
                     o->obj_n=g_ow.inv[s].obj_n; o->tile=g_ow.inv[s].tile; o->qty=g_ow.inv[s].qty; o->quality=g_ow.inv[s].quality;
                     o->x=(uint16_t)tx; o->y=(uint16_t)ty; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE;
-                    o->alive=1; o->dirty=1;                       /* on the map now -> re-serialised on save */
+                    o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;      /* on the map now -> its carried record is relocated on save */
                     for(int k=s;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;   /* remove from inventory */
                     if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
                     build_blocked();                             /* new on-map object -> rebuild buckets/blocking */
@@ -5112,7 +5285,12 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
             }
         }
     } else { /* 'U' use — dispatch by object number (doors open/close, ...) */
-        if(idx<0){ msgcat(0,"Nothing to use there."); }
+        if(g_veh_kind==412||g_veh_kind==414) return vehicle_exit(w);       /* aboard: U = disembark (vehicles.md §3.1) */
+        if(g_veh_kind==431) return horse_dismount(w);                      /* mounted: U = dismount (§4) */
+        if(idx>=0 && (g_wobj[idx].obj_n==412||g_wobj[idx].obj_n==414)) return use_boat(w,idx);
+        if(idx<0){ int h=horse_actor_at(tx,ty);
+                   if(h>=0) return horse_mount(w,h);                       /* U at a wandering horse (§4) */
+                   msgcat(0,"Nothing to use there."); }
         else recompose = use_object(idx);
     }
     return recompose;
@@ -5130,6 +5308,52 @@ static void arm_drop(void)          /* start a D)rop: open the pack, arm the ver
 {
     if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to drop."); g_pending_verb=0; g_show_inv=0; return; }
     g_show_inv=1; g_inv_sel=0; g_pending_verb='D'; drop_prompt();
+}
+
+static int g_avatar_weapon=43;                            /* readied weapon obj_n (default sword) */
+/* ---- E)quip: ready pooled pack items to a party member (docs/rules/equipment.md §5) ---- */
+static void equip_prompt(void)
+{
+    if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) g_inv_sel=0;
+    char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
+    int n=msgcat(0,"Equip the "); n=msgcat(n,dn); msgcat(n,"? (E=next, 1-5=who)");
+}
+static void arm_equip(void)
+{
+    if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to equip."); g_pending_verb=0; g_show_inv=0; return; }
+    g_show_inv=1; g_inv_sel=0; g_pending_verb='E'; equip_prompt();
+}
+/* refresh an actor's combat fold + the avatar's live weapon after a readied-set change */
+static void equip_refold(int a)
+{
+    equip_fold(g_aready[a], &g_aweapon[a], &g_aac[a]);
+    if(a==1) g_avatar_weapon = g_aweapon[1] ? g_aweapon[1] : 0;
+}
+/* ready the selected pack item to party member `pi` (0-based roster index) */
+static void equip_to_member(int pi)
+{
+    if(pi<0||pi>=g_nparty||g_inv_sel<0||g_inv_sel>=g_ow.ninv) return;
+    int a=g_party[pi].actor; if(a<0||a>=U6_MAX_ACTORS) return;
+    int on=g_ow.inv[g_inv_sel].obj_n;
+    char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
+    int r=equip_ready(g_aready[a], on);
+    if(r==EQUIP_ENOTREADIABLE){ msgcat(0,"Thou canst not ready that!"); return; }
+    if(r==EQUIP_EFULL){ int n=msgcat(0,g_party[pi].name); msgcat(n," cannot wear more of those."); return; }
+    objworld_consume(&g_ow,(uint16_t)on,1);            /* one leaves the pooled pack */
+    equip_refold(a);
+    { int n=msgcat(0,g_party[pi].name); n=msgcat(n," readies the "); n=msgcat(n,dn); msgcat(n,"."); }
+    g_pending_verb=0; g_show_inv=0;
+}
+/* unready slot `slot` of actor `a` back into the pooled pack (status view digit) */
+static int equip_take_off(int a, int slot)
+{
+    int on=equip_unready(g_aready[a], slot);
+    if(!on) return 0;
+    inv_add_objn(on,1);
+    equip_refold(a);
+    { char dn[40]; obj_name((uint16_t)basetile(on),dn,sizeof dn);
+      int n=msgcat(0,"Removed the "); n=msgcat(n,dn); msgcat(n,"."); }
+    return 1;
 }
 
 /* inventory list into the panel scroll */
@@ -5223,21 +5447,41 @@ static void draw_char_view(uint8_t col)
     if(!nm||!nm[0]) nm=(a==1)?g_avatar_name:"?";
     ui_text(PANX+(PANW-ui_textw(nm))/2, pyy+PH+3, nm, 14);   /* name in bright yellow */
 
-    int ty=pyy+PH+15;
+    int ty=pyy+PH+13;
     if(a==1){ const char*g=g_cc_gender?"Male":"Female";      /* only the Avatar's gender is modeled */
-        ui_text(PANX+(PANW-ui_textw(g))/2, ty, g, col); ty+=13; }
+        ui_text(PANX+(PANW-ui_textw(g))/2, ty, g, col); ty+=10; }
 
-    char b[16], *e;
-    u_num(b,g_astr[a]); stat_row(ty,"Str",b,col); ty+=11;
-    u_num(b,g_adex[a]); stat_row(ty,"Dex",b,col); ty+=11;
-    u_num(b,g_aint[a]); stat_row(ty,"Int",b,col); ty+=13;
-    e=u_num(b,g_ahp[a]);   *e++='/'; u_num(e,g_amaxhp[a]);   stat_row(ty,"HP",b,col); ty+=11;
-    e=u_num(b,g_amana[a]); *e++='/'; u_num(e,g_amaxmana[a]); stat_row(ty,"MP",b,col); ty+=13;
+    char b[16], *e;                                          /* compact rows: gear list fits below */
+    u_num(b,g_astr[a]); stat_row(ty,"Str",b,col); ty+=9;
+    u_num(b,g_adex[a]); stat_row(ty,"Dex",b,col); ty+=9;
+    u_num(b,g_aint[a]); stat_row(ty,"Int",b,col); ty+=10;
+    e=u_num(b,g_ahp[a]);   *e++='/'; u_num(e,g_amaxhp[a]);   stat_row(ty,"HP",b,col); ty+=9;
+    e=u_num(b,g_amana[a]); *e++='/'; u_num(e,g_amaxmana[a]); stat_row(ty,"MP",b,col); ty+=10;
     { const char*fs=g_afood[a]==0?"Starving":g_afood[a]<=FOOD_HUNGRY?"Hungry":g_afood[a]>=150?"Full":"Fed";
-      stat_row(ty,"Food",fs,col); ty+=13; }                  /* hunger model */
-    u_num(b,g_alevel[a]>0?g_alevel[a]:1); stat_row(ty,"Lev",b,col); ty+=11;
-    u_num(b,g_aexp[a]); stat_row(ty,"Exp",b,col); ty+=11;
-    if(a==1){ u_num(b,g_cg.karma); stat_row(ty,"Kar",b,col); }  /* Avatar alignment (ADDKARMA/SUBKARMA) */
+      stat_row(ty,"Food",fs,col); ty+=10; }                  /* hunger model */
+    e=u_num(b,g_alevel[a]>0?g_alevel[a]:1);                  /* "Lev N  Exp M" share one row */
+    *e++=' '; u_num(e,g_aexp[a]); stat_row(ty,"Lv/Ex",b,col); ty+=9;
+    if(a==1){ u_num(b,g_cg.karma); stat_row(ty,"Kar",b,col); ty+=9; }  /* Avatar alignment (ADDKARMA/SUBKARMA) */
+    /* readied gear (equipment.md §5): one numbered row per occupied slot; the digit unreadies */
+    { int row=1; ty+=2;
+      for(int sl=0; sl<EQ_NSLOTS && ty<=LH-10; sl++){
+          if(!g_aready[a][sl]) continue;
+          char ln[26]; int t=0; ln[t++]=(char)('0'+row); ln[t++]=' ';
+          char nn[20]; obj_name((uint16_t)basetile(g_aready[a][sl]),nn,sizeof nn);
+          for(int k=0;nn[k]&&t<25;k++) ln[t++]=nn[k]; ln[t]=0;
+          ui_text(PANX+8, ty, ln, 14); ty+=9; row++; }       /* yellow: actionable rows */
+      if(row>1 && ty<=LH-9) ui_text(PANX+8, ty, "(digit removes)", col); }
+}
+/* status view: digit `d` (1..) unreadies the d-th occupied slot of the viewed actor. 1 = handled. */
+static int status_unready_digit(int d)
+{
+    int a=g_status_actor; if(a<1||a>=U6_MAX_ACTORS) return 0;
+    int row=0;
+    for(int sl=0; sl<EQ_NSLOTS; sl++){
+        if(!g_aready[a][sl]) continue;
+        if(++row==d) return equip_take_off(a,sl);
+    }
+    return 0;
 }
 
 /* ---- command-icon bar + mouse cursor ------------------------------------ */
@@ -5723,7 +5967,7 @@ static void party_attack(int att,int def){
  * The avatar's weapon (g_avatar_weapon) sets damage + RANGE: melee weapons need an adjacent
  * target; ranged weapons (bow/crossbow) hit the first actor along the direction within range,
  * blocked by walls (§6). CB3b will read the readied weapon/armour from OBJLIST inventory. */
-static int g_avatar_weapon=43;                            /* readied weapon obj_n (default sword) */
+/* (g_avatar_weapon is declared before the E)quip helpers — the combat code below uses it) */
 /* does (x,y) block a thrown/fired shot? (terrain or an object sight-blocker) */
 static int sight_blocked_at(const world_t*w,int x,int y){
     if(blocks_sight(world_tile(w,x,y))) return 1;
@@ -6207,7 +6451,7 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='C'){ return cast_spell(w, g_nparty?g_party[0].actor:1, g_cast_spell, dx, dy); }
     if(verb=='A'){ return do_attack(w,dx,dy); }
     if(verb=='L'){ do_verb(w,'L',dx,dy); return 0; }
-    if(verb=='U'){ do_verb(w,'U',dx,dy); return 0; }
+    if(verb=='U'){ return do_verb(w,'U',dx,dy); }   /* recompose: doors, vehicle board/exit move the view */
     if(verb=='G'){ return do_verb(w,'G',dx,dy); }
     if(verb=='D'){ return do_verb(w,'D',dx,dy); }
     if(verb=='M'){ int sx=dx<0?-1:(dx>0?1:0), sy=dy<0?-1:(dy>0?1:0);
@@ -6265,40 +6509,209 @@ static int do_rest(world_t *w)
 static int do_save(const world_t *w)
 {
     if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No save template (SAVE.000)."); return 0; }
-    uint8_t *d=g_savetmpl; int32_t off=g_objlist_off;
+    uint8_t *d=g_savetmpl; int32_t off=g_objlist_off, n=g_savetmpl_len;
+    int aboard=(g_veh_kind==412||g_veh_kind==414);
+    uint8_t in_party[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) in_party[i]=0;
     /* FULL objlist state: every party member's position + HP/Str/Dex/Int + experience. The
-     * avatar (actor 1) uses the world position; companions use their live actor positions. */
+     * avatar (actor 1) uses the world position; companions use their live actor positions —
+     * aboard a boat they are hidden inside it, so they travel with it (save_load.md §1). */
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor;
         if(a<1||a>=U6_MAX_ACTORS) continue;
+        in_party[a]=1;
         int ax,ay,az;
-        if(a==1){ ax=(int)w->px; ay=(int)w->py; az=0; }
+        if(a==1||aboard){ ax=(int)w->px; ay=(int)w->py; az=0; }
         else { ax=g_actx[a]; ay=g_acty[a]; az=(g_actz[a]==0xff)?0:g_actz[a]; }
         sav_set_actor_pos  (d, off, a, ax, ay, az);
         sav_set_actor_stats(d, off, a, g_ahp[a], g_astr[a], g_adex[a], g_aint[a]);
         sav_set_actor_exp  (d, off, a, g_aexp[a]);
+        sav_set_actor_level_mana(d, off, a, g_alevel[a], g_amana[a]);
     }
+    sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
+    /* the horse we ride (absorbed: it is where we are) or last left somewhere new (vehicles.md §4) */
+    if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, 0);
+    else if(g_horse_moved>=0){ int h=g_horse_moved;
+        sav_set_actor_pos(d, off, h, g_actx[h], g_acty[h], (g_actz[h]==0xff)?0:g_actz[h]); }
     { int mod=clock_minutes(w); sav_set_clock(d, off, mod%60, mod/60); }   /* game clock */
     if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma);  /* created-avatar identity */
     /* OBJECT-WORLD state: re-serialise every DIRTY object in place (U6's object DB is a flat
-     * record set that loads by STATUS, so counts + following offsets are preserved — save.c):
-     *   - a taken item (!alive)  -> flip its on-map record to in-inventory, owner = the Avatar;
-     *   - a door/container (alive, frame changed) -> patch its frame byte. */
-    { int32_t surf=sav_surface_off(d, g_savetmpl_len); int patched=0;
-      if(surf>=0) for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
-          if(!o->dirty) continue;
-          if(!o->alive){
-              if(o->origin!=WOBJ_PARENT_NONE){                  /* taken from a container: patch its in-container record */
-                  wobj_t*c=&g_wobj[o->origin];
-                  patched += sav_patch_contained_taken(d, g_savetmpl_len, surf, c->x, c->y, c->obj_n,
-                                                        o->obj_n, o->quality, 1);
-              } else patched += sav_patch_obj_taken(d, g_savetmpl_len, surf, o->x, o->y, o->obj_n, 1);
-          }
-          else { int frame=(int)o->tile - basetile(o->obj_n);
-                 if(frame>=0) patched += sav_patch_obj_frame(d, g_savetmpl_len, surf, o->x, o->y, o->obj_n, frame); }
+     * record set that loads by STATUS, so counts + following offsets are preserved — save.c).
+     * Order matters: a record flipped by an earlier step is what a later step looks for. */
+    { int32_t surf=sav_surface_off(d, n); int patched=0;
+      if(surf>=0){
+      /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
+      for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+          if(!o->dirty || o->alive) continue;
+          if(o->origin!=WOBJ_PARENT_NONE){                      /* taken from a container: patch its in-container record */
+              wobj_t*c=&g_wobj[o->origin];
+              patched += sav_patch_contained_taken(d, n, surf, c->x, c->y, c->obj_n, o->obj_n, o->quality, 1);
+          } else patched += sav_patch_obj_taken(d, n, surf, o->x, o->y, o->obj_n, 1); }
+      /* 2) changed map objects (doors, levers, boats): frame / position / price tag, at the record's
+       *    ORIGINAL position (a sailed boat's record is re-anchored to where it is now) */
+      for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+          if(o->dirty!=WOBJ_DIRTY_STATE || !o->alive) continue;
+          int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) continue;
+          int ox=o->x, oy=o->y, mk=-1;
+          for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ ox=g_moved[k].ox; oy=g_moved[k].oy; mk=k; break; }
+          int boat=(o->obj_n==412||o->obj_n==414);
+          if(sav_patch_obj_state(d, n, surf, ox, oy, o->obj_n, o->x, o->y, frame, boat?o->quality:-1)){
+              patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; } } }
+      /* 3) readied gear (equipment.md §6): clear the party's readied bits, then mark one carried
+       *    record per live slot item (a GET-flipped record from step 1 qualifies) */
+      (void)sav_unready_party(d, n, in_party, U6_MAX_ACTORS);
+      for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+          for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl])
+              patched += sav_ready_item(d, n, a, g_aready[a][sl], in_party, U6_MAX_ACTORS); }
+      /* 4) dropped items: their carried records go onto the map where they lie; from then on
+       *    the object has an on-map record at its position like any other */
+      for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+          if(o->dirty!=WOBJ_DIRTY_DROPPED || !o->alive) continue;
+          int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) frame=0;
+          if(sav_drop_item(d, n, o->obj_n, o->quality, o->x, o->y, frame, in_party, U6_MAX_ACTORS)>0){
+              o->dirty=WOBJ_DIRTY_STATE; patched++; } }
       }
       (void)patched; }
-    if(sav_write_file("SAVED.000", d, g_savetmpl_len)==0){ msgcat(0,"Game saved."); return 1; }
+    { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
+      sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
+    if(sav_write_file("SAVED.000", d, n)==0){ msgcat(0,"Game saved."); return 1; }
     msgcat(0,"Save failed."); return 0;
+}
+
+/* ---- in-game LOAD: rebuild the LIVE world from SAVED.000 (docs/rules/save_load.md) --------
+ * The save is our own written ScummVM-format file (nuvie_save.md): the 64 surface super-chunks
+ * are a concatenated OBJBLK stream (u6obj_decode_world parses records + container parents), the
+ * objlist carries actors/party/clock/player. All transient buffers come from a chip mark/reset
+ * region, so a load costs no permanent memory. Surface-focused, like do_save. */
+static int load_game(world_t *w)
+{
+    plat_mark mk = plat_chip_mark();
+    int32_t n = 0; uint8_t *d = (uint8_t*)plat_load_file("SAVED.000", 0, &n);
+    if(!d){ plat_chip_reset(mk); msgcat(0,"No saved game (SAVED.000)."); return 0; }
+    int32_t ol = sav_objlist_off(d, n), so = sav_surface_off(d, n), se = sav_surface_end(d, n);
+    int32_t iv = sav_inv_off(d, n), ive = sav_inv_end(d, n);
+    if(ol < 0 || so < 0 || se <= so || ive < 0){ plat_chip_reset(mk); msgcat(0,"Save file is damaged."); return 0; }
+
+    if(g_talking) end_talk();
+    g_show_inv = 0; g_show_status = 0; g_pending_verb = 0;
+    g_veh_kind = 0; g_veh_horse = -1; g_avatar_hide = 0; g_avatar_ovr = 0;   /* re-boarded below if the save says so */
+    g_nmoved = 0; g_horse_moved = -1;                                        /* every record is at its saved position again */
+
+    /* 1) WORLD OBJECTS: decode the surface region, keep top-level z==0 + contained-with-kept-parent
+     * (the same rule mkworld applies when it bakes the pack). The actor-inventory chunk is decoded
+     * too: an item DROPPED from the pack is relocated onto the map inside that chunk (save_load.md
+     * §5), and a record is placed by its own x/y wherever it sits. */
+    {   u6_object_t *tmp   = (u6_object_t*)plat_alloc_chip((uint32_t)MAXWOBJ * sizeof(u6_object_t));
+        int32_t     *remap = (int32_t*)plat_alloc_chip((uint32_t)MAXWOBJ * sizeof(int32_t));
+        if(!tmp || !remap){ plat_chip_reset(mk); msgcat(0,"Not enough memory to load."); return 0; }
+        int32_t nr = u6obj_decode_world(d + so, se - so, tmp, MAXWOBJ);
+        {   int32_t n2 = u6obj_decode_world(d + iv, ive - iv, tmp + nr, MAXWOBJ - nr);
+            for(int32_t i = nr; i < nr + n2; i++)                     /* its parent links are batch-local */
+                if(tmp[i].parent != U6OBJ_PARENT_NONE) tmp[i].parent = (uint16_t)(tmp[i].parent + nr);
+            nr += n2; }
+        int32_t nk = 0;
+        for(int32_t i = 0; i < nr; i++){
+            int keep; uint16_t np = WOBJ_PARENT_NONE;
+            if(tmp[i].parent == U6OBJ_PARENT_NONE) keep = (tmp[i].z == 0);
+            else { int32_t r = remap[tmp[i].parent]; keep = (r >= 0); if(keep) np = (uint16_t)r; }
+            remap[i] = keep ? nk : -1;
+            if(!keep) continue;
+            wobj_t *o = &g_wobj[nk++];
+            int contained = (np != WOBJ_PARENT_NONE);
+            o->obj_n  = tmp[i].obj_n;
+            o->tile   = (uint16_t)(basetile(tmp[i].obj_n) + tmp[i].frame);
+            o->x      = contained ? 0 : tmp[i].x;
+            o->y      = contained ? 0 : tmp[i].y;
+            o->qty    = tmp[i].quantity;
+            o->quality= tmp[i].quality;
+            o->parent = np; o->origin = WOBJ_PARENT_NONE;
+            o->alive  = (uint8_t)!contained;
+            o->dirty  = 0; }
+        objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable);   /* also empties the pooled pack */
+        g_nobjs = nk; }
+
+    /* 2) ACTORS from the objlist (objlist.md; all little-endian) */
+    for(int i = 0; i < U6_MAX_ACTORS; i++){
+        const uint8_t *pb = d + ol + 0x100 + i*3, *ab = d + ol + 0x400 + i*2;
+        int x = pb[0] | ((pb[1] & 3) << 8), y = (pb[1] >> 2) | ((pb[2] & 0xf) << 6), z = pb[2] >> 4;
+        int on = ab[0] | ((ab[1] & 3) << 8), fr = ab[1] >> 2;
+        g_actx[i] = (uint16_t)x; g_acty[i] = (uint16_t)y; g_actz[i] = (uint8_t)z;
+        g_atile[i] = on ? (uint16_t)(basetile(on) + fr) : 0xffff;
+        g_astr[i] = d[ol + 0x900 + i]; g_adex[i] = d[ol + 0xa00 + i]; g_aint[i] = d[ol + 0xb00 + i];
+        g_aexp[i] = (uint16_t)(d[ol + 0xc00 + i*2] | (d[ol + 0xc00 + i*2 + 1] << 8));
+        g_ahp[i]  = d[ol + 0xe00 + i]; g_amaxhp[i] = g_ahp[i];              /* boot semantics (pack load) */
+        { int lv = d[ol + 0xff1 + i];                                        /* level array (Nuvie); derive if unset */
+          if(lv < 1 || lv > 8) lv = (g_amaxhp[i] >= 30) ? (g_amaxhp[i] / 30) : 1;
+          if(lv > 8) lv = 8; g_alevel[i] = (int8_t)lv; }
+        g_amaxmana[i] = (uint8_t)magic_max_mana(g_aint[i], i == 1);
+        g_amana[i] = (d[ol + 0x13f1 + i] == 0xFF) ? g_amaxmana[i] : d[ol + 0x13f1 + i];   /* current mana (0xFF = full) */
+        if(g_amana[i] > g_amaxmana[i]) g_amana[i] = g_amaxmana[i]; }
+
+    /* avatar -> the world position; clock + player fields */
+    w->px = g_actx[1]; w->py = g_acty[1]; w->level = g_actz[1];
+    g_start_min = (int)d[ol + 0x1bf4] * 60 + d[ol + 0x1bf3]; w->clock = 0;
+    g_cg.avatar_sex = d[ol + 0x1c71]; g_cg.karma = d[ol + 0x1bf9];
+    if(d[ol + 0xf00]){ int o = 0;                                            /* player name (0xf00, <=13 + NUL) */
+        while(o < 13 && d[ol + 0xf00 + o]){ g_avatar_name[o] = (char)d[ol + 0xf00 + o]; o++; }
+        g_avatar_name[o] = 0; }
+
+    /* 3) PARTY: objlist status bit 0x80 (avatar always first) */
+    {   int old_n = g_nparty; struct { int actor; char name[16]; } keep[MAXPARTY];
+        for(int p = 0; p < old_n && p < MAXPARTY; p++){ keep[p].actor = g_party[p].actor;
+            for(int k = 0; k < 16; k++) keep[p].name[k] = g_party[p].name[k]; }
+        g_nparty = 0;
+        for(int i = 1; i < U6_MAX_ACTORS && g_nparty < MAXPARTY; i++){
+            if(!(d[ol + 0x800 + i] & 0x80)) continue;
+            g_party[g_nparty].actor = i; g_party[g_nparty].hp = g_ahp[i]; g_party[g_nparty].name[0] = 0;
+            for(int p = 0; p < old_n; p++) if(keep[p].actor == i){          /* keep a known name */
+                for(int k = 0; k < 16; k++) g_party[g_nparty].name[k] = keep[p].name[k]; break; }
+            if(!g_party[g_nparty].name[0]){
+                if(i == 1){ int o = 0; while(g_avatar_name[o] && o < 15){ g_party[0].name[o] = g_avatar_name[o]; o++; } g_party[0].name[o] = 0; }
+                else resolve_name(i, g_party[g_nparty].name, 16); }
+            g_nparty++; } }
+
+    /* 4) pooled pack + readied gear + gold, from the actor-inventory super-chunk */
+    {   for(int i = 0; i < U6_MAX_ACTORS; i++) for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[i][sl] = 0;
+        g_cg.gold = 0;
+        const uint8_t *inv = d + iv; int cnt = inv[0] | (inv[1] << 8);
+        const uint8_t *rec = inv + 2;
+        if(iv + 2 + (int32_t)cnt*8 <= n) for(int o = 0; o < cnt; o++){
+            const uint8_t *b = rec + o*8;
+            int loc = b[0] & 0x18, hops = 0;
+            const uint8_t *cur = b;
+            while(loc == 0x08 && hops++ < 8){                    /* nested container: walk up to the holder */
+                int pl = ((((cur[2] >> 2) | ((cur[3] & 0xf) << 6)) & 0x3f) << 10) | (cur[1] | ((cur[2] & 3) << 8));
+                if(pl < 0 || pl >= cnt) break;
+                cur = rec + pl*8; loc = cur[0] & 0x18; }
+            if(loc != 0x10 && loc != 0x18) continue;
+            int owner = cur[1] | ((cur[2] & 3) << 8);
+            if(owner < 1 || owner >= U6_MAX_ACTORS || !(d[ol + 0x800 + owner] & 0x80)) continue;   /* party only */
+            int on = b[4] | ((b[5] & 3) << 8);
+            int direct = (cur == b);
+            if(direct && loc == 0x18){                            /* readied on the holder itself */
+                (void)equip_ready(g_aready[owner], on); continue; }
+            if(on == 88){ int q = (b[7] << 8) | b[6]; g_cg.gold += q; continue; }   /* coins -> the gold pool */
+            { invitem_t it; it.obj_n = (uint16_t)on; it.tile = (uint16_t)(basetile(on) + ((b[5] & 0xfc) >> 2));
+              it.qty = b[6] ? b[6] : 1; it.quality = b[7];
+              int done = 0;
+              for(int k = 0; k < g_ow.ninv; k++) if(g_ow.inv[k].obj_n == it.obj_n && g_ow.inv[k].quality == it.quality){
+                  g_ow.inv[k].qty = (uint16_t)(g_ow.inv[k].qty + it.qty); done = 1; break; }
+              if(!done && g_ow.ninv < OBJ_INV_MAX) g_ow.inv[g_ow.ninv++] = it; } }
+        for(int p = 0; p < g_nparty; p++){ int a = g_party[p].actor; if(a >= 0 && a < U6_MAX_ACTORS) equip_refold(a); } }
+
+    /* the loaded file is now the SAVE TEMPLATE too: the next do_save patches this state, not the
+     * boot-time SAVE.000 (our own writer keeps the layout, so the sizes match) */
+    if(n == g_savetmpl_len) memcpy(g_savetmpl, d, (size_t)n);
+    plat_chip_reset(mk);                                          /* free the file + temp arrays */
+    build_blocked();
+    g_tmpdm_invalidate();
+    g_hour = clock_hour(w); g_minutes = clock_minutes(w);
+    /* 5) VEHICLE state (vehicles.md §6): the party saved on a boat's tile is aboard it; saved on a
+     * horse's tile (the absorbed mount travels with the rider) it is mounted */
+    if(tile_is_water(w, w->px, w->py)){
+        int bi = wobj_boat_at(414, w->px, w->py); if(bi < 0) bi = wobj_boat_at(412, w->px, w->py);
+        if(bi >= 0) (void)use_boat(w, bi); }
+    else { int hi = horse_actor_at(w->px, w->py); if(hi >= 0) (void)horse_mount(w, hi); }
+    msgcat(0, "Game restored.");
+    return 1;
 }
 
 /* Parse the FRONT-END art block (menu/title, intro scenes, TV, clock, moongate, montage portraits,
@@ -7348,6 +7761,19 @@ int main(int argc, char **argv)
         g_nroof=(ap[0]<<8)|ap[1];   ap+=2; g_roofmap=ap; ap+=(int32_t)g_nroof*6;
         /* per-actor readied gear (U6WL): 256 x {u16 weapon obj_n, u8 armour class} */
         for(int i=0;i<U6_MAX_ACTORS;i++){ g_aweapon[i]=(uint16_t)((ap[0]<<8)|ap[1]); g_aac[i]=ap[2]; ap+=3; }
+        /* per-actor READIED ITEM LIST (U6WQ — equipment.md §6): the items behind the U6WL fold, so
+         * E)quip can change them live. Magic-checked at this fixed position (pack+engine version
+         * together); each listed actor's weapon/AC is re-folded from the actual items. */
+        if(ap+6<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='Q'){
+            int nq=(ap[4]<<8)|ap[5]; ap+=6;
+            for(int e=0;e<nq && ap+2<=pak+n; e++){
+                int a=ap[0], cnt=ap[1]; ap+=2;
+                for(int k=0;k<cnt && ap+2<=pak+n; k++){
+                    int on=(ap[0]<<8)|ap[1]; ap+=2;
+                    (void)equip_ready(g_aready[a], on); }        /* slot rules place it (overflow etc.) */
+                equip_fold(g_aready[a], &g_aweapon[a], &g_aac[a]);
+            }
+        }
         /* per-actor alignment-hostile flag (U6WM): 256 x u8 */
         for(int i=0;i<U6_MAX_ACTORS;i++) g_align_hostile[i]=ap[i];
         ap+=U6_MAX_ACTORS;
@@ -7576,7 +8002,14 @@ int main(int argc, char **argv)
     g_objlist_off=-1;
     g_savetmpl=(uint8_t*)plat_load_file("SAVE.000",0,&g_savetmpl_len);  /* CHIP: read-mostly template; spares the fast pool */
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
-        if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n"); }
+        if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n");
+        /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
+         * a created character (g_cc_done) keeps the name it was given */
+        else if(!g_cc_done && g_savetmpl[g_objlist_off+0xf00]){ int o=0;
+            while(o<13 && g_savetmpl[g_objlist_off+0xf00+o]){ g_avatar_name[o]=(char)g_savetmpl[g_objlist_off+0xf00+o]; o++; }
+            g_avatar_name[o]=0;
+            for(int p=0;p<g_nparty;p++) if(g_party[p].actor==1){ int k=0;
+                while(g_avatar_name[k] && k<15){ g_party[p].name[k]=g_avatar_name[k]; k++; } g_party[p].name[k]=0; } } }
 
     /* DMA MUSIC song arena, late fallback (memory_streaming.md "DMA music"): normally allocated in
      * the memory plan above (before the front-end, so its songs cache too) — cache_init self-guards,
@@ -7624,10 +8057,198 @@ int main(int argc, char **argv)
     {   int32_t slen=0; void*sq=plat_load_file("STATUS.REQ",1,&slen);
         if(sq){ int id=(slen>0)?((uint8_t*)sq)[0]:1; g_status_actor=(id>=1)?id:1; g_show_status=1; } }
 
-    if(g_savestate){
-        /* World built from a save: show the loaded state as-is. When a save TEMPLATE
-         * is present (SAVE.000 staged), demonstrate the ON-TARGET save writer — walk a
-         * few tiles then write SAVED.000. Absent in normal play. */
+    /* headless EQUIPMENT check (equipment.md §7): READY.REQ byte = mode. Prints the fold results
+     * (--conout 2) and holds the status view so the capture shows the readied list. */
+    {   int32_t rl=0; void*rq=plat_load_file("READY.REQ",1,&rl);
+        if(rq){ int mode=(rl>0)?((uint8_t*)rq)[0]:'1';
+            for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl);   /* deterministic start */
+            equip_refold(1);
+            if(mode=='1'){ inv_add_objn(43,1); inv_add_objn(21,1);                 /* sword + chain mail */
+                g_inv_sel=0; { int k=-1; for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==43) k=i; g_inv_sel=k; }
+                equip_to_member(0);                                                 /* sword -> avatar */
+                { int k=-1; for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==21) k=i; g_inv_sel=k; }
+                if(g_inv_sel>=0) equip_to_member(0);                                /* chain mail -> avatar */
+            } else if(mode=='2'){
+                dbg_num("READY halberd rc=", equip_ready(g_aready[1],47));          /* 3 = EQ_ARM */
+                dbg_num("READY shield  rc=", equip_ready(g_aready[1],9)+10);        /* EQUIP_EFULL(-2)+10 = 8 */
+                equip_refold(1);
+            } else if(mode=='3'){
+                (void)equip_ready(g_aready[1],43); equip_refold(1);
+                dbg_num("READY pre-unready ninv=", g_ow.ninv);
+                (void)equip_take_off(1,EQ_ARM);
+                dbg_num("READY post-unready ninv=", g_ow.ninv);
+            }
+            dbg_num("READY weapon=", g_aweapon[1]);
+            dbg_num("READY ac=",     g_aac[1]);
+            g_status_actor=1; g_show_status=1; } }
+
+    /* headless VEHICLE checks (vehicles.md §7): VEHICLE.REQ byte = mode. Self-locating — scans
+     * outward from the start for a coast (land beside water; open water for the ship), spawns the
+     * vehicle there, exercises it, and prints VEH lines for the harness to assert on. */
+    {   int32_t vl=0; void*vq=plat_load_file("VEHICLE.REQ",1,&vl);
+        if(vq){ int mode=(vl>0)?((uint8_t*)vq)[0]:'1';
+            int deep=(mode=='3');
+            int lx=-1,ly=-1,wx=0,wy=0,face=0;
+            for(int r=1;r<300 && lx<0;r++)                                 /* ring scan for a coast */
+              for(int e=-r;e<=r && lx<0;e++)
+                for(int side=0;side<4 && lx<0;side++){
+                    int x=(side==0||side==1)? (int)w.px+e : (side==2? (int)w.px-r : (int)w.px+r);
+                    int y=(side==0)? (int)w.py-r : (side==1? (int)w.py+r : (int)w.py+e);
+                    x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1);
+                    /* cheap tile-only scan first (objworld_at is O(nobjs) — too slow per candidate);
+                     * the object check runs once, on the accepted spot only */
+                    if(deep){                                          /* ship: ANY 3x3 open-water block (real
+                                                                          * coasts have a shoreline band, so "land
+                                                                          * beside deep water" barely exists) */
+                        int ok=1;
+                        for(int oy=-1;oy<=1 && ok;oy++) for(int ox=-1;ox<=1 && ok;ox++){
+                            int t=world_tile(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1));
+                            if(!(g_tflags1[t]&1) || (t>=16&&t<=47)) ok=0; }
+                        if(!ok) continue;
+                        int ok2=1;                                         /* full (object) check once */
+                        for(int oy=-1;oy<=1 && ok2;oy++) for(int ox=-1;ox<=1 && ok2;ox++)
+                            if(!veh_can_enter(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1),1)) ok2=0;
+                        if(!ok2) continue;
+                        face=0; lx=x; ly=y; wx=x; wy=y; continue; }        /* the hook boards directly */
+                    if(!world_is_passable(&w,x,y)) continue;   /* bitmap test — cheap */
+                    for(int d=0;d<4;d++){
+                        int ax=(x+VDX[d])&(U6_SURFACE_TILES-1), ay=(y+VDY[d])&(U6_SURFACE_TILES-1);
+                        if(!(g_tflags1[world_tile(&w,ax,ay)]&1)) continue;
+                        if(!veh_can_enter(&w,ax,ay,0)) continue;           /* full check (objects) on the candidate */
+                        lx=x; ly=y; wx=ax; wy=ay; break; } }
+            if(lx<0){ Cconws("VEH no coast found\r\n"); }
+            else {
+                w.px=(uint16_t)lx; w.py=(uint16_t)ly; g_tmpdm_invalidate();
+                dbg_num("VEH land x=", lx); dbg_num("VEH land y=", ly);
+                /* spawn the vehicle object(s) on the water */
+                int slots[3]={-1,-1,-1}, nparts=(mode=='3')?3:1;
+                if(mode!='4'){
+                    for(int k=0;k<nparts;k++){
+                        int sl=-1;
+                        if(g_ow.nobjs<MAXWOBJ) sl=(int)g_ow.nobjs++;
+                        else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE){ sl=j; break; }
+                        slots[k]=sl; }
+                    if(slots[nparts-1]>=0){
+                        if(mode=='3'){ int bt=basetile(412);
+                            int px_[3]={wx,(wx+VDX[face])&(U6_SURFACE_TILES-1),(wx-VDX[face])&(U6_SURFACE_TILES-1)};
+                            int py_[3]={wy,(wy+VDY[face])&(U6_SURFACE_TILES-1),(wy-VDY[face])&(U6_SURFACE_TILES-1)};
+                            int fr_[3]={8,0,16};                            /* centre, front, back */
+                            for(int k=0;k<3;k++){ wobj_t*o=&g_wobj[slots[k]];
+                                o->obj_n=412; o->tile=(uint16_t)(bt+fr_[k]+face*2);
+                                o->x=(uint16_t)px_[k]; o->y=(uint16_t)py_[k]; o->qty=30; o->quality=0;
+                                o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=1; }
+                        } else { wobj_t*o=&g_wobj[slots[0]];
+                            o->obj_n=414; o->tile=(uint16_t)basetile(414);
+                            o->x=(uint16_t)wx; o->y=(uint16_t)wy; o->qty=1; o->quality=0;
+                            o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=1; }
+                        build_blocked(); } }
+                if(mode=='1'||mode=='2'){
+                    do_verb(&w,'U',wx-lx,wy-ly);                            /* board the skiff */
+                    dbg_num("VEH aboard kind=", g_veh_kind);
+                    if(mode=='1'){ int steps=0;
+                        for(int i=0;i<3;i++)                                /* sail 3 tiles, any water dir */
+                            for(int d=0;d<4;d++) if(vehicle_try_move(&w,VDX[d],VDY[d])){ steps++; break; }
+                        dbg_num("VEH sailed=", steps);
+                        dbg_num("VEH x=", w.px); dbg_num("VEH y=", w.py);
+                    } else {
+                        dbg_num("VEH onto land blocked=", !vehicle_try_move(&w,lx-(int)w.px,ly-(int)w.py));
+                        (void)vehicle_exit(&w);
+                        dbg_num("VEH exited kind=", g_veh_kind);
+                        dbg_num("VEH on land passable=", world_is_passable(&w,w.px,w.py)); }
+                } else if(mode=='3'){
+                    (void)use_boat(&w, slots[1]);                           /* board via the FRONT part (find-centre) */
+                    dbg_num("VEH aboard kind=", g_veh_kind);
+                    dbg_num("VEH centre is=", g_veh_o[0]==slots[0]);
+                    { int steps=0;
+                      for(int i=0;i<2;i++)
+                          for(int d=0;d<4;d++) if(vehicle_try_move(&w,VDX[d],VDY[d])){ steps++; break; }
+                      dbg_num("VEH sailed=", steps); }
+                    dbg_num("VEH parts colinear=",
+                        ((g_wobj[g_veh_o[1]].x+g_wobj[g_veh_o[2]].x)&(U6_SURFACE_TILES-1))==((2*g_wobj[g_veh_o[0]].x)&(U6_SURFACE_TILES-1)) &&
+                        ((g_wobj[g_veh_o[1]].y+g_wobj[g_veh_o[2]].y)&(U6_SURFACE_TILES-1))==((2*g_wobj[g_veh_o[0]].y)&(U6_SURFACE_TILES-1)));
+                } else if(mode=='4'){
+                    int hx=-1,hy=-1;                                        /* a passable neighbour for the horse */
+                    for(int d=0;d<4;d++){ int ax=(w.px+VDX[d])&(U6_SURFACE_TILES-1), ay=(w.py+VDY[d])&(U6_SURFACE_TILES-1);
+                        if(world_is_passable(&w,ax,ay)){ hx=ax; hy=ay; break; } }
+                    int ha=-1; for(int i=2;i<U6_MAX_ACTORS;i++) if(g_atile[i]==0xffff){ ha=i; break; }
+                    if(hx>=0 && ha>=0){
+                        g_atile[ha]=(uint16_t)basetile(430); g_actx[ha]=(uint16_t)hx; g_acty[ha]=(uint16_t)hy; g_actz[ha]=0;
+                        do_verb(&w,'U',hx-(int)w.px,hy-(int)w.py);          /* mount */
+                        dbg_num("VEH mounted kind=", g_veh_kind);
+                        dbg_num("VEH rider tile=", g_avatar_ovr);
+                        { int mv=world_try_move(&w,0,1); if(mv){ g_veh_face=2; g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2); }
+                          dbg_num("VEH rode=", mv); }
+                        do_verb(&w,'U',0,0);                                /* dismount (self) */
+                        dbg_num("VEH dismounted kind=", g_veh_kind);
+                        dbg_num("VEH horse back=", g_actz[ha]!=0xff); }
+                    else Cconws("VEH no horse spot\r\n"); }
+            } } }
+
+    /* "Journey Onward" resumes the last save when one exists (a chargen run starts FRESH —
+     * g_cc_done wins). Headless LOAD.REQ: save -> move away -> restore -> print the round-trip. */
+    if(g_menu_journey && !g_cc_done && plat_fsize_path("SAVED.000")>0) (void)load_game(&w);
+    {   int32_t ll=0; uint8_t*lq=(uint8_t*)plat_load_file("LOAD.REQ",1,&ll);
+        if(lq && ll>0 && (lq[0]=='2'||lq[0]=='3')){
+            /* PERSISTENCE round-trip (save_load.md §5): a ready change, a dropped item and a sailed
+             * boat must survive save -> load, and a SECOND save+load from the loaded state must not
+             * revert anything (the loaded file has become the template). '3' = no boat, so the party
+             * stays put and the written SAVED.000 shows the drop when loaded in ScummVM. */
+            int do_boat=(lq[0]=='2');
+            int a2=(g_nparty>1)?g_party[1].actor:-1, helm=0, body=0;
+            if(a2>0){ helm=g_aready[a2][EQ_HEAD]; body=g_aready[a2][EQ_BODY];
+                if(helm) (void)equip_take_off(a2,EQ_HEAD);                 /* -> the pool */
+                if(body) (void)equip_take_off(a2,EQ_BODY); }
+            if(helm){ (void)equip_ready(g_aready[1],helm); objworld_consume(&g_ow,(uint16_t)helm,1); equip_refold(1); }
+            int dx_=-1, dy_=-1;                                               /* drop the body armour beside us */
+            if(body) for(int d=0;d<4 && dx_<0;d++){
+                int tx=(w.px+VDX[d])&(U6_SURFACE_TILES-1), ty=(w.py+VDY[d])&(U6_SURFACE_TILES-1);
+                if(!world_is_passable(&w,tx,ty)) continue;
+                for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==(uint16_t)body){ g_inv_sel=k; break; }
+                (void)do_verb(&w,'D',VDX[d],VDY[d]); dx_=tx; dy_=ty; }
+            int si=-1, bx0=0, by0=0, sailed=0;                                /* a REAL skiff of the save (owned, afloat) */
+            if(do_boat) for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
+                if(o->alive && o->obj_n==414 && o->quality==0 && tile_is_water(&w,o->x,o->y)){ si=i; break; } }
+            if(si>=0){ bx0=g_wobj[si].x; by0=g_wobj[si].y;
+                w.px=g_wobj[si].x; w.py=(uint16_t)((g_wobj[si].y+1)&(U6_SURFACE_TILES-1)); (void)g_tmpdm_invalidate();
+                (void)use_boat(&w,si);
+                for(int t=0;t<3;t++) for(int d=0;d<4;d++) if(vehicle_try_move(&w,VDX[d],VDY[d])){ sailed++; break; } }
+            int bx=(si>=0)?g_wobj[si].x:-1, by=(si>=0)?g_wobj[si].y:-1, px=w.px, py=w.py;
+            dbg_num("PERSIST helm=", helm); dbg_num("PERSIST body=", body); dbg_num("PERSIST skiff=", si>=0); dbg_num("PERSIST sailed=", sailed);
+            for(int cyc=1;cyc<=2;cyc++){
+                do_save(&w);
+                dbg_num("PERSIST cycle=", cyc);
+                dbg_num("PERSIST load ok=", load_game(&w));
+                dbg_num("PERSIST aboard=", g_veh_kind==414);
+                dbg_num("PERSIST avatar on boat=", w.px==px && w.py==py);
+                dbg_num("PERSIST boat at new pos=", si>=0 && wobj_boat_at(414,bx,by)>=0);
+                dbg_num("PERSIST boat gone from old=", si>=0 && (sailed==0 || wobj_boat_at(414,bx0,by0)<0));
+                dbg_num("PERSIST a1 head=", g_aready[1][EQ_HEAD]);
+                dbg_num("PERSIST a2 head=", a2>0?g_aready[a2][EQ_HEAD]:-1);
+                dbg_num("PERSIST a2 body=", a2>0?g_aready[a2][EQ_BODY]:-1);
+                { int gi=(dx_>=0)?objworld_at(&g_ow,dx_,dy_):-1;
+                  dbg_num("PERSIST body on ground=", gi>=0 && g_wobj[gi].obj_n==(uint16_t)body); }
+                dbg_num("PERSIST body in pack=", body?objworld_count(&g_ow,(uint16_t)body):-1); } }
+        else if(lq){
+            int sx, sy; uint32_t sclk;
+            for(int i=0;i<3;i++){ world_try_move(&w,0,1); step_npcs(&w); }   /* walk 3 south */
+            sx=w.px; sy=w.py; sclk=(uint32_t)clock_minutes(&w);
+            do_save(&w);
+            for(int i=0;i<4;i++){ world_try_move(&w,1,0); world_try_move(&w,0,-1); }  /* wander off */
+            dbg_num("LOAD moved-away x=", w.px); dbg_num("LOAD moved-away y=", w.py);
+            dbg_num("LOAD restore ok=", load_game(&w));
+            dbg_num("LOAD x match=", w.px==sx); dbg_num("LOAD y match=", w.py==sy);
+            dbg_num("LOAD clock match=", (uint32_t)clock_minutes(&w)==sclk);
+            dbg_num("LOAD party=", g_nparty);
+            dbg_num("LOAD nobjs=", (int)g_ow.nobjs);
+            dbg_num("LOAD gold=", g_cg.gold);
+            dbg_num("LOAD ninv=", g_ow.ninv);
+            dbg_num("LOAD a1 weapon=", g_aweapon[1]); dbg_num("LOAD a1 ac=", g_aac[1]);
+            dbg_num("LOAD a2 weapon=", g_aweapon[2]); dbg_num("LOAD a2 ac=", g_aac[2]); } }
+
+    if(g_savestate && plat_fsize_path("SAVEDEMO.REQ")>0){
+        /* Headless SAVE-WRITER demo (SAVEDEMO.REQ sentinel; `make save-engine`): walk a few
+         * tiles, toggle a door, take an item + a spilled child, then write SAVED.000. Every
+         * shipped pack is built from a save state now, so this is hook-gated, never automatic. */
         if(g_savetmpl && g_objlist_off>=0){
             for(int s=0;s<5;s++){ world_try_move(&w,0,1); step_npcs(&w); }  /* walk; party follows */
             for(int i=0;i<g_ow.nobjs;i++){                                   /* open a CLOSED door to exercise the object-world save */
@@ -8808,11 +9429,20 @@ int main(int argc, char **argv)
                 case IN_LEFT: dx=-1; break; case IN_RIGHT: dx=1; break;
                 default: break;
                 }
-                if (g_show_status) { g_show_status=0; redraw=1; }  /* any key returns from the status view (then still acts) */
+                if (g_show_status && a>='1' && a<='8' && status_unready_digit(a-'0')) {
+                    redraw=1; a=0; in=IN_NONE; dx=dy=0;            /* digit unreadied an item: stay in the view */
+                } else if (g_show_status) { g_show_status=0; redraw=1; }  /* any other key returns (then still acts) */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
                     if (g_pending_verb=='D' && (a=='d'||a=='D') && !(dx||dy) && g_ow.ninv>0){
                         g_inv_sel=(g_inv_sel+1)%g_ow.ninv; drop_prompt(); redraw=1;   /* D again -> next item */
                     }
+                    else if (g_pending_verb=='E' && (a=='e'||a=='E') && !(dx||dy) && g_ow.ninv>0){
+                        g_inv_sel=(g_inv_sel+1)%g_ow.ninv; equip_prompt(); redraw=1;  /* E again -> next item */
+                    }
+                    else if (g_pending_verb=='E' && a>='1' && a<='5' && !(dx||dy)){
+                        equip_to_member(a-'1'); redraw=1;                             /* 1..5 -> that member */
+                    }
+                    else if (g_pending_verb=='E' && (dx||dy)) { }                     /* E ignores directions */
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=0; g_show_inv=0; redraw=1; }
                     else if (a==0x1b) { g_pending_verb=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
@@ -8825,9 +9455,12 @@ int main(int argc, char **argv)
                 else if (a=='l'||a=='L') { g_pending_verb='L'; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); redraw=1; }                         /* D)rop */
+                else if (a=='e'||a=='E') { g_msg[0]=0; arm_equip(); redraw=1; }                        /* E)quip (equipment.md §5) */
                 else if (a=='u'||a=='U') { g_pending_verb='U'; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a=='i'||a=='I') { g_show_inv=!g_show_inv; g_msg[0]=0; redraw=1; }
                 else if (a=='s'||a=='S') { g_show_inv=0; do_save(&w); redraw=1; }  /* write SAVED.000 */
+                else if (a==0x12) { if(load_game(&w)){                              /* Ctrl-R: restore SAVED.000 */
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
                 else if (a=='r'||a=='R') { g_show_inv=0; do_rest(&w);                /* R)est: restore HP+mana */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='>' || a=='<') {          /* descend/ascend a map level (map_levels.md). '>' also
@@ -8847,10 +9480,17 @@ int main(int argc, char **argv)
                             else talk(id);
                             redraw=1; } }
                 }
-                else if (dx||dy) {                   /* walk */
+                else if (dx||dy) {                   /* walk (or steer the vehicle) */
                     if (g_talking||g_show_inv||g_msg[0]) {   /* closing a panel needs a full present */
                         end_talk(); g_show_inv=0; g_msg[0]=0; redraw=1; }
-                    if (world_try_move(&w,dx,dy)){ g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+                    int stepped;
+                    if (g_veh_kind==412||g_veh_kind==414) stepped=vehicle_try_move(&w,dx,dy);
+                    else {
+                        stepped=world_try_move(&w,dx,dy);
+                        if (stepped && g_veh_kind==431){      /* mounted: re-face the horse sprite */
+                            g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;
+                            g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase); } }
+                    if (stepped){ g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
                         step_npcs(&w);                   /* NPCs walk their schedules one step */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1; }  /* map-only */
                 }

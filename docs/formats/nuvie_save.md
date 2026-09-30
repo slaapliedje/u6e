@@ -121,8 +121,36 @@ written save** (with our fully-reconstructed surface chunks) and renders the wor
   objlist from a ScummVM save; mkworld builds the world pack from THAT state
   (objects + actors consistent, matching ScummVM) instead of DOS LZOBJBLK + ST save.
 - /tools (nuviewrite) writes a ScummVM-loadable save back out (host round-trip).
-- **On-target writer** (engine/save.c): the engine loads the user's `.000` as a
-  TEMPLATE at runtime (we ship none), patches the regions it models with **byte-wise
+- **Pristine template** (tools/mksave, `make save-template`, run by `make world`): the
+  shipped `SAVE.000` is SYNTHESIZED on the host from the player's own LZOBJBLK (64 surface
+  blocks) + LZDNGBLK (5 dungeon blocks + the pristine OBJLIST) — the inputs Nuvie's own
+  new-game path (`SaveGame::load_new`) reads — re-bucketed the way a save from a freshly
+  started game is: carried/readied records → the inventory chunk, eggs (obj 335) → the
+  eggs chunk, on-map records by `(y>>7)*8+(x>>7)` for z==0 or dungeon chunk z-1, each
+  container's contents following it with chunk-local parent links re-indexed; objlist =
+  the pristine one with Nuvie's new-game defaults (name @0xf00, str/dex/int 15, exp 0x172,
+  level 3 @0xff2, magic 30 @0x13f2). PARITY CHECK: against the user's ScummVM save (itself
+  a pristine start plus a little play) the synthesized file matches chunk-for-chunk —
+  inventory 142, eggs 1978, all five dungeon chunks, 63 of 64 surface chunks (the throne
+  room chunk differs by the 11 objects their game added), objlist 7283. The pack is then
+  built from this file (`nuviesave` → mkworld save mode), so the world, the party's
+  starting gear/gold/reagents and the save template are ONE state.
+- **ScummVM extended-save trailer** (engines/metaengine.cpp v4): `"SVMCR\0"`, u8 version 4,
+  u32 LE date `(day<<24)|(month<<16)|year`, u16 LE time `(hour<<8)|minute`, u32 LE playtime,
+  pascal description, u8 isAutosave, a THMB block (`"THMB"`, u32 BE size, u8 version 2,
+  u16 BE w,h, 9 PixelFormat bytes = bpp 2 + RGB565 losses/shifts, w*h u16 BE pixels), then
+  u32 LE = the header's file offset as the LAST four bytes. ScummVM's save list reads it
+  from the end; a file without it is not listed. mksave writes one with a 16x10 black
+  thumbnail (~400 bytes; ScummVM's own 160x100 costs 32 KB of target RAM per template);
+  the on-target writer date-stamps it via GEMDOS Tgetdate/Tgettime (`sav_set_trailer_date`).
+- **Proving ScummVM loads a file** (tools/savecheck.sh): swap it into slot 0 and run
+  `scummvm --save-slot=0` — Nuvie's "Journey Onward" otherwise loads the config's
+  `latest_save` slot (3 on this machine), which silently voided the check for months.
+  Verified 2026-09-29 with the slot pinned: the synthesized pristine save (name + moved
+  avatar visible) AND a target-written save (dropped plate mail on the throne-room carpet).
+- **On-target writer** (engine/save.c): the engine loads `SAVE.000` as a TEMPLATE at
+  runtime (the synthesized pristine save above, or after an in-game load the loaded file),
+  patches the regions it models with **byte-wise
   little-endian** encoding (correct on the big-endian 68000 with no swapping), and
   writes the save via the platform file layer. `sav_objlist_off()` walks the chunk
   list to find the objlist; `sav_set_actor_pos()` encodes a packed position.
@@ -135,6 +163,13 @@ written save** (with our fully-reconstructed surface chunks) and renders the wor
   locate the container's on-map record for its index P, then flip the in-container child
   with parent-link==P and matching obj_n from 0x08→0x10). Validated: door + on-map take
   + crate/child take = 12-byte localized diff, ScummVM loads it (`make save-engine`).
+  `sav_patch_obj_frame` grew into `sav_patch_obj_state` (position + frame + optional quality,
+  located by the record's ORIGINAL position — sailed boats); `sav_unready_party` /
+  `sav_ready_item` / `sav_drop_item` reconcile carried records across the inventory + eggs +
+  surface chunks (docs/rules/save_load.md §5). A dropped item's record is relocated on-map
+  INSIDE the inventory chunk: Nuvie's `load_super_chunk` places every record by its own
+  status + x/y whatever chunk it came from, and our loader now decodes that chunk's on-map
+  records too. Verified by loading such a file in ScummVM (tools/savecheck.sh).
 
 ## Status: VERIFIED. Read: objects + actor table (position/appearance/HP/str/dex/
 ## int/party) → world pack → engine render; map & roster match ScummVM. Write:

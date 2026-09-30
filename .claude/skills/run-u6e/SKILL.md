@@ -74,7 +74,7 @@ box on the right, the clock, and the command bar.
 | `scene … --combat 1\|2` | stage `COMBAT.BIN`: 1 = avatar kills an adjacent acid slug; 2 = a hostile slug assaults the party |
 | `scene … --vbls N` | emulator run length (default 5000); raise if the frame looks unfinished |
 | `scene … -o FILE` | output PNG path (default `build/scene.png`) |
-| `logic` | host-side `make enginetest convtest cvmtest combattest` — instant, no emulator |
+| `logic` | host-side `make enginetest convtest cvmtest combattest equiptest` — instant, no emulator |
 | `check` | `make check` — boots `selftest.prg` on ST + TT, mirrors the VT-52 console; ends `RESULT: ALL PASS` |
 
 A `scene` capture takes **~2–3 minutes** (the world rebuild decodes the whole U6
@@ -99,15 +99,22 @@ developer at a desk. Use `drive.sh scene` instead.
   are driven by *where you start* (`X Y`) and *1-byte sentinel files* the engine
   reads at boot (`NPCWALK.BIN`, `COMBAT.BIN`) — that's what `--walk`/`--combat`
   stage. `drive.sh` clears stale sentinels each run.
-- **Every headless scene shows "Jaana joins thy party!"** This is intentional:
-  `gamedemo.c`'s headless path scripts a `talk(62)` → "join" → close-panel demo
-  to exercise the conversation-VM↔engine wiring, so Jaana is always in the
-  roster and that message is always in the box. It is **not** your change
-  leaking — ignore it and read the map window + clock + stats.
-- **`SAVE.000` hijacks the camera.** If a ScummVM-format `build/SAVE.000` is
-  present, the engine auto-walks 5 tiles south and re-saves, moving the view off
-  your `(X,Y)`. `drive.sh` deletes it before each `scene` so captures stay put.
-  (The `make save-engine` target uses this on purpose.)
+- **The roster is the real saved party (Avatar/Dupre/Shamino/Iolo), message box
+  empty.** (The old "Jaana joins thy party!" boot demo is gone — the party now
+  comes from the pack's saved-party list. `TALKTEST.REQ` is the hook if a capture
+  needs a scripted conversation.)
+- **The captured frame can be MID-REDRAW.** Hatari is hard-killed and the last
+  decoded AVI frame kept, so occasionally the map has un-composed black regions
+  or the clock/MP line shows two overprinted values. That is the harness, not
+  your change — re-run the capture (or use a `SHOT.REQ` pixel dump) before
+  chasing a "corruption" bug.
+- **`build/SAVE.000` is a build artifact, not a stray file.** `make world`
+  synthesizes it (tools/mksave: the pristine new-game save in ScummVM layout)
+  and builds the pack FROM it; it is the template S)ave patches, and it ships.
+  Don't delete it. The old auto-walk-and-save demo only runs behind a
+  `SAVEDEMO.REQ` sentinel (`make save-engine`), so captures stay at `(X,Y)`.
+  `SAVED.000` (a written save) makes "Journey Onward" resume it — `drive.sh`
+  clears it before each `scene`.
 - **The screen is a 320×200 UI letterboxed into TT-low 320×480**, 2×
   vertically-doubled — that's why the captured PNG is 640×480-ish with the game
   centered. Expected, not a stretch bug.

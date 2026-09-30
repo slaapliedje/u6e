@@ -34,6 +34,13 @@ Per target, the installed folder ends up with:
   which the engine loads as **separate files** (see `gamedemo.c`; resident when
   RAM allows, otherwise read entry-by-entry on demand); copied verbatim from
   your `refdata`.
+- `SAVE.000` (~142 KB) — the **pristine new-game save** in ScummVM/Nuvie layout,
+  synthesized at build time from your `LZOBJBLK` + `LZDNGBLK` (`tools/mksave`,
+  docs/formats/nuvie_save.md). It is the template the engine patches when you
+  S)ave (→ `SAVED.000`, which "Journey Onward" resumes) — without it there is no
+  saving. The pack is built from the same file, so world + party gear + template
+  are one consistent state. Derived from your data like the packs; nothing of
+  ours in it.
 - `MENU.REQ` (1 byte) — presence tells the engine to boot to the U6 **title /
   main menu** (Introduction / Create a Character / Journey Onward) instead of
   dropping straight into gameplay. This is the authentic interactive boot.

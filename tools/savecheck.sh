@@ -25,10 +25,13 @@ cp -f "$WRITTEN" "$SLOT"       # swap in the save we wrote
 echo "swapped our written save into slot 0"
 
 pkill -f "Xvfb $DISP" 2>/dev/null || true; sleep 1
+export SDL_VIDEODRIVER=x11; unset WAYLAND_DISPLAY       # render on the Xvfb, not a Wayland session
 Xvfb $DISP -screen 0 1280x960x24 >/tmp/u6_xvfb.log 2>&1 &
 sleep 2
 export DISPLAY=$DISP
-scummvm -p "$DATA" --no-fullscreen --no-aspect-ratio ultima6 >/tmp/u6_svm.log 2>&1 &
+# --save-slot=0 pins Nuvie's "Journey Onward" to slot 0 (it otherwise loads the config's
+# latest_save slot, which need not be 0 — that silently voided this check for a while).
+scummvm -p "$DATA" --no-fullscreen --no-aspect-ratio --save-slot=0 ultima6 >/tmp/u6_svm.log 2>&1 &
 SVM=$!
 sleep 9
 i=0; while [ $i -lt 6 ]; do xdotool key --clearmodifiers Escape; sleep 1.2; i=$((i+1)); done

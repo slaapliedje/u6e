@@ -122,6 +122,7 @@ fi
 # verify everything we need exists now
 miss=0
 [ -f "$PRG_SRC" ] || { echo "!! missing engine binary: $PRG_SRC" >&2; miss=1; }
+[ -f "$BUILD/SAVE.000" ] || { echo "!! missing save template: $BUILD/SAVE.000 (make save-template)" >&2; miss=1; }
 for p in "${PACKS[@]}"; do [ -f "$BUILD/$p" ] || { echo "!! missing pack: $BUILD/$p" >&2; miss=1; }; done
 for a in "${AUX[@]}"; do [ -f "$REFDATA/$a" ] || { echo "!! missing data file: $REFDATA/$a (set --refdata)" >&2; miss=1; }; done
 [ "$miss" = 0 ] || { echo "   (run without --no-build, or build the make targets first)" >&2; exit 4; }
@@ -247,6 +248,13 @@ for a in "${AUX[@]}"; do
   place_whole "$STAGE/$a" "$a"
   printf 'OUT %s\nSRC %d %s\n' "$a" "$CUR" "$a" >> "$MAN"
 done
+
+# SAVE.000: the PRISTINE new-game save (ScummVM layout, synthesized by tools/mksave from the
+# player's own LZOBJBLK + LZDNGBLK). The engine patches it in place when the player S)aves
+# (-> SAVED.000, which Journey Onward resumes); without it there is no saving at all.
+cp "$BUILD/SAVE.000" "$STAGE/SAVE.000"
+place_whole "$STAGE/SAVE.000" SAVE.000
+printf 'OUT SAVE.000\nSRC %d SAVE.000\n' "$CUR" >> "$MAN"
 
 # MIDITEST.PRG (platform/miditest.c, `make miditest`): stand-alone MIDI port/cable check —
 # tiny, ships whole when built, installed next to the game.
