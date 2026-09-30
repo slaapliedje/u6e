@@ -1606,6 +1606,17 @@ becomes the template. Verified by LOAD.REQ modes 2/3 (two save→load cycles) on
 Still open on the writer: stack consumption / gold spent / items received in conversation (need a
 real inventory-chunk rebuild).
 
+### Dungeon depth closed (2026-09-30)
+Per-level objects, live transition triggers and level persistence (docs/rules/map_levels.md §4b):
+the save template (every save carries all 5 dungeon chunks) is the object store for every level;
+the engine's working set holds one level, reconciled back into the template before each switch
+(`objects_reconcile` = the S)ave steps, now addressed by level) and decoded from it after
+(`level_decode`, ~240 KB transient on the chip region — fits the 4 MB tier). U)se of a
+ladder/hole and stepping onto a cave mouth/hole fire the §4 transforms; actor visibility/AI/
+blocking compare against the current level. `DUNGEON.REQ "9"` proves take → save → load →
+climb out → re-enter on TT + stock 4 MB Falcon; ScummVM loads a save made underground.
+Remaining: eggs (spawning), dungeon usecode.
+
 ### Save template closed (2026-09-29)
 The bigger finding of the day — the SHIPPED disks carried no SAVE.000 (a dev file copied from the
 user's ScummVM save), so S)ave/Load were dev-only, and the pristine `world` pack had an unarmed,

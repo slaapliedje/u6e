@@ -21,9 +21,10 @@ compiled for target), /render gamedemo.c `load_game()`.
 `load_game()` re-reads `SAVED.000` (the engine's own written save — ScummVM format,
 nuvie_save.md) and rebuilds the LIVE state:
 
-- **World objects**: the 64 surface super-chunks are decoded as one concatenated OBJBLK
-  stream (`u6obj_decode_world`), then converted with the SAME keep/parent rule mkworld uses
-  when it bakes the pack (top-level z==0 kept; contained objects kept when their container
+- **World objects** of the Avatar's LEVEL (`level_decode`, map_levels.md §4b): the 64 surface
+  super-chunks (or dungeon chunk z-1) are decoded as one concatenated OBJBLK stream
+  (`u6obj_decode_world`), then converted with the SAME keep/parent rule mkworld uses when it
+  bakes the pack (top-level records of that z kept; contained objects kept when their container
   is, with x/y zeroed, alive=0, parent re-indexed). The whole `g_wobj` array is replaced.
 - **Actors** (objlist, little-endian): position (0x100+i*3), appearance → tile
   (0x400+i*2, basetile+frame), str/dex/int (0x900/0xa00/0xb00), exp (0xc00, u16),
@@ -69,9 +70,9 @@ back on load; the trailer is date-stamped for ScummVM's load menu.
 
 ## 3. Known limits (v1, symmetric with do_save)
 
-- Surface-focused: the 5 dungeon super-chunks are not reloaded (do_save also only patches
-  the surface region). Dungeon-level object persistence lands with the per-level-objects
-  dungeon follow-up.
+- Every level persists (2026-09-30, map_levels.md §4b): the writer addresses records by level
+  and load decodes the Avatar's level; changes on other levels were reconciled into the
+  template when the party left them. Eggs are still opaque (carried byte-wise).
 - Pack stack CONSUMPTION (torches burnt, food eaten, reagents cast) and gold SPENT are not
   written back: the save's carried records keep their counts. Bought/received items from
   conversations likewise (no record exists to patch). These need record insertion/removal,
@@ -134,6 +135,9 @@ in this order (each later step looks for what an earlier one produced):
 
 Region walked by steps 3-4: the actor-inventory chunk, the eggs chunk and the 64 surface
 chunks (`[4, surface_end)`), ~10 k records; container links are chunk-local record indices.
+Steps 1, 2 and 4 address a record by LEVEL (surface super-chunk by x/y, or dungeon chunk z-1;
+a drop is relocated with the level's z). The same reconcile (`objects_reconcile`) runs before
+every level switch, so the template always holds every level's current state.
 
 ## Status
 VERIFIED (v1 scope above; §5 write-back added 2026-09-29).

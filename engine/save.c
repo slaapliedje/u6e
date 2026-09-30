@@ -50,6 +50,27 @@ int32_t sav_surface_end(const uint8_t *d, int32_t n)
     return pos;
 }
 
+int sav_level_span(const uint8_t *d, int32_t n, int level, int32_t *off, int32_t *end)
+{
+    if (level == 0){ *off = sav_surface_off(d, n); *end = sav_surface_end(d, n); return *off >= 0 && *end > *off; }
+    if (level < 1 || level > 5) return 0;
+    int32_t pos = sav_surface_end(d, n); if (pos < 0) return 0;
+    for (int i = 1; i < level; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return 0; }
+    *off = pos; *end = skip_chunk(d, n, pos);
+    return *end > 0;
+}
+
+/* start (count word) of the chunk holding an on-map record of `level` at (x,y): a surface
+ * record's row-major super-chunk, or dungeon chunk level-1; -1 if the layout doesn't parse */
+static int32_t chunk_of(const uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y)
+{
+    int32_t pos = surf_off;
+    int skip = (level == 0) ? (((y >> 7) & 7) * 8 + ((x >> 7) & 7)) : (64 + level - 1);
+    if (level < 0 || level > 5) return -1;
+    for (int i = 0; i < skip; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return -1; }
+    return pos;
+}
+
 /* Patch the STATE of the on-map object whose record sits at its ORIGINAL position (ox,oy) with
  * the given obj_n, in that position's row-major super-chunk. The object database is a flat fixed
  * record set — a door toggle, a sailed boat or a bought boat changes only the record's frame /
@@ -57,13 +78,11 @@ int32_t sav_surface_end(const uint8_t *d, int32_t n)
  * (nuvie_save.md). Loaders place a record by its own x/y, not by the chunk it sits in, so a boat
  * that sailed into another super-chunk is still found by everyone. The frame is the top 6 bits of
  * byte 5; z (byte 3 high nibble) is kept. Returns 1 if a matching record was found + patched. */
-int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int ox, int oy, int obj_n,
+int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int ox, int oy, int obj_n,
                         int x, int y, int frame, int quality)
 {
-    int chunk = ((oy >> 7) & 7) * 8 + ((ox >> 7) & 7);
-    int32_t pos = surf_off;
-    for (int i = 0; i < chunk; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return 0; }
-    if (pos + 2 > n) return 0;
+    int32_t pos = chunk_of(d, n, surf_off, level, ox, oy);
+    if (pos < 0 || pos + 2 > n) return 0;
     int cnt = le16(d + pos); pos += 2;
     for (int k = 0; k < cnt; k++){
         if (pos + 8 > n) return 0;
@@ -166,7 +185,7 @@ int sav_ready_item(uint8_t *d, int32_t n, int actor, int obj_n, const uint8_t *i
     return 1;
 }
 
-int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int frame,
+int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int z, int frame,
                   const uint8_t *in_party, int nact)
 {
     rec_it it; uint8_t *r; int moved = 0;
@@ -179,7 +198,7 @@ int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, i
         r[0] = (uint8_t)(r[0] & ~0x18);                /* location -> on the map */
         r[1] = (uint8_t)(x & 0xff);
         r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
-        r[3] = (uint8_t)((y >> 6) & 0x0f);             /* z = 0: surface */
+        r[3] = (uint8_t)(((y >> 6) & 0x0f) | ((z & 0x0f) << 4));
         r[5] = (uint8_t)(((obj_n >> 8) & 3) | ((frame & 0x3f) << 2));
         moved++;
     }
@@ -191,12 +210,10 @@ int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, i
  * physical chunk (nuvie_save.md), so an in-inventory record left in its surface super-chunk still
  * loads into the owner's inventory — no cross-chunk move / rebuild. Only matches ON-MAP records,
  * so it safely no-ops for contained/spilled items (their record isn't on-map). Returns 1 if patched. */
-int sav_patch_obj_taken(uint8_t *d, int32_t n, int32_t surf_off, int x, int y, int obj_n, int owner)
+int sav_patch_obj_taken(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int owner)
 {
-    int chunk = ((y >> 7) & 7) * 8 + ((x >> 7) & 7);
-    int32_t pos = surf_off;
-    for (int i = 0; i < chunk; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return 0; }
-    if (pos + 2 > n) return 0;
+    int32_t pos = chunk_of(d, n, surf_off, level, x, y);
+    if (pos < 0 || pos + 2 > n) return 0;
     int cnt = le16(d + pos); pos += 2;
     for (int k = 0; k < cnt; k++){
         if (pos + 8 > n) return 0;
@@ -225,13 +242,11 @@ int sav_patch_obj_taken(uint8_t *d, int32_t n, int32_t surf_off, int x, int y, i
  * record stays put and no rebuild is needed. (Limitation: if a container holds two children with
  * the same obj_n AND quality, both taken, only the first record is flipped — a rare case; the
  * second reverts to the container on reload, the pre-fix "acceptable" behaviour.) Returns 1 if patched. */
-int sav_patch_contained_taken(uint8_t *d, int32_t n, int32_t surf_off,
+int sav_patch_contained_taken(uint8_t *d, int32_t n, int32_t surf_off, int level,
         int cont_x, int cont_y, int cont_obj_n, int item_obj_n, int item_quality, int owner)
 {
-    int chunk = ((cont_y >> 7) & 7) * 8 + ((cont_x >> 7) & 7);
-    int32_t pos = surf_off;
-    for (int i = 0; i < chunk; i++){ pos = skip_chunk(d, n, pos); if (pos < 0) return 0; }
-    if (pos + 2 > n) return 0;
+    int32_t pos = chunk_of(d, n, surf_off, level, cont_x, cont_y);
+    if (pos < 0 || pos + 2 > n) return 0;
     int cnt = le16(d + pos); int32_t base = pos + 2;
     if (base + (int32_t)cnt * 8 > n) return 0;
     /* pass 1: the container's record index P (the on-map record at cont_x,cont_y with its obj_n) */

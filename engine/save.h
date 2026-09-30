@@ -30,11 +30,17 @@ int32_t sav_surface_off(const uint8_t *d, int32_t n);
 int32_t sav_inv_off(const uint8_t *d, int32_t n);
 int32_t sav_inv_end(const uint8_t *d, int32_t n);      /* end of the inventory chunk (= the eggs chunk) */
 int32_t sav_surface_end(const uint8_t *d, int32_t n);
+/* The object region of one map LEVEL: 0 = the 64 surface chunks, 1..5 = that dungeon chunk.
+ * Returns 1 and fills [*off, *end), or 0 if the layout doesn't parse. */
+int sav_level_span(const uint8_t *d, int32_t n, int level, int32_t *off, int32_t *end);
+
+/* Every on-map patcher below addresses a record by its LEVEL: a surface record (level 0) lives in
+ * super-chunk (y>>7)*8+(x>>7), a dungeon record (level 1..5) in dungeon chunk level-1. */
 
 /* Patch the on-map object whose record sits at its ORIGINAL position (ox,oy) with `obj_n`
  * (in-place; nuvie_save.md): new position x,y (a sailed boat), frame (doors, boat facing) and
  * quality (a bought boat's cleared price tag; <0 keeps the record's). Returns 1 if patched. */
-int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int ox, int oy, int obj_n,
+int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int ox, int oy, int obj_n,
                         int x, int y, int frame, int quality);
 
 /* ---- carried-record RECONCILIATION (docs/rules/save_load.md §5) ----------------------------
@@ -54,19 +60,19 @@ int sav_unready_party(uint8_t *d, int32_t n, const uint8_t *in_party, int nact);
 int sav_ready_item(uint8_t *d, int32_t n, int actor, int obj_n, const uint8_t *in_party, int nact);
 
 /* D)rop persistence: relocate EVERY party-carried record of (obj_n, quality) onto the map at
- * (x,y, z=0) with `frame`. Each record keeps its own stack count — the pooled stack the player
+ * (x,y,z) with `frame`. Each record keeps its own stack count — the pooled stack the player
  * dropped IS their union. Returns the number relocated. */
-int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int frame,
+int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int z, int frame,
                   const uint8_t *in_party, int nact);
 
 /* Persist a TAKEN item: flip the on-map record at (x,y,obj_n) to in-inventory, owner `owner`.
  * Returns 1 if patched (no-ops for non-on-map records). */
-int sav_patch_obj_taken(uint8_t *d, int32_t n, int32_t surf_off, int x, int y, int obj_n, int owner);
+int sav_patch_obj_taken(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int owner);
 
 /* Persist a TAKEN CONTAINED item: locate the container's record (cont_x,cont_y,cont_obj_n) to get
  * its index in the super-chunk, then flip the in-container child (parent link -> that index) with
  * obj_n=item_obj_n (and quality, if >=0) to in-inventory owned by `owner`. Returns 1 if patched. */
-int sav_patch_contained_taken(uint8_t *d, int32_t n, int32_t surf_off,
+int sav_patch_contained_taken(uint8_t *d, int32_t n, int32_t surf_off, int level,
         int cont_x, int cont_y, int cont_obj_n, int item_obj_n, int item_quality, int owner);
 
 /* Patch actor `actor`'s stats (HP@0xe00, str@0x900, dex@0xa00, int@0xb00). */

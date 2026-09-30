@@ -88,6 +88,7 @@ static uint16_t       g_atile[U6_MAX_ACTORS]; /* per-actor appearance tile (0xff
 static u6actor_t      g_actors[U6_MAX_ACTORS];/* schedules (positions by game time)      */
 static uint16_t       g_actx[U6_MAX_ACTORS], g_acty[U6_MAX_ACTORS]; /* MUTABLE actor positions */
 static uint8_t        g_actz[U6_MAX_ACTORS];  /* live level (0xff = none/off-surface)      */
+static int            g_cur_level;              /* the map level the working set holds (= w.level; map_levels.md §4b) */
 /* NPC schedule-walking (Stage 1): actors step one tile/turn toward their scheduled spot,
  * facing the move. Frame layout = base + dir*tpd (+walk); dir N=0 E=1 S=2 W=3. */
 static uint16_t       g_abase[U6_MAX_ACTORS]; /* appearance basetile (dir 0, frame 0)      */
@@ -2836,7 +2837,7 @@ static int wt_activity(int wt)
 static int npc_occupied(int self,int x,int y)
 {
     for(int j=0;j<U6_MAX_ACTORS;j++){
-        if(j==self||g_atile[j]==0xffff||g_actz[j]!=0) continue;
+        if(j==self||g_atile[j]==0xffff||(int)g_actz[j]!=g_cur_level) continue;
         if(g_actx[j]==x && g_acty[j]==y) return 1;
     }
     return 0;
@@ -2923,7 +2924,7 @@ static void step_npcs(const world_t*w)
       if((rc%24)==0) sync_party_hp(); }
     int avx=(int)w->px, avy=(int)w->py;
     for(int i=2;i<U6_MAX_ACTORS;i++){                  /* 0/1 = Avatar */
-        if(g_atile[i]==0xffff||g_actz[i]!=0){ g_amoved[i]=0;
+        if(g_atile[i]==0xffff||(int)g_actz[i]!=g_cur_level){ g_amoved[i]=0;
             if(g_summon[i]){ g_summon[i]=0; g_summon_life[i]=0; }   /* a slain/gone summon frees its slot (§5c) */
             continue; }
         if(g_asleep[i]){ g_asleep[i]--; g_amoved[i]=0; continue; }  /* sleep: skip the turn (§5a/§5b) */
@@ -3003,7 +3004,7 @@ static int obj_basetile(int on){
  *    (chair tile - base(252), 0..3). */
 static int npc_sit_tile(int i)
 {
-    if(g_atile[i]==0xffff || g_actz[i]!=0) return -1;
+    if(g_atile[i]==0xffff || (int)g_actz[i]!=g_cur_level) return -1;
     int tpd=g_atpd[i]; if(tpd<4) return -1;                 /* only 16-frame humanoids have a sit frame */
     int ax=g_actx[i], ay=g_acty[i];
     if(obj_idx_at((ax+1)&(U6_SURFACE_TILES-1),ay,327)>=0)   /* throne: faces south */
@@ -3049,7 +3050,7 @@ static int npc_tile(int i)
  * seeded, then walked by step_npcs). Returns 1 (+fills *ax,*ay) if on surface. */
 static int actor_pos(int i,int*ax,int*ay)
 {
-    if(g_atile[i]==0xffff||g_actz[i]!=0) return 0;   /* none / off-surface */
+    if(g_atile[i]==0xffff||(int)g_actz[i]!=g_cur_level) return 0;   /* none / not on this level */
     *ax=g_actx[i]; *ay=g_acty[i]; return 1;
 }
 
@@ -5074,6 +5075,8 @@ static int      g_veh_horse=-1;      /* the absorbed horse's actor id while moun
 static uint8_t  g_veh_hz;            /* its saved z                                          */
 static int      g_horse_moved=-1;    /* last horse actor left somewhere new (dismount) -> its position is saved */
 static int g_tmpdm_invalidate(void){ g_tmp_valid=0; g_dm_valid=0; return 0; }   /* teleport: full view rebuild */
+static int use_transition_object(world_t *w, int idx);   /* ladders/holes (defined with the level code below) */
+static int step_triggers(world_t *w);
 
 /* Boats are the only map objects that MOVE. Their save records are located by position
  * (save_load.md §5), so each boarded part remembers where its record still says it is; do_save
@@ -5288,6 +5291,8 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         if(g_veh_kind==412||g_veh_kind==414) return vehicle_exit(w);       /* aboard: U = disembark (vehicles.md §3.1) */
         if(g_veh_kind==431) return horse_dismount(w);                      /* mounted: U = dismount (§4) */
         if(idx>=0 && (g_wobj[idx].obj_n==412||g_wobj[idx].obj_n==414)) return use_boat(w,idx);
+        if(idx>=0 && (g_wobj[idx].obj_n==305||g_wobj[idx].obj_n==106||g_wobj[idx].obj_n==308))
+            return use_transition_object(w,idx);                             /* ladder / hole (map_levels.md §4) */
         if(idx<0){ int h=horse_actor_at(tx,ty);
                    if(h>=0) return horse_mount(w,h);                       /* U at a wandering horse (§4) */
                    msgcat(0,"Nothing to use there."); }
@@ -6170,8 +6175,8 @@ static void teleport_party(world_t*w,int x,int y){
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<=1) continue;   /* the Avatar is the world pos */
         int placed=0;
         for(;k<8 && !placed;k++){ int nx=(int)((x+dd[k][0])&(U6_SURFACE_TILES-1)), ny=(int)((y+dd[k][1])&(U6_SURFACE_TILES-1));
-            if(npc_at(w,nx,ny)<0 && world_is_passable(w,nx,ny)){ g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; g_actz[a]=0; placed=1; } }
-        if(!placed){ g_actx[a]=(uint16_t)x; g_acty[a]=(uint16_t)y; g_actz[a]=0; }   /* no room: stack on the Avatar */
+            if(npc_at(w,nx,ny)<0 && world_is_passable(w,nx,ny)){ g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; g_actz[a]=(uint8_t)w->level; placed=1; } }
+        if(!placed){ g_actx[a]=(uint16_t)x; g_acty[a]=(uint16_t)y; g_actz[a]=(uint8_t)w->level; }   /* no room: stack on the Avatar */
     }
     g_tmp_valid=0;   /* a jump is NOT a 1-tile scroll — force a full compose at the destination */
 }
@@ -6455,7 +6460,7 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='G'){ return do_verb(w,'G',dx,dy); }
     if(verb=='D'){ return do_verb(w,'D',dx,dy); }
     if(verb=='M'){ int sx=dx<0?-1:(dx>0?1:0), sy=dy<0?-1:(dy>0?1:0);
-        if((sx||sy) && world_try_move(w,sx,sy)){ g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); return 1; }
+        if((sx||sy) && world_try_move(w,sx,sy)){ g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); (void)step_triggers(w); return 1; }
         return 0; }
     if(verb=='T'){ int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
         int id=npc_at(w,tx,ty); if(id>=0) talk(id); else msgcat(0,"No-one to talk to."); return 0; }
@@ -6506,21 +6511,65 @@ static int do_rest(world_t *w)
     msgcat(0,"Thou campest. Rested, thy powers are restored.");
     return 1;
 }
+/* Reconcile the CURRENT level's object changes + the party's readied gear into the save template
+ * in place (docs/rules/save_load.md §5; map_levels.md §4b). U6's object DB is a flat record set that
+ * loads by STATUS, so counts + following offsets are preserved (save.c). Records are addressed by
+ * level (a surface record in its super-chunk, a dungeon record in its level chunk). Order matters:
+ * a record flipped by an earlier step is what a later step looks for. Runs before every level
+ * switch and every S)ave. Returns the number of records patched. */
+static int objects_reconcile(const world_t *w)
+{
+    if(!g_savetmpl) return 0;
+    uint8_t *d=g_savetmpl; int32_t n=g_savetmpl_len, surf=sav_surface_off(d, n); int patched=0, lv=w->level;
+    if(surf<0) return 0;
+    uint8_t in_party[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) in_party[i]=0;
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=1 && a<U6_MAX_ACTORS) in_party[a]=1; }
+    /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(!o->dirty || o->alive) continue;
+        if(o->origin!=WOBJ_PARENT_NONE){                      /* taken from a container: patch its in-container record */
+            wobj_t*c=&g_wobj[o->origin];
+            patched += sav_patch_contained_taken(d, n, surf, lv, c->x, c->y, c->obj_n, o->obj_n, o->quality, 1);
+        } else patched += sav_patch_obj_taken(d, n, surf, lv, o->x, o->y, o->obj_n, 1); }
+    /* 2) changed map objects (doors, levers, boats): frame / position / price tag, at the record's
+     *    ORIGINAL position (a sailed boat's record is re-anchored to where it is now) */
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(o->dirty!=WOBJ_DIRTY_STATE || !o->alive) continue;
+        int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) continue;
+        int ox=o->x, oy=o->y, mk=-1;
+        for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ ox=g_moved[k].ox; oy=g_moved[k].oy; mk=k; break; }
+        int boat=(o->obj_n==412||o->obj_n==414);
+        if(sav_patch_obj_state(d, n, surf, lv, ox, oy, o->obj_n, o->x, o->y, frame, boat?o->quality:-1)){
+            patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; } } }
+    /* 3) readied gear (equipment.md §6): clear the party's readied bits, then mark one carried
+     *    record per live slot item (a GET-flipped record from step 1 qualifies). Must precede the
+     *    drops: an item taken off and dropped is still a readied record until this pass. */
+    (void)sav_unready_party(d, n, in_party, U6_MAX_ACTORS);
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl])
+            patched += sav_ready_item(d, n, a, g_aready[a][sl], in_party, U6_MAX_ACTORS); }
+    /* 4) dropped items: their carried records go onto the map where they lie (with this level's z);
+     *    from then on the object has an on-map record at its position like any other */
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(o->dirty!=WOBJ_DIRTY_DROPPED || !o->alive) continue;
+        int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) frame=0;
+        if(sav_drop_item(d, n, o->obj_n, o->quality, o->x, o->y, lv, frame, in_party, U6_MAX_ACTORS)>0){
+            o->dirty=WOBJ_DIRTY_STATE; patched++; } }
+    return patched;
+}
 static int do_save(const world_t *w)
 {
     if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No save template (SAVE.000)."); return 0; }
     uint8_t *d=g_savetmpl; int32_t off=g_objlist_off, n=g_savetmpl_len;
     int aboard=(g_veh_kind==412||g_veh_kind==414);
-    uint8_t in_party[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) in_party[i]=0;
-    /* FULL objlist state: every party member's position + HP/Str/Dex/Int + experience. The
-     * avatar (actor 1) uses the world position; companions use their live actor positions —
+    /* FULL objlist state: every party member's position (+ map level) + HP/Str/Dex/Int + experience.
+     * The avatar (actor 1) uses the world position; companions use their live actor positions —
      * aboard a boat they are hidden inside it, so they travel with it (save_load.md §1). */
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor;
         if(a<1||a>=U6_MAX_ACTORS) continue;
-        in_party[a]=1;
         int ax,ay,az;
-        if(a==1||aboard){ ax=(int)w->px; ay=(int)w->py; az=0; }
-        else { ax=g_actx[a]; ay=g_acty[a]; az=(g_actz[a]==0xff)?0:g_actz[a]; }
+        if(a==1||aboard){ ax=(int)w->px; ay=(int)w->py; az=w->level; }
+        else { ax=g_actx[a]; ay=g_acty[a]; az=(g_actz[a]==0xff)?w->level:g_actz[a]; }
         sav_set_actor_pos  (d, off, a, ax, ay, az);
         sav_set_actor_stats(d, off, a, g_ahp[a], g_astr[a], g_adex[a], g_aint[a]);
         sav_set_actor_exp  (d, off, a, g_aexp[a]);
@@ -6528,52 +6577,104 @@ static int do_save(const world_t *w)
     }
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
     /* the horse we ride (absorbed: it is where we are) or last left somewhere new (vehicles.md §4) */
-    if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, 0);
+    if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, w->level);
     else if(g_horse_moved>=0){ int h=g_horse_moved;
         sav_set_actor_pos(d, off, h, g_actx[h], g_acty[h], (g_actz[h]==0xff)?0:g_actz[h]); }
     { int mod=clock_minutes(w); sav_set_clock(d, off, mod%60, mod/60); }   /* game clock */
     if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma);  /* created-avatar identity */
-    /* OBJECT-WORLD state: re-serialise every DIRTY object in place (U6's object DB is a flat
-     * record set that loads by STATUS, so counts + following offsets are preserved — save.c).
-     * Order matters: a record flipped by an earlier step is what a later step looks for. */
-    { int32_t surf=sav_surface_off(d, n); int patched=0;
-      if(surf>=0){
-      /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
-      for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
-          if(!o->dirty || o->alive) continue;
-          if(o->origin!=WOBJ_PARENT_NONE){                      /* taken from a container: patch its in-container record */
-              wobj_t*c=&g_wobj[o->origin];
-              patched += sav_patch_contained_taken(d, n, surf, c->x, c->y, c->obj_n, o->obj_n, o->quality, 1);
-          } else patched += sav_patch_obj_taken(d, n, surf, o->x, o->y, o->obj_n, 1); }
-      /* 2) changed map objects (doors, levers, boats): frame / position / price tag, at the record's
-       *    ORIGINAL position (a sailed boat's record is re-anchored to where it is now) */
-      for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
-          if(o->dirty!=WOBJ_DIRTY_STATE || !o->alive) continue;
-          int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) continue;
-          int ox=o->x, oy=o->y, mk=-1;
-          for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ ox=g_moved[k].ox; oy=g_moved[k].oy; mk=k; break; }
-          int boat=(o->obj_n==412||o->obj_n==414);
-          if(sav_patch_obj_state(d, n, surf, ox, oy, o->obj_n, o->x, o->y, frame, boat?o->quality:-1)){
-              patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; } } }
-      /* 3) readied gear (equipment.md §6): clear the party's readied bits, then mark one carried
-       *    record per live slot item (a GET-flipped record from step 1 qualifies) */
-      (void)sav_unready_party(d, n, in_party, U6_MAX_ACTORS);
-      for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
-          for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl])
-              patched += sav_ready_item(d, n, a, g_aready[a][sl], in_party, U6_MAX_ACTORS); }
-      /* 4) dropped items: their carried records go onto the map where they lie; from then on
-       *    the object has an on-map record at its position like any other */
-      for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
-          if(o->dirty!=WOBJ_DIRTY_DROPPED || !o->alive) continue;
-          int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) frame=0;
-          if(sav_drop_item(d, n, o->obj_n, o->quality, o->x, o->y, frame, in_party, U6_MAX_ACTORS)>0){
-              o->dirty=WOBJ_DIRTY_STATE; patched++; } }
-      }
-      (void)patched; }
+    /* OBJECT-WORLD + readied-gear state: this level's changes into the template (save_load.md §5) */
+    (void)objects_reconcile(w);
     { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
       sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
     if(sav_write_file("SAVED.000", d, n)==0){ msgcat(0,"Game saved."); return 1; }
     msgcat(0,"Save failed."); return 0;
+}
+
+/* ---- per-level object working set (map_levels.md §4b) -----------------------------------
+ * Decode map level `level` from a save buffer into g_wobj: the surface region (64 chunks) or
+ * dungeon chunk level-1, plus the actor-inventory chunk's ON-MAP records of that z (an item dropped
+ * from the pack is relocated there, save_load.md §5). Keep rule = mkworld's when it bakes the pack:
+ * top-level records of this z, contained records whose container is kept (x/y zeroed, alive=0,
+ * parent re-indexed). Transient decode buffers come from a chip mark/reset region. The pooled pack
+ * survives unless `reset_pack`. Returns the object count, or -1 (no memory / bad layout). */
+static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pack)
+{
+    int32_t so, se, iv = sav_inv_off(d, n), ive = sav_inv_end(d, n);
+    if(!sav_level_span(d, n, level, &so, &se) || ive < 0) return -1;
+    plat_mark mk = plat_chip_mark();
+    u6_object_t *tmp   = (u6_object_t*)plat_alloc_chip((uint32_t)MAXWOBJ * sizeof(u6_object_t));
+    int32_t     *remap = (int32_t*)plat_alloc_chip((uint32_t)MAXWOBJ * sizeof(int32_t));
+    if(!tmp || !remap){ plat_chip_reset(mk); return -1; }
+    int32_t nr = u6obj_decode_world(d + so, se - so, tmp, MAXWOBJ);
+    {   int32_t n2 = u6obj_decode_world(d + iv, ive - iv, tmp + nr, MAXWOBJ - nr);
+        for(int32_t i = nr; i < nr + n2; i++)                     /* its parent links are batch-local */
+            if(tmp[i].parent != U6OBJ_PARENT_NONE) tmp[i].parent = (uint16_t)(tmp[i].parent + nr);
+        nr += n2; }
+    int32_t nk = 0;
+    for(int32_t i = 0; i < nr; i++){
+        int keep; uint16_t np = WOBJ_PARENT_NONE;
+        if(tmp[i].parent == U6OBJ_PARENT_NONE) keep = (tmp[i].z == level);
+        else { int32_t r = remap[tmp[i].parent]; keep = (r >= 0); if(keep) np = (uint16_t)r; }
+        remap[i] = keep ? nk : -1;
+        if(!keep) continue;
+        wobj_t *o = &g_wobj[nk++];
+        int contained = (np != WOBJ_PARENT_NONE);
+        o->obj_n  = tmp[i].obj_n;
+        o->tile   = (uint16_t)(basetile(tmp[i].obj_n) + tmp[i].frame);
+        o->x      = contained ? 0 : tmp[i].x;
+        o->y      = contained ? 0 : tmp[i].y;
+        o->qty    = tmp[i].quantity;
+        o->quality= tmp[i].quality;
+        o->parent = np; o->origin = WOBJ_PARENT_NONE;
+        o->alive  = (uint8_t)!contained;
+        o->dirty  = 0; }
+    plat_chip_reset(mk);
+    {   invitem_t keep_inv[OBJ_INV_MAX]; int keep_n = g_ow.ninv;
+        if(!reset_pack) memcpy(keep_inv, g_ow.inv, sizeof keep_inv);
+        objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable);   /* empties the pooled pack */
+        if(!reset_pack){ memcpy(g_ow.inv, keep_inv, sizeof keep_inv); g_ow.ninv = keep_n; } }
+    g_nobjs = nk; g_nmoved = 0;                                   /* indices are new; records are at their positions */
+    return nk;
+}
+/* Change map level through a transition (kind WL_DOWN/WL_UP/WL_HOLE from the Avatar's tile; the
+ * transform rules are map_levels.md §4): reconcile this level into the template, apply the
+ * transition, decode the new level, re-seed the party beside the Avatar. Returns 1 (recompose)
+ * with a message either way. */
+static int do_transition(world_t *w, int kind, int quality)
+{
+    if(g_veh_kind==412||g_veh_kind==414){ msgcat(0,"Not from a boat."); return 1; }
+    if(!g_savetmpl){ msgcat(0,"No dungeon data (SAVE.000)."); return 1; }
+    int lv0=w->level; uint16_t px0=w->px, py0=w->py;
+    (void)objects_reconcile(w);
+    if(!world_transition(w, kind, quality)){ msgcat(0,"There is no way up here."); return 1; }
+    if(level_decode(g_savetmpl, g_savetmpl_len, w->level, 0) < 0){   /* out of memory: stay put */
+        w->level=lv0; w->px=px0; w->py=py0; (void)level_decode(g_savetmpl, g_savetmpl_len, lv0, 0);
+        msgcat(0,"Not enough memory to change level."); return 1; }
+    g_cur_level=w->level;
+    build_blocked();
+    teleport_party(w, w->px, w->py);                              /* companions beside the Avatar, on this level */
+    g_show_inv=0; (void)g_tmpdm_invalidate();
+    msgcat(0, w->level>lv0 ? "You descend." : (w->level==0 ? "You climb to the surface." : "You ascend."));
+    return 1;
+}
+/* U)se of a ladder / hole object at world index idx (§4: the party steps onto it, then climbs;
+ * a ladder's frame 0 = down, else up; a hole drops). Returns recompose. */
+static int use_transition_object(world_t *w, int idx)
+{
+    const wobj_t *o=&g_wobj[idx]; int on=o->obj_n, fr=(int)o->tile-basetile(on);
+    int kind = (on==308) ? WL_HOLE : (fr==0 ? WL_DOWN : WL_UP);
+    w->px=o->x; w->py=o->y;
+    return do_transition(w, kind, o->quality);
+}
+/* after a successful step: standing on a cave mouth (326) or a hole (308) descends (§4 PASS triggers) */
+static int step_triggers(world_t *w)
+{
+    if(g_veh_kind) return 0;
+    int idx=objworld_at(&g_ow, w->px, w->py); if(idx<0) return 0;
+    int on=g_wobj[idx].obj_n;
+    if(on==326) return do_transition(w, WL_DOWN, g_wobj[idx].quality);
+    if(on==308) return do_transition(w, WL_HOLE, g_wobj[idx].quality);
+    return 0;
 }
 
 /* ---- in-game LOAD: rebuild the LIVE world from SAVED.000 (docs/rules/save_load.md) --------
@@ -6595,39 +6696,6 @@ static int load_game(world_t *w)
     g_veh_kind = 0; g_veh_horse = -1; g_avatar_hide = 0; g_avatar_ovr = 0;   /* re-boarded below if the save says so */
     g_nmoved = 0; g_horse_moved = -1;                                        /* every record is at its saved position again */
 
-    /* 1) WORLD OBJECTS: decode the surface region, keep top-level z==0 + contained-with-kept-parent
-     * (the same rule mkworld applies when it bakes the pack). The actor-inventory chunk is decoded
-     * too: an item DROPPED from the pack is relocated onto the map inside that chunk (save_load.md
-     * §5), and a record is placed by its own x/y wherever it sits. */
-    {   u6_object_t *tmp   = (u6_object_t*)plat_alloc_chip((uint32_t)MAXWOBJ * sizeof(u6_object_t));
-        int32_t     *remap = (int32_t*)plat_alloc_chip((uint32_t)MAXWOBJ * sizeof(int32_t));
-        if(!tmp || !remap){ plat_chip_reset(mk); msgcat(0,"Not enough memory to load."); return 0; }
-        int32_t nr = u6obj_decode_world(d + so, se - so, tmp, MAXWOBJ);
-        {   int32_t n2 = u6obj_decode_world(d + iv, ive - iv, tmp + nr, MAXWOBJ - nr);
-            for(int32_t i = nr; i < nr + n2; i++)                     /* its parent links are batch-local */
-                if(tmp[i].parent != U6OBJ_PARENT_NONE) tmp[i].parent = (uint16_t)(tmp[i].parent + nr);
-            nr += n2; }
-        int32_t nk = 0;
-        for(int32_t i = 0; i < nr; i++){
-            int keep; uint16_t np = WOBJ_PARENT_NONE;
-            if(tmp[i].parent == U6OBJ_PARENT_NONE) keep = (tmp[i].z == 0);
-            else { int32_t r = remap[tmp[i].parent]; keep = (r >= 0); if(keep) np = (uint16_t)r; }
-            remap[i] = keep ? nk : -1;
-            if(!keep) continue;
-            wobj_t *o = &g_wobj[nk++];
-            int contained = (np != WOBJ_PARENT_NONE);
-            o->obj_n  = tmp[i].obj_n;
-            o->tile   = (uint16_t)(basetile(tmp[i].obj_n) + tmp[i].frame);
-            o->x      = contained ? 0 : tmp[i].x;
-            o->y      = contained ? 0 : tmp[i].y;
-            o->qty    = tmp[i].quantity;
-            o->quality= tmp[i].quality;
-            o->parent = np; o->origin = WOBJ_PARENT_NONE;
-            o->alive  = (uint8_t)!contained;
-            o->dirty  = 0; }
-        objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable);   /* also empties the pooled pack */
-        g_nobjs = nk; }
-
     /* 2) ACTORS from the objlist (objlist.md; all little-endian) */
     for(int i = 0; i < U6_MAX_ACTORS; i++){
         const uint8_t *pb = d + ol + 0x100 + i*3, *ab = d + ol + 0x400 + i*2;
@@ -6645,8 +6713,11 @@ static int load_game(world_t *w)
         g_amana[i] = (d[ol + 0x13f1 + i] == 0xFF) ? g_amaxmana[i] : d[ol + 0x13f1 + i];   /* current mana (0xFF = full) */
         if(g_amana[i] > g_amaxmana[i]) g_amana[i] = g_amaxmana[i]; }
 
-    /* avatar -> the world position; clock + player fields */
-    w->px = g_actx[1]; w->py = g_acty[1]; w->level = g_actz[1];
+    /* avatar -> the world position + map level; clock + player fields */
+    w->px = g_actx[1]; w->py = g_acty[1]; w->level = (g_actz[1] <= 5) ? g_actz[1] : 0; g_cur_level = w->level;
+
+    /* 1) WORLD OBJECTS of the Avatar's level (map_levels.md §4b; the pooled pack is rebuilt below) */
+    if(level_decode(d, n, w->level, 1) < 0){ plat_chip_reset(mk); msgcat(0,"Not enough memory to load."); return 0; }
     g_start_min = (int)d[ol + 0x1bf4] * 60 + d[ol + 0x1bf3]; w->clock = 0;
     g_cg.avatar_sex = d[ol + 0x1c71]; g_cg.karma = d[ol + 0x1bf9];
     if(d[ol + 0xf00]){ int o = 0;                                            /* player name (0xf00, <=13 + NUL) */
@@ -9032,7 +9103,7 @@ int main(int argc, char **argv)
             else if(t==2) cast_spell(&w,1,magic_find("Wizard Eye"),0,0);
             else if(t==3){
                 int npc=-1,bd=99;
-                for(int i=2;i<U6_MAX_ACTORS;i++){ if(g_atile[i]==0xffff||g_actz[i]!=0) continue;
+                for(int i=2;i<U6_MAX_ACTORS;i++){ if(g_atile[i]==0xffff||(int)g_actz[i]!=g_cur_level) continue;
                     int cx=g_actx[i]-(int)w.px,cy=g_acty[i]-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy;
                     int d=cx>cy?cx:cy; if(d<bd){bd=d;npc=i;} }
                 if(npc>=0){ dbg_num("INVIS npc=", npc); dbg_num("INVIS dist=", bd);
@@ -9088,12 +9159,45 @@ int main(int argc, char **argv)
               if(i<rl && rq[i]>='0'&&rq[i]<='9'){ x=0; while(i<rl&&rq[i]>='0'&&rq[i]<='9'){x=x*10+(rq[i]-'0');i++;} }
               while(i<rl && rq[i]==' ') i++;
               if(i<rl && rq[i]>='0'&&rq[i]<='9'){ y=0; while(i<rl&&rq[i]>='0'&&rq[i]<='9'){y=y*10+(rq[i]-'0');i++;} }
-              if(lvl>=1 && lvl<=5){ w.level=lvl; w.px=x&255; w.py=y&255;
-                  g_tmp_valid=0; g_dm_valid=0; dbg_num("DUNGEON level=",lvl); }
-              else if(lvl==0){                       /* "0 X Y" = ENTER from surface (X,Y) via world_transition(DOWN) */
-                  w.level=0; w.px=x; w.py=y; world_transition(&w, WL_DOWN, 0);
-                  g_tmp_valid=0; g_dm_valid=0; build_blocked();
-                  dbg_num("DUNGEON entered level=",w.level); dbg_num(" x=",w.px); dbg_num(" y=",w.py); } }
+              if(lvl>=1 && lvl<=5){ (void)objects_reconcile(&w); w.level=lvl; w.px=x&255; w.py=y&255;
+                  if(g_savetmpl) (void)level_decode(g_savetmpl, g_savetmpl_len, lvl, 0);
+                  g_cur_level=lvl; build_blocked(); teleport_party(&w, w.px, w.py);
+                  g_tmp_valid=0; g_dm_valid=0; dbg_num("DUNGEON level=",lvl); dbg_num("DUNGEON nobjs=",(int)g_ow.nobjs); }
+              else if(lvl==0){                       /* "0 X Y" = ENTER from surface (X,Y) through the real transition */
+                  w.level=0; w.px=x; w.py=y; (void)do_transition(&w, WL_DOWN, 0);
+                  dbg_num("DUNGEON entered level=",w.level); dbg_num(" x=",w.px); dbg_num(" y=",w.py);
+                  dbg_num("DUNGEON nobjs=",(int)g_ow.nobjs); }
+              else if(lvl==9){
+                  /* PERSISTENCE round trip (map_levels.md §5): stand on the first surface cave mouth
+                   * (auto-descends), take the first gettable object below, save, reload, climb back
+                   * up an up-ladder and re-enter — the taken object must stay gone throughout. */
+                  int ci=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==326){ ci=i; break; }
+                  dbg_num("DNG cave found=", ci>=0);
+                  if(ci>=0){ teleport_party(&w, g_wobj[ci].x, g_wobj[ci].y); (void)step_triggers(&w); }
+                  dbg_num("DNG level=", w.level); dbg_num("DNG nobjs=", (int)g_ow.nobjs);
+                  int gi=-1, gx=-1, gy=-1, gon=0, ladder=-1, lx=0, ly=0;
+                  for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
+                      if(gi<0 && objworld_can_get(&g_ow,o->obj_n) && o->obj_n!=326){ gi=i; }
+                      if(ladder<0 && o->obj_n==305 && ((int)o->tile-basetile(305))!=0){ ladder=i; } }
+                  if(gi>=0){ gx=g_wobj[gi].x; gy=g_wobj[gi].y; gon=g_wobj[gi].obj_n;
+                      dbg_num("DNG take obj=", gon); dbg_num("DNG take ok=", objworld_get(&g_ow,gi)); }
+                  if(ladder>=0){ lx=g_wobj[ladder].x; ly=g_wobj[ladder].y; }
+                  dbg_num("DNG up-ladder found=", ladder>=0);
+                  int sx=w.px, sy=w.py, sl=w.level;
+                  do_save(&w);
+                  for(int t=0;t<3;t++) world_try_move(&w,1,0);
+                  dbg_num("DNG load ok=", load_game(&w));
+                  dbg_num("DNG level restored=", w.level==sl && w.level>0);
+                  dbg_num("DNG pos restored=", w.px==sx && w.py==sy);
+                  { int at=(gx>=0)?objworld_at(&g_ow,gx,gy):-1;
+                    dbg_num("DNG taken gone=", gi<0 || at<0 || g_wobj[at].obj_n!=(uint16_t)gon);
+                    dbg_num("DNG taken in pack=", gon?objworld_count(&g_ow,(uint16_t)gon):-1); }
+                  if(ladder>=0){ teleport_party(&w, lx, ly); (void)do_verb(&w,'U',0,0);   /* U)se the ladder we stand on */
+                      dbg_num("DNG surfaced level=", w.level); dbg_num("DNG surface nobjs=", (int)g_ow.nobjs);
+                      (void)do_transition(&w, WL_DOWN, 0);
+                      dbg_num("DNG re-entered level=", w.level);
+                      { int at=(gx>=0)?objworld_at(&g_ow,gx,gy):-1;
+                        dbg_num("DNG taken still gone=", gi<0 || at<0 || g_wobj[at].obj_n!=(uint16_t)gon); } } } }
           dg_done=1; } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
@@ -9465,12 +9569,8 @@ int main(int argc, char **argv)
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='>' || a=='<') {          /* descend/ascend a map level (map_levels.md). '>' also
                                                        * enters a dungeon from the surface (chunk /4 transform). */
-                    int lv0=w.level;
-                    if (world_transition(&w, a=='>'?WL_DOWN:WL_UP, 0)) {
-                        g_show_inv=0; g_tmp_valid=0; g_dm_valid=0; build_blocked();
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink);
-                        msgcat(0, w.level>lv0 ? "You descend." : (w.level==0 ? "You climb to the surface." : "You ascend."));
-                    } else msgcat(0, "There is no way up here.");
+                    (void)do_transition(&w, a=='>'?WL_DOWN:WL_UP, 0);
+                    compose_map(&w); draw_border_tiles(); draw_status(&w,ink);
                     redraw=1; }
                 else if (in==IN_QUIT) break;
                 else if (in==IN_TALK) {              /* talk to an adjacent NPC (a trainer advances thy level) */
@@ -9492,6 +9592,7 @@ int main(int argc, char **argv)
                             g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase); } }
                     if (stepped){ g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
                         step_npcs(&w);                   /* NPCs walk their schedules one step */
+                        (void)step_triggers(&w);         /* cave mouth / hole under our feet? (map_levels.md §4) */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1; }  /* map-only */
                 }
             }
@@ -9539,6 +9640,7 @@ int main(int argc, char **argv)
                 if (npc_pathstep(&w,(int)w.px,(int)w.py,g_travel_tx,g_travel_ty,-1,-1,&sx,&sy)
                     && (sx||sy) && world_try_move(&w,sx,sy)) {
                     g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w);
+                    if(step_triggers(&w)) g_travel_active=0;
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1;
                     if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;
                 } else g_travel_active=0;                       /* blocked / no path -> stop */

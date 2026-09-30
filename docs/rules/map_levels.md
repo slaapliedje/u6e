@@ -74,17 +74,49 @@ Engine: `world_transition(w, kind, quality)` (kind DOWN/UP/HOLE) applies exactly
 at z5→up; up-from-surface no-op). Wiring the in-game triggers (render the ladder/cave/hole objects per
 level + USE/PASS detection) is the integration step.
 
-## 4b. NOT YET (follow-ups)
-- **Dungeon lighting**: dungeons should be DARK (torch-lit) regardless of surface time; currently
-  `compute_light` uses the surface day/night ambient (so a daytime level renders lit where visible).
-- **Dungeon objects**: per-level object blocking + object rendering (the objblk/save objects carry z).
-- **Save**: dungeon-level chunks are preserved byte-wise on save (save.c) but the player level isn't
-  persisted yet.
+## 4b. Per-level objects, triggers and persistence (2026-09-30)
+
+**Object store.** The save template buffer (`SAVE.000`, or the file an in-game load restored —
+docs/rules/save_load.md) is the authoritative object store for EVERY level: 64 surface chunks +
+5 dungeon chunks (+ the inventory chunk, where an item dropped from the pack is relocated with
+the z it was dropped on). The engine's working set `g_wobj` holds ONE level at a time:
+- Entering level z (`level_switch`): (1) the current level's changes are RECONCILED into the
+  template in place (the same taken / state / drop steps S)ave performs, save_load.md §5, now
+  addressed by level: a surface record lives in its `(y>>7)*8+(x>>7)` chunk, a dungeon record in
+  dungeon chunk z-1); (2) the new level is DECODED from the template (dungeon chunk z-1, or the
+  surface region, plus the inventory chunk's on-map records of that z), the pooled pack kept;
+  (3) blocking/sight bitmaps and buckets rebuild; (4) the party is re-seeded beside the Avatar
+  on the new level. A level switch needs the template (no `SAVE.000` → "No dungeon data").
+- Actors are on a level: every "is this actor here" test compares its z with the CURRENT level
+  (not with 0), so dungeon dwellers from the objlist appear below and surface NPCs don't.
+- S)ave writes the Avatar's (and the boat-borne party's) z; load decodes the Avatar's level.
+
+**Triggers** (§4 rules, now live): U)se a ladder (305/106) or hole (308) — the party first
+steps onto it, then climbs (frame 0 = down, else up; a level-1 up-ladder's quality selects the
+surface sub-chunk); STEPPING onto a cave mouth (326) or a hole descends. '>'/'<' stay as debug
+keys. Transitions are refused aboard a boat.
+
+**Persistence.** A dungeon item taken / door opened / item dropped survives S)ave + load and a
+round trip to the surface and back, because the template carries every level and the working
+set is always reconciled into it before it is replaced.
+
+Not yet: eggs (monster spawning), dungeon-specific usecode (winches, etc.).
 
 ## 5. Test hooks
 - `tools/mapdump` → dungeon1_sc.png (== flat, coherent). `DUNGEON.REQ "<level> [x] [y]"` drops the
-  in-game view onto a dungeon level for a shot (built dg_1_100_100.png = a coherent level-1 room).
+  in-game view onto a dungeon level for a shot (built dg_1_100_100.png = a coherent level-1 room);
+  `"0 X Y"` enters from the surface at (X,Y) through the real transition + level switch.
+- `DUNGEON.REQ "9"`: persistence round-trip — the party is put on the first surface cave mouth
+  (auto-descends), takes the first gettable object on level 1, saves, reloads (level + position +
+  the taken object gone), climbs back to the surface via an up-ladder and re-enters (the object
+  still gone). Prints `DNG ...` lines.
 
 ## 6. Status
-IN PROGRESS. Geography (decode + level model + in-game render) VERIFIED. Transitions, dungeon-dark
-lighting, per-level objects, and level persistence are TODO.
+VERIFIED 2026-09-30. Geography, transitions (ladder/hole U)se, cave/hole step-on), dungeon-dark
+lighting, per-level objects (decoded from the save template on every level switch, changes
+reconciled back) and level persistence (S)ave/load of the Avatar's level + the level's objects) are
+DONE. `DUNGEON.REQ "9"` round trip on emulated TT and the stock 4 MB Falcon: cave auto-descent to
+level 1 (1467 objects), a taken object survives save → load (level + position restored) → U)se of
+an up-ladder to the surface (8343 objects back) → re-entry. A save made underground loads in real
+ScummVM with the party on level 1 (tools/savecheck.sh). Not yet: eggs / monster spawning,
+dungeon-specific usecode.

@@ -114,7 +114,7 @@ bool world_transition(world_t *w, int kind, uint8_t quality)
 bool world_is_passable(const world_t *w, int32_t x, int32_t y)
 {
     if (!w->passable[world_tile(w, x, y)]) return false;          /* terrain blocks */
-    if (w->level == 0 && w->blocked_obj) {                        /* impassable object? (surface bitmap only) */
+    if (w->blocked_obj) {                                         /* impassable object? (the current level's bitmap) */
         int32_t bx = x & (U6_SURFACE_TILES - 1), by = y & (U6_SURFACE_TILES - 1);
         int32_t idx = by * U6_SURFACE_TILES + bx;
         if (w->blocked_obj[idx >> 3] & (1u << (idx & 7))) return false;
