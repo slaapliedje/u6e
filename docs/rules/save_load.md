@@ -81,8 +81,9 @@ back on load; the trailer is date-stamped for ScummVM's load menu.
 - Spellbook known-spells / reagent seeds keep their session state (reagent ITEMS in the
   pack reload fine and are what casting consumes).
 - A bag carried in the pack is flattened on load (its contents become loose pack items) and
-  written back loose (§6). A companion who JOINS after the load keeps their template records
-  untouched (they are pooled at the next load); one who LEAVES leaves their items in the pool.
+  written back loose (§6). A companion who JOINS has their records absorbed into the pool at
+  once (readied gear to their slots); one who LEAVES keeps their readied gear (written back to
+  them, §6) but their carried items stay in the party's pool (2026-10-07).
 
 ## 4. Test hook + validation
 
@@ -154,7 +155,8 @@ rebuild (`sav_write_rebuilt`, engine/save.c), streamed through a 2 KB buffer wit
   inventories the live model absorbed — carried/readied by them, or contained in something
   they carry, chunk-local links followed), counts and links re-indexed;
 - the actor-inventory chunk then gets the party's inventory FROM THE LIVE MODEL
-  (`build_party_records`): each member's readied items (0x19, owner = member), the pooled pack
+  (`build_party_records`): each pooled actor's readied items (0x19, owner = member — a former
+  member who left keeps theirs this way), the pooled pack
   carried by the Avatar (0x11; a stackable type — pack section U6W5, objblk.md §2 — as one
   qty16 record, a non-stackable stack as up to 8 single records), the gold as one coins record
   (obj 88, qty16), the spellbook (57) with one spell record (58, quality = spell number) per

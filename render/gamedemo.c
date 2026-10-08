@@ -4617,6 +4617,8 @@ static void sync_health_out(void)
 
 /* pull conversation JOIN/LEAVE (the VM's in_party[]) back into the roster — this
  * is the cvm_game_t <-> engine wiring made visible. */
+static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only);   /* fwd (save code below) */
+static void equip_refold(int a);                                              /* fwd (E)quip code below) */
 static void sync_party_out(void)
 {
     for(int i=1;i<256;i++){                          /* JOIN: add new members */
@@ -4627,6 +4629,8 @@ static void sync_party_out(void)
             const char *nm = (i==g_cv.npc && g_talk_name[0]) ? g_talk_name : "?";
             int o=0; while(nm[o]&&o<15){ g_party[g_nparty].name[o]=nm[o]; o++; } g_party[g_nparty].name[o]=0;
             g_nparty++;
+            if(g_savetmpl && g_objlist_off>=0){ pool_absorb(g_savetmpl, g_savetmpl_len, g_objlist_off, i);   /* their pack joins the pool */
+                equip_refold(i); }
         }
     }
     for(int j=0;j<g_nparty;){                         /* LEAVE: drop members (keep avatar) */
@@ -6848,12 +6852,15 @@ static void talk_state_from_save(const uint8_t *d, int32_t ol)
     sav_get_talk_state(d, ol, g_cg.talk_flags, &q, &g);
     g_cg.on_quest = (uint8_t)(q ? 1 : 0); g_cg.knows_gargish = (uint8_t)(g ? 1 : 0);
 }
-static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol)
+static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only)
 {
     int32_t iv = sav_inv_off(d, n);
-    for(int i = 0; i < U6_MAX_ACTORS; i++){ for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[i][sl] = 0; g_pooled[i] = 0; }
-    g_cg.gold = 0; g_ow.ninv = 0;
-    for(int i = 1; i < U6_MAX_ACTORS; i++) if(d[ol + 0x800 + i] & 0x80) g_pooled[i] = 1;
+    if(only < 0){                                                 /* the whole party, from scratch */
+        for(int i = 0; i < U6_MAX_ACTORS; i++){ for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[i][sl] = 0; g_pooled[i] = 0; }
+        g_cg.gold = 0; g_ow.ninv = 0;
+        for(int i = 1; i < U6_MAX_ACTORS; i++) if(d[ol + 0x800 + i] & 0x80) g_pooled[i] = 1; }
+    else { if(only >= U6_MAX_ACTORS || g_pooled[only]) return;   /* one joiner, not absorbed before */
+        for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[only][sl] = 0; g_pooled[only] = 1; }
     const uint8_t *inv = d + iv; int cnt = inv[0] | (inv[1] << 8);
     const uint8_t *rec = inv + 2;
     if(iv + 2 + (int32_t)cnt*8 <= n) for(int o = 0; o < cnt; o++){
@@ -6867,6 +6874,7 @@ static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol)
         if(loc != 0x10 && loc != 0x18) continue;
         int owner = cur[1] | ((cur[2] & 3) << 8);
         if(owner < 1 || owner >= U6_MAX_ACTORS || !g_pooled[owner]) continue;   /* party only */
+        if(only >= 0 && owner != only) continue;
         int on = b[4] | ((b[5] & 3) << 8);
         int direct = (cur == b);
         if(direct && loc == 0x18){                            /* readied on the holder itself */
@@ -6885,6 +6893,7 @@ static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol)
           if(!done && g_ow.ninv < OBJ_INV_MAX) g_ow.inv[g_ow.ninv++] = it; } }
     for(int p = 0; p < g_nparty; p++){ int a = g_party[p].actor; if(a >= 0 && a < U6_MAX_ACTORS) equip_refold(a); }
 }
+static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol){ pool_absorb(d, n, ol, -1); }
 
 /* The party's inventory as save records, from the live model (save_load.md §6): each member's
  * readied items, the pooled pack carried by the Avatar (a stackable as one qty16 record, a
@@ -6894,8 +6903,8 @@ static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol)
 static int build_party_records(uint8_t *out)
 {
     int nr = 0, book = -1;
-    for(int p = 0; p < g_nparty && nr < PARTY_REC_MAX; p++){ int a = g_party[p].actor;
-        if(a < 1 || a >= U6_MAX_ACTORS) continue;
+    for(int a = 1; a < U6_MAX_ACTORS && nr < PARTY_REC_MAX; a++){      /* members, and those who left with their gear */
+        if(!g_pooled[a]) continue;
         for(int sl = 0; sl < EQ_NSLOTS && nr < PARTY_REC_MAX; sl++) if(g_aready[a][sl])
             sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], 0, 0, 0); }
     for(int k = 0; k < g_ow.ninv && nr < PARTY_REC_MAX; k++){ const invitem_t *it = &g_ow.inv[k];
@@ -8858,6 +8867,13 @@ int main(int argc, char **argv)
               dbg_num("HEALSYNC a2 hp full=", g_ahp[a2]==g_amaxhp[a2]); dbg_num("HEALSYNC a2 poison gone=", g_poison[a2]==0);
               dbg_num("HEALSYNC a3 alive=", g_ahp[a3]==1);
               g_ahp[a2]=hp2; g_ahp[a3]=g_amaxhp[a3]; sync_party_hp(); }
+            /* JOIN/LEAVE inventory (save_load.md §6): Jaana (62) joins -> her gear is absorbed; leaves -> her readied gear is written back to her */
+            { int n0=g_ow.ninv; g_cg.in_party[62]=1; sync_party_out();
+              dbg_num("JOINSYNC in party=", is_party_member(62)); dbg_num("JOINSYNC pooled=", g_pooled[62]);
+              dbg_num("JOINSYNC readied weapon=", g_aweapon[62]); dbg_num("JOINSYNC ninv delta=", g_ow.ninv-n0);
+              g_cg.in_party[62]=0; sync_party_out(); dbg_num("JOINSYNC left=", !is_party_member(62));
+              do_save(&w); dbg_num("JOINSYNC load ok=", load_game(&w)); dbg_num("JOINSYNC pooled after load=", g_pooled[62]);
+              dbg_num("JOINSYNC her weapon after load=", g_aweapon[62]); }
             g_ow.ninv=0; inv_add_objn(65,3); inv_add_objn(129,1); g_cg.gold=50;   /* 3 ginseng + 1 food, 50 gold */
             dbg_num("INVSYNC before ginseng=", 3); dbg_num("INVSYNC before gold=", g_cg.gold);
             sync_inv_in();
