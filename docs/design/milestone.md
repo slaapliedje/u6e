@@ -1606,6 +1606,17 @@ becomes the template. Verified by LOAD.REQ modes 2/3 (two save→load cycles) on
 Still open on the writer: stack consumption / gold spent / items received in conversation (need a
 real inventory-chunk rebuild).
 
+### Wind model closed (2026-10-07)
+docs/rules/wind.md: the wind (objlist 0x1bfa, FROM direction, calm; 1..30-turn change timer, calm
+below ground; the fan rotates it) now drives sailing — movement points (5 per world turn) with the
+original ship cost table by heading-vs-wind and the skiff table by heading-vs-current — the raft
+(steerable on shallow water, carried by current + wind on deep water via the 8x8 table, drifts on a
+passed turn) and the balloon (carried item 420 → inflated 423 beside the party; boards on any
+terrain; moves only downwind, refuses in calm; flies low — Wall-flagged tiles/objects block;
+lands on adjacent ground and deflates to the item). Stepping is unified in player_step (foot /
+horse / vessel) with Space = pass; the wind byte saves/loads; a save patcher can retype a record
+(420 ↔ 423). WIND.REQ 1-3 verified on TT + 4 MB Falcon.
+
 ### Eggs closed (2026-09-30)
 Monster/object spawning (docs/rules/eggs.md): eggs (obj 335 + embryos) from the save template's
 eggs chunk, one table per level; the party's 8x8 block is watched and a block change / teleport /

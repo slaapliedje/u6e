@@ -23,7 +23,8 @@ no pack change (tileflags1 already ships as U6WG).
 |---|---|---|
 | 412 | ship (three map objects: front / centre / back) | deep water only |
 | 414 | skiff | any water |
-| 415 | raft | any water, wind-drifted (DEFERRED) |
+| 415 | raft | any water; on deep water carried by current + wind (wind.md §3) |
+| 420 / 423 | balloon item / inflated balloon | air, drifts with the wind only (wind.md §4) |
 | 430 | horse (an actor) | land |
 | 431 | horse with rider (the mounted actor's obj_n) | land |
 | 149 | ship deed | key item for buying boats |
@@ -71,9 +72,8 @@ the centre and the back one tile SOUTH (and rotated accordingly).
 
 ## 5. u6e v1 simplifications (documented deviations)
 
-- Raft drift and the balloon (wind system) are DEFERRED — the wind model doesn't exist yet.
-- Movement COSTS (ship faster downwind, skiff slower per original cost tables) are deferred
-  with the wind model; a vehicle step costs a normal turn.
+- Raft drift, the balloon and the movement COSTS (ship by wind, skiff by current) are
+  implemented with the wind model — docs/rules/wind.md (2026-10-07).
 - The original replaces the boat objects with a "vehicle actor 0" while aboard; u6e keeps the
   boat as its map object(s) and moves them each step — same visible result, no vehicle actor.
 - Party members individually skiff-capable / multiple skiffs: not modeled; the party moves as

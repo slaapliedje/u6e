@@ -421,7 +421,8 @@ static char           g_msg[160];          /* latest verb result line           
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
-static int            g_travel_tx, g_travel_ty;  /* the click-to-travel destination tile  */
+static int            g_use_pack;                 /* U)se armed on a carried item (U pressed twice) */
+static int            g_travel_tx, g_travel_ty, g_travel_level;  /* the click-to-travel destination tile (+ level: a transition ends it) */
 static int            g_show_inv;          /* 1 = inventory list shown in the panel */
 static int            g_menu_journey;      /* "Journey Onward" chosen -> resume SAVED.000 at boot if present */
 static int            g_inv_sel;            /* selected inventory row (for D)rop; cycled by 'D' while armed) */
@@ -2910,8 +2911,10 @@ static void sync_party_hp(void);                            /* roster HP <- g_ah
 /* One turn of NPC movement: schedule NPCs step toward their scheduled spot, party
  * members follow the Avatar; each routes around walls via npc_pathstep and turns to
  * FACE the step. Turn-based: called when the game clock advances. */
+static void wind_tick(int level);                      /* wind.md (defined with the status line below) */
 static void step_npcs(const world_t*w)
 {
+    wind_tick(w->level);                               /* the wind change timer (wind.md §1) */
     if(g_spell_light_turns>0) g_spell_light_turns--;   /* Light spell decays a turn per step */
     if(g_xray_turns>0) g_xray_turns--;                 /* X-ray see-through decays a turn (§5e) */
     for(int i=0;i<U6_MAX_ACTORS;i++) if(g_ainvis[i]) g_ainvis[i]--;   /* Invisibility wears off (§5) */
@@ -4538,6 +4541,23 @@ static void draw_conversation(uint8_t col)
     }
 }
 
+/* WIND (docs/rules/wind.md): 0..7 = N,NE,E,SE,S,SW,W,NW (the direction it blows FROM), 8 = calm */
+#define WIND_CALM 8
+static int      g_wind=WIND_CALM, g_wind_timer=10;
+static int      g_mp_acc;            /* movement points not yet turned into world turns (wind.md §2) */
+static rng_t    g_wind_rng;
+static const uint8_t SHIP_COST[8]={10,5,3,4,5,4,3,5};
+static const uint8_t SKIFF_COST[8]={3,4,5,7,10,7,5,4};
+static const uint8_t RAFT_TBL[8][8]={ {0,0,1,1,0,7,7,0},{1,1,1,2,2,1,0,0},{1,2,2,2,3,3,2,1},{2,2,3,3,3,4,4,3},
+                                      {4,3,3,4,4,4,5,5},{6,5,4,4,5,5,5,6},{7,7,6,5,5,6,6,6},{7,0,0,7,6,6,7,7} };
+static const signed char D8X[8]={0,1,1,1,0,-1,-1,-1}, D8Y[8]={-1,-1,0,1,1,1,0,-1};
+static int dir8_of(int dx,int dy){ for(int d=0;d<8;d++) if(D8X[d]==dx && D8Y[d]==dy) return d; return 0; }
+static const char *WIND_NAME[9]={"N","NE","E","SE","S","SW","W","NW","C"};
+static void wind_tick(int level)                       /* one world turn: the change timer */
+{   if(--g_wind_timer>0) return;
+    g_wind=(level>0)?WIND_CALM:rng_range(&g_wind_rng,9); g_wind_timer=1+rng_range(&g_wind_rng,30); }
+static void wind_from_save(const uint8_t *d, int32_t ol)
+{   int b=sav_get_wind(d,ol); g_wind=(b>7)?WIND_CALM:b; g_wind_timer=1+rng_range(&g_wind_rng,30); }
 /* time + wind on the map window's BOTTOM frayed border (left-aligned), where U6
  * shows its date/wind line — verified against ScummVM (refshots/u6_gameplay.png).
  * Drawn after compose_map + draw_border_tiles so it sits on top of the border. */
@@ -4551,6 +4571,7 @@ static void draw_status(const world_t*w,uint8_t col)
     s[k++]=(char)('0'+(g_alevel[1]<10?g_alevel[1]:9));    /* avatar exp level */
     { const char*t=" MP"; while(*t) s[k++]=*t++; }        /* avatar magic points (§ play) */
     k=put2(s,k,g_amana[1]); s[k++]='/'; k=put2(s,k,g_amaxmana[1]);
+    { const char*t=" Wind:"; while(*t) s[k++]=*t++; t=WIND_NAME[g_wind<=WIND_CALM?g_wind:WIND_CALM]; while(*t) s[k++]=*t++; }
     s[k]=0;
     ui_text(MAPX+4, MAPY+MAPSZ-10, s, col);               /* bottom border of the map window */
 }
@@ -5096,8 +5117,11 @@ static uint8_t  g_veh_pz[MAXPARTY];  /* hidden party members' saved z (aboard a 
 static int      g_veh_horse=-1;      /* the absorbed horse's actor id while mounted         */
 static uint8_t  g_veh_hz;            /* its saved z                                          */
 static int      g_horse_moved=-1;    /* last horse actor left somewhere new (dismount) -> its position is saved */
+
 static int g_tmpdm_invalidate(void){ g_tmp_valid=0; g_dm_valid=0; return 0; }   /* teleport: full view rebuild */
+static int veh_aboard(void){ return g_veh_kind==412||g_veh_kind==414||g_veh_kind==415||g_veh_kind==423; }   /* in a vessel (not a horse) */
 static int use_transition_object(world_t *w, int idx);   /* ladders/holes (defined with the level code below) */
+static int npc_at(const world_t*w,int x,int y);           /* (defined with the NPC code below) */
 static int step_triggers(world_t *w);
 static void eggs_update(const world_t *w, int teleport); /* eggs.md §2 (defined with the egg code below) */
 static void eggs_load_level(const uint8_t *d, int32_t n, int level);
@@ -5107,12 +5131,12 @@ static void temp_actors_clear(void);
  * (save_load.md §5), so each boarded part remembers where its record still says it is; do_save
  * patches the record there and re-anchors it. Cleared by a load (positions match the save again). */
 #define MOVED_MAX 24
-static struct { uint16_t idx, ox, oy; } g_moved[MOVED_MAX];
+static struct { uint16_t idx, ox, oy, oon; } g_moved[MOVED_MAX];
 static int g_nmoved;
 static void moved_register(int idx)
 {   if(idx<0) return;
     for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)idx) return;
-    if(g_nmoved<MOVED_MAX){ g_moved[g_nmoved].idx=(uint16_t)idx;
+    if(g_nmoved<MOVED_MAX){ g_moved[g_nmoved].idx=(uint16_t)idx; g_moved[g_nmoved].oon=g_wobj[idx].obj_n;
         g_moved[g_nmoved].ox=g_wobj[idx].x; g_moved[g_nmoved].oy=g_wobj[idx].y; g_nmoved++; } }
 
 static const signed char VDX[4]={0,1,0,-1}, VDY[4]={-1,0,1,0};      /* N E S W (§3 exit order) */
@@ -5135,6 +5159,7 @@ static int veh_can_enter(const world_t*w,int x,int y,int deep)
 static void veh_set_tiles(void)
 {   if(g_veh_kind==414){ wobj_t*o=&g_wobj[g_veh_o[0]];
         o->tile=(uint16_t)(basetile(414)+g_veh_face*2+g_veh_phase); o->dirty=1; }
+    else if(g_veh_kind==415||g_veh_kind==423){ wobj_t*o=&g_wobj[g_veh_o[0]]; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; }   /* raft / balloon: one frame (a never-saved inflated balloon stays DROPPED) */
     else if(g_veh_kind==412){ int bt=basetile(412);
         g_wobj[g_veh_o[1]].tile=(uint16_t)(bt+   g_veh_face*2+g_veh_phase);
         g_wobj[g_veh_o[0]].tile=(uint16_t)(bt+ 8+g_veh_face*2+g_veh_phase);
@@ -5176,7 +5201,7 @@ static int vehicle_exit(world_t*w)
 /* (U)se a skiff/ship object: board it (§3 checks in order). Returns recompose. */
 static int use_boat(world_t*w,int idx)
 {   wobj_t*o=&g_wobj[idx]; int on=o->obj_n;
-    if(on==414 && !tile_is_water(w,o->x,o->y)){ msgcat(0,"You must place it in water first."); return 1; }
+    if((on==414||on==415) && !tile_is_water(w,o->x,o->y)){ msgcat(0,"You must place it in water first."); return 1; }
     int ci=idx;
     if(on==412){                                   /* any part -> the CENTRE object (§3.3) */
         int fr=(int)o->tile-basetile(412), face=(fr&7)/2, cx=o->x, cy=o->y;
@@ -5201,15 +5226,88 @@ static int use_boat(world_t*w,int idx)
     w->px=c->x; w->py=c->y;                        /* the player now IS the vehicle (camera follows) */
     veh_hide_party();
     (void)g_tmpdm_invalidate();
-    msgcat(0,on==412?"You board the ship.":"You board the skiff.");
+    msgcat(0,on==412?"You board the ship.":on==415?"You board the raft.":"You board the skiff.");
     return 1; }
+/* the balloon (wind.md §4): U)se the inflated balloon (423) to board — any terrain */
+static int use_balloon(world_t*w,int idx)
+{   wobj_t*c=&g_wobj[idx];
+    g_veh_kind=423; g_veh_o[0]=idx; g_veh_o[1]=g_veh_o[2]=-1; moved_register(idx);
+    g_veh_face=2; g_veh_phase=0;
+    w->px=c->x; w->py=c->y;
+    veh_hide_party(); (void)g_tmpdm_invalidate();
+    msgcat(0,"You board the balloon."); return 1; }
+/* aboard the balloon, U)se: land on adjacent passable ground; the balloon deflates into the
+ * carried-balloon object (420) lying at the landing tile (its record is retyped on save) */
+static int balloon_land(world_t*w)
+{   for(int d=0;d<4;d++){
+        int lx=(w->px+VDX[d])&(U6_SURFACE_TILES-1), ly=(w->py+VDY[d])&(U6_SURFACE_TILES-1);
+        if(world_is_passable(w,lx,ly)){
+            wobj_t*b=&g_wobj[g_veh_o[0]];
+            b->obj_n=420; b->tile=(uint16_t)basetile(420); b->x=(uint16_t)lx; b->y=(uint16_t)ly;
+            if(b->dirty!=WOBJ_DIRTY_DROPPED) b->dirty=WOBJ_DIRTY_STATE;   /* never saved since inflating: still the carried record, relocated */
+            veh_show_party(w,lx,ly);
+            g_veh_kind=0; g_avatar_ovr=0;
+            w->px=(uint16_t)lx; w->py=(uint16_t)ly;
+            build_blocked(); (void)g_tmpdm_invalidate();
+            msgcat(0,"You land; the balloon deflates.");
+            return 1; } }
+    msgcat(0,"Only next to land.");
+    return 1; }
+/* U)se of a carried item (wind.md §1/§4): the fan turns the wind; the balloon inflates beside us */
+static int use_pack_item(world_t*w,int on)
+{   if(on==212){ g_wind=(g_wind==WIND_CALM)?0:((g_wind+1)&7); g_wind_timer=1+rng_range(&g_wind_rng,30);
+        msgcat(0,"You feel a breeze."); return 1; }
+    if(on==420){
+        if(w->level>0){ msgcat(0,"Not usable here."); return 1; }
+        static const int sx[9]={1,-1,0,0,1,-1,1,-1,0}, sy[9]={0,0,1,-1,1,-1,-1,1,0};
+        int tx=-1,ty=-1;
+        for(int k=0;k<9;k++){ int x=(w->px+sx[k])&(U6_SURFACE_TILES-1), y=(w->py+sy[k])&(U6_SURFACE_TILES-1);
+            if(world_is_passable(w,x,y) && objworld_at(&g_ow,x,y)<0 && npc_at(w,x,y)<0){ tx=x; ty=y; break; } }
+        if(tx<0){ msgcat(0,"No room to inflate it here."); return 1; }
+        int slot=-1;
+        if(g_ow.nobjs<MAXWOBJ) slot=(int)g_ow.nobjs++;
+        else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE){ slot=j; break; }
+        if(slot<0){ msgcat(0,"No room to inflate it here."); return 1; }
+        wobj_t*o=&g_wobj[slot];
+        o->obj_n=423; o->tile=(uint16_t)(basetile(423)+3); o->qty=1; o->quality=0;
+        o->x=(uint16_t)tx; o->y=(uint16_t)ty; o->parent=WOBJ_PARENT_NONE;
+        o->origin=(uint16_t)(0x8000|420);                      /* dropped FROM the carried balloon record (retyped on save) */
+        o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;
+        objworld_consume(&g_ow,420,1);
+        build_blocked(); msgcat(0,"Done!"); return 1; }
+    msgcat(0,"Nothing happens."); return 0; }
 
 /* one vehicle step: all target tiles must pass the §2 water rules; parts move + re-face as a unit */
+/* a balloon flies LOW (wind.md §4): no Wall-flagged map tile, no Wall-flagged object tile */
+static int veh_can_fly(const world_t*w,int x,int y)
+{   if(g_tflags1[world_tile(w,x,y)]&0x04) return 0;
+    int i=objworld_at(&g_ow, x&(U6_SURFACE_TILES-1), y&(U6_SURFACE_TILES-1));
+    if(i<0 || i==g_veh_o[0]) return 1;
+    return !(g_tflags1[g_wobj[i].tile]&0x04); }
+/* one vehicle step: the raft and the balloon may override the direction (wind.md §3/§4); all
+ * target tiles must pass the water/air rules; parts move + re-face as a unit. Returns the step's
+ * MOVEMENT COST (wind.md §2), 0 = no move. */
 static int vehicle_try_move(world_t*w,int dx,int dy)
-{   int nface=veh_face_of(dx,dy);
+{   int kind=g_veh_kind, heading;
+    if(kind==423){                                                   /* balloon: only the wind moves it */
+        if(g_wind==WIND_CALM){ msgcat(0,"Thou canst not move without wind!"); return 0; }
+        heading=(g_wind+4)&7; dx=D8X[heading]; dy=D8Y[heading]; }
+    else if(kind==415){                                              /* raft: deep water steers it */
+        int t=world_tile(w,w->px,w->py);
+        if(g_tflags1[t]&0x02){ int cur=(t>=8&&t<16)?t-8:0;
+            heading=(g_wind==WIND_CALM)?cur:RAFT_TBL[cur][(g_wind+4)&7]; dx=D8X[heading]; dy=D8Y[heading]; }
+        else { if(!dx&&!dy) return 0; heading=dir8_of(dx,dy); } }
+    else { if(!dx&&!dy) return 0; heading=dir8_of(dx,dy); }
+    int nface=veh_face_of(dx,dy);
     int nx=(w->px+dx)&(U6_SURFACE_TILES-1), ny=(w->py+dy)&(U6_SURFACE_TILES-1);
-    if(g_veh_kind==414){
+    int cost=5;
+    if(kind==414||kind==415){
         if(!veh_can_enter(w,nx,ny,0)) return 0;
+        if(kind==414){ int t=world_tile(w,w->px,w->py); int cur=(t>=8&&t<16)?t-8:heading;
+            int d=heading-cur; if(d<0) d=-d; cost=SKIFF_COST[d]; }
+        g_wobj[g_veh_o[0]].x=(uint16_t)nx; g_wobj[g_veh_o[0]].y=(uint16_t)ny;
+    } else if(kind==423){
+        if(!veh_can_fly(w,nx,ny)) return 0;
         g_wobj[g_veh_o[0]].x=(uint16_t)nx; g_wobj[g_veh_o[0]].y=(uint16_t)ny;
     } else {
         int fx=(nx+VDX[nface])&(U6_SURFACE_TILES-1), fy=(ny+VDY[nface])&(U6_SURFACE_TILES-1);
@@ -5217,11 +5315,36 @@ static int vehicle_try_move(world_t*w,int dx,int dy)
         if(!veh_can_enter(w,nx,ny,1) || !veh_can_enter(w,fx,fy,1) || !veh_can_enter(w,bx,by,1)) return 0;
         g_wobj[g_veh_o[0]].x=(uint16_t)nx; g_wobj[g_veh_o[0]].y=(uint16_t)ny;
         g_wobj[g_veh_o[1]].x=(uint16_t)fx; g_wobj[g_veh_o[1]].y=(uint16_t)fy;
-        g_wobj[g_veh_o[2]].x=(uint16_t)bx; g_wobj[g_veh_o[2]].y=(uint16_t)by; }
+        g_wobj[g_veh_o[2]].x=(uint16_t)bx; g_wobj[g_veh_o[2]].y=(uint16_t)by;
+        if(g_wind!=WIND_CALM){ int d=heading-g_wind; if(d<0) d=-d; cost=SHIP_COST[d]; } }
     g_veh_face=nface; g_veh_phase^=1; veh_set_tiles();
     w->px=(uint16_t)nx; w->py=(uint16_t)ny;
-    w->turns++; w->clock+=10;                      /* same turn cost as a walked step (world.c) */
     build_blocked();                               /* objects moved -> rebuild buckets/blocking */
+    return cost; }
+/* the world advances one turn per 5 movement points (wind.md §2) */
+static void vehicle_turns(world_t*w,int cost)
+{   g_mp_acc+=cost;
+    while(g_mp_acc>=5){ g_mp_acc-=5; w->turns++; w->clock+=10;
+        g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); } }
+
+/* one player step by (dx,dy): on foot, mounted, or steering a vessel. Advances the world by the
+ * step's movement cost (a walked step = one turn; vehicles per wind.md §2) and runs the step
+ * triggers. Returns 1 if the party moved. */
+static int player_step(world_t*w,int dx,int dy)
+{   int stepped;
+    if(veh_aboard()){ int cost=vehicle_try_move(w,dx,dy); stepped=cost>0; if(stepped) vehicle_turns(w,cost); }
+    else {
+        stepped=world_try_move(w,dx,dy);
+        if(stepped){
+            if(g_veh_kind==431){ g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;   /* mounted: re-face the horse sprite */
+                g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase); }
+            g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); } }
+    if(stepped) (void)step_triggers(w);
+    return stepped; }
+/* a passed turn (wind.md §3): a raft or the balloon drifts with the wind; the world moves on */
+static int player_pass(world_t*w)
+{   if((g_veh_kind==415||g_veh_kind==423) && g_wind!=WIND_CALM){ int cost=vehicle_try_move(w,0,0); if(cost>0){ vehicle_turns(w,cost); (void)step_triggers(w); return 1; } }
+    w->turns++; w->clock+=10; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w);
     return 1; }
 
 /* horses (§4): a wandering horse actor at (x,y)? (its tile sits in obj 430's frame range) */
@@ -5313,9 +5436,11 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
             }
         }
     } else { /* 'U' use — dispatch by object number (doors open/close, ...) */
-        if(g_veh_kind==412||g_veh_kind==414) return vehicle_exit(w);       /* aboard: U = disembark (vehicles.md §3.1) */
+        if(g_veh_kind==412||g_veh_kind==414||g_veh_kind==415) return vehicle_exit(w);   /* aboard: U = disembark (vehicles.md §3.1) */
+        if(g_veh_kind==423) return balloon_land(w);                        /* in the balloon: U = land (wind.md §4) */
         if(g_veh_kind==431) return horse_dismount(w);                      /* mounted: U = dismount (§4) */
-        if(idx>=0 && (g_wobj[idx].obj_n==412||g_wobj[idx].obj_n==414)) return use_boat(w,idx);
+        if(idx>=0 && (g_wobj[idx].obj_n==412||g_wobj[idx].obj_n==414||g_wobj[idx].obj_n==415)) return use_boat(w,idx);
+        if(idx>=0 && g_wobj[idx].obj_n==423) return use_balloon(w,idx);
         if(idx>=0 && (g_wobj[idx].obj_n==305||g_wobj[idx].obj_n==106||g_wobj[idx].obj_n==308))
             return use_transition_object(w,idx);                             /* ladder / hole (map_levels.md §4) */
         if(idx<0){ int h=horse_actor_at(tx,ty);
@@ -5393,7 +5518,7 @@ static void draw_inventory(uint8_t col)
     if(g_ow.ninv==0) ui_text(PANX+8, 32, "(nothing)", col);
     else for(int i=0;i<g_ow.ninv && i<15;i++){
         char line[24]; int t=0; char nm[20]; obj_name(g_ow.inv[i].tile,nm,sizeof nm);
-        int sel = (g_pending_verb=='D' && i==g_inv_sel);   /* the row armed for D)rop */
+        int sel = ((g_pending_verb=='D' || g_pending_verb=='E' || (g_pending_verb=='U' && g_use_pack)) && i==g_inv_sel);   /* the armed row */
         if(sel){ line[t++]='>'; line[t++]=' '; }            /* selection marker */
         if(g_ow.inv[i].qty>1){ int q=g_ow.inv[i].qty; if(q>99)q=99;
             line[t++]=(char)('0'+q/10); line[t++]=(char)('0'+q%10); line[t++]=' '; }
@@ -6610,7 +6735,7 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='G'){ return do_verb(w,'G',dx,dy); }
     if(verb=='D'){ return do_verb(w,'D',dx,dy); }
     if(verb=='M'){ int sx=dx<0?-1:(dx>0?1:0), sy=dy<0?-1:(dy>0?1:0);
-        if((sx||sy) && world_try_move(w,sx,sy)){ g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); (void)step_triggers(w); return 1; }
+        if((sx||sy) && player_step(w,sx,sy)) return 1;
         return 0; }
     if(verb=='T'){ int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
         int id=npc_at(w,tx,ty); if(id>=0) talk(id); else msgcat(0,"No-one to talk to."); return 0; }
@@ -6678,20 +6803,22 @@ static int objects_reconcile(const world_t *w)
     /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
     for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
         if(!o->dirty || o->alive) continue;
-        if(o->origin!=WOBJ_PARENT_NONE){                      /* taken from a container: patch its in-container record */
+        if(o->origin!=WOBJ_PARENT_NONE && !(o->origin&0x8000)){   /* taken from a container: patch its in-container record */
             wobj_t*c=&g_wobj[o->origin];
             patched += sav_patch_contained_taken(d, n, surf, lv, c->x, c->y, c->obj_n, o->obj_n, o->quality, 1);
-        } else patched += sav_patch_obj_taken(d, n, surf, lv, o->x, o->y, o->obj_n, 1); }
+        } else { int tx=o->x, ty=o->y, ton=o->obj_n;         /* a moved/retyped object: its record is where it was */
+            for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ tx=g_moved[k].ox; ty=g_moved[k].oy; ton=g_moved[k].oon; break; }
+            patched += sav_patch_obj_taken(d, n, surf, lv, tx, ty, ton, 1); } }
     /* 2) changed map objects (doors, levers, boats): frame / position / price tag, at the record's
      *    ORIGINAL position (a sailed boat's record is re-anchored to where it is now) */
     for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
         if(o->dirty!=WOBJ_DIRTY_STATE || !o->alive) continue;
         int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) continue;
-        int ox=o->x, oy=o->y, mk=-1;
-        for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ ox=g_moved[k].ox; oy=g_moved[k].oy; mk=k; break; }
-        int boat=(o->obj_n==412||o->obj_n==414);
-        if(sav_patch_obj_state(d, n, surf, lv, ox, oy, o->obj_n, o->x, o->y, frame, boat?o->quality:-1)){
-            patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; } } }
+        int ox=o->x, oy=o->y, oon=o->obj_n, mk=-1;
+        for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ ox=g_moved[k].ox; oy=g_moved[k].oy; oon=g_moved[k].oon; mk=k; break; }
+        int boat=(o->obj_n==412||o->obj_n==414||o->obj_n==415||o->obj_n==423);
+        if(sav_patch_obj_state(d, n, surf, lv, ox, oy, oon, o->x, o->y, frame, boat?o->quality:-1, (oon!=o->obj_n)?o->obj_n:-1)){
+            patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; g_moved[mk].oon=o->obj_n; } } }
     /* 3) readied gear (equipment.md §6): clear the party's readied bits, then mark one carried
      *    record per live slot item (a GET-flipped record from step 1 qualifies). Must precede the
      *    drops: an item taken off and dropped is still a readied record until this pass. */
@@ -6704,8 +6831,9 @@ static int objects_reconcile(const world_t *w)
     for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
         if(o->dirty!=WOBJ_DIRTY_DROPPED || !o->alive) continue;
         int frame=(int)o->tile - basetile(o->obj_n); if(frame<0) frame=0;
-        if(sav_drop_item(d, n, o->obj_n, o->quality, o->x, o->y, lv, frame, in_party, U6_MAX_ACTORS)>0){
-            o->dirty=WOBJ_DIRTY_STATE; patched++; } }
+        int src=(o->origin!=WOBJ_PARENT_NONE && (o->origin&0x8000))?(o->origin&0x7fff):o->obj_n;   /* placed from a record of another type? */
+        if(sav_drop_item(d, n, src, o->quality, o->x, o->y, lv, frame, (src!=o->obj_n)?o->obj_n:-1, in_party, U6_MAX_ACTORS)>0){
+            o->dirty=WOBJ_DIRTY_STATE; o->origin=WOBJ_PARENT_NONE; patched++; } }
     return patched;
 }
 /* Absorb the party's inventories from a save buffer's actor-inventory chunk into the live model
@@ -6792,7 +6920,7 @@ static int do_save(const world_t *w)
 {
     if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No save template (SAVE.000)."); return 0; }
     uint8_t *d=g_savetmpl; int32_t off=g_objlist_off, n=g_savetmpl_len;
-    int aboard=(g_veh_kind==412||g_veh_kind==414);
+    int aboard=veh_aboard();
     /* FULL objlist state: every party member's position (+ map level) + HP/Str/Dex/Int + experience.
      * The avatar (actor 1) uses the world position; companions use their live actor positions —
      * aboard a boat they are hidden inside it, so they travel with it (save_load.md §1). */
@@ -6808,6 +6936,7 @@ static int do_save(const world_t *w)
     }
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
     sav_set_talk_state(d, off, g_cg.talk_flags, g_cg.on_quest, g_cg.knows_gargish);   /* conversation state */
+    sav_set_wind(d, off, g_wind==WIND_CALM ? 0xff : g_wind);                           /* the wind (wind.md §1) */
     /* the horse we ride (absorbed: it is where we are) or last left somewhere new (vehicles.md §4) */
     if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, w->level);
     else if(g_horse_moved>=0){ int h=g_horse_moved;
@@ -6879,7 +7008,7 @@ static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pa
  * with a message either way. */
 static int do_transition(world_t *w, int kind, int quality)
 {
-    if(g_veh_kind==412||g_veh_kind==414){ msgcat(0,"Not from a boat."); return 1; }
+    if(veh_aboard()){ msgcat(0,"Not from a boat."); return 1; }
     if(!g_savetmpl){ msgcat(0,"No dungeon data (SAVE.000)."); return 1; }
     int lv0=w->level; uint16_t px0=w->px, py0=w->py;
     (void)objects_reconcile(w);
@@ -6983,6 +7112,7 @@ static int load_game(world_t *w)
     pool_from_inventory(d, n, ol);
     magic_seed_items();
     talk_state_from_save(d, ol);
+    wind_from_save(d, ol); g_mp_acc = 0;
 
     /* the loaded file is now the SAVE TEMPLATE too: the next do_save patches this state, not the
      * boot-time SAVE.000 (our own writer keeps the layout, so the sizes match) */
@@ -6996,7 +7126,9 @@ static int load_game(world_t *w)
      * horse's tile (the absorbed mount travels with the rider) it is mounted */
     if(tile_is_water(w, w->px, w->py)){
         int bi = wobj_boat_at(414, w->px, w->py); if(bi < 0) bi = wobj_boat_at(412, w->px, w->py);
+        if(bi < 0) bi = wobj_boat_at(415, w->px, w->py);
         if(bi >= 0) (void)use_boat(w, bi); }
+    else if(wobj_boat_at(423, w->px, w->py) >= 0) (void)use_balloon(w, wobj_boat_at(423, w->px, w->py));   /* saved aloft */
     else { int hi = horse_actor_at(w->px, w->py); if(hi >= 0) (void)horse_mount(w, hi); }
     msgcat(0, "Game restored.");
     return 1;
@@ -8255,6 +8387,7 @@ int main(int argc, char **argv)
     init_npcs();                                          /* seed NPC positions/facing for schedule-walking */
     rng_seed(&g_crng, 0x6e0c0de ^ (uint32_t)g_start_min); /* combat RNG (docs/rules/combat.md) */
     rng_seed(&g_egg_rng, 0xe66e66u ^ (uint32_t)g_start_min);  /* egg hatch RNG (docs/rules/eggs.md) */
+    rng_seed(&g_wind_rng, 0x3113d1u ^ (uint32_t)g_start_min);  /* wind change RNG (docs/rules/wind.md) */
     if(g_aweapon[1]) g_avatar_weapon=g_aweapon[1];        /* the avatar's actual readied weapon (CB3b) */
     for(int i=0;i<U6_MAX_ACTORS;i++){                     /* per-actor level = maxHP/30 (party leveling) */
         int lv=(g_amaxhp[i]>=30)?(g_amaxhp[i]/30):1; if(lv>8) lv=8; g_alevel[i]=(int8_t)lv; }
@@ -8304,6 +8437,7 @@ int main(int argc, char **argv)
         else { pool_from_inventory(g_savetmpl, g_savetmpl_len, g_objlist_off);   /* the party's real pack (§6) */
                magic_seed_items();
                talk_state_from_save(g_savetmpl, g_objlist_off);                 /* what NPCs already told us */
+               wind_from_save(g_savetmpl, g_objlist_off);                       /* the wind (wind.md §1) */
                eggs_load_level(g_savetmpl, g_savetmpl_len, 0); }                /* the surface's eggs (eggs.md) */
         /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
          * a created character (g_cc_done) keeps the name it was given */
@@ -8486,6 +8620,112 @@ int main(int argc, char **argv)
                     else Cconws("VEH no horse spot\r\n"); }
             } } }
 
+    /* headless WIND checks (wind.md §7): WIND.REQ byte = mode. */
+    {   int32_t wl=0; const uint8_t*wq=(const uint8_t*)plat_load_file("WIND.REQ",1,&wl);
+        if(wq && wl>0){ int mode=wq[0];
+            dbg_num("WIND loaded=", g_wind);
+            if(mode=='1'){
+                /* a ship on a 7x7 open-water block, then the step cost per heading under a north wind */
+                int wx=-1,wy=-1;
+                for(int r=1;r<300 && wx<0;r++) for(int e=-r;e<=r && wx<0;e++) for(int side=0;side<4 && wx<0;side++){
+                    int x=(side==0||side==1)? (int)w.px+e : (side==2? (int)w.px-r : (int)w.px+r);
+                    int y=(side==0)? (int)w.py-r : (side==1? (int)w.py+r : (int)w.py+e);
+                    x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1);
+                    int ok=1;
+                    for(int oy=-3;oy<=3 && ok;oy++) for(int ox=-3;ox<=3 && ok;ox++){
+                        int t=world_tile(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1));
+                        if(!(g_tflags1[t]&1) || (t>=16&&t<=47)) ok=0; }
+                    if(!ok) continue;
+                    for(int oy=-3;oy<=3 && ok;oy++) for(int ox=-3;ox<=3 && ok;ox++)
+                        if(!veh_can_enter(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1),1)) ok=0;
+                    if(ok){ wx=x; wy=y; } }
+                dbg_num("WIND sea found=", wx>=0);
+                if(wx>=0){ int bt=basetile(412), slots[3];
+                    for(int k=0;k<3;k++){ int sl=-1; if(g_ow.nobjs<MAXWOBJ) sl=(int)g_ow.nobjs++; slots[k]=sl; }
+                    int px_[3]={wx,wx,wx}, py_[3]={wy,(wy-1)&(U6_SURFACE_TILES-1),(wy+1)&(U6_SURFACE_TILES-1)}, fr_[3]={8,0,16};
+                    for(int k=0;k<3;k++){ wobj_t*o=&g_wobj[slots[k]]; o->obj_n=412; o->tile=(uint16_t)(bt+fr_[k]);
+                        o->x=(uint16_t)px_[k]; o->y=(uint16_t)py_[k]; o->qty=30; o->quality=0;
+                        o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=1; }
+                    build_blocked();
+                    w.px=(uint16_t)wx; w.py=(uint16_t)wy; g_tmp_valid=0; (void)use_boat(&w,slots[0]);
+                    dbg_num("WIND aboard=", g_veh_kind==412);
+                    g_wind=0; g_wind_timer=1000;                                  /* north wind, held */
+                    static const int hx[4]={0,1,0,-1}, hy[4]={-1,0,1,0};        /* N E S W */
+                    for(int h=0;h<4;h++){ int c=vehicle_try_move(&w,hx[h],hy[h]);   /* cost: 10, 3, 5, 3 */
+                        dbg_num("WIND ship cost=", c); if(c) vehicle_try_move(&w,-hx[h],-hy[h]); }
+                    g_wind=WIND_CALM; dbg_num("WIND calm cost=", vehicle_try_move(&w,0,1));
+                    { int before=(int)w.turns; g_mp_acc=0; g_wind=2;              /* east wind: sailing north = beam reach (3) */
+                      for(int k=0;k<5;k++){ int c=vehicle_try_move(&w,0,-1); if(c) vehicle_turns(&w,c); }
+                      dbg_num("WIND turns for 5 beam steps=", (int)w.turns-before); }
+                    (void)vehicle_exit(&w); }
+                g_wind=WIND_CALM; (void)use_pack_item(&w,212); dbg_num("WIND after fan from calm=", g_wind);
+                g_wind=7; (void)use_pack_item(&w,212); dbg_num("WIND after fan from NW=", g_wind);
+                g_wind=5; g_wind_timer=1000; do_save(&w); g_wind=1; dbg_num("WIND load ok=", load_game(&w)); dbg_num("WIND after load=", g_wind);
+            } else if(mode=='2'){
+                /* the balloon: carried item -> inflate -> board -> drift with a NW wind -> calm refuses -> land */
+                { int fx=-1,fy=-1;                                               /* an open 5x5 of free passable ground */
+                  for(int r=1;r<300 && fx<0;r++) for(int e=-r;e<=r && fx<0;e++) for(int side=0;side<4 && fx<0;side++){
+                    int x=(side==0||side==1)? (int)w.px+e : (side==2? (int)w.px-r : (int)w.px+r);
+                    int y=(side==0)? (int)w.py-r : (side==1? (int)w.py+r : (int)w.py+e);
+                    x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1); int ok=1;
+                    for(int oy=-2;oy<=2 && ok;oy++) for(int ox=-2;ox<=2 && ok;ox++){ int tx=(x+ox)&(U6_SURFACE_TILES-1), ty=(y+oy)&(U6_SURFACE_TILES-1);
+                        int t=world_tile(&w,tx,ty); if(!world_is_passable(&w,tx,ty) || (g_tflags1[t]&1) || (g_tflags1[t]&4)) ok=0; }
+                    if(!ok) continue;
+                    for(int oy=-2;oy<=2 && ok;oy++) for(int ox=-2;ox<=2 && ok;ox++) if(objworld_at(&g_ow,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1))>=0) ok=0;
+                    if(ok){ fx=x; fy=y; } }
+                  dbg_num("WIND field found=", fx>=0); if(fx>=0) teleport_party(&w,fx,fy); }
+                inv_add_objn(420,1); do_save(&w); (void)load_game(&w);          /* the carried balloon gets a real record */
+                dbg_num("WIND balloon carried=", objworld_count(&g_ow,420));
+                g_wind=7; g_wind_timer=1000;
+                (void)use_pack_item(&w,420);
+                int bi=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==423){ bi=i; break; }
+                dbg_num("WIND balloon inflated=", bi>=0);
+                if(bi>=0){ int bx=g_wobj[bi].x, by=g_wobj[bi].y;
+                    (void)use_balloon(&w,bi); dbg_num("WIND aboard balloon=", g_veh_kind==423);
+                    int c=vehicle_try_move(&w,0,-1);                             /* tries north; NW wind blows it SE */
+                    dbg_num("WIND drift moved=", c>0); dbg_num("WIND drift dx=", (int)w.px-bx+1); dbg_num("WIND drift dy=", (int)w.py-by+1);
+                    g_wind=WIND_CALM; dbg_num("WIND calm move=", vehicle_try_move(&w,0,-1));
+                    g_wind=7; (void)player_pass(&w); dbg_num("WIND pass drifted=", (int)w.px!=bx+1 || (int)w.py!=by+1);
+                    (void)balloon_land(&w); dbg_num("WIND landed=", g_veh_kind==0);
+                    int li=objworld_at(&g_ow,w.px,w.py); int near=0;
+                    for(int d=0;d<4;d++){ int ix=objworld_at(&g_ow,(w.px+VDX[d])&(U6_SURFACE_TILES-1),(w.py+VDY[d])&(U6_SURFACE_TILES-1)); if(ix>=0 && g_wobj[ix].obj_n==420) near=1; }
+                    dbg_num("WIND balloon item lies here=", (li>=0 && g_wobj[li].obj_n==420) || near);
+                    do_save(&w); dbg_num("WIND load ok=", load_game(&w));
+                    int cnt420=0, cnt423=0; for(int i=0;i<g_ow.nobjs;i++){ if(!g_wobj[i].alive) continue; if(g_wobj[i].obj_n==420) cnt420++; if(g_wobj[i].obj_n==423) cnt423++; }
+                    dbg_num("WIND after load 420 on map=", cnt420); dbg_num("WIND after load 423 on map=", cnt423); }
+            } else if(mode=='3'){
+                /* a raft on deep water goes where the wind table says */
+                int ri=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==415 && tile_is_water(&w,g_wobj[i].x,g_wobj[i].y)){ ri=i; break; }
+                dbg_num("WIND raft found=", ri>=0);
+                if(ri>=0){ w.px=g_wobj[ri].x; w.py=(uint16_t)((g_wobj[ri].y+1)&(U6_SURFACE_TILES-1)); g_tmp_valid=0;
+                    (void)use_boat(&w,ri); dbg_num("WIND aboard raft=", g_veh_kind==415);
+                    g_wind=WIND_CALM; g_wind_timer=1000;
+                    { int x0=w.px, y0=w.py; int c=vehicle_try_move(&w,0,-1);       /* shallow water: the player steers */
+                      dbg_num("WIND shallow steered north=", c>0 && (int)w.py==((y0-1)&(U6_SURFACE_TILES-1)) && (int)w.px==x0); }
+                    (void)vehicle_exit(&w); }
+                /* a raft on the open sea: its motion on deep water is forced by water + wind */
+                {   int wx=-1,wy=-1;
+                    for(int r=1;r<300 && wx<0;r++) for(int e=-r;e<=r && wx<0;e++) for(int side=0;side<4 && wx<0;side++){
+                        int x=(side==0||side==1)? (int)w.px+e : (side==2? (int)w.px-r : (int)w.px+r);
+                        int y=(side==0)? (int)w.py-r : (side==1? (int)w.py+r : (int)w.py+e);
+                        x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1); int ok=1;
+                        for(int oy=-2;oy<=2 && ok;oy++) for(int ox=-2;ox<=2 && ok;ox++){ int t=world_tile(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1));
+                            if(!(g_tflags1[t]&1) || !(g_tflags1[t]&2) || (t>=16&&t<=47)) ok=0; }
+                        if(!ok) continue;
+                        for(int oy=-2;oy<=2 && ok;oy++) for(int ox=-2;ox<=2 && ok;ox++) if(!veh_can_enter(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1),0)) ok=0;
+                        if(ok){ wx=x; wy=y; } }
+                    dbg_num("WIND deep sea found=", wx>=0);
+                    if(wx>=0){ int sl=-1; if(g_ow.nobjs<MAXWOBJ) sl=(int)g_ow.nobjs++;
+                      if(sl>=0){ wobj_t*o=&g_wobj[sl]; o->obj_n=415; o->tile=(uint16_t)basetile(415); o->x=(uint16_t)wx; o->y=(uint16_t)wy;
+                        o->qty=1; o->quality=0; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; build_blocked();
+                        w.px=(uint16_t)wx; w.py=(uint16_t)wy; g_tmp_valid=0; (void)use_boat(&w,sl); }
+                      int t=world_tile(&w,w.px,w.py); int deep=(g_tflags1[t]&2)?1:0; dbg_num("WIND raft on deep=", deep); dbg_num("WIND raft tile=", t);
+                      if(deep){ g_wind=6;                                          /* west wind blows EAST: table[still][E] = NE */
+                        int x0=w.px, y0=w.py; int c=vehicle_try_move(&w,0,1);     /* the player asks south: ignored */
+                        int cur=(t>=8&&t<16)?t-8:0, want=RAFT_TBL[cur][2];
+                        dbg_num("WIND raft moved=", c>0); dbg_num("WIND raft forced dir ok=", c>0 && (int)w.px==((x0+D8X[want])&(U6_SURFACE_TILES-1)) && (int)w.py==((y0+D8Y[want])&(U6_SURFACE_TILES-1)));
+                        dbg_num("WIND raft want dir=", want); } } } } } }
+
     /* "Journey Onward" resumes the last save when one exists (a chargen run starts FRESH —
      * g_cc_done wins). Headless LOAD.REQ: save -> move away -> restore -> print the round-trip. */
     if(g_menu_journey && !g_cc_done && plat_fsize_path("SAVED.000")>0) (void)load_game(&w);
@@ -8507,7 +8747,8 @@ int main(int argc, char **argv)
                 int tx=(w.px+VDX[d])&(U6_SURFACE_TILES-1), ty=(w.py+VDY[d])&(U6_SURFACE_TILES-1);
                 if(!world_is_passable(&w,tx,ty)) continue;
                 for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==(uint16_t)body){ g_inv_sel=k; break; }
-                (void)do_verb(&w,'D',VDX[d],VDY[d]); dx_=tx; dy_=ty; }
+                (void)do_verb(&w,'D',VDX[d],VDY[d]); dx_=tx; dy_=ty;
+                }
             int si=-1, bx0=0, by0=0, sailed=0;                                /* a REAL skiff of the save (owned, afloat) */
             if(do_boat) for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
                 if(o->alive && o->obj_n==414 && o->quality==0 && tile_is_water(&w,o->x,o->y)){ si=i; break; } }
@@ -9847,6 +10088,16 @@ int main(int argc, char **argv)
                         equip_to_member(a-'1'); redraw=1;                             /* 1..5 -> that member */
                     }
                     else if (g_pending_verb=='E' && (dx||dy)) { }                     /* E ignores directions */
+                    else if (g_pending_verb=='U' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){
+                        if(!g_use_pack){ g_use_pack=1; g_show_inv=1; g_inv_sel=0; }     /* U again -> use a carried item */
+                        else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;                        /* ... U once more -> next item */
+                        { char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
+                          int n=msgcat(0,"Use the "); n=msgcat(n,dn); msgcat(n,"? (U=next, Enter=use)"); }
+                        redraw=1; }
+                    else if (g_pending_verb=='U' && g_use_pack && a==0x0d && !(dx||dy)){
+                        if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) (void)use_pack_item(&w, g_ow.inv[g_inv_sel].obj_n);
+                        g_pending_verb=0; g_show_inv=0; g_use_pack=0;
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=0; g_show_inv=0; redraw=1; }
                     else if (a==0x1b) { g_pending_verb=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
@@ -9860,7 +10111,8 @@ int main(int argc, char **argv)
                 else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); redraw=1; }                         /* D)rop */
                 else if (a=='e'||a=='E') { g_msg[0]=0; arm_equip(); redraw=1; }                        /* E)quip (equipment.md §5) */
-                else if (a=='u'||a=='U') { g_pending_verb='U'; g_msg[0]=0; g_show_inv=0; redraw=1; }
+                else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; redraw=1; }
+                else if (a==' ') { g_show_inv=0; if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* pass a turn (a raft/balloon drifts) */
                 else if (a=='i'||a=='I') { g_show_inv=!g_show_inv; g_msg[0]=0; redraw=1; }
                 else if (a=='s'||a=='S') { g_show_inv=0; do_save(&w); redraw=1; }  /* write SAVED.000 */
                 else if (a==0x12) { if(load_game(&w)){                              /* Ctrl-R: restore SAVED.000 */
@@ -9883,16 +10135,7 @@ int main(int argc, char **argv)
                 else if (dx||dy) {                   /* walk (or steer the vehicle) */
                     if (g_talking||g_show_inv||g_msg[0]) {   /* closing a panel needs a full present */
                         end_talk(); g_show_inv=0; g_msg[0]=0; redraw=1; }
-                    int stepped;
-                    if (g_veh_kind==412||g_veh_kind==414) stepped=vehicle_try_move(&w,dx,dy);
-                    else {
-                        stepped=world_try_move(&w,dx,dy);
-                        if (stepped && g_veh_kind==431){      /* mounted: re-face the horse sprite */
-                            g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;
-                            g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase); } }
-                    if (stepped){ g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
-                        step_npcs(&w);                   /* NPCs walk their schedules one step */
-                        (void)step_triggers(&w);         /* cave mouth / hole under our feet? (map_levels.md §4) */
+                    if (player_step(&w,dx,dy)){         /* foot / horse / vessel; NPCs + triggers inside */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1; }  /* map-only */
                 }
             }
@@ -9926,7 +10169,7 @@ int main(int argc, char **argv)
                     } else if (dx||dy) {                        /* plain click: WALK there (click-to-travel) */
                         g_travel_tx=(int)((w.px+dx)&(U6_SURFACE_TILES-1));
                         g_travel_ty=(int)((w.py+dy)&(U6_SURFACE_TILES-1));
-                        g_travel_active=1;
+                        g_travel_active=1; g_travel_level=w.level;
                     }
                     redraw=1;
                 }
@@ -9938,9 +10181,8 @@ int main(int argc, char **argv)
             if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;   /* arrived */
             else { int sx,sy;
                 if (npc_pathstep(&w,(int)w.px,(int)w.py,g_travel_tx,g_travel_ty,-1,-1,&sx,&sy)
-                    && (sx||sy) && world_try_move(&w,sx,sy)) {
-                    g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w);
-                    if(step_triggers(&w)) g_travel_active=0;
+                    && (sx||sy) && player_step(&w,sx,sy)) {
+                    if(w.level!=g_travel_level) g_travel_active=0;
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1;
                     if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;
                 } else g_travel_active=0;                       /* blocked / no path -> stop */

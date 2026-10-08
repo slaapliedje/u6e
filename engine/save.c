@@ -79,7 +79,7 @@ static int32_t chunk_of(const uint8_t *d, int32_t n, int32_t surf_off, int level
  * that sailed into another super-chunk is still found by everyone. The frame is the top 6 bits of
  * byte 5; z (byte 3 high nibble) is kept. Returns 1 if a matching record was found + patched. */
 int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int ox, int oy, int obj_n,
-                        int x, int y, int frame, int quality)
+                        int x, int y, int frame, int quality, int new_obj_n)
 {
     int32_t pos = chunk_of(d, n, surf_off, level, ox, oy);
     if (pos < 0 || pos + 2 > n) return 0;
@@ -92,10 +92,12 @@ int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int 
         int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
         int ron = r[4] | ((r[5] & 3) << 8);
         if (rx == ox && ry == oy && ron == obj_n){
+            int won = (new_obj_n >= 0) ? new_obj_n : ron;
             r[1] = (uint8_t)(x & 0xff);
             r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
             r[3] = (uint8_t)((r[3] & 0xf0) | ((y >> 6) & 0x0f));
-            r[5] = (uint8_t)((ron >> 8) & 3) | (uint8_t)((frame & 0x3f) << 2);  /* keep obj_n high, set frame */
+            r[4] = (uint8_t)(won & 0xff);
+            r[5] = (uint8_t)((won >> 8) & 3) | (uint8_t)((frame & 0x3f) << 2);  /* obj_n (maybe retyped) + frame */
             if (quality >= 0) r[7] = (uint8_t)quality;    /* <0 = keep (a stackable's byte 7 is its count's high byte) */
             return 1;
         }
@@ -186,8 +188,9 @@ int sav_ready_item(uint8_t *d, int32_t n, int actor, int obj_n, const uint8_t *i
 }
 
 int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int z, int frame,
-                  const uint8_t *in_party, int nact)
+                  int as_obj_n, const uint8_t *in_party, int nact)
 {
+    int won = (as_obj_n >= 0) ? as_obj_n : obj_n;
     rec_it it; uint8_t *r; int moved = 0;
     it_start(&it, d, n);
     while ((r = it_next(&it))){
@@ -199,7 +202,8 @@ int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, i
         r[1] = (uint8_t)(x & 0xff);
         r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
         r[3] = (uint8_t)(((y >> 6) & 0x0f) | ((z & 0x0f) << 4));
-        r[5] = (uint8_t)(((obj_n >> 8) & 3) | ((frame & 0x3f) << 2));
+        r[4] = (uint8_t)(won & 0xff);
+        r[5] = (uint8_t)(((won >> 8) & 3) | ((frame & 0x3f) << 2));
         moved++;
     }
     return moved;
@@ -333,6 +337,9 @@ void sav_get_talk_state(const uint8_t *d, int32_t off, uint8_t *talk_flags, int 
     if (on_quest) *on_quest = d[off + 0x1bf1];
     if (knows_gargish) *knows_gargish = d[off + 0x1c5f];
 }
+
+void sav_set_wind(uint8_t *d, int32_t off, int wind_byte){ d[off + 0x1bfa] = (uint8_t)wind_byte; }
+int  sav_get_wind(const uint8_t *d, int32_t off){ return d[off + 0x1bfa]; }
 
 void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana)
 {

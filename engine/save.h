@@ -41,7 +41,7 @@ int sav_level_span(const uint8_t *d, int32_t n, int level, int32_t *off, int32_t
  * (in-place; nuvie_save.md): new position x,y (a sailed boat), frame (doors, boat facing) and
  * quality (a bought boat's cleared price tag; <0 keeps the record's). Returns 1 if patched. */
 int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int ox, int oy, int obj_n,
-                        int x, int y, int frame, int quality);
+                        int x, int y, int frame, int quality, int new_obj_n);   /* new_obj_n <0 = keep (a balloon deflates 423->420) */
 
 /* ---- carried-record RECONCILIATION (docs/rules/save_load.md §5) ----------------------------
  * These walk EVERY record of the object region [4, surface_end): the actor-inventory chunk, the
@@ -63,7 +63,7 @@ int sav_ready_item(uint8_t *d, int32_t n, int actor, int obj_n, const uint8_t *i
  * (x,y,z) with `frame`. Each record keeps its own stack count — the pooled stack the player
  * dropped IS their union. Returns the number relocated. */
 int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, int z, int frame,
-                  const uint8_t *in_party, int nact);
+                  int as_obj_n, const uint8_t *in_party, int nact);   /* as_obj_n <0 = keep (an inflated balloon: 420 -> 423) */
 
 /* Persist a TAKEN item: flip the on-map record at (x,y,obj_n) to in-inventory, owner `owner`.
  * Returns 1 if patched (no-ops for non-on-map records). */
@@ -91,6 +91,10 @@ void sav_set_player(uint8_t *d, int32_t off, int gender, int portrait, int karma
  * quest flag (0x1bf1) and knows-Gargish (0x1c5f). */
 void sav_set_talk_state(uint8_t *d, int32_t off, const uint8_t *talk_flags, int on_quest, int knows_gargish);
 void sav_get_talk_state(const uint8_t *d, int32_t off, uint8_t *talk_flags, int *on_quest, int *knows_gargish);
+
+/* The wind (objlist 0x1bfa): 0..7 = N,NE,E,SE,S,SW,W,NW (the direction it blows FROM), 0xff = calm. */
+void sav_set_wind(uint8_t *d, int32_t off, int wind_byte);
+int  sav_get_wind(const uint8_t *d, int32_t off);
 
 /* Patch actor `actor`'s level (objlist 0xff1 + actor) and current magic points (0x13f1 + actor). */
 void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana);
