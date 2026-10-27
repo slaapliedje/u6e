@@ -132,6 +132,73 @@ member starves, losing 1 HP every 8 turns ("X is starving!"). The ztats screen s
 Food row (Full/Fed/Hungry/Starving). Not yet save-backed (begins Full each load).
 Validated (HUNGER.BIN): food 5 → 0 over turns → Avatar loses 3 HP → eat a loaf → food 40.
 
+## Secret doors, passthroughs, fire devices, torches, powder kegs (IMPLEMENTED 2026-10-26)
+
+> Derived from: READING ScummVM/Nuvie `usecode/u6_object_types.h` (which objects have handlers),
+> `usecode/u6_usecode.cpp` use_secret_door / use_passthrough / use_firedevice (+ message) /
+> torch, light_torch, extinguish_torch / use_powder_keg, `actors/u6_actor.cpp`
+> handle_lightsource, and the U6 scripts in Nuvie's `ultima.dat` (`u6/init.lua` use_keg /
+> explode_keg / explode_obj / explode_surrounding_objects, `u6/actor.lua` the lit-torch
+> burn in advance_time), `core/effect.cpp` ExpEffect (the 16 blast rays within 2 tiles) — to
+> understand the behaviour; re-expressed, no code transcribed. Object counts from the user's
+> own data (the pristine save): 40 secret doors (9 in dungeons), 16 passthroughs (surface),
+> 17 torches on the map, 79 powder kegs (26 in dungeon levels 2-4).
+
+- **Secret door (334).** Two orientations: frames 0 / 2 are HIDDEN (they look like wall, and
+  pass as their tile says), 1 / 3 are open. L)ook at a hidden one reveals it: "You see a secret
+  door." and the frame goes 0→1 / 2→3 (the original's Search). U)se toggles it: an open one
+  closes (frame −1), a hidden or closed one opens (frame +1). Passability follows the frame's
+  tile; the frame persists like a door's.
+- **Passthrough (278 vertical, 280 horizontal).** Frame < 2 = closed. U)se OPENS it: the object
+  moves ONE tile up (278) / left (280) and takes frame 2 — "Open the passthrough."; U)se again
+  CLOSES it: it moves back down / right and takes frame 0 — "Close the passthrough.". Refused
+  ("Not now!") when an actor stands on the tile it would move to. The moved object re-anchors
+  its save record like a sailed boat.
+- **Fire devices.** Fireplace (164): frames 0↔1 and 2↔3 (odd = lit). Candle (122), candelabra
+  (145), brazier (206): frame 0↔1; a brazier at frame 2 is a holy flame and cannot be doused.
+  U)se toggles: "<name> is lit." / "<name> is doused.". The lit frame's tile is the light
+  emitter (tileflags2 bits 0-1), so the lighting follows the frame at once.
+- **Torch (90).** U)se a torch from the pack: one torch is READIED into a free hand (ARM, else
+  ARM2 — "No free hand to hold the torch." when both are taken) and lit: "Torch is lit."; the
+  holder sheds light level 3 (the brightest emitter class) while it burns. It burns for
+  200 turns of fuel, losing one each turn with probability 1/2 (≈400 turns): "A torch burned
+  out." — the torch is gone. U)se the pack's torch again while one is lit, or unready the lit
+  torch: it is extinguished and used up (the original destroys an extinguished torch).
+  U)se a torch lying on the map lights it in place (frame 1: a light source on the ground);
+  U)se it again and it burns out (removed). Only the Avatar's torch is modelled (companions
+  and NPCs do not light theirs).
+- **Powder keg (223).** U)se a keg (on the map or carried): "Powder lit!" — frame 1 and a
+  3-turn fuse (one fuse at a time: "Not now" while one burns; a lit keg: "No effect"). When the
+  fuse runs out every lit keg on the level explodes (a carried one at the party's feet): the keg
+  is gone, a fireball (tile 393) bursts, every actor within 2 tiles (the 5×5 — probable, the
+  original throws 16 rays 2 tiles out) takes a flat 1..60 — the party included; then within 2
+  tiles every other keg explodes too (chain) and every door (297-300) that is not magically
+  locked (frame ≤ 12) is destroyed: "The door is blown up!". Destroyed kegs and doors are
+  deleted from the save (cannons.md §4).
+- **Persistence.** Frames (secret doors, fire devices, lit map kegs, lit map torches) persist as
+  object state; moved passthroughs re-anchor; destroyed objects are deleted. v1 does not save a
+  readied torch's lit state or fuel (it is unlit after a load — relight it) nor the 3-turn fuse.
+
+Test hook `DUNGUSE.REQ`: '1' secret door: the nearest hidden one — L)ook reveals (frame +1,
+passable?), U)se closes, U)se opens; '2' passthrough: U)se moves it up/left + frame 2, U)se
+moves it back; '3' fire device: U)se a fireplace/candle toggles its frame and its tile's emitter
+level; '4' torch: give a torch, U)se from the pack → readied + lit (fuel 200), the Avatar's cell
+is lit to the level-3 base, 600 turns later it has burned out and the hand is free; '5' keg: a
+keg beside a spawned door with a gargoyle 2 tiles away — U)se, three turns → keg and door gone,
+the gargoyle hurt, the message printed.
+
+Status: VERIFIED 2026-10-26 — DUNGUSE.REQ 1-5 on emulated TT and the stock 4 MB Falcon (identical):
+'1' the nearest hidden secret door (on passable floor tile 210) blocks while hidden, L)ook reveals
+it ("You see a secret door.", frame 1, now passable), U)se closes (frame 0) and opens again;
+'2' the vertical passthrough at (325,399) opens to (325,398) frame 2 and closes back to (325,399)
+frame 0 — found by type, since a floor object shares its tile; '3' a brazier: "brazier is doused."
+(frame 0, emitter 0) then "flaming brazier is lit." (frame 1, emitter 3); '4' a pack torch: "Torch is
+lit.", fuel 200, in hand, one torch fewer in the pack, burned out after 411 turns with the hand
+free; '5' a lit keg: "Powder lit!", three turns later the keg and the door beside it are gone,
+"The door is blown up!", the gargoyle two tiles away hurt (200 → 194), the party 3 tiles away unhurt.
+Found on the way: object blocking used Impassable|Wall; the reference blocks on Impassable only, and
+the Wall-only tiles are doorways, arches and the open secret door frames — fixed (tileflag.md).
+
 ## Other use handlers (TODO — same dispatcher, future slices)
 - Magic lock/unlock spells; persisting field/consumed-item/hunger state to the save.
 - Readables (signs/books/tombstones) → show text — DONE (docs/formats/strings.md;
@@ -139,4 +206,5 @@ Validated (HUNGER.BIN): food 5 → 0 over turns → Avatar loses 3 HP → eat a 
 - Ladders/holes/stairs → change level. Needs the multi-level world model.
 
 ## Status: IN PROGRESS (doors + containers/stacks + keys/locks + LOCKPICKS + FOOD/HUNGER +
-## readables + LEVERS/SWITCHES/CRANKS + DRAWBRIDGES done; multi-level stairs scoped)
+## readables + LEVERS/SWITCHES/CRANKS + DRAWBRIDGES + ladders/holes/caves (map_levels.md) +
+## SECRET DOORS / PASSTHROUGHS / FIRE DEVICES / TORCHES / POWDER KEGS done)

@@ -144,13 +144,62 @@ deterministic RNG seam so golden-transcript tests are reproducible.
       health goes into the VM (dead = 0 HP, poisoned; WOUNDED/POISONED read it); after the turn a
       cured member loses the poison, a resurrected one stands at 1 HP, a HEALed one is at full HP
       (`healed_full` records the op). INVSYNC.BIN prints the HEALSYNC round trip.
-- [ ] WORKTYPE still acts on the VM's view only (NPC schedule changes by conversation).
+- [x] WORKTYPE acts on the LIVE NPC (2026-10-26) — §6b.
 - [ ] DATA/DPRINT data-block strings (some answers reference indexed strings).
 - [ ] Per-game opcode deltas (Savage/Martian) behind a RuleSet hook.
 - [ ] Interactive keyword TYPING on-target (line input); INPUT/INPUTNUM vars.
 
+## 6b. WORKTYPE → the live NPC (2026-10-26)
+
+> Derived from: READING Nuvie `core/converse_interpret.cpp` (U6OP_WORKTYPE 0xcd takes npc +
+> worktype and calls the actor's set_worktype), `actors/actor.cpp` set_worktype / updateSchedule
+> (a worktype holds until the actor's schedule moves to a NEW entry, which re-applies the
+> scheduled code; set_worktype anchors the actor's work location at its current tile),
+> `actors/u6_actor.cpp` will_not_talk (combat-retreat / attack-party worktypes refuse to talk),
+> `core/events.cpp` talk ("No response"), `actors/actor_manager.cpp` (objlist 0x11f1 = each
+> actor's current worktype, read on load / written on save), and a scan of the user's own
+> CONVERSE.A/.B for the opcode (which NPCs, which codes, the surrounding text). No code
+> transcribed. Nuvie names 0x99 "Brawl" and 0x9a "Mousing" in a debug string only and gives
+> them no behaviour; the script texts define them for us (probable).
+
+- The opcode takes (npc, worktype). The real scripts use it 20 times: 0x99 on the speaker with
+  "...the gargoyle attacks!" / "...must die!" / "leaps at you, screaming" texts and Culham on five
+  other NPCs (a brawl), 0x9a with "...and flees!" / "must flee!", 0x91 with "faints dead away!".
+  One script passes both operands from script variables.
+- Effect: the NPC's worktype is FORCED to the code, anchored at the tile where it stands, until
+  its schedule changes to another entry (the original's rule); then the scheduled code and place
+  take over again and whatever hostility the force caused is dropped. Codes:
+  - 0x99 brawl/attack, 0x9b attack-party, 0x08 assault, 0x03-0x06 combat stances: the NPC turns
+    on the party (the assault AI, alert at once);
+  - 0x9a flee, 0x07 combat-retreat: the NPC flees the party on sight (the coward AI);
+  - 0x91 sleep (a faint), 0x90 work, 0x8f wander, 0x0e immobile, 0x00 motionless: the NPC stays
+    at / wanders around the tile where it stands; a hostile NPC given one of these calms down;
+  - 0x87-0x8a: face N/E/S/W;
+  - 0x01 in-party / 0x02 player: no effect (JOIN/LEAVE carry the party).
+- T)alk to an NPC under a combat or flee code: "No response." (the original refuses too).
+- The VM sees the live codes: before each conversation turn every NPC's current worktype (the
+  forced one, else the schedule's; party members 0x01, the Avatar 0x02) goes into the VM's view —
+  var 0x20 reads it; after the turn every entry the script changed is applied as above.
+- Persistence: S)ave writes each scheduled or forced NPC's current worktype into objlist 0x11f1
+  (the original's meaning of the byte); a load re-applies a saved combat / flee code (0x03-0x08,
+  0x99, 0x9a, 0x9b) that differs from the schedule's current one. Other saved codes come back
+  from the schedule (a saved faint is not restored — v1 simplification).
+- Test hook `WORKTYPE.REQ`: '1' forces the codes on the nearest scheduled NPC through the VM
+  path and watches it approach/strike (0x99), flee (0x9a), stand (0x91) and resume its schedule
+  at the next entry; '2' the real scripts (NPCs 170 / 171 / 185 greet — prints the force the
+  script set, if its condition held); '3' save → the objlist byte, load → the force is back.
+- Status: VERIFIED 2026-10-26 — WORKTYPE.REQ on emulated TT and the stock 4 MB Falcon (identical):
+  '1' NPC 6 (3 tiles away) forced 0x99 turns hostile and closes to 1 tile, 0x9a makes it flee back to
+  3, 0x91 keeps it on its tile, the next schedule entry clears the force and restores its calm;
+  '2' the real greetings set 0x91 on the Lensmaker (170, "faints dead away!") and 0x9a on the Snake
+  Charmer (171, "and flees!"); '3' "No response." while hostile, objlist byte 0x99 after S)ave, the
+  force and hostility back after load. Host: `make wtrun NPC=49 KEYWORDS="name job gyps"` runs
+  Culham's real bytecode — the gypsy story ends in WORKTYPE 0x99 on NPCs 45/49/50 (44/46 are behind
+  the NPCNEARBY query, still stubbed to 0).
+
 ## 7. Status
 VERIFIED — the full conversation VM runs the real bytecode (greeting, expression
-eval, IF/ELSE/ENDIF branching, keyword loop, BYE) for NPCs across CONVERSE.A,
-host AND on the TT. Game-mutation opcodes stubbed (see §3). See also
+eval, IF/ELSE/ENDIF branching, keyword loop, BYE) for NPCs across CONVERSE.A/.B,
+host AND on the TT/Falcon. Game-mutation opcodes JOIN/LEAVE/GIVE/NEW/DELETE/HEAL/CURE/
+RESURRECT/WORKTYPE act on the live game (§6, §6b); NPCNEARBY stays stubbed. See also
 /docs/design/m4-usecode-gate.md.

@@ -98,7 +98,8 @@ chain mail 21=5, plate mail 22=7, magic armour 23=10, spiked collar 24=2, protec
 ## 6. Range  (get_weapon_range)
 Melee = adjacent (Chebyshev 1). Reach weapons morning star(40)/halberd(47) hit at the melee
 gate too. Ranged: bow 41=5, crossbow 42=7, magic bow 54=7, sling/thrown shorter; a ranged
-attack also needs a clear line (map_line_hit_check). MVP is MELEE only.
+attack also needs a clear line (map_line_hit_check). MVP is MELEE only. The SHIP as a weapon
+(412: range 5, damage 30, a cannonball missile) is docs/rules/cannons.md.
 
 ## 7. Enemy AI (worktype)
 Hostile actors run worktype ASSAULT: each turn, path one step toward the nearest party member

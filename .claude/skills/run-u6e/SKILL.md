@@ -76,7 +76,7 @@ battle, hatched from the throne-room egg (docs/rules/eggs.md), not a bug.
 | `scene … --combat 1\|2` | stage `COMBAT.BIN`: 1 = avatar kills an adjacent acid slug; 2 = a hostile slug assaults the party |
 | `scene … --vbls N` | emulator run length (default 5000); raise if the frame looks unfinished |
 | `scene … -o FILE` | output PNG path (default `build/scene.png`) |
-| `logic` | host-side `make enginetest convtest cvmtest combattest equiptest` — instant, no emulator |
+| `logic` | host-side `make enginetest convtest cvmtest combattest savetest equiptest` — instant, no emulator |
 | `check` | `make check` — boots `selftest.prg` on ST + TT, mirrors the VT-52 console; ends `RESULT: ALL PASS` |
 
 A `scene` capture takes **~2–3 minutes** (the world rebuild decodes the whole U6

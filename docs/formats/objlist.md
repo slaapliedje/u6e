@@ -45,7 +45,7 @@ Arrays we use (others exist for inventory/work flags):
 | 0xb00  | 1 byte   | **intelligence**                                        |
 | 0xc00  | 2 bytes  | **experience** (LE on DOS/ScummVM, BE on ST)            |
 | 0xe00  | 1 byte   | **current hit points** (what the party roster displays) |
-| 0x11f1 | 1 byte   | **worktype** (Nuvie actor_manager); combat: 0x03 FRONT, 0x07 COMBAT_RETREAT (coward), 0x08 ASSAULT, 0x9b ATTACK_PARTY; schedule: 0x90 WORK, 0x91 SLEEP, 0x8f WANDER, … |
+| 0x11f1 | 1 byte   | **worktype** (Nuvie actor_manager) = the actor's CURRENT worktype (schedule code or a conversation's WORKTYPE); combat: 0x03 FRONT, 0x07 COMBAT_RETREAT (coward), 0x08 ASSAULT, 0x9b ATTACK_PARTY, 0x99 brawl/attack, 0x9a flee; schedule: 0x90 WORK, 0x91 SLEEP, 0x8f WANDER, … u6e writes it on S)ave and re-applies a saved combat/flee code on load (docs/rules/usecode_vm.md §7) |
 | 0x14f1 | 1 byte   | movement points (per-actor)                             |
 | 0x17f1 | 1 byte   | per-NPC conversation talk-flags                         |
 | 0x19f1 | 1 byte   | movement_flags (bits 0x60 = the "OLD" alignment; the LIVE one is in 0x800) |

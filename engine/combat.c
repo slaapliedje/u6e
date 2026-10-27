@@ -50,6 +50,7 @@ int weapon_range(int obj_n)
     case 37: return 3;   /* throwing axe   */
     case 36: return 3;   /* spear (thrown) */
     case 49: return 4;   /* boomerang      */
+    case 412: return 5;  /* a ship's cannons (cannons.md §1) */
     default: return 1;   /* melee          */
     }
 }

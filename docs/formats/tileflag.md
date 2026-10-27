@@ -117,6 +117,12 @@ figure sits *in* the throne instead of covering it.
   replace that heuristic later.
 
 ## Open questions
+- Object blocking (2026-10-26): an object blocks movement iff its tile's tileflags1 bit1
+  (Impassable) is set — the reference's `tile.passable`. The Wall bit alone does NOT block: of
+  the 19 tiles that carry Wall without Impassable, all belong to doorways (301), arches (302/304)
+  and the OPEN secret door frames (334 f1/f3), all walked through. Terrain is unaffected (every
+  map tile with Wall also has Impassable). Forced passability (tileflags3 bit2: drawbridge spans)
+  stays as before.
 - bit3 "Ge" of tileflags3 — purpose unconfirmed.
 - Article bits (tileflags3 6-7) not yet consumed (Look prints the bare name).
 

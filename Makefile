@@ -65,7 +65,7 @@ AUTO_PRG := c:\\$(notdir $(SELFTEST_PRG))
 # common Hatari invocation: mount build/ as C:, autostart the .PRG
 HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
-.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched refshot save-roundtrip save-check save-engine m6-anim m6-npc
+.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched refshot save-roundtrip save-check save-engine m6-anim m6-npc
 
 all: $(SELFTEST_PRG)
 
@@ -468,6 +468,21 @@ $(BUILD)/combattest: tools/combattest.c engine/combat.c engine/rng.c
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
 combattest: $(BUILD)/combattest
 	$(BUILD)/combattest
+
+# save-template shape patchers (record deletion + hull qty): synthetic buffer, no game data
+$(BUILD)/savetest: tools/savetest.c engine/save.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -Iplatform -o $@ $^
+savetest: $(BUILD)/savetest
+	$(BUILD)/savetest
+
+# run one real U6 conversation through the VM on the host and report its WORKTYPE effects
+# (usecode_vm.md §6b): make wtrun NPC=49 KEYWORDS="name job gyps"
+$(BUILD)/wtrun: tools/wtrun.c engine/converse_vm.c engine/converse_vm.h dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -Idataformats -o $@ tools/wtrun.c dataformats/u6lzw.c
+wtrun: $(BUILD)/wtrun
+	$(BUILD)/wtrun $(REFDATA) $(NPC) $(KEYWORDS)
 
 # equipment slot-model unit test (docs/rules/equipment.md)
 $(BUILD)/equiptest: tools/equiptest.c engine/equip.c engine/combat.c engine/rng.c

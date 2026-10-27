@@ -92,7 +92,7 @@ inflated balloon is the carried balloon record relocated onto the map and retype
 - A ship in calm still sails, at the base cost (the reference implementation deducts no
   points at all in calm, which would freeze the world).
 - Diagonal vehicle moves use the 8-direction heading for the cost but the four sprite facings.
-- Ship cannons and the balloon's altitude/"high air" variant: not modelled.
+- The balloon's altitude/"high air" variant: not modelled (ship cannons: docs/rules/cannons.md).
 - The wind timer counts turns, not real time; the change rhythm is the original's range.
 
 ## 7. Test hooks

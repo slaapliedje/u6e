@@ -43,6 +43,15 @@ int sav_level_span(const uint8_t *d, int32_t n, int level, int32_t *off, int32_t
 int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int ox, int oy, int obj_n,
                         int x, int y, int frame, int quality, int new_obj_n);   /* new_obj_n <0 = keep (a balloon deflates 423->420) */
 
+/* Hull strength (cannons.md §4): write the qty byte of the on-map record at (x,y,obj_n). 1 if patched. */
+int sav_patch_obj_qty(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int qty);
+
+/* DESTROY (cannons.md §4): delete the childless on-map record at (x,y,obj_n) of `level` in place —
+ * chunk count, that chunk's in-container links, the buffer tail and a ScummVM trailer's header
+ * offset are all fixed up. Returns the NEW buffer length (n-8), or -1 if nothing was deleted;
+ * the caller re-derives any cached offsets (objlist) from the shorter buffer. */
+int32_t sav_delete_record(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n);
+
 /* ---- carried-record RECONCILIATION (docs/rules/save_load.md §5) ----------------------------
  * These walk EVERY record of the object region [4, surface_end): the actor-inventory chunk, the
  * eggs chunk and the 64 surface chunks (a GET-flipped record stays in its surface chunk).
@@ -98,6 +107,9 @@ int  sav_get_wind(const uint8_t *d, int32_t off);
 
 /* Patch actor `actor`'s level (objlist 0xff1 + actor) and current magic points (0x13f1 + actor). */
 void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana);
+/* the per-actor WORKTYPE byte (objlist 0x11f1): a conversation's WORKTYPE / the live schedule code */
+void sav_set_actor_worktype(uint8_t *d, int32_t off, int actor, int wt);
+int  sav_get_actor_worktype(const uint8_t *d, int32_t off, int actor);
 
 /* Patch the player's name (objlist 0xf00: up to 13 characters + NUL, Nuvie's new-game field). */
 void sav_set_avatar_name(uint8_t *d, int32_t off, const char *name);

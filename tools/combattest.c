@@ -54,6 +54,7 @@ int main(void){
     CHECK(weapon_range(43)==1, "sword melee range 1");
     CHECK(weapon_range(41)==5, "bow range 5");
     CHECK(weapon_range(42)==7, "crossbow range 7");
+    CHECK(weapon_range(412)==5 && weapon_dmg(412)==30, "ship cannons: range 5, damage 30 (cannons.md)");
     CHECK(armour_ac(22)==7, "plate mail AC 7");
     CHECK(armour_ac(23)==10, "magic armour AC 10");
     CHECK(armour_ac(999)==0, "non-armour AC 0");

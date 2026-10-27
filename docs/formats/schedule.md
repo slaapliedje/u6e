@@ -60,6 +60,9 @@ source was on hand to match, so only the sleep class is treated as confirmed.
 |----------------|----------|------------|---------------------------------------------|
 | `0x91`         | **sleep**  | confirmed | 167 entries, ~all at night (20h:109, 00h:33, 16h:24; ≈0 daytime). Every named NPC's home/night entry uses it (Lord British 21:00, Gwenneth 19:00 home, Jaana 23:00). |
 | `0x90`         | **wander** | probable  | 120 entries, daytime "at this location" code used by townsfolk at/near home (Andrea 09:00, Jaana 12:00) but NOT by posted NPCs at their posts. Modelled as a small roam around the anchor. |
+| `0x99` | **brawl / attack** (conversation-set: "the gargoyle attacks!", Culham's five brawlers) | probable | Never appears in SCHEDULE; set only by WORKTYPE in 7 conversations whose text says the NPC attacks. Nuvie names it "Brawl" (debug string) and gives it no behaviour. u6e: hostile toward the party until the next schedule change (docs/rules/usecode_vm.md §7). |
+| `0x9a` | **flee / wander off** (conversation-set: "… and flees!", "must flee!") | probable | Never in SCHEDULE; set by WORKTYPE in 4 conversations whose text says the NPC flees. Nuvie names it "Mousing". u6e: flees the party until the next schedule change. |
+| `0x91` (by conversation) | **faint** ("faints dead away!") | probable | The sleep code set on the speaker by 3 scripts: the NPC stays where it stands, asleep, until its schedule changes. |
 | others (`0x8f`,`0x92`,`0x93`,…) | **work** (stand at post) | default   | Posted/fixed behaviours: Lord British on the throne (`0x93`@316,367), Gwenneth at her shop counter (`0x92`). Walk to the spot and stand until per-worktype poses (sit/eat/sleep-in-bed) are added. |
 
 The 0x91→sleep and 0x90→wander bands are what the engine's `wt_activity()`

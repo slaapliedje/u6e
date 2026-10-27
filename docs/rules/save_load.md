@@ -144,6 +144,16 @@ Steps 1, 2 and 4 address a record by LEVEL (surface super-chunk by x/y, or dunge
 a drop is relocated with the level's z). The same reconcile (`objects_reconcile`) runs before
 every level switch, so the template always holds every level's current state.
 
+- **Hull strength / destroyed objects (cannons.md §4, 2026-10-26):** a ship centre's `qty` (hull) is
+  written back with its state patch; an object marked DESTROYED (a broken ship's front/back parts)
+  has its record DELETED from the template in place before the other passes — chunk count, that
+  chunk's in-container links, the buffer tail and the ScummVM trailer offset are fixed and the
+  cached objlist offset re-derived. The centre is retyped 412 → 415 through the moved-object path.
+
+- **Worktype byte (usecode_vm.md §6b, 2026-10-26):** S)ave writes every scheduled or forced NPC's
+  CURRENT worktype into objlist 0x11f1; a load re-applies a saved combat / flee code that differs
+  from the schedule's (a guard sent after the party stays after it).
+
 ## 6. The written file: a streaming rebuild (2026-09-30)
 
 In-place patching (§5) keeps the in-memory template consistent as the object store of every

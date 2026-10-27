@@ -78,8 +78,9 @@ the centre and the back one tile SOUTH (and rotated accordingly).
   boat as its map object(s) and moves them each step — same visible result, no vehicle actor.
 - Party members individually skiff-capable / multiple skiffs: not modeled; the party moves as
   one vehicle.
-- Ship cannons (broadside firing) deferred.
-- Combat while aboard: enemies may still act; the party cannot melee from the boat in v1.
+- Ship cannons, hull strength and a ship breaking: docs/rules/cannons.md (2026-10-26).
+- Combat while aboard: aboard a SHIP the party's attack is the cannons and enemy blows land on the
+  hull (cannons.md); from a skiff or raft the Avatar strikes with the readied weapon as on foot.
 
 ## 6. Save + load of vehicle state (2026-09-29)
 
@@ -113,5 +114,5 @@ castle-moat river and refuses land, disembark lands on passable ground; ship spa
 boards via its FRONT part (centre found by the §1 geometry), sails 2 with the three parts colinear
 and re-faced; horse mounts (avatar sprite becomes obj 431), rides, dismounts and the horse actor
 reappears. Captures: skiff + ship frames (party hidden, camera on the vehicle, message shown).
-Deferred per §5: raft/balloon/wind, movement costs, cannons. Save persistence of moved boats +
+Deferred per §5: raft/balloon/wind, movement costs (done in wind.md); cannons done in cannons.md. Save persistence of moved boats +
 re-boarding on load: DONE 2026-09-29 (§6), verified by LOAD.REQ mode '2' on TT + 4 MB Falcon.

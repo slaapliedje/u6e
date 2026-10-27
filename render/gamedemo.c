@@ -108,6 +108,14 @@ static int is_stackable(int on){ return (on>=0 && on<1024) ? (g_stackable[on>>3]
 static uint8_t        g_aac[U6_MAX_ACTORS];    /* readied armour class (combat.md CB3b)        */
 static uint8_t        g_align_hostile[U6_MAX_ACTORS]; /* 1 = monster type hostile on sight (U6WM, CB4) */
 static uint8_t        g_coward[U6_MAX_ACTORS]; /* 1 = coward (worktype COMBAT_RETREAT): flees until struck (U6WN) */
+static uint8_t        g_wt_force[U6_MAX_ACTORS];/* a conversation's WORKTYPE on this NPC (0 = none; usecode_vm.md §6b) */
+static uint16_t       g_wt_fx[U6_MAX_ACTORS], g_wt_fy[U6_MAX_ACTORS];   /* where it stood when forced (its anchor) */
+static int8_t         g_wt_fsi[U6_MAX_ACTORS];  /* schedule entry active when forced: a change clears the force */
+static uint8_t        g_wt_prev[U6_MAX_ACTORS]; /* bit0 hostile / bit1 coward / bit2 alert before the force */
+static uint8_t        g_wt_pushed[256];         /* what the VM saw before the turn (sync_worktype_in) */
+static uint8_t        g_torch_fuel[U6_MAX_ACTORS]; /* turns of fuel left in a LIT readied torch (0 = unlit; usecode_use.md) */
+static uint8_t        g_keg_timer;               /* powder-keg fuse: turns until every lit keg explodes (0 = none) */
+static uint8_t        g_keg_carried;             /* a lit keg in the pack explodes at the party's feet */
 static uint8_t        g_amaxhp[U6_MAX_ACTORS]; /* HP at load (=max), for the flee threshold (CB4) */
 static uint8_t        g_aflee[U6_MAX_ACTORS];  /* 1 = fleeing: badly-hurt actor retreats (CB4)    */
 static int            g_combat_mode;           /* C)ombat mode: party auto-fights adjacent foes (CB4) */
@@ -420,6 +428,8 @@ static uint16_t       g_cyc_phase;          /* rotation phase                   
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
+static int            g_fx_on;             /* one-tile overlay drawn over everything: a cannonball in flight / a burst (cannons.md §1) */
+static uint16_t       g_fx_tile; static int g_fx_x, g_fx_y;
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
 static int            g_use_pack;                 /* U)se armed on a carried item (U pressed twice) */
 static int            g_travel_tx, g_travel_ty, g_travel_level;  /* the click-to-travel destination tile (+ level: a transition ends it) */
@@ -2806,9 +2816,52 @@ static void init_npcs(void)
     }
 }
 
+/* ---- a conversation's WORKTYPE on a live NPC (docs/rules/usecode_vm.md §6b) -------------------- */
+static int wt_is_combat(int wt){ return wt==0x99||wt==0x9b||wt==0x08||(wt>=0x03&&wt<=0x06); }
+static int wt_is_flee(int wt){ return wt==0x9a||wt==0x07; }
+/* force worktype `wt` on NPC i: anchored where it stands, until its schedule entry changes */
+static void wt_apply(int i,int wt)
+{
+    if(i<2||i>=U6_MAX_ACTORS||g_atile[i]==0xffff) return;
+    if(wt==0x01||wt==0x02) return;                           /* party / player: JOIN and LEAVE carry those */
+    if(!g_wt_force[i]) g_wt_prev[i]=(uint8_t)((g_hostile[i]?1:0)|(g_coward[i]?2:0)|(g_alert[i]?4:0));
+    g_wt_force[i]=(uint8_t)wt; g_wt_fx[i]=g_actx[i]; g_wt_fy[i]=g_acty[i];
+    g_wt_fsi[i]=(int8_t)(g_actors[i].nsched>0 ? u6sched_active(&g_actors[i],g_hour) : -1);
+    if(wt_is_combat(wt)){ g_hostile[i]=1; g_alert[i]=1; g_coward[i]=0; g_aflee[i]=0; }
+    else if(wt_is_flee(wt)){ g_coward[i]=1; g_alert[i]=1; g_hostile[i]=0; }
+    else { g_hostile[i]=0; g_coward[i]=0; g_aflee[i]=0;        /* calmed / posted where it stands */
+           if(wt>=0x87&&wt<=0x8a) g_facing[i]=(uint8_t)(wt-0x87); }
+}
+/* the schedule took over again: drop the force and the hostility it caused */
+static void wt_force_clear(int i)
+{
+    if(!g_wt_force[i]) return;
+    g_wt_force[i]=0;
+    g_hostile[i]=(uint8_t)(g_wt_prev[i]&1); g_coward[i]=(uint8_t)((g_wt_prev[i]>>1)&1); g_alert[i]=(uint8_t)((g_wt_prev[i]>>2)&1);
+}
+/* once per world turn: a forced NPC whose schedule moved to another entry resumes it */
+static void wt_force_tick(void)
+{
+    for(int i=2;i<U6_MAX_ACTORS;i++){ if(!g_wt_force[i]) continue;
+        if(g_atile[i]==0xffff){ g_wt_force[i]=0; continue; }
+        if(g_actors[i].nsched<=0) continue;                   /* no schedule: holds until slain */
+        if(u6sched_active(&g_actors[i],g_hour)!=(int)g_wt_fsi[i]) wt_force_clear(i); }
+}
+static int npc_worktype(int i);                              /* (defined below) */
+/* the worktype the VM should see for actor i: forced, else party 0x01 / Avatar 0x02, else the schedule's */
+static int npc_live_worktype(int i)
+{
+    if(i<0||i>=U6_MAX_ACTORS) return 0;
+    if(g_wt_force[i]) return g_wt_force[i];
+    if(i==1) return 0x02;
+    for(int p=0;p<g_nparty;p++) if(g_party[p].actor==i) return 0x01;
+    int wt=npc_worktype(i); return wt<0?0:wt;
+}
+
 /* scheduled surface destination for actor i at the current hour; 1 if it has one */
 static int npc_dest(int i,int*dx,int*dy)
 {
+    if(g_wt_force[i]){ *dx=g_wt_fx[i]; *dy=g_wt_fy[i]; return 1; }   /* forced: where it stood (usecode_vm.md §6b) */
     if(g_actors[i].nsched<=0) return 0;
     int si=u6sched_active(&g_actors[i],g_hour); if(si<0) return 0;
     u6sched_entry_t e; u6sched_decode(g_actors[i].sched+si*5,&e);
@@ -2829,6 +2882,7 @@ enum { ACT_WORK=0, ACT_SLEEP, ACT_WANDER };
 #define WANDER_R     2      /* wander stays within this Chebyshev radius of its anchor */
 static int npc_worktype(int i)
 {
+    if(g_wt_force[i]) return g_wt_force[i];                       /* a conversation's WORKTYPE (usecode_vm.md §6b) */
     if(g_actors[i].nsched<=0) return -1;
     int si=u6sched_active(&g_actors[i],g_hour); if(si<0) return -1;
     u6sched_entry_t e; u6sched_decode(g_actors[i].sched+si*5,&e);
@@ -2900,6 +2954,11 @@ static void hostile_step(const world_t*w,int i);     /* combat.md CB2 (defined b
 static int  coward_step(const world_t*w,int i);      /* CB4 coward (defined below) */
 static int  adjacent_hostile(const world_t*w,int x,int y);  /* CB4 (defined below) */
 static void party_attack(int att,int def);                  /* CB4 (defined below) */
+static int  ship_aboard(void);                               /* cannons.md: the party is aboard a ship (defined with the vehicle code) */
+static void ship_struck(int att);                            /* an enemy's hit on the party's ship -> hull (defined with the cannon code) */
+static int  cannon_fire(world_t*w,int idx);                  /* U)se a fixed cannon (221) */
+static void dunguse_tick(const world_t*w);                   /* torch fuel + keg fuse, once per world turn (usecode_use.md) */
+static void moved_register(int idx);                         /* a moved object's record stays findable (vehicles.md §6) */
 static int  sees_party(const world_t*w,int i);              /* aggro-on-sight: range + LOS (defined below) */
 static int  blocks_sight(int tile);                         /* sight-blocker test (defined below) */
 static int  light_of(int tile);                             /* emitter level 0..3 (defined below) */
@@ -2915,6 +2974,8 @@ static void wind_tick(int level);                      /* wind.md (defined with 
 static void step_npcs(const world_t*w)
 {
     wind_tick(w->level);                               /* the wind change timer (wind.md §1) */
+    wt_force_tick();                                   /* forced worktypes expire with the schedule (usecode_vm.md §6b) */
+    dunguse_tick(w);                                   /* a lit torch burns, a keg fuse runs down (usecode_use.md) */
     if(g_spell_light_turns>0) g_spell_light_turns--;   /* Light spell decays a turn per step */
     if(g_xray_turns>0) g_xray_turns--;                 /* X-ray see-through decays a turn (§5e) */
     for(int i=0;i<U6_MAX_ACTORS;i++) if(g_ainvis[i]) g_ainvis[i]--;   /* Invisibility wears off (§5) */
@@ -3130,7 +3191,7 @@ static void build_blocked(void)
     for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
         int t=o->tile; if(t<0||t>=2048) continue;
         int32_t idx=(int32_t)o->y*1024+o->x;
-        if(g_tflags1[t]&0x06) g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7));
+        if(g_tflags1[t]&0x02) g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7));   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
         if(blocks_sight(t))   g_sightblk[idx>>3]|=(uint8_t)(1u<<(idx&7));
     }
     for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){    /* energy/force field blocks passage (§5a) */
@@ -3446,6 +3507,7 @@ static void compute_light(const world_t*w, uint8_t*light_out, int inside){
             if(vx<VT&&vy<VT){ int e=light_of(obj_tile(o)); if(e>0) add_globe(L,(int)vx,(int)vy,BASE[e],RAD[e]); } }
         if(bx==bx1) break; } if(by==by1) break; } }
     if(g_spell_light_turns>0) add_globe(L,VT/2,VT/2,255,g_spell_light_rad);  /* Light spell (magic_skills.md) */
+    else if(g_torch_fuel[1]>0) add_globe(L,VT/2,VT/2,BASE[3],RAD[3]);    /* a lit torch in hand: emitter level 3 (usecode_use.md) */
     else                      add_globe(L,VT/2,VT/2,150,2);                 /* the avatar's own light */
     for(int i=0;i<VT*VT;i++){ int v=L[i]; if(v<0)v=0; if(v>255)v=255; light_out[i]=(uint8_t)v; }
 #ifdef LIGHT_DEBUG_BINARY
@@ -4221,6 +4283,8 @@ static void compose_map(const world_t*w)
       if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,-1); }
     SUB_ADD(g_ph1_actors);
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
+    if(g_fx_on){ int32_t fvx=((int32_t)g_fx_x-left)&(U6_SURFACE_TILES-1), fvy=((int32_t)g_fx_y-top)&(U6_SURFACE_TILES-1);
+        if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); }   /* a cannonball / burst over everything (cannons.md §1) */
     PH_END(1);
     PH_BEGIN();
     /* Blit terrain shifted in by INSET px so the outer ring stays PAPYRUS (from
@@ -4532,7 +4596,7 @@ static void draw_conversation(uint8_t col)
         }
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
-            const char*p = g_pending_verb=='A'?"Attack-(dir)?":g_pending_verb=='L'?"Look-(dir)?":
+            const char*p = g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-(dir)?":"Attack-(dir)?"):g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?"Cast-(dir)?":
                            g_pending_verb=='T'?"Talk-(dir)?":"Move-(dir)?";
@@ -4603,6 +4667,18 @@ static void sync_party_in(void)
     for(int i=0;i<256;i++){ g_cg.dead[i]=(uint8_t)(g_atile[i]!=0xffff && g_ahp[i]==0); g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
         g_cg.healed_full[i]=0; }
     g_cg.avatar_hp=(int16_t)g_ahp[1];
+}
+/* WORKTYPE (usecode_vm.md §6b): before a turn the VM sees every NPC's live worktype; after it, every
+ * entry the script changed is forced on the live NPC (attack / flee / faint / post / face). */
+static void sync_worktype_in(void)
+{
+    for(int i=0;i<256;i++){ int v=(i<U6_MAX_ACTORS && g_atile[i]!=0xffff)?npc_live_worktype(i):0;
+        g_cg.worktype[i]=(uint8_t)v; g_wt_pushed[i]=(uint8_t)v; }
+}
+static void sync_worktype_out(void)
+{
+    for(int i=0;i<256;i++){ if(g_cg.worktype[i]==g_wt_pushed[i]) continue;
+        wt_apply(i,g_cg.worktype[i]); g_wt_pushed[i]=g_cg.worktype[i]; }
 }
 /* after a conversation turn: a HEAL/CURE/RESURRECT on a party member becomes real — poison
  * cured, a dead member back at 1 HP (the original's resurrection), a healed one at full HP */
@@ -4723,13 +4799,15 @@ static void se_talk(int id)
 static void talk(int id)
 {
     if(g_gamename){ se_talk(id); return; }        /* SE/MD core pack: identity-only talk */
+    if(id>=2 && id<U6_MAX_ACTORS && g_wt_force[id] && (wt_is_combat(g_wt_force[id])||wt_is_flee(g_wt_force[id]))){
+        msgcat(0,"No response."); return; }       /* fighting or fleeing: will not talk (usecode_vm.md §6b) */
     lib_t *L=(id<g_countA)?&g_lib[LIB_CONVA]:&g_lib[LIB_CONVB]; int ci=(id<g_countA)?id:id-g_countA;
     int32_t elen; const uint8_t *e=lib_get(L,ci,&elen);
     if(!e) return;
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf);
     if(got<=0) return;
 
-    sync_party_in(); sync_inv_in();             /* persistent g_cg + real party + inventory */
+    sync_party_in(); sync_inv_in(); sync_worktype_in();   /* persistent g_cg + real party + inventory + live worktypes */
     g_cg.hour=(uint8_t)g_hour;                   /* $T greeting word tracks the game clock */
     cvm_init(&g_cv,g_script_buf,got,&g_cg,id,g_avatar_name,g_avatar_title);
     cvm_status st=cvm_run(&g_cv);
@@ -4737,7 +4815,7 @@ static void talk(int id)
     { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
       while(*q && *q!='"') q++;
       tappend(0, *q?q:gt); }
-    sync_party_out(); sync_inv_out(); sync_health_out();   /* greeting may JOIN/LEAVE, give/take items, heal */
+    sync_party_out(); sync_inv_out(); sync_health_out(); sync_worktype_out();   /* greeting may JOIN/LEAVE, give/take items, heal */
 
     /* portrait: index id-1, library A for <98 else B (PORTRAIT.A holds 98) */
     g_have_pc=0;
@@ -4771,7 +4849,7 @@ static void submit_input(void)
     tappend(tl,cvm_text(&g_cv));
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);
-    sync_party_out(); sync_inv_out(); sync_health_out();   /* a keyword may change the party, give/take items/gold, heal */
+    sync_party_out(); sync_inv_out(); sync_health_out(); sync_worktype_out();   /* a keyword may change the party, give/take items/gold, heal */
 }
 
 /* index of an NPC orthogonally/diagonally adjacent to the avatar at g_hour,
@@ -4857,6 +4935,25 @@ static int is_field_objn(int o){ return o==51||o==175||o==317||o==318||o==319||o
 static int use_object_inner(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
+    if(o==334){ int fr=(int)g_wobj[idx].tile-basetile(334);              /* secret door (usecode_use.md): 0/2 hidden, 1/3 open */
+        if(fr==1||fr==3){ g_wobj[idx].tile--; msgcat(0,"You close the secret door."); }
+        else { g_wobj[idx].tile++; msgcat(0,"You open the secret door."); }
+        if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; build_blocked(); return 1; }
+    if(o==164||o==122||o==145||o==206){ int fr=(int)g_wobj[idx].tile-basetile(o), lit;   /* fire devices: fireplace 0<->1 / 2<->3, others 0<->1 */
+        if(o==206 && fr==2){ msgcat(0,"The holy flame cannot be doused."); return 0; }
+        if(o==164){ if(fr==1||fr==3){ g_wobj[idx].tile--; lit=0; } else { g_wobj[idx].tile++; lit=1; } }
+        else      { if(fr&1){ g_wobj[idx].tile--; lit=0; } else { g_wobj[idx].tile++; lit=1; } }
+        if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; build_blocked();
+        { char fn[40]; obj_name(g_wobj[idx].tile,fn,sizeof fn); int n=msgcat(0,fn[0]?fn:nm); msgcat(n,lit?" is lit.":" is doused."); }
+        return 1; }
+    if(o==223){ int fr=(int)g_wobj[idx].tile-basetile(223);              /* powder keg: light the fuse */
+        if(fr!=0){ msgcat(0,"No effect."); return 0; }
+        if(g_keg_timer>0){ msgcat(0,"Not now."); return 0; }
+        g_wobj[idx].tile++; if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE;
+        g_keg_timer=3; msgcat(0,"Powder lit!"); return 1; }
+    if(o==90){ int fr=(int)g_wobj[idx].tile-basetile(90);                /* a torch on the ground: light it / burn it out */
+        if(fr==0){ g_wobj[idx].tile++; if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; build_blocked(); msgcat(0,"Torch is lit."); return 1; }
+        g_wobj[idx].alive=0; g_wobj[idx].dirty=WOBJ_DIRTY_DESTROYED; build_blocked(); msgcat(0,"A torch burned out."); return 1; }
     if(o>=297 && o<=300){                            /* oaken/windowed/cedar/steel door */
         int fr=(int)g_wobj[idx].tile - basetile(o);  /* 0-3 open, 4-7 closed, 9/11 LOCKED, 13/15 MAGIC (usecode_use.md) */
         int n;
@@ -5124,6 +5221,7 @@ static int      g_horse_moved=-1;    /* last horse actor left somewhere new (dis
 
 static int g_tmpdm_invalidate(void){ g_tmp_valid=0; g_dm_valid=0; return 0; }   /* teleport: full view rebuild */
 static int veh_aboard(void){ return g_veh_kind==412||g_veh_kind==414||g_veh_kind==415||g_veh_kind==423; }   /* in a vessel (not a horse) */
+static int ship_aboard(void){ return g_veh_kind==412; }
 static int use_transition_object(world_t *w, int idx);   /* ladders/holes (defined with the level code below) */
 static int npc_at(const world_t*w,int x,int y);           /* (defined with the NPC code below) */
 static int step_triggers(world_t *w);
@@ -5202,6 +5300,17 @@ static int vehicle_exit(world_t*w)
     msgcat(0,"Only next to land.");
     return 1; }
 
+/* passthrough (278 vertical / 280 horizontal; usecode_use.md): opening moves it one tile up / left */
+static int use_passthrough(world_t*w,int idx)
+{   wobj_t*o=&g_wobj[idx]; int fr=(int)o->tile-basetile(o->obj_n), span=(w->level==0)?U6_SURFACE_TILES:256;
+    int nx=o->x, ny=o->y, nfr;
+    if(fr<2){ if(o->obj_n==278) ny=(ny-1)&(span-1); else nx=(nx-1)&(span-1); nfr=2; }
+    else     { if(o->obj_n==278) ny=(ny+1)&(span-1); else nx=(nx+1)&(span-1); nfr=0; }
+    if(npc_at(w,nx,ny)>=0 || (nx==(int)w->px && ny==(int)w->py)){ msgcat(0,"Not now!"); return 1; }
+    moved_register(idx); o->x=(uint16_t)nx; o->y=(uint16_t)ny; o->tile=(uint16_t)(basetile(o->obj_n)+nfr);
+    if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; build_blocked();
+    msgcat(0, nfr==2?"Open the passthrough.":"Close the passthrough."); return 1; }
+
 /* (U)se a skiff/ship object: board it (§3 checks in order). Returns recompose. */
 static int use_boat(world_t*w,int idx)
 {   wobj_t*o=&g_wobj[idx]; int on=o->obj_n;
@@ -5279,6 +5388,16 @@ static int use_pack_item(world_t*w,int on)
         o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;
         objworld_consume(&g_ow,420,1);
         build_blocked(); msgcat(0,"Done!"); return 1; }
+    if(on==90){                                                /* a torch from the pack (usecode_use.md) */
+        if(g_torch_fuel[1]>0){ for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==90){ (void)equip_unready(g_aready[1],sl); break; }
+            g_torch_fuel[1]=0; equip_refold(1); msgcat(0,"A torch burned out."); return 1; }   /* put out = used up */
+        if(objworld_count(&g_ow,90)<=0){ msgcat(0,"Nothing happens."); return 0; }
+        if(equip_ready(g_aready[1],90)<0){ msgcat(0,"No free hand to hold the torch."); return 0; }
+        objworld_consume(&g_ow,90,1); equip_refold(1); g_torch_fuel[1]=200; msgcat(0,"Torch is lit."); return 1; }
+    if(on==223){                                               /* a carried keg: the fuse burns in the pack */
+        if(g_keg_timer>0){ msgcat(0,"Not now."); return 0; }
+        if(objworld_count(&g_ow,223)<=0) return 0;
+        objworld_consume(&g_ow,223,1); g_keg_carried=1; g_keg_timer=3; msgcat(0,"Powder lit!"); return 1; }
     msgcat(0,"Nothing happens."); return 0; }
 
 /* one vehicle step: all target tiles must pass the §2 water rules; parts move + re-face as a unit */
@@ -5388,6 +5507,9 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
     if(verb=='L'){
         if(idx>=0) obj_name(g_wobj[idx].tile,nm,sizeof nm);
         else       obj_name(world_tile(w,tx,ty),nm,sizeof nm);   /* terrain name */
+        if(idx>=0 && g_wobj[idx].obj_n==334){ int fr=(int)g_wobj[idx].tile-basetile(334);   /* looking reveals a secret door (usecode_use.md) */
+            if(fr==0||fr==2){ g_wobj[idx].tile++; if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; build_blocked(); }
+            msgcat(0,"You see a secret door."); return 1; }
         n=msgcat(0,"You see "); n=msgcat(n,nm[0]?nm:"nothing");
         if(idx>=0 && container_searchable(idx)){                 /* U6: looking SEARCHES a container
                                                                   * (chest/crate/barrel only when OPEN) */
@@ -5445,6 +5567,9 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         if(g_veh_kind==431) return horse_dismount(w);                      /* mounted: U = dismount (§4) */
         if(idx>=0 && (g_wobj[idx].obj_n==412||g_wobj[idx].obj_n==414||g_wobj[idx].obj_n==415)) return use_boat(w,idx);
         if(idx>=0 && g_wobj[idx].obj_n==423) return use_balloon(w,idx);
+        if(idx>=0 && g_wobj[idx].obj_n==221) return cannon_fire(w,idx);                   /* a fixed cannon (cannons.md §3) */
+        { int pi=obj_idx_at(tx,ty,278); if(pi<0) pi=obj_idx_at(tx,ty,280);                /* a passthrough shares its tile with floor objects: find it by type (usecode_use.md) */
+          if(pi>=0) return use_passthrough(w,pi); }
         if(idx>=0 && (g_wobj[idx].obj_n==305||g_wobj[idx].obj_n==106||g_wobj[idx].obj_n==308))
             return use_transition_object(w,idx);                             /* ladder / hole (map_levels.md §4) */
         if(idx<0){ int h=horse_actor_at(tx,ty);
@@ -5508,6 +5633,7 @@ static int equip_take_off(int a, int slot)
 {
     int on=equip_unready(g_aready[a], slot);
     if(!on) return 0;
+    if(on==90 && g_torch_fuel[a]){ g_torch_fuel[a]=0; equip_refold(a); msgcat(0,"A torch burned out."); return 1; }   /* a lit torch taken off is used up (usecode_use.md) */
     inv_add_objn(on,1);
     equip_refold(a);
     { char dn[40]; obj_name((uint16_t)basetile(on),dn,sizeof dn);
@@ -5883,13 +6009,28 @@ static int sees_party(const world_t*w,int i){
 
 /* a hostile actor strikes a party member (combat.md §2-3). Monster melee damage is
  * derived from strength for now (max(2,str/2)); CB3 will ship the real monster table. */
+/* an unarmed actor's melee maximum (combat.md §4: monster melee) */
+/* the object number behind an actor's base tile (the creature table is keyed by obj_n) */
+static int actor_objn(int i){
+    if(!g_basetile) return 0;
+    for(int o=1;o<1024;o++){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8); if(b && b==(int)g_abase[i]) return o; }
+    return 0; }
+static int monster_melee_max(int att){
+    if(g_aweapon[att]) return weapon_dmg(g_aweapon[att]);    /* armed actor uses its readied weapon */
+    mon_base_t mb; if(monster_base(actor_objn(att),&mb)) return mb.dmg;   /* unarmed: the creature table's base damage (combat.md §4, eggs.md §4) */
+    return g_astr[att]?(g_astr[att]/2>2?g_astr[att]/2:2):4;  /* unknown type: strength-based melee */ }
 static void enemy_attack(int att,int def){
+    if(veh_aboard()){                                        /* the party is in a vessel (cannons.md §2) */
+        if(g_veh_kind==412){ ship_struck(att); return; }     /* a ship takes the blow on its hull */
+        if(g_veh_kind==423) return;                          /* the balloon cannot be hit */
+        int cand[MAXPARTY], nc=0;                            /* skiff / raft: a random living member is hit */
+        for(int p=0;p<g_nparty && p<MAXPARTY;p++){ int a=g_party[p].actor; if(a>=1&&a<U6_MAX_ACTORS&&g_ahp[a]>0) cand[nc++]=a; }
+        if(nc>0) def=cand[rng_range(&g_crng,nc)]; }
     char an[24]; obj_name(npc_tile(att),an,sizeof an);
     if(!an[0]){ an[0]='f'; an[1]='o'; an[2]='e'; an[3]=0; }
     int adex=g_adex[att]?g_adex[att]:10, ddex=g_adex[def]?g_adex[def]:15;
     if(!combat_hit(status_hit_role(att,adex),ddex,&g_crng)){ int n=msgcat(0,an); msgcat(n," misses."); return; }  /* curse penalty (§5b) */
-    int wm=g_aweapon[att]?weapon_dmg(g_aweapon[att])         /* armed actor uses its readied weapon */
-                         :(g_astr[att]?(g_astr[att]/2>2?g_astr[att]/2:2):4);  /* else monster melee */
+    int wm=monster_melee_max(att);
     int dmg=status_dmg(def,combat_damage(wm,g_aac[def],&g_crng));  /* vs armour, then Protection halves it (§5b) */
     if(dmg<=0){ int n=msgcat(0,an); msgcat(n," grazes."); return; }
     int hp=g_ahp[def]; g_ahp[def]=(dmg>=hp)?0:(uint8_t)(hp-dmg);
@@ -6133,9 +6274,157 @@ static int sight_blocked_at(const world_t*w,int x,int y){
     int idx=objworld_at(&g_ow,x,y);
     return (idx>=0 && blocks_sight(g_wobj[idx].tile)) ? 1 : 0;
 }
+
+/* ---- cannonballs (docs/rules/cannons.md) ------------------------------------------------- */
+#define TILE_CANNONBALL 399
+#define TILE_EXPLOSION  382
+static int g_fx_last_dist;                      /* test hook: how far the last ball flew */
+/* show the one-tile overlay at (x,y) for `vbls` frames (a cannonball in flight, a burst) */
+static void fx_show(const world_t*w,int x,int y,int tile,int vbls){
+    g_fx_on=1; g_fx_tile=(uint16_t)tile; g_fx_x=x&(U6_SURFACE_TILES-1); g_fx_y=y&(U6_SURFACE_TILES-1);
+    compose_map(w); present_map();
+    for(int i=0;i<vbls;i++) vsync_pump();
+}
+static void fx_clear(const world_t*w){ if(!g_fx_on) return; g_fx_on=0; compose_map(w); present_map(); }
+/* a missile-boundary tile (tileflags2 bit5) under or on (x,y) — our own vessel's parts excepted */
+static int missile_boundary_at(const world_t*w,int x,int y){
+    if(g_tflags[world_tile(w,x,y)]&0x20) return 1;
+    int idx=objworld_at(&g_ow,x,y); if(idx<0) return 0;
+    if(g_veh_kind) for(int k=0;k<3;k++) if(idx==g_veh_o[k]) return 0;
+    return (g_tflags[g_wobj[idx].tile]&0x20) ? 1 : 0;
+}
+/* the centre part of a ship (not the one we are aboard) lying at (x,y), or -1 */
+static int other_ship_centre_at(int x,int y){
+    int i=wobj_boat_at(412,x,y); if(i<0) return -1;
+    if(g_veh_kind==412 && i==g_veh_o[0]) return -1;
+    int fr=(int)g_wobj[i].tile-basetile(412); return (fr>=8&&fr<16)?i:-1;
+}
+/* hull damage to a ship's centre OBJECT (§2): returns 1 if the hull reached 0 */
+static int ship_obj_hull_hit(int ci,int dmg){
+    wobj_t*c=&g_wobj[ci]; int h=(int)c->qty; h=(dmg>=h)?0:h-dmg; c->qty=(uint16_t)h;
+    if(c->dirty!=WOBJ_DIRTY_DROPPED) c->dirty=WOBJ_DIRTY_STATE;
+    return h==0;
+}
+/* Fly a cannonball from (sx,sy) along (dx,dy) up to `range` tiles: it stops at the first actor
+ * (*hit_actor), at another ship's centre part (*hit_ship) or at a missile boundary / sight
+ * blocker, and bursts where it stopped. Returns the tiles flown; *hx,*hy = where it ended. */
+static int cannonball_fly(const world_t*w,int sx,int sy,int dx,int dy,int range,int*hit_actor,int*hit_ship,int*hx,int*hy){
+    int span=(w->level==0)?U6_SURFACE_TILES:256, r, tx=sx, ty=sy;
+    *hit_actor=-1; *hit_ship=-1;
+    for(r=1;r<=range;r++){
+        tx=(sx+dx*r)&(span-1); ty=(sy+dy*r)&(span-1);
+        int id=npc_at(w,tx,ty);
+        if(id>=0){ fx_show(w,tx,ty,TILE_CANNONBALL,2); *hit_actor=id; break; }
+        int ci=other_ship_centre_at(tx,ty);
+        if(ci>=0){ fx_show(w,tx,ty,TILE_CANNONBALL,2); *hit_ship=ci; break; }
+        if(missile_boundary_at(w,tx,ty) || sight_blocked_at(w,tx,ty)) break;   /* bursts at the obstacle */
+        fx_show(w,tx,ty,TILE_CANNONBALL,2);
+    }
+    if(r>range) r=range;
+    fx_show(w,tx,ty,TILE_EXPLOSION,6);                 /* the burst */
+    fx_clear(w);
+    *hx=tx; *hy=ty; g_fx_last_dist=r; return r;
+}
+/* apply `dmg` to actor `id` (already rolled): wound / kill + message; no experience (§1) */
+static void cannon_damage_actor(int id,int dmg,const char*hit_verb,const char*kill_verb){
+    char nm[24]; obj_name(npc_tile(id),nm,sizeof nm); if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
+    int party=0; for(int p=0;p<g_nparty;p++) if(g_party[p].actor==id) party=1;
+    if(!party){ g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1; }
+    if(dmg<=0){ int n=msgcat(0,nm); msgcat(n," grazed."); return; }
+    int hp=g_ahp[id]?g_ahp[id]:30;
+    if(dmg>=hp){ g_ahp[id]=0; if(!party) g_atile[id]=0xffff;
+        int n=msgcat(0,kill_verb); n=msgcat(n,nm); msgcat(n,"!"); }
+    else { g_ahp[id]=(uint8_t)(hp-dmg); int n=msgcat(0,hit_verb); n=msgcat(n,nm); msgcat(n,"!"); if(!party) check_flee(id); }
+    if(party) sync_party_hp();
+}
+/* A)ttack aboard a ship (§1): the cannons fire along (dx,dy); the ship is the weapon (range 5,
+ * damage 30, dexterity 30). Returns 1 (recompose). */
+static int ship_fire(world_t*w,int dx,int dy){
+    int ha,hs,hx,hy;
+    (void)cannonball_fly(w,(int)w->px,(int)w->py,dx,dy,weapon_range(412),&ha,&hs,&hx,&hy);
+    if(ha>=0){
+        int fdex=g_adex[ha]?g_adex[ha]:15;
+        if(!combat_hit(30,fdex,&g_crng)){ char nm[24]; obj_name(npc_tile(ha),nm,sizeof nm);
+            if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
+            int n=msgcat(0,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return 1; }
+        cannon_damage_actor(ha,status_dmg(ha,combat_damage(weapon_dmg(412),g_aac[ha],&g_crng)),"Hit ","Killed ");
+        return 1; }
+    if(hs>=0){ msgcat(0, ship_obj_hull_hit(hs,combat_damage(weapon_dmg(412),0,&g_crng))?"Ship broke!":"The ship is hit!"); return 1; }
+    msgcat(0,"The cannonball bursts.");
+    return 1;
+}
+/* U)se a fixed cannon (§3): "Fire!" — the ball flies 5 tiles in the cannon's facing; a flat 32
+ * to the first actor, 20 off a ship's hull. */
+static int cannon_fire(world_t*w,int idx){
+    static const int CDX[4]={0,1,0,-1}, CDY[4]={-1,0,1,0};
+    wobj_t*c=&g_wobj[idx]; int face=((int)c->tile-basetile(221))&3;
+    msgcat(0,"Fire!");
+    int ha,hs,hx,hy; (void)cannonball_fly(w,c->x,c->y,CDX[face],CDY[face],5,&ha,&hs,&hx,&hy);
+    if(ha>=0) cannon_damage_actor(ha,32,"The ball hits ","The ball slays ");
+    else if(hs>=0 && ship_obj_hull_hit(hs,20)) msgcat(0,"Ship broke!");
+    return 1;
+}
+/* The party's ship breaks (§2): the parts are destroyed, a raft remains at the centre's tile and
+ * the party is aboard it. The centre record is retyped 412 -> 415, front/back are deleted (§4). */
+static void ship_break(void){
+    int ci=g_veh_o[0];
+    for(int k=1;k<3;k++){ int i=g_veh_o[k]; if(i>=0){ g_wobj[i].alive=0; g_wobj[i].dirty=WOBJ_DIRTY_DESTROYED; } }
+    wobj_t*c=&g_wobj[ci]; c->obj_n=415; c->tile=(uint16_t)basetile(415); c->qty=0;
+    if(c->dirty!=WOBJ_DIRTY_DROPPED) c->dirty=WOBJ_DIRTY_STATE;
+    g_veh_kind=415; g_veh_o[1]=g_veh_o[2]=-1;
+    build_blocked(); (void)g_tmpdm_invalidate();
+    msgcat(0,"Ship broke!");
+}
+/* an enemy's attack on the party aboard a ship (§2): hit roll against the ship's dexterity 30,
+ * the damage roll (no armour) comes off the hull */
+static void ship_struck(int att){
+    char an[24]; obj_name(npc_tile(att),an,sizeof an); if(!an[0]){ an[0]='f'; an[1]='o'; an[2]='e'; an[3]=0; }
+    int adex=g_adex[att]?g_adex[att]:10;
+    if(!combat_hit(status_hit_role(att,adex),30,&g_crng)){ int n=msgcat(0,an); msgcat(n," misses the ship."); return; }
+    int dmg=combat_damage(monster_melee_max(att),0,&g_crng); if(dmg<1) dmg=1;
+    int n=msgcat(0,an); msgcat(n," hits the ship!");
+    if(ship_obj_hull_hit(g_veh_o[0],dmg)) ship_break();
+}
+/* ---- powder kegs + torches (docs/rules/usecode_use.md) ------------------------------------- */
+#define TILE_FIREBALL 393
+/* the keg at (x,y) blows: a fireball, a flat 1..60 to every actor within 2 tiles, then the kegs
+ * and the doors within 2 tiles (doors not magically locked are destroyed) */
+static void keg_explode_at(const world_t*w,int x,int y,int depth)
+{
+    int span=(w->level==0)?U6_SURFACE_TILES:256;
+    int ki=obj_idx_at(x,y,223); if(ki>=0){ g_wobj[ki].alive=0; g_wobj[ki].dirty=WOBJ_DIRTY_DESTROYED; }
+    build_blocked();
+    fx_show(w,x,y,TILE_FIREBALL,8); fx_clear(w);
+    for(int a=1;a<U6_MAX_ACTORS;a++){ int ax,ay;
+        if(a==1){ ax=(int)w->px; ay=(int)w->py; } else if(!actor_pos(a,&ax,&ay)) continue;
+        int cx=(ax-x)&(span-1); if(cx>span/2) cx=span-cx; int cy=(ay-y)&(span-1); if(cy>span/2) cy=span-cy;
+        if(cx<=2 && cy<=2) cannon_damage_actor(a,1+rng_range(&g_crng,60),"The blast hits ","The blast slays "); }
+    if(depth>=6) return;
+    for(int dy=-2;dy<=2;dy++) for(int dx=-2;dx<=2;dx++){ int tx=(x+dx)&(span-1), ty=(y+dy)&(span-1);
+        if(dx||dy){ int k2=obj_idx_at(tx,ty,223); if(k2>=0 && g_wobj[k2].alive) keg_explode_at(w,tx,ty,depth+1); }
+        for(int dn=297;dn<=300;dn++){ int di=obj_idx_at(tx,ty,dn); if(di<0||!g_wobj[di].alive) continue;
+            int fr=(int)g_wobj[di].tile-basetile(dn); if(fr>12) continue;          /* a magically locked door survives */
+            g_wobj[di].alive=0; g_wobj[di].dirty=WOBJ_DIRTY_DESTROYED; msgcat(0,"The door is blown up!"); } }
+    build_blocked();
+}
+static void keg_explode_all(const world_t*w)
+{
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(o->alive && o->obj_n==223 && ((int)o->tile-basetile(223))==1) keg_explode_at(w,o->x,o->y,0); }
+    if(g_keg_carried){ g_keg_carried=0; keg_explode_at(w,(int)w->px,(int)w->py,0); }
+}
+/* once per world turn: a lit torch loses a turn of fuel half the time and burns out at 0; the keg fuse */
+static void dunguse_tick(const world_t*w)
+{
+    if(g_torch_fuel[1]>0 && rng_range(&g_crng,2)==0 && --g_torch_fuel[1]==0){
+        for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==90){ (void)equip_unready(g_aready[1],sl); break; }
+        equip_refold(1); msgcat(0,"A torch burned out."); }
+    if(g_keg_timer>0 && --g_keg_timer==0) keg_explode_all(w);
+}
 static int do_attack(world_t*w,int dx,int dy)
 {
     if(!dx && !dy) return 0;
+    if(g_veh_kind==412) return ship_fire(w,dx,dy);          /* aboard a ship: the cannons (cannons.md §1) */
     int wobj=g_avatar_weapon, range=weapon_range(wobj), wmax=weapon_dmg(wobj);
     if(wmax<=0) wmax=4;                                   /* unarmed fallback */
     int id=-1, tx=(int)w->px, ty=(int)w->py;
@@ -6779,6 +7068,12 @@ static int map_click_delta(int lx,int ly,int *dx,int *dy)
  * encounter yet.) Returns 1 (recompose). */
 static int do_rest(world_t *w)
 {
+    if(veh_aboard()){                                       /* cannons.md §2: resting aboard a ship repairs the hull */
+        if(g_veh_kind!=412){ msgcat(0,"Can not be repaired!"); return 1; }
+        wobj_t*c=&g_wobj[g_veh_o[0]]; int h=(int)c->qty+5; if(h>100) h=100; c->qty=(uint16_t)h;
+        if(c->dirty!=WOBJ_DIRTY_DROPPED) c->dirty=WOBJ_DIRTY_STATE;
+        w->clock += 5; g_hour=clock_hour(w); g_minutes=clock_minutes(w);
+        int n=msgcat(0,"Hull Strength: "); n=msgcat_int(n,h); msgcat(n,"%"); return 1; }
     w->clock += 6*60;                                   /* advance 6 game-hours */
     g_hour=clock_hour(w); g_minutes=clock_minutes(w);
     init_npcs();                                        /* re-seed NPCs at their new scheduled spots */
@@ -6804,6 +7099,16 @@ static int objects_reconcile(const world_t *w)
     eggs_sync_template(d, n);                                      /* which eggs have hatched (eggs.md §2) */
     uint8_t in_party[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) in_party[i]=0;
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=1 && a<U6_MAX_ACTORS) in_party[a]=1; }
+    /* 0) destroyed objects (cannons.md §4): the record is deleted in place (moved-aware); the template
+     *    shrinks by 8 bytes per record, so the cached length + objlist offset are re-derived */
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(o->dirty!=WOBJ_DIRTY_DESTROYED || o->alive) continue;
+        int tx=o->x, ty=o->y, ton=o->obj_n, mk=-1;
+        for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ tx=g_moved[k].ox; ty=g_moved[k].oy; ton=g_moved[k].oon; mk=k; break; }
+        int32_t nn=sav_delete_record(d, n, surf, lv, tx, ty, ton);
+        if(nn>0){ n=nn; g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(d, nn); patched++; }
+        if(mk>=0){ g_moved[mk]=g_moved[g_nmoved-1]; g_nmoved--; }   /* its moved entry is gone with it */
+        o->dirty=0; }
     /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
     for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
         if(!o->dirty || o->alive) continue;
@@ -6822,7 +7127,8 @@ static int objects_reconcile(const world_t *w)
         for(int k=0;k<g_nmoved;k++) if(g_moved[k].idx==(uint16_t)i){ ox=g_moved[k].ox; oy=g_moved[k].oy; oon=g_moved[k].oon; mk=k; break; }
         int boat=(o->obj_n==412||o->obj_n==414||o->obj_n==415||o->obj_n==423);
         if(sav_patch_obj_state(d, n, surf, lv, ox, oy, oon, o->x, o->y, frame, boat?o->quality:-1, (oon!=o->obj_n)?o->obj_n:-1)){
-            patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; g_moved[mk].oon=o->obj_n; } } }
+            patched++; if(mk>=0){ g_moved[mk].ox=o->x; g_moved[mk].oy=o->y; g_moved[mk].oon=o->obj_n; }
+            if(boat) (void)sav_patch_obj_qty(d, n, surf, lv, o->x, o->y, o->obj_n, (int)o->qty); } }   /* a ship centre's hull; a broken ship's raft reads 0 (cannons.md §4) */
     /* 3) readied gear (equipment.md §6): clear the party's readied bits, then mark one carried
      *    record per live slot item (a GET-flipped record from step 1 qualifies). Must precede the
      *    drops: an item taken off and dropped is still a readied record until this pass. */
@@ -6928,6 +7234,10 @@ static int build_party_records(uint8_t *out)
 static int do_save(const world_t *w)
 {
     if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No save template (SAVE.000)."); return 0; }
+    /* OBJECT-WORLD + readied-gear state FIRST: this level's changes into the template (save_load.md §5).
+     * A destroyed record SHRINKS the template (cannons.md §4), so its length and the objlist offset are
+     * read only after the reconcile. */
+    (void)objects_reconcile(w);
     uint8_t *d=g_savetmpl; int32_t off=g_objlist_off, n=g_savetmpl_len;
     int aboard=veh_aboard();
     /* FULL objlist state: every party member's position (+ map level) + HP/Str/Dex/Int + experience.
@@ -6950,10 +7260,10 @@ static int do_save(const world_t *w)
     if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, w->level);
     else if(g_horse_moved>=0){ int h=g_horse_moved;
         sav_set_actor_pos(d, off, h, g_actx[h], g_acty[h], (g_actz[h]==0xff)?0:g_actz[h]); }
+    for(int i=2;i<U6_MAX_ACTORS;i++)                     /* each NPC's CURRENT worktype (objlist 0x11f1; usecode_vm.md §6b) */
+        if(g_atile[i]!=0xffff && (g_wt_force[i] || g_actors[i].nsched>0)) sav_set_actor_worktype(d, off, i, npc_live_worktype(i));
     { int mod=clock_minutes(w); sav_set_clock(d, off, mod%60, mod/60); }   /* game clock */
     if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma);  /* created-avatar identity */
-    /* OBJECT-WORLD + readied-gear state: this level's changes into the template (save_load.md §5) */
-    (void)objects_reconcile(w);
     { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
       sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
     /* the FILE: every chunk minus the pooled actors' records + the party's inventory rebuilt from
@@ -7131,6 +7441,14 @@ static int load_game(world_t *w)
     build_blocked();
     g_tmpdm_invalidate();
     g_hour = clock_hour(w); g_minutes = clock_minutes(w);
+    for(int i = 0; i < U6_MAX_ACTORS; i++) g_wt_force[i] = 0;
+    if(g_savetmpl && g_objlist_off >= 0)                                      /* a saved combat / flee worktype comes back (usecode_vm.md §6b) */
+        for(int i = 2; i < U6_MAX_ACTORS; i++){
+            if(g_atile[i] == 0xffff) continue;
+            int b = sav_get_actor_worktype(g_savetmpl, g_objlist_off, i);
+            if(!(wt_is_combat(b) || wt_is_flee(b))) continue;
+            if(g_actors[i].nsched > 0 && npc_worktype(i) == b) continue;
+            wt_apply(i, b); }
     /* 5) VEHICLE state (vehicles.md §6): the party saved on a boat's tile is aboard it; saved on a
      * horse's tile (the absorbed mount travels with the rider) it is mounted */
     if(tile_is_water(w, w->px, w->py)){
@@ -8629,6 +8947,217 @@ int main(int argc, char **argv)
                     else Cconws("VEH no horse spot\r\n"); }
             } } }
 
+    /* headless DUNGEON-OBJECT checks (usecode_use.md): DUNGUSE.REQ byte = mode. */
+    {   int32_t ul=0; const uint8_t*uq=(const uint8_t*)plat_load_file("DUNGUSE.REQ",1,&ul);
+        if(uq && ul>0){ int mode=uq[0];
+            /* nearest world object of one of the given types (frame filter f0..f1), level 0 */
+            #define NEAREST_OBJ(COND) ({ int best=-1, bd=1<<30; for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue; int fr=(int)o->tile-basetile(o->obj_n); (void)fr; if(!(COND)) continue; \
+                int cx=(int)o->x-(int)w.px, cy=(int)o->y-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; best=i; } } best; })
+            if(mode=='1'){
+                int i=NEAREST_OBJ(o->obj_n==334 && (fr==0||fr==2));
+                dbg_num("DU secret found=", i>=0);
+                if(i>=0){ int x=g_wobj[i].x, y=g_wobj[i].y; w.px=(uint16_t)((x+1)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)y; g_tmp_valid=0;
+                    dbg_num("DU frame0=", (int)g_wobj[i].tile-basetile(334)); dbg_num("DU passable0=", world_is_passable(&w,x,y));
+                    dbg_num("DU map tile=", world_tile(&w,x,y)); dbg_num("DU terrain passable=", w.passable[world_tile(&w,x,y)]); dbg_num("DU objects here=", objworld_at(&g_ow,x,y)>=0);
+                    (void)do_verb(&w,'L',-1,0); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("DU frame after look=", (int)g_wobj[i].tile-basetile(334)); dbg_num("DU passable after look=", world_is_passable(&w,x,y));
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n"); dbg_num("DU frame after use=", (int)g_wobj[i].tile-basetile(334));
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n"); dbg_num("DU frame after use2=", (int)g_wobj[i].tile-basetile(334)); }
+            }
+            if(mode=='2'){
+                int i=NEAREST_OBJ((o->obj_n==278||o->obj_n==280) && fr<2);
+                dbg_num("DU passthrough found=", i>=0);
+                if(i>=0){ int x=g_wobj[i].x, y=g_wobj[i].y, on=g_wobj[i].obj_n; w.px=(uint16_t)((x+1)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)y; g_tmp_valid=0;
+                    dbg_num("DU pt obj=", on); dbg_num("DU pt x0=", x); dbg_num("DU pt y0=", y);
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("DU pt x1=", g_wobj[i].x); dbg_num("DU pt y1=", g_wobj[i].y); dbg_num("DU pt frame1=", (int)g_wobj[i].tile-basetile(on));
+                    int ddx=(int)g_wobj[i].x-(int)w.px, ddy=(int)g_wobj[i].y-(int)w.py;
+                    (void)do_verb(&w,'U',ddx,ddy); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("DU pt x2=", g_wobj[i].x); dbg_num("DU pt y2=", g_wobj[i].y); dbg_num("DU pt frame2=", (int)g_wobj[i].tile-basetile(on)); }
+            }
+            if(mode=='3'){
+                int i=NEAREST_OBJ((o->obj_n==164||o->obj_n==122||o->obj_n==145||(o->obj_n==206&&fr!=2)));
+                dbg_num("DU fire found=", i>=0);
+                if(i>=0){ int x=g_wobj[i].x, y=g_wobj[i].y, on=g_wobj[i].obj_n; w.px=(uint16_t)((x+1)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)y; g_tmp_valid=0;
+                    dbg_num("DU fire obj=", on); dbg_num("DU fire frame0=", (int)g_wobj[i].tile-basetile(on)); dbg_num("DU fire light0=", light_of(g_wobj[i].tile));
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("DU fire frame1=", (int)g_wobj[i].tile-basetile(on)); dbg_num("DU fire light1=", light_of(g_wobj[i].tile));
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("DU fire frame2=", (int)g_wobj[i].tile-basetile(on)); dbg_num("DU fire light2=", light_of(g_wobj[i].tile)); }
+            }
+            if(mode=='4'){
+                inv_add_objn(90,1); int n0=objworld_count(&g_ow,90);
+                (void)use_pack_item(&w,90); Cconws(g_msg); Cconws("\r\n");
+                dbg_num("DU torch fuel=", g_torch_fuel[1]); dbg_num("DU torch in hand=", g_aready[1][EQ_ARM]==90||g_aready[1][EQ_ARM2]==90);
+                dbg_num("DU torch pack delta=", n0-objworld_count(&g_ow,90));
+                int turns=0; while(g_torch_fuel[1]>0 && turns<2000){ dunguse_tick(&w); turns++; }
+                dbg_num("DU torch burned after turns=", turns); dbg_num("DU torch hand free=", g_aready[1][EQ_ARM]!=90&&g_aready[1][EQ_ARM2]!=90);
+                Cconws(g_msg); Cconws("\r\n");
+            }
+            if(mode=='5'){
+                int kx=(w.px+3)&(U6_SURFACE_TILES-1), ky=w.py, dx_=(w.px+4)&(U6_SURFACE_TILES-1);
+                int ks=-1, ds=-1; if(g_ow.nobjs+2<=MAXWOBJ){ ks=(int)g_ow.nobjs++; ds=(int)g_ow.nobjs++; }
+                if(ks>=0){ wobj_t*o=&g_wobj[ks]; o->obj_n=223; o->tile=(uint16_t)basetile(223); o->x=(uint16_t)kx; o->y=(uint16_t)ky; o->qty=1; o->quality=0;
+                    o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0;
+                    o=&g_wobj[ds]; o->obj_n=297; o->tile=(uint16_t)(basetile(297)+5); o->x=(uint16_t)dx_; o->y=(uint16_t)ky; o->qty=1; o->quality=0;
+                    o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; build_blocked(); }
+                int s=hatch_creature(&w,kx,ky,363,ALIGN_EVIL);
+                if(s>=0){ g_actx[s]=(uint16_t)((w.px+5)&(U6_SURFACE_TILES-1)); g_acty[s]=(uint16_t)ky; g_ahp[s]=200; g_amaxhp[s]=200; }
+                dbg_num("DU keg spawned=", ks>=0); dbg_num("DU keg hp_before=", s>=0?g_ahp[s]:0);
+                if(ks>=0){ (void)use_object(ks); Cconws(g_msg); Cconws("\r\n"); dbg_num("DU keg timer=", g_keg_timer);
+                    for(int t=0;t<3;t++) dunguse_tick(&w);
+                    dbg_num("DU keg alive=", g_wobj[ks].alive); dbg_num("DU door alive=", g_wobj[ds].alive);
+                    dbg_num("DU keg hp_after=", s>=0?g_ahp[s]:0); dbg_num("DU avatar hp=", g_ahp[1]); Cconws(g_msg); Cconws("\r\n"); }
+                if(s>=0) g_atile[s]=0xffff;
+            }
+            #undef NEAREST_OBJ
+        }
+    }
+    /* headless WORKTYPE checks (usecode_vm.md §6b): WORKTYPE.REQ byte = mode. */
+    {   int32_t kl=0; const uint8_t*kq=(const uint8_t*)plat_load_file("WORKTYPE.REQ",1,&kl);
+        if(kq && kl>0){ int mode=kq[0];
+            int np=-1, bd=1<<30;                                   /* the nearest scheduled, peaceful, non-party NPC here */
+            for(int i=2;i<U6_MAX_ACTORS;i++){ if(g_atile[i]==0xffff || g_actz[i]!=0 || g_actors[i].nsched<=0) continue;
+                int pm=0; for(int p=0;p<g_nparty;p++) if(g_party[p].actor==i) pm=1; if(pm) continue;
+                if(g_align_hostile[i]||g_hostile[i]||g_coward[i]) continue;
+                int cx=(int)g_actx[i]-(int)w.px, cy=(int)g_acty[i]-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy;
+                if(dd>=2 && dd<=12 && dd<bd){ bd=dd; np=i; } }
+            dbg_num("WT npc=", np<0?0:np); dbg_num("WT dist0=", bd<(1<<30)?bd:0);
+            if(mode=='1' && np>=0){
+                int d0=bd;
+                g_cg.worktype[np]=0x99; sync_worktype_out();       /* as a script's WORKTYPE self,0x99 would */
+                dbg_num("WT forced=", g_wt_force[np]); dbg_num("WT hostile=", g_hostile[np]); dbg_num("WT live_wt_is_99=", npc_worktype(np)==0x99);
+                int hp0=g_ahp[1]; for(int s=0;s<6;s++) step_npcs(&w);
+                int cx=(int)g_actx[np]-(int)w.px, cy=(int)g_acty[np]-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int d1=cx>cy?cx:cy;
+                dbg_num("WT attack dist1=", d1); dbg_num("WT approached_or_struck=", d1<d0 || g_ahp[1]<hp0);
+                g_cg.worktype[np]=0x9a; sync_worktype_out();
+                dbg_num("WT coward=", g_coward[np]); for(int s=0;s<6;s++) step_npcs(&w);
+                cx=(int)g_actx[np]-(int)w.px; cy=(int)g_acty[np]-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int d2=cx>cy?cx:cy;
+                dbg_num("WT flee dist2=", d2); dbg_num("WT fled=", d2>d1);
+                g_cg.worktype[np]=0x91; sync_worktype_out();
+                { int fx=g_actx[np], fy=g_acty[np]; for(int s=0;s<6;s++) step_npcs(&w);
+                  dbg_num("WT faint stayed=", g_actx[np]==fx && g_acty[np]==fy); }
+                dbg_num("WT hostile_now=", g_hostile[np]); dbg_num("WT coward_now=", g_coward[np]);
+                int si0=u6sched_active(&g_actors[np],g_hour), h=g_hour, found=0;   /* the next schedule entry clears it */
+                for(int k=1;k<=23 && !found;k++){ int hh=(g_hour+k)%24; if(u6sched_active(&g_actors[np],hh)!=si0){ h=hh; found=1; } }
+                dbg_num("WT next_entry_found=", found);
+                if(found){ w.clock=(uint32_t)h*60; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
+                dbg_num("WT cleared=", g_wt_force[np]==0); dbg_num("WT coward_restored=", g_coward[np]==0);
+                talk(np); Cconws(g_msg); Cconws("\r\n"); end_talk();   /* talks again once cleared */
+            }
+            if(mode=='2'){
+                static const int ids[3]={170,171,185};
+                for(int k=0;k<3;k++){ int id=ids[k];
+                    if(g_atile[id]==0xffff){ dbg_num("WT script npc missing=", id); continue; }
+                    talk(id); dbg_num("WT script npc=", id); dbg_num("WT script force=", g_wt_force[id]);
+                    Cconws(g_transcript); Cconws("\r\n"); end_talk(); }
+            }
+            if(mode=='3' && np>=0){
+                g_cg.worktype[np]=0x99; sync_worktype_out();
+                talk(np); Cconws(g_msg); Cconws("\r\n"); end_talk();   /* "No response." while hostile */
+                (void)do_save(&w);
+                dbg_num("WT saved byte=", sav_get_actor_worktype(g_savetmpl,g_objlist_off,np));
+                wt_force_clear(np); dbg_num("WT cleared before load=", g_wt_force[np]==0 && g_hostile[np]==0);
+                int ok=load_game(&w); dbg_num("WT loaded=", ok);
+                dbg_num("WT force after load=", g_wt_force[np]); dbg_num("WT hostile after load=", g_hostile[np]);
+            }
+        }
+    }
+    /* headless CANNON checks (cannons.md §6): CANNON.REQ byte = mode. */
+    {   int32_t cl=0; const uint8_t*cq=(const uint8_t*)plat_load_file("CANNON.REQ",1,&cl);
+        if(cq && cl>0){ int mode=cq[0];
+            int wx=-1,wy=-1;                                        /* a 7x7 block of open water (as WIND '1') */
+            for(int r=1;r<300 && wx<0;r++) for(int e=-r;e<=r && wx<0;e++) for(int side=0;side<4 && wx<0;side++){
+                int x=(side==0||side==1)? (int)w.px+e : (side==2? (int)w.px-r : (int)w.px+r);
+                int y=(side==0)? (int)w.py-r : (side==1? (int)w.py+r : (int)w.py+e);
+                x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1);
+                int ok=1;
+                for(int oy=-3;oy<=3 && ok;oy++) for(int ox=-3;ox<=3 && ok;ox++){
+                    int t=world_tile(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1));
+                    if(!(g_tflags1[t]&1) || (t>=16&&t<=47)) ok=0; }
+                if(!ok) continue;
+                for(int oy=-3;oy<=3 && ok;oy++) for(int ox=-3;ox<=3 && ok;ox++)
+                    if(!veh_can_enter(&w,(x+ox)&(U6_SURFACE_TILES-1),(y+oy)&(U6_SURFACE_TILES-1),1)) ok=0;
+                if(ok){ wx=x; wy=y; } }
+            dbg_num("CANNON sea found=", wx>=0);
+            if(mode=='1' && wx>=0){
+                /* a spawned ship (never saved) on open sea, the party aboard; a gargoyle 3 tiles east */
+                int bt=basetile(412), slots[3];
+                for(int k=0;k<3;k++){ int sl=-1; if(g_ow.nobjs<MAXWOBJ) sl=(int)g_ow.nobjs++; slots[k]=sl; }
+                int px_[3]={wx,wx,wx}, py_[3]={wy,(wy-1)&(U6_SURFACE_TILES-1),(wy+1)&(U6_SURFACE_TILES-1)}, fr_[3]={8,0,16};
+                for(int k=0;k<3;k++){ wobj_t*o=&g_wobj[slots[k]]; o->obj_n=412; o->tile=(uint16_t)(bt+fr_[k]);
+                    o->x=(uint16_t)px_[k]; o->y=(uint16_t)py_[k]; o->qty=100; o->quality=0;
+                    o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; }
+                build_blocked();
+                w.px=(uint16_t)wx; w.py=(uint16_t)wy; g_tmp_valid=0; (void)use_boat(&w,slots[0]);
+                dbg_num("CANNON aboard=", g_veh_kind==412);
+                int s=hatch_creature(&w,wx,wy,363,ALIGN_EVIL);
+                if(s>=0){ g_actx[s]=(uint16_t)((wx+3)&(U6_SURFACE_TILES-1)); g_acty[s]=(uint16_t)wy; g_ahp[s]=40; g_amaxhp[s]=40; g_aac[s]=0; }
+                dbg_num("CANNON foe=", s>=0);
+                int before=s>=0?g_ahp[s]:0, hits=0, shots=0;
+                while(s>=0 && shots<12 && g_ahp[s]==(uint8_t)before && g_atile[s]!=0xffff){ (void)do_attack(&w,1,0); shots++; }
+                if(s>=0) hits=(g_atile[s]==0xffff || g_ahp[s]!=(uint8_t)before);
+                dbg_num("CANNON hit=", hits); dbg_num("CANNON shots=", shots); dbg_num("CANNON hp_before=", before);
+                dbg_num("CANNON hp_after=", s>=0?(g_atile[s]==0xffff?0:g_ahp[s]):0); dbg_num("CANNON dist_east=", g_fx_last_dist);
+                Cconws(g_msg); Cconws("\r\n");
+                (void)do_attack(&w,0,-1);                          /* north over open sea: full range */
+                dbg_num("CANNON burst_north=", g_fx_last_dist);
+                Cconws(g_msg); Cconws("\r\n");
+                if(s>=0) g_atile[s]=0xffff;
+                g_fx_on=1; g_fx_tile=TILE_CANNONBALL; g_fx_x=(wx+2)&(U6_SURFACE_TILES-1); g_fx_y=wy;   /* held for the capture: a ball in flight */
+            }
+            if(mode=='2'){
+                /* the REAL ship at Buccaneer's Den (600,119): hull hits, repair, breaking, persistence */
+                int ci=wobj_boat_at(412,600,119); dbg_num("HULL real ship found=", ci>=0);
+                if(ci>=0){
+                    g_wobj[ci].quality=0;                                   /* as if bought */
+                    w.px=600; w.py=119; g_tmp_valid=0; (void)use_boat(&w,ci);
+                    dbg_num("HULL aboard=", g_veh_kind==412); dbg_num("HULL start=", (int)g_wobj[ci].qty);
+                    int s=hatch_creature(&w,600,119,363,ALIGN_EVIL);
+                    if(s>=0){ g_actx[s]=601; g_acty[s]=118; g_astr[s]=25; dbg_num("HULL gargoyle melee max=", monster_melee_max(s)); }   /* creature table dmg 15 (eggs.md §4) */
+                    int tries=0; while(s>=0 && g_wobj[ci].qty==100 && tries<40){ enemy_attack(s,1); tries++; }
+                    dbg_num("HULL after=", (int)g_wobj[ci].qty); Cconws(g_msg); Cconws("\r\n");
+                    (void)do_rest(&w); dbg_num("HULL rest=", (int)g_wobj[ci].qty); Cconws(g_msg); Cconws("\r\n");
+                    g_wobj[ci].qty=5; tries=0; while(s>=0 && g_veh_kind==412 && tries<60){ enemy_attack(s,1); tries++; }
+                    dbg_num("HULL broke=", g_veh_kind==415); dbg_num("HULL raft at centre=", wobj_boat_at(415,600,119)>=0);
+                    int parts=0; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==412 && g_wobj[j].y==119 && g_wobj[j].x>=599 && g_wobj[j].x<=601) parts++;
+                    dbg_num("HULL parts alive=", parts); Cconws(g_msg); Cconws("\r\n");
+                    (void)do_rest(&w); Cconws(g_msg); Cconws("\r\n");            /* on the raft: "Can not be repaired!" */
+                    if(s>=0) g_atile[s]=0xffff;
+                    int32_t len0=g_savetmpl_len; (void)do_save(&w); dbg_num("HULL tmpl shrink=", (int)(len0-g_savetmpl_len));
+                    int r412=0, r415=0; { int32_t off,end;                   /* the template's surface records at the three tiles */
+                        if(sav_level_span(g_savetmpl,g_savetmpl_len,0,&off,&end)){ int32_t pos=off;
+                            for(int c=0;c<64 && pos+2<=end;c++){ int cnt=g_savetmpl[pos]|(g_savetmpl[pos+1]<<8); pos+=2;
+                                for(int k=0;k<cnt && pos+8<=end;k++,pos+=8){ const uint8_t*r=g_savetmpl+pos;
+                                    if(r[0]&0x18) continue;
+                                    int rx=r[1]|((r[2]&3)<<8), ry=(r[2]>>2)|((r[3]&0x0f)<<6), ron=r[4]|((r[5]&3)<<8);
+                                    if(ry==119 && rx>=599 && rx<=601){ if(ron==412) r412++; if(ron==415) r415++; } } } } }
+                    dbg_num("HULL saved raft=", r415); dbg_num("HULL saved parts=", r412);
+                    dbg_num("HULL objlist ok=", g_objlist_off==sav_objlist_off(g_savetmpl,g_savetmpl_len));
+                }
+            }
+            if(mode=='3' && wx>=0){
+                /* a fixed cannon on the sea facing east: a gargoyle 2 tiles east, then a ship centre 3 tiles east */
+                int sl=-1; if(g_ow.nobjs<MAXWOBJ) sl=(int)g_ow.nobjs++;
+                int cx=(wx-3)&(U6_SURFACE_TILES-1), cy=wy;
+                if(sl>=0){ wobj_t*o=&g_wobj[sl]; o->obj_n=221; o->tile=(uint16_t)(basetile(221)+1); o->x=(uint16_t)cx; o->y=(uint16_t)cy;
+                    o->qty=1; o->quality=0; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; }
+                build_blocked();
+                w.px=(uint16_t)cx; w.py=(uint16_t)((cy-1)&(U6_SURFACE_TILES-1)); g_tmp_valid=0;
+                int s=hatch_creature(&w,cx,cy,363,ALIGN_EVIL);
+                if(s>=0){ g_actx[s]=(uint16_t)((cx+2)&(U6_SURFACE_TILES-1)); g_acty[s]=(uint16_t)cy; g_ahp[s]=50; g_amaxhp[s]=50; }
+                dbg_num("FIXED cannon=", sl>=0); dbg_num("FIXED hp_before=", s>=0?g_ahp[s]:0);
+                if(sl>=0) (void)cannon_fire(&w,sl);
+                dbg_num("FIXED hp_after=", s>=0?g_ahp[s]:0); dbg_num("FIXED dist=", g_fx_last_dist); Cconws(g_msg); Cconws("\r\n");
+                if(s>=0) g_atile[s]=0xffff;
+                int sc=-1; if(g_ow.nobjs<MAXWOBJ) sc=(int)g_ow.nobjs++;
+                if(sc>=0){ wobj_t*o=&g_wobj[sc]; o->obj_n=412; o->tile=(uint16_t)(basetile(412)+8); o->x=(uint16_t)wx; o->y=(uint16_t)wy;
+                    o->qty=100; o->quality=0; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; build_blocked();
+                    if(sl>=0) (void)cannon_fire(&w,sl);
+                    dbg_num("FIXED hull=", (int)o->qty); dbg_num("FIXED dist2=", g_fx_last_dist); Cconws(g_msg); Cconws("\r\n"); }
+            }
+        }
+    }
     /* headless WIND checks (wind.md §7): WIND.REQ byte = mode. */
     {   int32_t wl=0; const uint8_t*wq=(const uint8_t*)plat_load_file("WIND.REQ",1,&wl);
         if(wq && wl>0){ int mode=wq[0];
@@ -10119,7 +10648,7 @@ int main(int argc, char **argv)
                     else if (a==0x1b) { g_pending_verb=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
                 }
                 else if (((key>>8)&0xFF)==0x3B) { music_cycle_pref(); msgcat(0, music_pref_label()); redraw=1; }  /* F1: music source */
-                else if (a=='a'||a=='A') { g_pending_verb='A'; g_msg[0]=0; g_show_inv=0; redraw=1; }  /* A)ttack */
+                else if (a=='a'||a=='A') { g_pending_verb='A'; g_msg[0]=0; if(ship_aboard()) msgcat(0,"Attack with ship cannons-"); g_show_inv=0; redraw=1; }  /* A)ttack */
                 else if (a=='c'||a=='C') { open_cast_menu(); redraw=1; }                              /* C)ast: open the spell menu */
                 else if (a=='b'||a=='B') { g_combat_mode=!g_combat_mode; g_show_inv=0;                /* B)attle: combat-mode toggle (moved off 'c') */
                     msgcat(0, g_combat_mode?"Combat mode!":"Peace mode."); redraw=1; }

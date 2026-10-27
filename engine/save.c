@@ -4,6 +4,7 @@
  * All multi-byte save fields are little-endian; we read/write them byte-wise so
  * the code is correct on the big-endian 68000 target with no swapping. */
 #include "save.h"
+#include <string.h>
 #include "platfile.h"
 
 static uint16_t le16(const uint8_t *p){ return (uint16_t)(p[0] | (p[1] << 8)); }
@@ -103,6 +104,84 @@ int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int 
         }
     }
     return 0;
+}
+
+/* Hull strength write-back (docs/rules/cannons.md §4): the qty byte of the on-map record at
+ * (x,y,obj_n) of `level`. Returns 1 if patched. */
+int sav_patch_obj_qty(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int qty)
+{
+    int32_t pos = chunk_of(d, n, surf_off, level, x, y);
+    if (pos < 0 || pos + 2 > n) return 0;
+    int cnt = le16(d + pos); pos += 2;
+    for (int k = 0; k < cnt; k++){
+        if (pos + 8 > n) return 0;
+        uint8_t *r = d + pos; pos += 8;
+        if ((r[0] & 0x18) != 0) continue;
+        int rx = r[1] | ((r[2] & 3) << 8);
+        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int ron = r[4] | ((r[5] & 3) << 8);
+        if (rx == x && ry == y && ron == obj_n){ r[6] = (uint8_t)qty; return 1; }
+    }
+    return 0;
+}
+
+/* DESTROY (docs/rules/cannons.md §4): delete the on-map record at (x,y,obj_n) of `level` from the
+ * template IN PLACE. The chunk's count drops by one, every in-container link of that chunk that
+ * pointed past the deleted index is decremented (links are chunk-local record indices,
+ * objblk.md §2), the buffer tail moves down 8 bytes and a ScummVM trailer's header offset (the
+ * last u32) is corrected. Only a childless record may be deleted (a record linked as a parent is
+ * refused). Returns the new buffer length, or -1 if nothing was deleted. */
+int32_t sav_delete_record(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n)
+{
+    int32_t cpos = chunk_of(d, n, surf_off, level, x, y);
+    if (cpos < 0 || cpos + 2 > n) return -1;
+    int cnt = le16(d + cpos); int32_t base = cpos + 2;
+    if (base + (int32_t)cnt * 8 > n) return -1;
+    int k;
+    for (k = 0; k < cnt; k++){
+        const uint8_t *r = d + base + k * 8;
+        if ((r[0] & 0x18) != 0) continue;
+        int rx = r[1] | ((r[2] & 3) << 8);
+        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int ron = r[4] | ((r[5] & 3) << 8);
+        if (rx == x && ry == y && ron == obj_n) break;
+    }
+    if (k >= cnt) return -1;
+    for (int j = 0; j < cnt; j++){                         /* refuse a container; re-index later links */
+        uint8_t *r = d + base + j * 8;
+        if ((r[0] & 0x18) != 0x08) continue;
+        int rx = r[1] | ((r[2] & 3) << 8);
+        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int link = ((ry & 0x3f) << 10) | rx;
+        if (link == k) return -1;
+    }
+    int32_t ol = sav_objlist_off(d, n); if (ol < 4) return -1;
+    int32_t osz = (int32_t)(d[ol-4] | (d[ol-3] << 8) | ((uint32_t)d[ol-2] << 16) | ((uint32_t)d[ol-1] << 24));
+    int32_t tail = ol + osz; if (tail > n) return -1;
+    int32_t hp = -1;
+    if (tail + 4 <= n){                                    /* a trailer: its header offset is the file's last u32 */
+        const uint8_t *e = d + n - 4;
+        hp = (int32_t)(e[0] | (e[1] << 8) | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24));
+        if (!(hp >= tail && hp + 6 <= n - 4 && d[hp] == 'S' && d[hp+1] == 'V' && d[hp+2] == 'M' && d[hp+3] == 'C' && d[hp+4] == 'R')) hp = -1;
+    }
+    for (int j = 0; j < cnt; j++){
+        uint8_t *r = d + base + j * 8;
+        if ((r[0] & 0x18) != 0x08) continue;
+        int rx = r[1] | ((r[2] & 3) << 8);
+        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int link = ((ry & 0x3f) << 10) | rx;
+        if (link > k){ link--; rx = link & 0x3ff; ry = (ry & ~0x3f) | ((link >> 10) & 0x3f);
+            r[1] = (uint8_t)(rx & 0xff);
+            r[2] = (uint8_t)(((rx >> 8) & 3) | ((ry & 0x3f) << 2));
+            r[3] = (uint8_t)((r[3] & 0xf0) | ((ry >> 6) & 0x0f)); }
+    }
+    int32_t at = base + k * 8;
+    memmove(d + at, d + at + 8, (size_t)(n - at - 8));
+    n -= 8;
+    d[cpos] = (uint8_t)((cnt - 1) & 0xff); d[cpos+1] = (uint8_t)(((cnt - 1) >> 8) & 0xff);
+    if (hp >= 0){ int32_t np = hp - 8; uint8_t *e = d + n - 4;
+        e[0] = (uint8_t)np; e[1] = (uint8_t)(np >> 8); e[2] = (uint8_t)(np >> 16); e[3] = (uint8_t)(np >> 24); }
+    return n;
 }
 
 /* ---- carried-record reconciliation (save.h; docs/rules/save_load.md §5) ------------------- */
@@ -346,6 +425,10 @@ void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int
     d[off + 0xff1  + actor] = (uint8_t)level;
     d[off + 0x13f1 + actor] = (uint8_t)mana;
 }
+
+/* the per-actor WORKTYPE byte (objlist 0x11f1; docs/rules/usecode_vm.md §7 / schedule.md) */
+void sav_set_actor_worktype(uint8_t *d, int32_t off, int actor, int wt){ d[off + 0x11f1 + actor] = (uint8_t)wt; }
+int  sav_get_actor_worktype(const uint8_t *d, int32_t off, int actor){ return d[off + 0x11f1 + actor]; }
 
 void sav_set_avatar_name(uint8_t *d, int32_t off, const char *name)
 {
