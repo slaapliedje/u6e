@@ -84,7 +84,10 @@ the z it was dropped on). The engine's working set `g_wobj` holds ONE level at a
   template in place (the same taken / state / drop steps S)ave performs, save_load.md §5, now
   addressed by level: a surface record lives in its `(y>>7)*8+(x>>7)` chunk, a dungeon record in
   dungeon chunk z-1); (2) the new level is DECODED from the template (dungeon chunk z-1, or the
-  surface region, plus the inventory chunk's on-map records of that z), the pooled pack kept;
+  surface region, plus the inventory chunk's on-map records of that z), the pooled pack kept —
+  ONE CHUNK AT A TIME through a 4096-record transient batch (container links are chunk-local,
+  objblk.md §2; ~72 KB instead of a whole-level 216 KB, so the stock 4 MB Falcon can load with the
+  pack resident — design/memory_streaming.md);
   (3) blocking/sight bitmaps and buckets rebuild; (4) the party is re-seeded beside the Avatar
   on the new level. A level switch needs the template (no `SAVE.000` → "No dungeon data").
 - Actors are on a level: every "is this actor here" test compares its z with the CURRENT level

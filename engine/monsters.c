@@ -80,3 +80,62 @@ int monster_roll_stat(int base, rng_t *r)
     if (t == 0) return base;
     return base - t + rng_range(r, t + 1) + rng_range(r, t + 1);
 }
+
+/* Immunities by creature type (magic_skills.md §5b): poison-immune, undead (death spells), sleep-immune,
+ * flies (tremor-immune), repels undead, double fire damage, fire-immune. Types not listed have none. */
+static const struct { uint16_t obj_n; uint8_t f; } MF[] = {
+    { 364, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE },                                  /* acid slug */
+    { 429, MF_POISON_IMMUNE },                                                /* alligator */
+    { 427, MF_SLEEP_IMMUNE },                                                 /* giant ant */
+    { 344, MF_FLIES }, { 356, MF_FLIES }, { 372, MF_FLIES }, { 423, MF_FLIES },   /* bat, bird, mongbat, balloon */
+    { 357, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE },                                  /* corpser */
+    { 367, MF_FLIES|MF_REPEL_UNDEAD|MF_FIRE_IMMUNE|MF_UNDEAD|MF_SLEEP_IMMUNE },   /* daemon */
+    { 411, MF_FLIES|MF_FIRE_IMMUNE }, { 369, MF_FLIES|MF_FIRE_IMMUNE },      /* dragon, drake */
+    { 362, MF_FLIES|MF_SLEEP_IMMUNE }, { 355, MF_FLIES|MF_SLEEP_IMMUNE },    /* winged gargoyle, gazer */
+    { 352, MF_REPEL_UNDEAD|MF_FIRE_IMMUNE|MF_POISON_IMMUNE|MF_UNDEAD|MF_SLEEP_IMMUNE },   /* ghost */
+    { 368, MF_REPEL_UNDEAD|MF_FIRE_IMMUNE|MF_POISON_IMMUNE|MF_UNDEAD|MF_SLEEP_IMMUNE },   /* skeleton */
+    { 374, MF_FIRE_IMMUNE|MF_SLEEP_IMMUNE },                                  /* hydra */
+    { 343, MF_FLIES|MF_SLEEP_IMMUNE },                                        /* insects */
+    {  98, MF_POISON_IMMUNE|MF_SLEEP_IMMUNE },                                /* mimic */
+    { 342, MF_POISON_IMMUNE },                                                /* giant rat */
+    { 347, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE },                                  /* reaper */
+    { 360, MF_DOUBLE_FIRE|MF_POISON_IMMUNE|MF_SLEEP_IMMUNE },                 /* rot worm */
+    { 426, MF_SLEEP_IMMUNE }, { 345, MF_SLEEP_IMMUNE },                       /* giant scorpion, giant squid */
+    { 375, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE },                                  /* slime */
+    { 366, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE }, { 365, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE },   /* tangle vine, its flower */
+    { 373, MF_FIRE_IMMUNE|MF_UNDEAD|MF_SLEEP_IMMUNE },                        /* wisp */
+};
+int monster_flags(int obj_n)
+{
+    for (unsigned i = 0; i < sizeof MF / sizeof MF[0]; i++) if (MF[i].obj_n == obj_n) return MF[i].f;
+    return 0;
+}
+
+/* innate spells per creature type (combat.md §7b; the reference's creature table's spell column, read
+ * for understanding): U6 spell numbers (circle-1)*16+idx. 128 = the monsters' own "become invisible",
+ * 129 = the wisp's teleport. A hatched creature carries one charge per entry and never uses it up. */
+typedef struct { uint16_t obj_n; uint8_t n; uint8_t sp[8]; } mon_spells_t;
+static const mon_spells_t MSP[] = {
+    { 367, 4, { 17, 128, 34, 80 } },                 /* daemon: magic arrow, invisible, fireball, charm */
+    { 411, 5, { 34, 83, 68, 96, 119 } },             /* dragon: fireball, flame wind, lightning, chain bolt, summon */
+    { 369, 2, { 34, 68 } },                          /* drake: fireball, lightning */
+    { 362, 3, { 68, 65, 69 } },                      /* winged gargoyle: lightning, explosion, paralyze */
+    { 355, 3, { 20, 68, 80 } },                      /* gazer: sleep, lightning, charm */
+    { 352, 2, { 128, 99 } },                         /* ghost: invisible, fear */
+    { 374, 4, { 69, 96, 98, 68 } },                  /* hydra: paralyze, chain bolt, energy wind, lightning */
+    { 378, 8, { 17, 34, 20, 49, 68, 80, 69, 83 } },  /* mage: magic arrow, fireball, sleep, conjure, lightning, charm, paralyze, flame wind */
+    {  98, 2, { 18, 80 } },                          /* mimic: poison, charm */
+    { 347, 4, { 17, 80, 66, 68 } },                  /* reaper: magic arrow, charm, insect swarm, lightning */
+    { 346, 3, { 34, 83, 51 } },                      /* sea serpent: fireball, flame wind, fire field */
+    { 361, 1, { 89 } },                              /* giant spider: web */
+    { 345, 2, { 17, 68 } },                          /* giant squid: magic arrow, lightning */
+    { 373, 3, { 20, 69, 129 } },                     /* wisp: sleep, paralyze, teleport */
+    { 365, 1, { 20 } },                              /* tangle-vine flower: sleep */
+};
+int monster_spells(int obj_n, const uint8_t **out)
+{
+    for (unsigned i = 0; i < sizeof MSP / sizeof MSP[0]; i++)
+        if (MSP[i].obj_n == obj_n){ if (out) *out = MSP[i].sp; return MSP[i].n; }
+    if (out) *out = 0;
+    return 0;
+}

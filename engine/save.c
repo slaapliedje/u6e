@@ -131,22 +131,13 @@ int sav_patch_obj_qty(uint8_t *d, int32_t n, int32_t surf_off, int level, int x,
  * objblk.md §2), the buffer tail moves down 8 bytes and a ScummVM trailer's header offset (the
  * last u32) is corrected. Only a childless record may be deleted (a record linked as a parent is
  * refused). Returns the new buffer length, or -1 if nothing was deleted. */
-int32_t sav_delete_record(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n)
+/* Delete record k of the chunk whose count word is at cpos: refuses a container (children would be
+ * orphaned), re-indexes the chunk's later container links, shifts the file down 8 bytes, fixes the
+ * count word and a ScummVM trailer's header offset. Returns the new length, or -1. */
+static int32_t delete_record_k(uint8_t *d, int32_t n, int32_t cpos, int k)
 {
-    int32_t cpos = chunk_of(d, n, surf_off, level, x, y);
-    if (cpos < 0 || cpos + 2 > n) return -1;
     int cnt = le16(d + cpos); int32_t base = cpos + 2;
-    if (base + (int32_t)cnt * 8 > n) return -1;
-    int k;
-    for (k = 0; k < cnt; k++){
-        const uint8_t *r = d + base + k * 8;
-        if ((r[0] & 0x18) != 0) continue;
-        int rx = r[1] | ((r[2] & 3) << 8);
-        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
-        int ron = r[4] | ((r[5] & 3) << 8);
-        if (rx == x && ry == y && ron == obj_n) break;
-    }
-    if (k >= cnt) return -1;
+    if (k < 0 || k >= cnt || base + (int32_t)cnt * 8 > n) return -1;
     for (int j = 0; j < cnt; j++){                         /* refuse a container; re-index later links */
         uint8_t *r = d + base + j * 8;
         if ((r[0] & 0x18) != 0x08) continue;
@@ -182,6 +173,59 @@ int32_t sav_delete_record(uint8_t *d, int32_t n, int32_t surf_off, int level, in
     if (hp >= 0){ int32_t np = hp - 8; uint8_t *e = d + n - 4;
         e[0] = (uint8_t)np; e[1] = (uint8_t)(np >> 8); e[2] = (uint8_t)(np >> 16); e[3] = (uint8_t)(np >> 24); }
     return n;
+}
+/* index of the on-map record at (x,y) with obj_n in the chunk at cpos, or -1 */
+static int find_onmap_k(const uint8_t *d, int32_t n, int32_t cpos, int x, int y, int obj_n)
+{
+    if (cpos < 0 || cpos + 2 > n) return -1;
+    int cnt = le16(d + cpos); int32_t base = cpos + 2;
+    if (base + (int32_t)cnt * 8 > n) return -1;
+    for (int k = 0; k < cnt; k++){
+        const uint8_t *r = d + base + k * 8;
+        if ((r[0] & 0x18) != 0) continue;
+        int rx = r[1] | ((r[2] & 3) << 8);
+        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int ron = r[4] | ((r[5] & 3) << 8);
+        if (rx == x && ry == y && ron == obj_n) return k;
+    }
+    return -1;
+}
+int32_t sav_delete_record(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n)
+{
+    int32_t cpos = chunk_of(d, n, surf_off, level, x, y);
+    int k = find_onmap_k(d, n, cpos, x, y, obj_n);
+    return (k < 0) ? -1 : delete_record_k(d, n, cpos, k);
+}
+int32_t sav_delete_contained(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int cont_obj_n, int child_obj_n)
+{
+    int32_t cpos = chunk_of(d, n, surf_off, level, x, y);
+    int P = find_onmap_k(d, n, cpos, x, y, cont_obj_n); if (P < 0) return -1;
+    int cnt = le16(d + cpos); int32_t base = cpos + 2;
+    for (int k = 0; k < cnt; k++){
+        const uint8_t *r = d + base + k * 8;
+        if ((r[0] & 0x18) != 0x08) continue;
+        int rx = r[1] | ((r[2] & 3) << 8);
+        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+        int link = ((ry & 0x3f) << 10) | rx;
+        int ron = r[4] | ((r[5] & 3) << 8);
+        if (link == P && ron == child_obj_n) return delete_record_k(d, n, cpos, k);
+    }
+    return -1;
+}
+int32_t sav_delete_inv_record(uint8_t *d, int32_t n, int owner, int obj_n)
+{
+    int32_t cpos = sav_inv_off(d, n);
+    if (cpos < 0 || cpos + 2 > n) return -1;
+    int cnt = le16(d + cpos); int32_t base = cpos + 2;
+    if (base + (int32_t)cnt * 8 > n) return -1;
+    for (int k = 0; k < cnt; k++){
+        const uint8_t *r = d + base + k * 8;
+        if ((r[0] & 0x18) != 0x10) continue;                /* carried, not readied */
+        int ro = r[1] | ((r[2] & 3) << 8);
+        int ron = r[4] | ((r[5] & 3) << 8);
+        if (ro == owner && ron == obj_n){ int32_t nn = delete_record_k(d, n, cpos, k); if (nn > 0) return nn; }   /* a container is refused: try the next */
+    }
+    return -1;
 }
 
 /* ---- carried-record reconciliation (save.h; docs/rules/save_load.md §5) ------------------- */
@@ -403,6 +447,10 @@ void sav_set_date(uint8_t *d, int32_t off, int day, int month, int year)
 /* the powder-keg fuse (objlist 0x1c4b, u16 LE; usecode_use.md) */
 void sav_set_keg_timer(uint8_t *d, int32_t off, int t){ d[off + 0x1c4b] = (uint8_t)t; d[off + 0x1c4c] = (uint8_t)(t >> 8); }
 int  sav_get_keg_timer(const uint8_t *d, int32_t off){ return d[off + 0x1c4b] | (d[off + 0x1c4c] << 8); }
+void sav_set_timer(uint8_t *d, int32_t off, int idx, int val){ if (idx >= 0 && idx < 16) d[off + 0x1c03 + idx] = (uint8_t)val; }
+void sav_set_vanish(uint8_t *d, int32_t off, int v){ d[off + 0x1c13] = (uint8_t)v; d[off + 0x1c14] = (uint8_t)(v >> 8); }
+int  sav_get_vanish(const uint8_t *d, int32_t off){ return d[off + 0x1c13] | (d[off + 0x1c14] << 8); }
+int  sav_get_timer(const uint8_t *d, int32_t off, int idx){ return (idx >= 0 && idx < 16) ? d[off + 0x1c03 + idx] : 0; }
 void sav_get_date(const uint8_t *d, int32_t off, int *day, int *month, int *year)
 {
     *day = d[off + 0x1bf5]; *month = d[off + 0x1bf6]; *year = d[off + 0x1bf7] | (d[off + 0x1bf8] << 8);
@@ -582,4 +630,137 @@ int sav_write_rebuilt(const char *path, const uint8_t *d, int32_t n, const uint8
     plat_fclose(w.f);
     if (out_len) *out_len = w.total;
     return w.err ? -3 : 0;
+}
+
+/* ---- M)ove into a container: record relocation (save.h; usecode_use.md "M)ove") ------------- */
+
+static int rec_link(const uint8_t *r)
+{   int rx = r[1] | ((r[2] & 3) << 8), ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+    return ((ry & 0x3f) << 10) | rx; }
+static void rec_set_link(uint8_t *r, int link)
+{   int x = link & 0x3ff, y6 = (link >> 10) & 0x3f;
+    r[0] = (uint8_t)((r[0] & ~0x18) | 0x08);
+    r[1] = (uint8_t)(x & 0xff);
+    r[2] = (uint8_t)(((x >> 8) & 3) | (y6 << 2));
+    r[3] = (uint8_t)(r[3] & 0xf0); }
+
+int32_t sav_locate_onmap(const uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int *k)
+{
+    int32_t cpos = chunk_of(d, n, surf_off, level, x, y);
+    int kk = find_onmap_k(d, n, cpos, x, y, obj_n);
+    if (kk >= 0){ *k = kk; return cpos; }
+    int32_t pos = 4;                                        /* every chunk: inventories, eggs, 64 surface, 5 dungeon */
+    for (int c = 0; c < 71; c++){
+        if (pos + 2 > n) return -1;
+        int cnt = le16(d + pos); int32_t base = pos + 2;
+        if (base + (int32_t)cnt * 8 > n) return -1;
+        for (int j = 0; j < cnt; j++){
+            const uint8_t *r = d + base + j * 8;
+            if ((r[0] & 0x18) != 0) continue;
+            int rx = r[1] | ((r[2] & 3) << 8), ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6), rz = r[3] >> 4;
+            int ron = r[4] | ((r[5] & 3) << 8);
+            if (rx == x && ry == y && rz == level && ron == obj_n){ *k = j; return pos; }
+        }
+        pos = base + (int32_t)cnt * 8;
+    }
+    return -1;
+}
+
+int sav_find_child(const uint8_t *d, int32_t n, int32_t cpos, int parent_k, int obj_n, int quality)
+{
+    if (cpos < 0 || cpos + 2 > n) return -1;
+    int cnt = le16(d + cpos); int32_t base = cpos + 2;
+    if (base + (int32_t)cnt * 8 > n) return -1;
+    for (int k = 0; k < cnt; k++){
+        const uint8_t *r = d + base + k * 8;
+        if ((r[0] & 0x18) != 0x08) continue;
+        if (rec_link(r) != parent_k) continue;
+        int ron = r[4] | ((r[5] & 3) << 8);
+        if (ron == obj_n && (quality < 0 || r[7] == (uint8_t)quality)) return k;
+    }
+    return -1;
+}
+
+int32_t sav_delete_at(uint8_t *d, int32_t n, int32_t cpos, int k){ return delete_record_k(d, n, cpos, k); }
+
+void sav_set_rec_qty(uint8_t *d, int32_t n, int32_t cpos, int k, int qty)
+{
+    if (cpos < 0 || cpos + 2 > n) return;
+    int cnt = le16(d + cpos); int32_t at = cpos + 2 + (int32_t)k * 8;
+    if (k < 0 || k >= cnt || at + 8 > n) return;
+    d[at + 6] = (uint8_t)(qty & 0xff); d[at + 7] = (uint8_t)((qty >> 8) & 0xff);
+}
+
+/* grow the buffer by `delta` bytes at `at` (the tail shifts up); a ScummVM trailer's header offset
+ * (the file's last u32) follows the tail. Returns the new length, or -1 if it does not fit. */
+static int32_t grow_at(uint8_t *d, int32_t n, int32_t cap, int32_t at, int32_t delta)
+{
+    if (n + delta > cap || at < 0 || at > n) return -1;
+    int32_t ol = sav_objlist_off(d, n); if (ol < 4) return -1;
+    int32_t osz = (int32_t)(d[ol-4] | (d[ol-3] << 8) | ((uint32_t)d[ol-2] << 16) | ((uint32_t)d[ol-1] << 24));
+    int32_t tail = ol + osz; if (tail > n) return -1;
+    int32_t hp = -1;
+    if (tail + 4 <= n){
+        const uint8_t *e = d + n - 4;
+        hp = (int32_t)(e[0] | (e[1] << 8) | ((uint32_t)e[2] << 16) | ((uint32_t)e[3] << 24));
+        if (!(hp >= tail && hp + 6 <= n - 4 && d[hp] == 'S' && d[hp+1] == 'V' && d[hp+2] == 'M' && d[hp+3] == 'C' && d[hp+4] == 'R')) hp = -1;
+    }
+    memmove(d + at + delta, d + at, (size_t)(n - at));
+    n += delta;
+    if (hp >= 0){ int32_t np = hp + delta; uint8_t *e = d + n - 4;
+        e[0] = (uint8_t)np; e[1] = (uint8_t)(np >> 8); e[2] = (uint8_t)(np >> 16); e[3] = (uint8_t)(np >> 24); }
+    return n;
+}
+
+#define RC_MAX 64
+int32_t sav_recontain(uint8_t *d, int32_t n, int32_t cap, int32_t src_cpos, int src_k, int32_t dst_cpos, int dst_k)
+{
+    static uint8_t  blk[RC_MAX * 8];      /* the travelling records, links made block-relative */
+    static uint16_t idx[RC_MAX];          /* their indices in the source chunk, root first, ascending */
+    static uint8_t  inset[1024];          /* bitmap over source-chunk indices */
+    if (src_cpos < 0 || dst_cpos < 0 || src_cpos + 2 > n || dst_cpos + 2 > n) return -1;
+    int scnt = le16(d + src_cpos); int32_t sbase = src_cpos + 2;
+    if (src_k < 0 || src_k >= scnt || scnt > 8192 || sbase + (int32_t)scnt * 8 > n) return -1;
+    int dcnt = le16(d + dst_cpos);
+    if (dst_k < 0 || dst_k >= dcnt) return -1;
+    memset(inset, 0, sizeof inset);
+    int m = 0; idx[m++] = (uint16_t)src_k; inset[src_k >> 3] |= (uint8_t)(1u << (src_k & 7));
+    for (int j = src_k + 1; j < scnt; j++){                 /* contents follow their holder (objblk.md §2) */
+        const uint8_t *r = d + sbase + j * 8;
+        if ((r[0] & 0x18) != 0x08) continue;
+        int link = rec_link(r);
+        if (link < j && ((inset[link >> 3] >> (link & 7)) & 1)){
+            if (m >= RC_MAX) return -1;
+            idx[m++] = (uint16_t)j; inset[j >> 3] |= (uint8_t)(1u << (j & 7));
+        }
+    }
+    if (dst_cpos == src_cpos && ((inset[dst_k >> 3] >> (dst_k & 7)) & 1)) return -1;   /* a holder cannot go into itself */
+    if (n + (int32_t)m * 8 > cap) return -1;
+    for (int a = 0; a < m; a++){
+        uint8_t *b = blk + a * 8; memcpy(b, d + sbase + idx[a] * 8, 8);
+        if (a == 0){ rec_set_link(b, 0); continue; }      /* the root: its holder is patched in below */
+        int link = rec_link(b), rel = 0;
+        for (int q = 0; q < a; q++) if (idx[q] == link){ rel = q; break; }
+        rec_set_link(b, rel);
+    }
+    /* out of the source chunk, deepest (highest index) first: each deletion re-indexes later links */
+    for (int a = m - 1; a >= 0; a--){
+        int32_t nn = delete_record_k(d, n, src_cpos, idx[a]);
+        if (nn < 0) return -1;                             /* (cannot happen once the block is complete) */
+        n = nn;
+        if (dst_cpos == src_cpos && idx[a] < dst_k) dst_k--;
+        else if (dst_cpos > src_cpos) dst_cpos -= 8;
+    }
+    /* onto the end of the destination chunk */
+    dcnt = le16(d + dst_cpos);
+    int32_t dend = dst_cpos + 2 + (int32_t)dcnt * 8;
+    int32_t nn = grow_at(d, n, cap, dend, (int32_t)m * 8);
+    if (nn < 0) return -1;                                 /* (room was checked above) */
+    n = nn;
+    for (int a = 0; a < m; a++){
+        uint8_t *r = d + dend + a * 8; memcpy(r, blk + a * 8, 8);
+        rec_set_link(r, a == 0 ? dst_k : dcnt + rec_link(blk + a * 8));
+    }
+    d[dst_cpos] = (uint8_t)((dcnt + m) & 0xff); d[dst_cpos + 1] = (uint8_t)(((dcnt + m) >> 8) & 0xff);
+    return n;
 }

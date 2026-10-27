@@ -1065,6 +1065,77 @@ static const GameProfile *profile_for(const char *id)
  * (U6LZC_COMP_SE/_MD). Verified host-side: SE/MD compressed core files are LZC
  * single stored items, the rest (MAP/CHUNKS/TILEINDX/OBJTILES/BASETILE/TILEFLAG)
  * are raw in all three games. */
+/* ---- THE ENDING (docs/design/ending.md §0): narration from the user's END.EXE ----
+ * CLEAN-ROOM: the text lives only in the user's own executable and goes straight into the
+ * never-committed pack. Located STRUCTURALLY: END.EXE holds a block of thirty number words
+ * ("zero".."twenty-nine": a run of >=20 consecutive short lowercase fragments without spaces);
+ * the narration is the contiguous run of printable prose fragments right after it — 42 pre-wrapped
+ * lines (15 pages) + the 3 congratulation lines. Returns the line count (0 = absent). */
+#define EN_MAX 48
+#define EN_LEN 96
+static int extract_ending(const char *dir, char lines[EN_MAX][EN_LEN], char nums[30][16], int *nnum)
+{
+    char path[1024]; snprintf(path,sizeof path,"%s/END.EXE",dir);
+    long n; uint8_t *d=slurp_path(path,NULL,&n); *nnum=0;
+    if(!d){ printf("ending text: END.EXE not found -> engine notice only\n"); return 0; }
+    /* 1. the number-word table: >=20 short lowercase words, NUL-padded (empty fragments between) */
+    long i=0, after=-1; int run=0; long wpos[64]; int nw=0;
+    while(i<n){
+        long j=i; while(j<n && d[j]) j++;
+        int L=(int)(j-i);
+        if(L==0){ i=j+1; continue; }                              /* padding inside the table */
+        int word=(L>=3 && L<=12);
+        if(word) for(int k=0;k<L;k++){ uint8_t c=d[i+k]; if(!((c>='a'&&c<='z')||c=='-')){ word=0; break; } }
+        if(word){ if(run<64) wpos[run]=i; run++; }
+        else { if(run>=20){ after=i; break; } run=0; }
+        i=j+1;
+    }
+    if(after<0){ printf("ending text: number-word block not found -> engine notice only\n"); free(d); return 0; }
+    nw=run>64?64:run;
+    { int from=nw>30?nw-30:0, cnt=0;                               /* the last 30 words = zero..twenty-nine */
+      for(int k=from;k<nw;k++){ long p=wpos[k]; int L=0; while(p+L<n && d[p+L] && L<15) L++; memcpy(nums[cnt],d+p,(size_t)L); nums[cnt][L]=0; cnt++; }
+      *nnum=cnt; }
+    /* 2. the first narration line is the printable TAIL of the fragment after the table (it follows a
+     *    pointer table with no NUL between); 3. then consecutive printable fragments, 42 lines in all */
+    int nl=0;
+    { long j=after; while(j<n && d[j]) j++;
+      long t=j; while(t>after && d[t-1]>=32 && d[t-1]<127) t--;
+      int L=(int)(j-t); if(L>0 && L<EN_LEN){ memcpy(lines[nl],d+t,(size_t)L); lines[nl][L]=0; nl++; }
+      long p=j+1;
+      while(p<n && nl<42){
+          long q=p; while(q<n && d[q]) q++; int Lq=(int)(q-p), ok=(Lq>0 && Lq<EN_LEN);
+          for(int k=0;k<Lq && ok;k++){ uint8_t c=d[p+k]; if(!(c>=32&&c<127)) ok=0; }
+          if(!ok) break;
+          memcpy(lines[nl],d+p,(size_t)Lq); lines[nl][Lq]=0; nl++; p=q+1;
+      }
+      /* 4. the congratulations: an all-capitals word (control bytes stripped), the "Thou hast completed..."
+       *    sentence head, and the "Report thy feat..." tail after the ".\n" of a later fragment */
+      int got=0;
+      for(int f=0; f<16 && p<n && got<3; f++){
+          long q=p; while(q<n && d[q]) q++; int Lq=(int)(q-p);
+          char buf[EN_LEN]; int bl=0, caps=0, sp=0, nlpos=-1;
+          for(int k=0;k<Lq && bl<EN_LEN-1;k++){ uint8_t c=d[p+k]; if(c=='\n' && nlpos<0) nlpos=bl; if(c>=32&&c<127){ buf[bl++]=(char)c; if(c>='A'&&c<='Z') caps++; if(c==' ') sp++; } }
+          buf[bl]=0;
+          if(got==0){ if(bl>=10 && caps==bl){ snprintf(lines[nl++],EN_LEN,"%s",buf); got=1; } }
+          else if(got==1){ if(bl>=30 && sp>=4){ while(bl>0 && buf[bl-1]==' ') buf[--bl]=0; snprintf(lines[nl++],EN_LEN,"%s",buf); got=2; } }
+          else { if(nlpos>=0 && bl-nlpos>=20){ snprintf(lines[nl++],EN_LEN,"%s",buf+nlpos); got=3; } }
+          p=q+1;
+      } }
+    printf("ending text: extracted %d lines + %d number words from END.EXE @%#lx\n", nl, *nnum, (unsigned long)after);
+    free(d); return nl;
+}
+/* an ILBM palette file's CMAP (256 x 8-bit RGB) as the pack's 6-bit RGB */
+static int load_lbm_pal6(const char *dir, const char *name, uint8_t out[768])
+{
+    long n; uint8_t *d=slurp(dir,name,&n); if(!d) return 0;
+    int ok=0;
+    for(long i=0;i+8<=n;i++) if(!memcmp(d+i,"CMAP",4)){
+        long sz=((long)d[i+4]<<24)|((long)d[i+5]<<16)|((long)d[i+6]<<8)|d[i+7];
+        if(sz>=768 && i+8+768<=n){ for(int k=0;k<768;k++) out[k]=(uint8_t)(d[i+8+k]>>2); ok=1; }
+        break; }
+    free(d); return ok;
+}
+
 static uint8_t *load_core_asset(const char *dir, const char *name, uint8_t marker, long *outlen)
 {
     long n; uint8_t *b = slurp(dir, name, &n);
@@ -1811,6 +1882,13 @@ int main(int argc, char **argv)
     { fwrite("U6W5",1,4,f);
       for(int o=0;o<1024;o+=8){ int b=0; for(int k=0;k<8;k++) if(stackable[o+k]) b|=1<<k; fputc(b,f); } }
 
+    /* object WEIGHTS by obj_n (U6WB, magic-guarded): the TILEFLAG weight block verbatim (tileflag.md,
+     * block 0x1000) for M)ove's movable test — weight 0 = fixed scenery (rules/usecode_use.md). */
+    { fwrite("U6WB",1,4,f); fwrite(tflag+0x1000,1,1024,f); }
+    /* per-tile TILEFLAGS3 (U6W3, magic-guarded): the TILEFLAG block at 0x1400 verbatim (tileflag.md) — bit3 is
+     * the Vanish / Replicate flag, bit1 Support, bits 6-7 the article (rules/magic_skills.md §5f). */
+    { fwrite("U6W3",1,4,f); fwrite(tflag+0x1400,1,2048,f); }
+
     /* per-actor hostile-by-alignment flag (U6WM): 256 x u8 (combat.md §7 / CB4) */
     { int nh=0; for (int i=0;i<NACT;i++){ fputc(ahostile[i],f); nh+=ahostile[i]; }
       printf("alignment: %d/%d actors EVIL/CHAOTIC (status 0x800 bit 0x20 = enemy)\n", nh, NACT); }
@@ -2227,6 +2305,29 @@ int main(int argc, char **argv)
             rle[n++]=(uint8_t)r; rle[n++]=v; i+=r; }
           be16(fe,(unsigned)w); be16(fe,(unsigned)h); be32(fe,(uint32_t)n); fwrite(rle,1,(size_t)n,fe);
           printf("boot logo %d: INTRO_1.SHP %d %dx%d -> %ld RLE bytes\n", k, LOGO[k], w, h, n); free(lp); } }
+      FE_SEC(FES_END);
+      /* THE ENDING (docs/design/ending.md §2): ENDPAL.LBM as 6-bit + an ST 16 for the tableau + the RAW
+       * 13-shape END.SHP table (shape 0, the see-through wall, keyed on colour 0 by the reference: its
+       * index-0 pixels become 255 = transparent) + the narration lines and number words extracted from
+       * the user's END.EXE (never shipped). [768 pal][48+256 lc][u8 nsh] + nsh x [u16 w][u16 h][w*h]
+       * + [u8 nlines] + n x [u16 len][bytes] + [u8 nnum] + n x [u16 len][bytes]. */
+      { enum { EN_NSH=13 };
+        uint8_t ep[768]; if(!load_lbm_pal6(dir,"ENDPAL.LBM",ep)) memset(ep,0,768);
+        fwrite(ep,1,768,fe);
+        { static const ishape_t ES[] = { {7,0,0},{8,0,0},{3,9,30},{10,1,133} };   /* chamber + tableau + gate + scroll */
+          static uint8_t esc[320*200]; memset(esc,0,sizeof esc);
+          compose_shapes(dir,"END.SHP",ES,(int)(sizeof ES/sizeof ES[0]),esc,320,200);
+          uint8_t lc[48+256]; build_scene_lc(ep,esc,320*200,lc); fwrite(lc,1,sizeof lc,fe); }
+        fputc(EN_NSH,fe); long epre=ftell(fe); int nshipped=0;
+        for(int i=0;i<EN_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"END.SHP",i,&w,&h);
+          if(sp&&w>0&&h>0){ if(i==0) for(long k=0;k<(long)w*h;k++) if(sp[k]==0) sp[k]=U6SHAPE_TRANSPARENT;
+            be16(fe,(unsigned)w); be16(fe,(unsigned)h); fwrite(sp,1,(size_t)w*h,fe); nshipped++; }
+          else { be16(fe,0); be16(fe,0); }
+          free(sp); }
+        static char el[EN_MAX][EN_LEN]; static char en[30][16]; int nnum=0; int nl=extract_ending(dir,el,en,&nnum);
+        fputc(nl,fe); for(int q=0;q<nl;q++){ int L=(int)strlen(el[q]); be16(fe,(unsigned)L); fwrite(el[q],1,(size_t)L,fe); }
+        fputc(nnum,fe); for(int q=0;q<nnum;q++){ int L=(int)strlen(en[q]); be16(fe,(unsigned)L); fwrite(en[q],1,(size_t)L,fe); }
+        printf("ending: endpal + %d/%d END.SHP shapes + %d text lines + %d number words (%ld bytes)\n", nshipped, EN_NSH, nl, nnum, ftell(fe)-epre); }
     }   /* end front-end/intro art block */
     if(fe!=f){                                    /* close the section directory + the file */
         { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; }

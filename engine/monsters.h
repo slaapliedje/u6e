@@ -18,6 +18,13 @@ int monster_base(int obj_n, mon_base_t *out);
 /* The hatch roll of one stat: t = base/2; base when t == 0, else base - t + rand(0..t) + rand(0..t). */
 int monster_roll_stat(int base, rng_t *r);
 
+/* Per-type immunities (magic_skills.md §5b; the creature table's flag columns). 0 for humans. */
+enum { MF_POISON_IMMUNE = 1, MF_UNDEAD = 2, MF_SLEEP_IMMUNE = 4, MF_FLIES = 8, MF_REPEL_UNDEAD = 16,
+       MF_DOUBLE_FIRE = 32, MF_FIRE_IMMUNE = 64 };
+int monster_flags(int obj_n);
+/* The creature type's innate SPELLS as U6 spell numbers (combat.md §7b): *out points at the list,
+ * returns its length (0 = casts nothing). */
+int monster_spells(int obj_n, const uint8_t **out);
 /* 1 if this alignment fights the party (evil / chaotic). */
 static inline int align_is_hostile(int align){ return align == ALIGN_EVIL || align == ALIGN_CHAOTIC; }
 

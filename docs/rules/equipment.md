@@ -98,7 +98,38 @@ u6e keeps the party pack as ONE pooled list (established deviation). Equipment t
 `READY weapon=… ac=…` to the console and open the status view; '2' = two-handed rule (halberd
 then shield refused); '3' = unready flow. Combat assert: after '1', avatar hits use sword damage.
 
+## 8. Effects of readied magic items (IMPLEMENTED 2026-10-27)
+> Derived from: READING Nuvie `usecode/u6_usecode.cpp` magic_ring / storm_cloak /
+> amulet_of_submission / cannot_unready, and the U6 script `u6/actor.lua` advance_time (the
+> per-turn readied-item loop: vanishing odds, regeneration, the storm timer) — to understand;
+> re-expressed. Implemented in /render gamedemo.c (ready_fx_on/off/tick), save.c (timer 13).
+
+| item | readied effect |
+|---|---|
+| protection ring 256 | +5 armour class (combat.md §4 table — the fold already counts it); never vanishes |
+| regeneration ring 257 | the wearer regains 1 HP per turn, up to their maximum |
+| invisibility ring 258 | the wearer is invisible while it is worn (one ring suffices); taken off → visible unless a second ring stays on |
+| storm cloak 81 | a MAGICAL STORM: objlist timer 13 (0x1c10, objlist.md) is set to 20 on readying, counts down a turn at a time but is held at ≥1 every turn the cloak is worn, and is cleared when it comes off. In the original the storm keeps foes from firing their magic charges; u6e tracks and saves the timer — no foe wields charges yet |
+| amulet of submission 76 | cannot be taken off: "Magical energy prevents you from removing the amulet." |
+
+- **Vanishing**: each turn, every readied regeneration ring, invisibility ring and storm cloak of a
+  party member has a 1-in-1001 chance to VANISH — "A ring has vanished!" / "A cloak has vanished!"
+  — the item is gone (not returned to the pack); a vanished invisibility ring reveals its wearer
+  (unless a second is worn), a vanished cloak ends the storm.
+- The effects apply to PARTY members (the original's loop is `in_party`); an NPC wearing a ring
+  (Lord British wears the protection and regeneration rings in the starting data) keeps the AC only.
+- Hooked at every ready/unready path: E)quip, the status view digit (§5), the pool absorb at load.
+- Test hook `READYFX.REQ` mode '1' (usecode_use.md): the invisibility ring hides the Avatar while worn
+  and not after; the regeneration ring heals 1/turn; the cloak sets the storm to 20, counts it down,
+  clears it when removed; the amulet refuses removal; a worn ring vanishes within a long run.
+
 ## Status
+§8 VERIFIED 2026-10-27: READYFX.REQ '1' identical on emulated TT and the stock 4 MB Falcon — the
+invisibility ring hides the Avatar on readying and across 5 turns, removal reveals; the regeneration
+ring restores 5 HP in 5 turns; the storm cloak sets timer 13 to 20, 17 after 3 turns, held at 1 while
+worn, 0 on removal, and a set value reaches objlist 0x1c10 on S)ave; the amulet of submission stays on
+("Magical energy prevents you from removing the amulet."); a worn regeneration ring vanished after
+149 turns ("A ring has vanished!").
 VERIFIED 2026-09-20 — engine/equip.c (22 host asserts, `make equiptest`); U6WQ ships from the save
 (18 actors / 68 items on the canonical save; folds match the old U6WL values); READY.REQ modes 1-3
 validated on emulated TT (fold prints + the status-view gear list + digit unready). Save

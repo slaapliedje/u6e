@@ -51,6 +51,8 @@ Arrays we use (others exist for inventory/work flags):
 | 0x19f1 | 1 byte   | movement_flags (bits 0x60 = the "OLD" alignment; the LIVE one is in 0x800) |
 | 0x1bf1 | 1 byte   | player **quest flag**  ·  0x1bf9 karma  ·  0x1c5f knows-gargish  ·  0x1c69 combat-mode  ·  0x1c6a solo-member  ·  0x1c71 gender |
 | 0x1bf3 | 6 bytes  | **game time** (year/month/day/hour/min?)  ·  0x1bfa wind dir  ·  0x1c1b moonstone positions |
+| 0x1c03 | 16 bytes | **effect timers**, one byte each, counted down per turn (Nuvie GameClock / the U6 script's timer_*): 0 Light spell, 1 Infravision, 13 = **magical storm** (0x1c10; the storm cloak — rules/equipment.md §8), 14 time stop (0x1c11), 15 eclipse (0x1c12); the rest unknown. u6e reads/writes 1 (Infravision), 13 (Negate Magic / the cloak), 14 (Time Stop), 15 (Eclipse) |
+| 0x1c13 | 2 bytes  | the **vanished object** (Vanish / Reappear, rules/magic_skills.md §5f): u16 LE; 0 = nothing vanished. The reference writes obj_n + 1023 + frame for a framed object, which its own loader cannot take apart again (it reads every such value as object 1023); u6e stores **obj_n in bits 0-9 and the frame in bits 10-15** — identical for frame 0, unambiguous otherwise |
 | 0x1c72 | 1 byte   | avatar's selected portrait number (see portraits.md)    |
 
 ### Alignment (status 0x800, bits 0x60) — the authentic hostility source (VERIFIED)

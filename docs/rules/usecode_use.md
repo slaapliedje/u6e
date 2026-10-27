@@ -30,10 +30,17 @@ USE toggles state by ±4:
 The rendered tile is `basetile(obj_n) + frame`, so a ±4 frame change is a ±4 tile
 change — opening/closing swaps the door graphic.
 
-Locks (TODO): a door with `quality != 0` is locked and needs `OBJ_U6_KEY` (64)
-of matching quality (or a lock pick, obj 63). "magically locked" doors can't be
-opened normally. Our slice treats doors as unlocked (we don't yet ship per-object
-quality); locked-door handling lands with the inventory/key model.
+Locks: frames **8-11 = LOCKED** (a key of matching `quality`, obj 64, or a lockpick 63 opens
+them: frame −4 → closed) and **12-15 = MAGICALLY locked** (Unlock Magic: frame −8 → closed; Magic
+Lock puts a closed door there: +8). The data only uses the odd frames (9/11 and 13/15 — the two
+door orientations), the engine treats the whole ranges alike. A magically locked door survives a
+keg blast; the others are blown up.
+
+**Traps** (magic_skills.md §5f): a door or chest may hold a child "effect" object (337). Opening it
+(USE on a closed door / a closed chest) fires the trap on the Avatar and removes it: Acid (1..20
+damage), Poison, Bomb (1..20 fire damage to everyone within the 21-cell area) or Gas (everyone within
+the area poisoned). The Trap / Untrap / Detect Trap spells add, remove and sense them. Six traps ship
+in the pristine save (chests + steel doors); a removed one is deleted from the save record.
 
 Blocking (TODO): U6 won't close a door onto an actor/object, and a CLOSED door
 blocks movement. We don't block movement on object tiles yet, so closing is
@@ -248,8 +255,141 @@ NPCNEARBY sees them and the brawl sets 0x99 on 44, 46, 45 and 50.
 
 ## Torch and keg state across a save (2026-10-27)
 A lit readied torch's record is saved with frame 1 and its fuel in qty, and relit with that fuel
-on load; the keg fuse (objlist 0x1c4b, u16) is saved and restored (a lit keg carried in the pack
-is not — its fuse simply resumes on any lit keg on the map).
+on load (every party member's); the keg fuse (objlist 0x1c4b, u16) is saved and restored, and a lit
+keg carried in the pack is saved as a 223 frame-1 record in the party's inventory (the reference's
+explode_keg looks for exactly that) and comes back as the carried fuse. A shrine egg silenced by a
+mantra has its hatch chance (the egg record's qty byte) written as 0, so neither our load nor
+ScummVM's hatches it again.
+
+## M)ove — pushing objects and actors (IMPLEMENTED 2026-10-27; containers + Support tops 2026-10-27)
+> Derived from: READING Nuvie `core/events.cpp` push_start / pushTo (both forms),
+> `gui/widgets/map_window.cpp` can_drop_or_move_obj + blocked_by_wall, `core/obj_manager.cpp`
+> (the weight table, can_get_obj, can_store_obj, moveto_container), `core/obj.cpp` (add_and_stack),
+> `usecode/u6_usecode.cpp` use_cannon (MOVE) and amulet_of_submission — to understand; re-expressed.
+> Weights + Support flag: docs/formats/tileflag.md (the pack's U6WB / U6W3 sections). Container
+> records: docs/formats/objblk.md §2.
+
+- **M**, then a direction (or a click on a neighbouring tile), picks the thing to move: an ACTOR on
+  that tile first, else the topmost object; nothing there → "what?". The original selects with a
+  free cursor anywhere in the window; u6e moves what stands beside the party.
+- **Unmovable**: a type whose WEIGHT (tileflag block 0x1000, by obj_n) is 0 — fixed scenery,
+  statues (the "255" class — big furniture — IS movable, just not gettable) — and dragons (411):
+  "Not possible". Ship parts (412) are sailed, not pushed.
+- Then **To-** a direction: the thing moves ONE tile from where it stands (the original pushes one
+  space at a time). The direction is echoed ("North.").
+- **An object**:
+  - standing on a WALL map tile (tileflags1 Wall bit) that is not a door (297..300) → "Blocked."
+    (the original also reads the wall's facing bits; u6e refuses any wall tile);
+  - the target tile must be free of actors (the party included) → else "Blocked.";
+  - a skiff / raft (414/415) goes onto open WATER only, never onto a tile holding an object →
+    "Not possible";
+  - the target holds an object, and that object TAKES the pushed thing (see *Holders* below) →
+    the thing goes INSIDE it and leaves the map (no further message);
+  - else the target's topmost object must have a **Support** tile (tileflags3 bit1: tables, end
+    tables, the cutting table, stone tables, book stands, altars, a CLOSED crate) — or be passable
+    with neither its own tile nor the map tile a boundary (a rug, a floor plaque, a chest of drawers,
+    a spellbook) → the thing lands ON TOP (it becomes the tile's topmost object: drawn over it,
+    picked first by G)et / L)ook); otherwise "Not possible";
+  - a bare map tile: water takes nothing (but a boat); otherwise Support, or passable and not a
+    boundary → the thing moves; else "Not possible". (No map tile carries Support in U6; the rule is
+    kept for symmetry with the original.)
+  - a **cannon** (221) pushed along its facing rolls one tile; pushed any other way it is RE-AIMED
+    to that direction and stays put (use_cannon's MOVE rule);
+  - success: the object moves (its record is relocated at S)ave through the moved-object path, like
+    a passthrough's) and the turn passes.
+- **Holders** (the original's can_store rule for a container ON THE MAP): the pushed thing must be
+  gettable, never a trap (173 / the 337 trap effect), never a chest / barrel / crate (98/186/192);
+  the holder takes it when it is a bag (188), a backpack (99), a basket (191), an OPEN crate (192
+  frame 0), an OPEN barrel (186 frame 0) or an OPEN chest (98 frame 0); a spellbook (57) takes a
+  spell (58) it does not hold yet (a spell of that quality, or one of quality 255 = all spells,
+  already inside refuses); the vortex cube (62) takes a moonstone (73). Anything else — a closed
+  chest, a drawer, a desk, a body — is not a holder on the map (the original opens those only from
+  an inventory / a gump). A stackable thing joins a stack of the same type, frame and quality
+  already inside (counts add, the pushed stack is gone). A pushed bag goes in WITH its contents.
+  Searching the holder spills the pushed things like any contents.
+- **Persistence**: the move into a holder is carried into the save template at once (after a
+  reconcile of pending takes / drops / moves, so a thing taken and dropped this session has an
+  on-map record to move): the thing's record, with every record contained in it, leaves its chunk
+  and is appended to the holder's chunk as an in-container record linked to the holder (objblk.md
+  §2: links are chunk-local, contents follow their holder) — across super-chunks when the two
+  differ; a merged stack patches the inside stack's count and deletes its own record; a holder
+  without a record (a runtime object: a Replicated copy, a body) takes the record away with it.
+  Our load and ScummVM's see the thing inside. Up to 64 records travel in one push.
+- **An actor**: never the Avatar; a seated actor (on a chair or throne — the original's
+  can_move=false) → "Failed."; the **strength test** with `S` the pushed actor's strength and
+  `P` the pusher's (each 3 less when cursed): `(S/2 + 30 − P)/2 > rand(1..30)` → "Failed."; the
+  target tile must be passable and free of blocking objects and actors → else "Blocked."; success
+  moves the actor one tile (a companion too) and the turn passes. (The original charges 5
+  movement points; u6e's turn model spends the turn.)
+- Mouse: the first click selects a neighbouring tile; the second click's tile RELATIVE TO THE
+  pushed thing gives the direction (sign-clamped to one step).
+- Deviations: the original refuses a target it cannot see (a dark tile) and tests the line from the
+  pusher to the target for missile boundaries; u6e checks the wall under the pushed thing only. A
+  target more than one tile away is "Out of range!" (u6e pushes what stands beside the party).
+- Test hook `PUSH.REQ`: '1' a chair placed east of the Avatar pushed east moves one tile; a doorway
+  (weight 0) is "Not possible"; a creature on the target → "Blocked."; '2' a cannon facing east
+  pushed north is re-aimed (frame 0, same tile), pushed north again it rolls; '3' a hatched dog
+  (weight 110) of strength 1 pushed east moves, of strength 200 → "Failed.", a gargoyle (weight 0)
+  → "Not possible"; '4' the nearest real chair pushed one tile and S)aved → its record sits at the
+  new tile and none at the old; '5' a chair pushed onto a table / a closed crate lands on top as
+  the topmost object, onto a cask → "Not possible"; '6' gold pushed into an open chest goes inside,
+  a second gold stack merges (5+7 = 12), two keys of different quality stay apart, a closed chest
+  and a chest-into-chest refuse, a search spills the three; a key lands ON a spellbook, a spell goes
+  in, a spell it holds stays out; the vortex cube refuses a key and takes a moonstone; '7' REAL
+  objects: the nearest real chest (opened) takes the nearest real gettable item, a real bag WITH
+  contents from another super-chunk, and an item taken and dropped this session — each time the
+  template shows the record under the chest and none at the old place; then S)ave.
+  VERIFIED 2026-10-27, modes 1-4 identical on emulated TT and the stock 4 MB Falcon (the pack's
+  weights: chair 74, doorway 0, cannon 255, throne 0, dragon 130, gargoyle 0).
+  Modes 5-7 VERIFIED 2026-10-27, identical on emulated TT and the stock 4 MB Falcon: the table / closed
+  crate take the chair on top (it is the topmost object), the cask refuses; gold 5+7 merges to 12, the
+  chest holds 3, a search spills 3; the real chest at (293,351) takes a real item (124), a real bag
+  (188, with 6 meat) from another super-chunk and a taken-and-dropped item (27) — the written save
+  (host check: 1710 in-container records, 0 bad links; the chest record lists all three, the bag's
+  meat under the bag) loads in ScummVM.
+
+## Staff, vortex cube, white potion, holy flames, NPC torches (IMPLEMENTED 2026-10-27)
+> Derived from: READING Nuvie `usecode/u6_usecode.cpp` use_staff / use_vortex_cube / use_potion
+> (white) / holy_flame, `actors/u6_actor.cpp` handle_lightsource + `actors/actor_manager.cpp` (its
+> hourly call), `core/effect.cpp` U6WhitePotionEffect, the U6 script `u6/actor.lua` (party torches
+> burn, NPC torches do not) — to understand; re-expressed.
+
+- **Staff** (78) U)se: it holds CHARGES (336, one per stored spell; a charge's quality is the
+  spell number): one charge is consumed and that spell is cast at once WITHOUT mana or reagents (a
+  targeted spell asks the direction as C)ast does); no charge left → "Nothing happens.". Our pooled
+  pack flattens containers, so the staff's charges are pack items, and the pack list holds unreadied
+  items only, so the staff is used from the pack (the original's "Not readied." gate is dropped;
+  deviation). The staff at (915,410) in the starting data holds five charges.
+- **Vortex cube** (62) U)se: the endgame. Needs the Codex (59, quality 128) within 11 tiles on the
+  current level, the Britannian lens (394) at (921,851) and the gargoyle lens (396) at (925,851) on
+  the surface, and all EIGHT moonstones (73, frames 0..7) carried along with the cube (the pool
+  stands for the cube's contents) → "The Codex has vanished!": the Codex is removed (destroyed in
+  the save) and the game is won — the ending cutscene plays (docs/design/ending.md; without its
+  assets a short notice in our own words) and a key returns to the desktop. Else "No Effect!".
+- **White potion** (275 frame 7): x-ray sight — see through walls for 30 turns (the X-ray spell's
+  effect and duration, magic_skills.md §5e; the original times it in real seconds).
+- **Holy flames**: L)ook at a lit brazier (206 frame 2) of quality 1/2/3 says "The flame of
+  truth / love / courage." instead of the object's name (the shrines' braziers; quality 0 or >3 is
+  an ordinary brazier).
+- **NPC torches**: every hour (and after a load or a level change) each actor OUTSIDE the party
+  with a torch readied lights it when the hour is before 6 or after 18, or on any level other than
+  the surface and level 5 (the gargoyle world; the original also lights them during an eclipse —
+  not modelled), and puts it out otherwise; NPC torches never burn down. A COMPANION's lit torch
+  burns down like the Avatar's (1-in-2 per turn) and is saved with its fuel. Every lit torch on the
+  level lights its bearer's tile at emitter level 3.
+- Test hook `READYFX.REQ`: '1' rings + cloak + amulet (equipment.md §8); '2' the staff fires a
+  Light charge for no mana, a targeted charge arms C)ast's direction; '3' the white potion → 30
+  x-ray turns, a quality-1 brazier → "The flame of truth."; '4' NPC torches light at 22:00 and
+  douse at 12:00, a companion's torch burns down; '5' the cube: "No Effect!" without the lenses,
+  the Codex vanishes with them + 8 stones; '6' a silenced egg's chance byte and a carried lit keg
+  survive S)ave → load.
+  VERIFIED 2026-10-27, modes 1-6 identical on emulated TT and the stock 4 MB Falcon: a Light charge
+  gives 30 light turns for no mana and leaves one charge, the Magic Arrow charge arms the direction
+  prompt, an empty staff says "Nothing happens."; the white potion gives 30 x-ray turns; the
+  quality-1 brazier reads "The flame of truth."; a torch handed to NPC 6 is lit at 22:00 and doused
+  at 12:00; a companion's torch burns 50 → 35 fuel in 40 turns; without the lenses the cube says
+  "No Effect!", with them and the 8 stones at the Codex (923,851) it vanishes; the silenced egg's
+  chance byte (75 → 0) and the carried keg (fuse 2) come back from the save.
 
 ## Other use handlers (TODO — same dispatcher, future slices)
 - Magic lock/unlock spells; persisting field/consumed-item/hunger state to the save.
@@ -259,4 +399,5 @@ is not — its fuse simply resumes on any lit keg on the map).
 
 ## Status: IN PROGRESS (doors + containers/stacks + keys/locks + LOCKPICKS + FOOD/HUNGER +
 ## readables + LEVERS/SWITCHES/CRANKS + DRAWBRIDGES + ladders/holes/caves (map_levels.md) +
-## SECRET DOORS / PASSTHROUGHS / FIRE DEVICES / TORCHES / POWDER KEGS done)
+## SECRET DOORS / PASSTHROUGHS / FIRE DEVICES / TORCHES / POWDER KEGS + small handlers +
+## M)OVE pushing + STAFF / VORTEX CUBE / WHITE POTION / HOLY FLAMES / NPC TORCHES done)

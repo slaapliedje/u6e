@@ -45,6 +45,7 @@ enum {
     FES_FSET,       /* U6.SET proportional front-end font                                  */
     FES_LOGOS,      /* ORIGIN / Lord British boot logos                                     */
     FES_SCROLL,     /* shared narration parchment (BLOCKS.SHP 2) — intro captions + gargoyle */
+    FES_END,        /* the ending cutscene: ENDPAL + END.SHP shapes + END.EXE text (docs/design/ending.md) */
     FES_N
 };
 

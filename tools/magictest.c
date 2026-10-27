@@ -35,7 +35,11 @@ int main(void)
     }
     CHECK(ok_circles, "every spell has a circle in 1..8");
     CHECK(ok_cost,    "mana_cost(spell) == circle for all spells");
-    CHECK(SPELL_COUNT == 79, "79 spells total (7*10 + 9)");
+    CHECK(SPELL_COUNT == 80, "80 spells total (8*10)");
+    { int arm = spell_by_name("Armageddon"), dw = spell_by_name("Death Wind"), wc = spell_by_name("Wind Change");
+      CHECK(arm >= 0 && magic_spell_num(arm) == 112 && g_spells[arm].reagents == 0, "Armageddon = circle 8 idx 0 (spell_num 112), no reagents");
+      CHECK(dw >= 0 && magic_spell_num(dw) == 113, "Death Wind -> spell_num 113 (the reference's number)");
+      CHECK(wc >= 0 && magic_spell_num(wc) == 57 && spell_by_name("Wild Change") < 0, "Wind Change (circle 4 idx 9 = 57); the old typo is gone"); }
 
     printf("== known spells (spot checks) ==\n");
     int heal = spell_by_name("Heal");

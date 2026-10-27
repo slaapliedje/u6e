@@ -188,6 +188,16 @@ Validation (Hatari Falcon 14 MB, `--conout 2`, AVI audio vs the PCM): BRIT.PCM (
 (`GARGOYLE,BRIT,GARGOYLE`, 80 s each) so a replay-from-cache can be exercised headlessly
 (`music from_cache=1` on the console).
 
+## Save-load transient (2026-10-27)
+
+Loading a save (and every level change) decodes the object chunks through a transient batch taken
+from the chip mark/reset region. It used to be sized for the WHOLE level (12 000 records × 14 B +
+a 12 000-entry remap ≈ 216 KB) on top of the 142 KB file; when the §5f spell code grew the binary by
+~35 KB the stock 4 MB Falcon could no longer load a game ("Not enough memory to load."). The decode now
+runs ONE CHUNK AT A TIME (container links are chunk-local, objblk.md §2), with a 4096-record batch
+(~72 KB) — see rules/map_levels.md §4b. Lesson: every save/load hook must run on the 4 MB Falcon too,
+not only the TT; the margin is tens of KB.
+
 ## Follow-ups (not done)
 
 - Finer streaming granularity (per scene inside INTRO) if a smaller-RAM config ever matters — the

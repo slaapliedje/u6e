@@ -15,7 +15,7 @@
 
 #include <stdint.h>
 
-#define SPELL_COUNT      79       /* circles 1-7 x10 + circle 8 x9 (magic_skills.md §5) */
+#define SPELL_COUNT      80       /* 8 circles x 10 spells (magic_skills.md §5) */
 #define REAG_FIRST_OBJ   65       /* black pearl; reagents are obj_n 65..72 (§2)        */
 #define REAG_COUNT       8
 

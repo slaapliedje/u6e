@@ -66,10 +66,10 @@ fixed cannon), docs/rules/vehicles.md (boarding), wind.md (sailing).
   (frame 0 N, 1 E, 2 S, 3 W). The first actor on the line takes a flat **32** damage (no hit
   roll, no armour); a ship's centre part on the line takes 20 off its hull; a missile-boundary
   or sight-blocking tile stops the ball with a burst; otherwise it bursts at the end.
-- Aiming: the original re-aims a cannon by M)oving (pushing) it towards the wanted direction
-  (a push along its facing rolls it one tile instead). u6e has no object pushing yet — §5.
-- The game's starting data holds no cannon objects (cannons appear only as part of the ship
-  tiles), so this is included for completeness and for cannons found in play.
+- Aiming: a cannon is re-aimed by M)oving (pushing) it towards the wanted direction; a push along
+  its facing rolls it one tile instead (usecode_use.md, M)ove).
+- The starting data holds fixed cannons: the batteries around Buccaneer's Den (393..436, 722..757),
+  a pair by the docks at (582,625)/(582,630), one at (307,345) by Lord British's castle and more.
 
 ## 4. Persistence
 
@@ -91,7 +91,6 @@ fixed cannon), docs/rules/vehicles.md (boarding), wind.md (sailing).
 - Direction-based aiming (8 directions from the ship) instead of a free cursor; the ball
   cannot be fired at an empty tile on purpose — it flies the full range when nothing is hit.
 - Diagonal shots use the 8-direction line (the original fires at any tile in range).
-- No object pushing, so a fixed cannon cannot be re-aimed; it fires in its placed facing.
 - A broken ship's raft always sits on the centre tile (no toss).
 - The ship's cannons never fire at objects (the original can damage doors/kegs by attacking
   them); powder kegs do not explode.

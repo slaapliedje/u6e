@@ -5,7 +5,7 @@
 #include "magic.h"
 #include <string.h>
 
-/* The 79 U6 spells, dense circle-major order (magic_skills.md §5). Reagent masks
+/* The 80 U6 spells, dense circle-major order (magic_skills.md §5). Reagent masks
  * use the R_* bits from magic.h. */
 const spell_t g_spells[SPELL_COUNT] = {
     /* --- Circle 1 (cost 1) --- */
@@ -51,7 +51,7 @@ const spell_t g_spells[SPELL_COUNT] = {
     { 4, R_GA|R_GI,                "Mass Dispel",  "VAS AN JUX ORT" },
     { 4, R_NI|R_SS|R_BP,           "Poison Field", "IN NOX GRAV" },
     { 4, R_GI|R_SS|R_BP,           "Sleep Field",  "IN ZU GRAV" },
-    { 4, R_SA|R_BM,                "Wild Change",  "REL HUR" },
+    { 4, R_SA|R_BM,                "Wind Change",  "REL HUR" },
     /* --- Circle 5 (cost 5) --- */
     { 5, R_MA|R_SS|R_BP,           "Energy Field", "IN SANCT GRAV" },
     { 5, R_MA|R_SA|R_BP,           "Explosion",    "VAS POL FLAM" },
@@ -86,6 +86,7 @@ const spell_t g_spells[SPELL_COUNT] = {
     { 7, R_BM|R_SS|R_MA|R_SA,      "Wing Strike",  "KAL ORT XEN" },
     { 7, R_BM|R_NI|R_MA|R_SA|R_BP|R_SS, "Wizard Eye", "POR ORT WIS" },
     /* --- Circle 8 (cost 8) --- */
+    { 8, 0,                        "Armageddon",   "VAS CORP BET MANI" },   /* no reagents; spell_num 112 (§5) */
     { 8, R_MA|R_NI|R_SA|R_BM,      "Death Wind",   "CORP HUR" },
     { 8, R_MA|R_SA|R_NI|R_GA|R_BM, "Eclipse",      "VAS AN LOR" },
     { 8, R_BP|R_NI|R_SS|R_MA,      "Mass Charm",   "VAS AN XEN EX" },

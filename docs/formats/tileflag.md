@@ -13,7 +13,7 @@ their own equivalents (see Nuvie docs/martian/tileflags.txt).
 > - Validated by  : Get verb on-target only succeeds for movable items (torch,
 >   food, etc.) and fails on fixed scenery (walls, large furniture).
 > - Confidence   : confirmed (weights + the bits we use); some bits still guessed.
-> - Last updated : 2026-06-24
+> - Last updated : 2026-10-27
 
 ## Overall layout (4 blocks, total 0x1C00 = 7168 bytes)
 
@@ -22,7 +22,7 @@ their own equivalents (see Nuvie docs/martian/tileflags.txt).
 | 0x0000  | 2048 | tileflags1   | tile (0..2047) | bit0 Wet, bit1 Impassable, bit2 Wall, bit3 Damaging, bit4-7 directional/impedance |
 | 0x0800  | 2048 | tileflags2   | tile       | bits0-1 light level, bit2 boundary, bit3 look-through boundary, bit4 **Foreground (toptile)**, bit5 no-shoot-through, bit6-7 size (double width/height) |
 | 0x1000  | 1024 | **weights**  | obj_n (0..1023) | object weight, stored ×10 (byte/10 = stones) |
-| 0x1400  | 2048 | tileflags3   | tile       | bit0 Warm, bit1 Support (can place on top), bit2 Breakthrough (force passable), bit3 "Ge"(?), bit4 Ignore, bit5 Background, bit6-7 article ("","a","an","the") |
+| 0x1400  | 2048 | tileflags3   | tile       | bit0 Warm, bit1 Support (can place on top), bit2 Breakthrough (force passable), bit3 **Vanish/Replicate-able** (the reference's "Ge": the Vanish, Reappear and Replicate spells act only on such objects — 177 tiles), bit4 Ignore, bit5 Background, bit6-7 article ("","a","an","the") |
 
 (Endianness is per-byte; no multi-byte fields here.)
 
@@ -35,6 +35,10 @@ Per ObjManager::can_get_obj:
 
 So: `gettable(obj_n) = w != 0 && w != 0xFF && !(tileflags2[basetile(obj_n)] & 0x10)`
 where `w = weights[obj_n]`.
+
+**Movable** (M)ove — rules/usecode_use.md): `w != 0`; weight 255 is movable but not gettable. u6e
+ships the weight block verbatim in the world pack as the magic-guarded `U6WB` section
+([4 "U6WB"][1024 weights], after U6W5); an engine without it falls back to "movable = gettable".
 
 ## Rendering flags (tileflags2) — decoded from real data
 
@@ -123,7 +127,11 @@ figure sits *in* the throne instead of covering it.
   and the OPEN secret door frames (334 f1/f3), all walked through. Terrain is unaffected (every
   map tile with Wall also has Impassable). Forced passability (tileflags3 bit2: drawbridge spans)
   stays as before.
-- bit3 "Ge" of tileflags3 — purpose unconfirmed.
+- bit3 of tileflags3 (2026-10-27): the Vanish / Replicate flag (rules/magic_skills.md §5f) — the whole
+  block ships as the magic-guarded `U6W3` section ([4 "U6W3"][2048], after U6WB).
+- bit1 of tileflags3 (2026-10-27): the Support / "can place on top" flag — 34 object tiles in U6 (tables,
+  end tables, the cutting table, stone tables, book stands, altars, the CLOSED crate frame), no map tile;
+  M)ove lets a pushed thing land on such an object (rules/usecode_use.md M)ove).
 - Article bits (tileflags3 6-7) not yet consumed (Look prints the bare name).
 
 ## Status: VERIFIED (weights + gettable; some flag bits guessed)

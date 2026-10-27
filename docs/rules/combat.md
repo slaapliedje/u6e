@@ -135,6 +135,57 @@ that get hit switch to ASSAULT"). DONE — validated headlessly (COMBAT.BIN byte
 fled the avatar (y 355→357), then after a hit became hostile and closed back in (moved 2
 tiles toward the party).
 
+## 7b. Foes casting spells (2026-10-27)
+
+> Derived from: READING the U6 scripts in Nuvie's `ultima.dat` — `u6/actor.lua` actor_init (one
+> "charge" object 336 per entry of the creature table's spell column, quality = the spell number),
+> actor_get_weapon (the charge roll, the storm test, the fallback to the best weapon in range),
+> actor_attack (a charge weapon casts the spell at the target; the wisp's 129 is its teleport),
+> the weapon range table (a charge reaches 5), and the per-spell scripts for a non-player caster
+> (no Success / Failed lines; the effects print their own) — to understand; re-expressed. The
+> spell lists are in engine/monsters.c `monster_spells`. Confidence: probable. Validated by
+> FOESPELL.REQ (§9).
+
+Fifteen creature types cast: daemon, dragon, drake, winged gargoyle, gazer, ghost, hydra, mage,
+mimic, reaper, sea serpent, giant spider, giant squid, wisp, tangle-vine flower (the list per type
+is the table in monsters.c). A creature's charges are never used up.
+
+**When.** Each turn a hostile that has a target within 5 tiles and in line of sight runs the
+charge roll BEFORE moving or striking, in list order: a charge fires when `rand(0..3) == 0` and
+`rand(0..spell_num) < 16` (so a 1st-circle spell is tried at 1-in-4, an 8th-circle one at about
+1-in-32); the first that fires is cast and the turn is spent. No charge ever fires while the
+magical storm runs (objlist timer 13: Negate Magic, or a worn storm cloak — that is the cloak's
+purpose). Nothing fires → the usual melee (adjacent) / approach.
+
+**Targets and effects** (the target = the nearest party member; its tile for area spells; the
+reference's scripts with the monster as caster):
+
+| spell | effect on the party |
+|---|---|
+| Magic Arrow 17 | dexterity check `((target_dex/2 + 30) − caster_int)/2 ≤ d30` → 1..10 damage |
+| Poison 18 | §5b's strength roll (magic_skills.md) → poisoned |
+| Sleep 20 | the intelligence contest → asleep |
+| Fireball 34 | fire damage 1..20 (double / immune by the §5b flags) |
+| Conjure 49 | a creature of the caster's side appears within ±5 of it: troll, giant rat, giant spider, giant bat or snake (a d16: 0-3 / 4-6 / 7-9 / 10-12 / else) |
+| Fire Field 51 | a fire field on the target's tile (not on water) |
+| Explosion 65 | fire damage to everyone in the 21-cell area around the target |
+| Insect Swarm 66 | up to 8 hostile insect swarms within ±5 of the caster |
+| Lightning 68 | 1..30 damage |
+| Paralyze 69 | paralyzed (no roll): "X is paralyzed." |
+| Charm 80 | the contest; a charmed COMPANION fights for the monsters until the charm lifts (the §5b roll): each turn it strikes an adjacent party member (the Avatar included), else stands. The Avatar itself resists (u6e deviation: no leader change) |
+| Flame Wind 83 / Energy Wind 98 | the five-cell line through the target, perpendicular to the caster's aim (magic_skills.md §5f): fire damage / 1..30 |
+| Web 89 | webs on the free cells of the 3×3 around the target |
+| Chain Bolt 96 | 1..30 on the target, then up to 7 jumps to the nearest other actor within 4 of the caster |
+| Fear 99 | every NON-GOOD, non-undead actor within 5 of the caster that loses the contest flees — the reference's script spares good actors, so a ghost's fear scares other monsters, not the party |
+| Summon 119 | a daemon of the caster's side beside the player |
+| 128 "monster invisible" | the caster vanishes from sight (a long invisibility; Reveal dispels it) |
+| 129 (wisp) | "Wisp teleports!" — the wisp jumps to a free tile beside the player |
+
+Damage to a party member goes through the same path as a monster's blow (it CAN reach 0 HP, like
+melee); damage to anyone else through the spell damage routine. The cast shows the spell's
+projectile tile on the target and a line "<creature> casts <spell>." (u6e feedback; the original
+shows its casting flash).
+
 ## 8. Implementation plan (stages)
 - **CB1 — player melee attack — DONE.** A)ttack (key 'A' / command-bar icon 0) → direction
   → if an actor is in that tile, §2 hit check (avatar dex vs target dex) + §3 damage (default
@@ -221,6 +272,14 @@ HP change verified. Later: a hostile NPC trades blows over N turns. Compare beha
 RNG) vs ScummVM where feasible. Deterministic RNG seam (engine/rng.c) for unit tests.
 
 ## 10. Status
+§7b VERIFIED 2026-10-27 (FOESPELL.REQ 1-7, seeded RNG, identical logs on emulated TT and the stock 4 MB Falcon
+from the canonical save template): a mage three tiles from the party casts 15 times in 30 turns (Sleep, Magic
+Arrow with its dexterity check, Fireball), never closing to melee, leaving one companion wounded and one asleep;
+under Negate Magic the same mage casts nothing in 30 turns; a gazer's Charm turns Dupre against the party
+("Dupre hits thee!") until the charm lifts after 10 turns; a giant spider's Web lays nine webs around a dog and
+Iolo gets stuck walking into one; a daemon fades from sight; a ghost's Fear scares a dog and leaves the party
+unafraid; a wisp teleports beside the Avatar; a dragon summons a hostile daemon; a winged gargoyle's Explosion
+burns the whole party. Host `make combattest` / `magictest` pass.
 SPEC complete. **Combat milestone (M6) DONE** + validated on-target: CB1 (player melee),
 CB2 (enemy AI assault), CB3 (weapon/range/armour tables + ranged), CB3b (readied weapon/
 armour from OBJLIST inventory -> real per-actor gear, armour reduces damage), CB4 (per-obj_n
@@ -231,3 +290,7 @@ Captures: game_combat.png (melee kill), game_cb2.png (enemy wounds unarmoured pa
 game_cb3.png (bow kill at range), game_cb3b.png (armoured party shrugs off the slug),
 cb4.png (wounded slug flees south while a gargoyle assaults the party).
 Unit test: `make combattest` (hit/damage distributions + weapon/range/armour tables).
+- `FOESPELL.REQ` (§7b, seeded RNG): '1' a mage 3 tiles from the party casts over 30 turns (which
+  spells, the party's wounds / conditions); '2' the same under Negate Magic: no cast; '3' a gazer's
+  Charm turns a companion against the party until it wears off; '4' a giant spider webs the party;
+  '5' a daemon goes invisible; '6' a wisp teleports beside the Avatar; '7' a dragon's Summon.

@@ -183,7 +183,7 @@ verified per-spell as implemented (status starts unimplemented `·`).
 | 6 | Mass Dispel    | VAS AN JUX ORT| Ga Gi           | dispel fields in area |
 | 7 | Poison Field   | IN NOX GRAV   | Ni SS BP        | create poison field |
 | 8 | Sleep Field    | IN ZU GRAV    | Gi SS BP        | create sleep field |
-| 9 | Wild Change    | REL HUR       | SA BM           | random weather/effect |
+| 9 | Wind Change    | REL HUR       | SA BM           | set the wind's direction |
 
 ### Circle 5 (cost 5)
 | idx | spell        | words         | reagents           | effect (planned) |
@@ -230,17 +230,23 @@ verified per-spell as implemented (status starts unimplemented `·`).
 ### Circle 8 (cost 8)
 | idx | spell        | words         | reagents                   | effect (planned) |
 |-----|--------------|---------------|----------------------------|------------------|
-| 0 | Death Wind     | CORP HUR      | Ma Ni SA BM                | death area (wind) |
-| 1 | Eclipse        | VAS AN LOR    | Ma SA Ni Ga BM             | darken world |
-| 2 | Mass Charm     | VAS AN XEN EX | BP Ni SS Ma                | charm area |
-| 3 | Mass Kill      | VAS CORP      | BP Ni Ma SA                | kill area |
-| 4 | Resurrect      | IN MANI CORP  | Ga Gi SS SA BM Ma          | resurrect the dead |
-| 5 | Slime          | VAS REL XEN   | BM Ni Ma                   | split/spawn slime |
-| 6 | Summon         | KAL XEN CORP  | Ma Ga BM SS                | summon creatures |
-| 7 | Time Stop      | AN TYM        | Ma Ga BM                   | freeze game time |
-| 8 | Tremor         | VAS POR YLEM  | BM SA Ma                   | earthquake area |
+| 0 | Armageddon     | VAS CORP BET MANI | (none)                 | every living thing dies but the Avatar and Lord British |
+| 1 | Death Wind     | CORP HUR      | Ma Ni SA BM                | death area (wind) |
+| 2 | Eclipse        | VAS AN LOR    | Ma SA Ni Ga BM             | darken world |
+| 3 | Mass Charm     | VAS AN XEN EX | BP Ni SS Ma                | charm area |
+| 4 | Mass Kill      | VAS CORP      | BP Ni Ma SA                | kill area |
+| 5 | Resurrect      | IN MANI CORP  | Ga Gi SS SA BM Ma          | resurrect the dead |
+| 6 | Slime          | VAS REL XEN   | BM Ni Ma                   | turn foes into slimes |
+| 7 | Summon         | KAL XEN CORP  | Ma Ga BM SS                | summon creatures |
+| 8 | Time Stop      | AN TYM        | Ma Ga BM                   | freeze game time |
+| 9 | Tremor         | VAS POR YLEM  | BM SA Ma                   | earthquake area |
 
-(Circle 8 has 9 spells; the 16-slot circle leaves the rest unused.)
+(Every circle has 10 spells = 80; the 16-slot circles leave the rest unused. Armageddon is the
+circle's FIRST spell (spell_num 112, so Death Wind is 113 and the rest shift with it — the
+reference's own numbering, which matters for a spellbook's spell objects and staff charges). It
+needs no reagents and is never in a bought spellbook: the engine's demo seed leaves it unknown; a
+save's spellbook holding spell 112 (or the all-spells 255) makes it castable. CORRECTED 2026-10-27:
+an earlier revision of this table misspelled Wind Change as "Wild Change" and omitted Armageddon.)
 
 ## 5a. Fields (the field-tile layer)
 
@@ -274,34 +280,77 @@ targeted adjacent square (U6 spreads some fields into a short line/wall — futu
 poison is modeled as damage (no lingering poison STATUS yet); durations are a
 fixed guess (~12 turns), not the original's exact decay.
 
-## 5b. Status effects (actor conditions)
+## 5b. Status effects, area spells and mind spells (actor conditions)
 
-Several spells apply a temporary CONDITION to an actor rather than a one-shot
-result. These are actor STATE (not objects), each a per-actor turn counter that
-decays to 0. Confidence: probable — the conditions and which spell causes them
-are from U6; the exact per-turn magnitudes and durations are ours.
+> Derived from: READING the U6 scripts in Nuvie's `ultima.dat` (`u6/actor.lua`: actor_int_check,
+> actor_update_flags, spell_put_actor_to_sleep / spell_poison_actor / spell_charm_actor /
+> spell_kill_actor, actor_remove_charm, the creature table's immunity columns; `u6/magic.lua`:
+> magic_remove_actor_enchantments and the result messages; the per-spell scripts under
+> `u6/magic/circle_0N/`), and `core/effect.cpp` ExpEffect (the explosion's 16 target cells) — to
+> understand; re-expressed. Immunity flags live in engine/monsters.c (`monster_flags`).
+> Confidence: probable (the reference's own scripts; the intelligence contest's direction is our
+> reading, see below). Validated by MAGICFX.REQ (§9).
 
-| status    | applied by (circle)          | effect while active                         |
-|-----------|------------------------------|---------------------------------------------|
-| poison    | Poison (2), Poison Field     | loses a little HP each turn (damage-over-time)|
-| sleep     | Sleep (2), Mass Sleep, Sleep Field | actor skips its turns (does not act)  |
-| paralyze  | Paralyze (5)                 | actor skips its turns (longer than sleep)   |
-| protect   | Protection (3), Mass Protect (6) | party takes reduced damage when hit     |
-| curse     | Curse (3), Mass Curse (7)    | the cursed actor's attacks are less accurate|
-| charm     | Charm (6), Mass Charm (8)    | a hostile stops attacking the party (pacified)|
+Conditions are per-actor FLAGS (not timers): a condition stays until its own chance roll ends it,
+a cure clears it, or the actor dies. Each game turn, for every living actor:
 
-**Model (engine):** one small counter per condition per actor. Each game turn a
-status tick: applies poison damage, then decrements every counter (0 = the
-condition ends). Combat consults them — a protected DEFENDER halves incoming
-damage; a cursed ATTACKER rolls at a penalty; a charmed actor's `actor_hostile`
-reads false so it no longer assaults. Sleep/paralyze skip the actor's turn in the
-NPC step. Durations wear off by time; there is no dedicated "cure" spell in U6
-(poison antidotes are items — future).
+| condition | ends when (one roll per turn) | while active |
+|---|---|---|
+| protected | 1-in-64, then only if the actor's int ≤ d30 (the clever keep it) | halves damage taken (combat.md), poison does no harm |
+| cursed | 1-in-16, then only if int ≥ d30 | −3 to strength and intelligence in every check (actor_int_adj / actor_str_adj), −3 armour class (combat.md) |
+| charmed | 1-in-8, then only if int ≥ d30 | the actor fights FOR the party (ally AI); its hostility is restored when the charm ends |
+| paralyzed | 1-in-4, then only if str ≥ d30 | skips its turns |
+| asleep | 1-in-16 (not a scheduled sleeper) | skips its turns |
+| poisoned | never by itself (cured by the red potion, a healer, Dispel Magic / Mass Dispel) | 1-in-8 per turn: loses 1 HP (none while protected) |
+| invisible | 1-in-64, then only if int ≤ d30 (never while an invisibility ring is worn) | not drawn, not targeted |
 
-OPEN / simplified (honest): single-target spells hit the first actor in the aim
-direction (the mass/area variants apply to the whole party or are TODO); charm is
-modeled as "pacified" (stops attacking) rather than "fights for the party";
-durations are fixed guesses; invisibility/fear/confuse not modeled yet.
+`d30` = a roll of 1..30. Strength/intelligence are the cursed-adjusted values (min 1).
+
+**The intelligence contest** (sleep, charm, kill, fear, confuse, repel undead): the spell TAKES when
+`caster_int/2 + 15 − target_int > d30`, else "Failed". That is the reference's expression read
+as its comment names it ("the defender lost"); its callers appear to use the opposite sense,
+which would make a wiser caster LESS effective — we follow the arithmetic's evident intent
+(probable; a disassembly of the original would settle it).
+**Poison's roll** is strength-based: poisoned when `(target_str/2 + 30 − caster_int)/2 ≤ d30`.
+
+**Immunities** (the creature table): sleep-immune (insects, slugs, worms, gazers, winged
+gargoyles, squids, scorpions, ants, mimics, reapers, vines, undead, daemons, hydrae, wisps),
+poison-immune (rats, alligators, rot worms, mimics, ghosts, skeletons), undead = immune to the
+death spells (ghosts, skeletons, daemons, wisps), fire-immune (dragons, drakes, hydrae, daemons,
+ghosts, skeletons, wisps), double fire damage (slugs, slimes, corpsers, reapers, vines, flowers,
+rot worms), flies = tremor-immune (bats, birds, insects, mongbats, gazers, winged gargoyles,
+dragons, drakes, daemons, the balloon). "No effect" is printed for an immune target.
+
+**Single-target spells** (aim a direction; the first actor within 5 tiles, as §6):
+- **Poison** (2): the strength roll, else Failed. **Sleep** (2): the contest. **Paralyze** (5),
+  **Curse** (3): always take. **Charm** (6): the contest; a hostile becomes the party's ally —
+  "X is charmed."; charming an already charmed actor frees it. (u6e asks for a hostile target:
+  "It is not hostile.") **Kill** (7): undead → No effect; the contest; else the target dies
+  outright and the caster earns its experience. **Dispel Magic** (1): clears sleep, poison,
+  paralysis and charm on the target — Success / No effect.
+- Messages follow the reference: "Success", "Failed", "No effect"; the condition lines
+  "X falls asleep." / "X is poisoned." / "X is paralyzed." / "X is cursed." / "X is charmed.".
+
+**Area spells** (aim a direction: the centre is the first actor within 5 tiles, else the last
+open tile of the line; the AREA is the 5×5 square around the centre minus its four corners — the
+reference's explosion flies to 16 target cells and hits everything on those paths = 21 cells):
+- **Mass Sleep** (3) sleeps every actor in the area (each its own contest + immunity);
+  **Mass Awaken** (3) wakes them; **Mass Curse** (7) curses them all; **Mass Charm** (8) charms
+  the hostiles (each its own contest); **Mass Dispel** (4) clears their enchantments;
+  **Mass Kill** (8) kills each non-undead that loses the contest and sets off any powder keg in
+  the area. The Avatar is never in an area (the aim starts beside the caster); party members in
+  the area take Mass Sleep / Curse / Awaken / Dispel but not Mass Kill (u6e deviation).
+- All end with "Success".
+
+**Mind spells on everyone within 5 tiles of the caster** (an 11×11 square, no aim):
+- **Fear** (7): every non-party, non-undead actor that loses the contest FLEES (the reference's
+  timid worktype 0x13): a hostile runs from the party, a townsperson avoids it.
+- **Confuse** (6): every EVIL actor that loses the contest turns GOOD and fights for the party
+  — for good (the reference's alignment change is permanent).
+- Repel Undead (3) and Tremor / Slime / Wing Strike (8) use the same square — §5f.
+
+**Allies**: a charmed or confused actor runs the allied AI (hunts the nearest hostile, else keeps
+by the Avatar; §5c's summons do the same); hostiles still single out the party.
 
 ## 5c. Summoning (spawning creatures)
 
@@ -403,6 +452,78 @@ A set of information + remote-action spells that reuse existing engine systems:
 OPEN / simplified: Detect Magic only senses magic LOCKS (no dedicated magic-item
 flag yet); a true full-res Wizard Eye (flying-eye camera) is still a future lift.
 
+## 5f. The remaining spells — utility, objects, traps, bolts, winds, the doom spells
+
+> Derived from: READING the per-spell U6 scripts in Nuvie's `ultima.dat` (`u6/magic/circle_0N/*.lua`,
+> 33 scripts + `armageddon.lua`), their helpers in `u6/magic.lua` (the wind spread, the result
+> messages), `u6/actor.lua` (spell_hit_actor, spell_take_fire_dmg, actor_hit_msg, actor_tile_dmg's
+> web rule, slime_update_frames, actor_use_effect = the trap effects, the creature table's columns)
+> and `u6/init.lua` (the vanished-object save slot, the projectile offset table, use_keg,
+> explode_surrounding_objects), the reference's `core/anim_manager.cpp` HailstormAnim / WingAnim and
+> `core/effect.cpp` (hail / wing damage), `core/magic.cpp` (the storm's "No magic at this time!"),
+> `gui/widgets/map_window.cpp` (infravision draws actors over the darkness; an eclipse is dungeon
+> darkness) and `core/weather.cpp` is_eclipse — to understand; re-expressed. The tileflags3 "Ge"
+> bit (tileflag.md bit3) is the reference's Vanish/Replicate flag.
+> Confidence: probable (the reference's scripts; a few magnitudes are the reference's own choices).
+> Validated by SPELLS.REQ (§9).
+
+**Aiming.** Object spells aim a direction: the target is the first OBJECT within 5 tiles along it
+(the line stops at a sight-blocker; a door is itself the object). Actor spells take the first actor
+within 5 (§6). "Location" spells use §5b's centre rule (the first actor within 5, else the last open
+tile). Messages follow the reference: "Success", "Failed", "No effect", "Blocked!".
+
+**Damage spells** share one hit routine (the reference's actor_hit + actor_hit_msg): the victim
+loses the roll; a slain foe earns the caster its experience ("Killed <name>!"); a survivor prints
+its state by hp×4/max — 0 "critical!", 1 "heavily wounded.", 2 "lightly wounded.", 3 "barely
+wounded." — and a struck townsperson turns hostile (yells for help). Party members in an area ARE
+hit (the reference's explosion, winds, hail and chain bolt spare nobody), but the CASTER is never
+struck by its own spell and the Avatar is never reduced below 1 HP (u6e has no Avatar-death
+sequence — deviation).
+
+| spell (circle) | effect |
+|---|---|
+| Detect Trap (1) | aim an object; when the caster's int ≥ d30 and the door (297-300) / chest (98) holds a trap (a child "effect" object 337): "It's trapped.", else "No trap." |
+| Douse (1) | aim a fire device — candle 122, candelabra 145, fireplace 164, a lit map torch 90, a flaming brazier 206 (frame 1): a lit frame (1 / 3) goes down one (a torch burns out): "Success"; else "No effect" |
+| Ignite (1) | the same devices unlit (frame 0 / 2) go up one (a torch is lit); an UNLIT powder keg 223 is lit (its 3-turn fuse): "Success"; else "No effect" |
+| Infravision (2) | timer 1 = 20 turns: creatures on dark but visible cells are drawn in full light |
+| Reappear (2) | the vanished object (below) is recreated on the tile beside the caster in the aimed direction (free, passable), as a temporary object: "Success"; nothing vanished / no room: "No effect" |
+| Trap (2) | aim a door / chest: adds a trap (child 337) unless it has one: "Success" / "No effect" |
+| Untrap (2) | removes the trap: "Success" / "No effect" |
+| Vanish (2) | aim an object whose tile carries tileflags3 bit3: it is removed from the map and REMEMBERED (objlist 0x1c13: obj_n | frame<<10 — see objlist.md on the reference's undecodable frame encoding) for Reappear: "Success"; else "No effect" |
+| Magic Lock (3) | a CLOSED door (frame 4-7) → +8 "magically locked!"; an open one: "Can't (Un)lock an opened door"; a chest frame 1 / 2 → 3 "magically locked!"; else "No effect" |
+| Repel Undead (3) | every creature within 5 of the caster that the table marks repellable (ghosts, skeletons, daemons) and that loses the §5b contest FLEES (the reference's timid worktype): "Success" |
+| Animate (4) | aim a READIABLE object (equipment.md §3): it becomes an allied creature of its own type on its tile (a temporary ally, §5c): "Success"; else "No effect" |
+| Disable (4) | aim an actor; it loses the contest or "Failed"; damage = its hp − 1 (it survives at 1 HP: "critical!") |
+| Wind Change (4) | "Direction-": the wind now blows FROM that direction (wind.md); the echo "North." |
+| Explosion (5) | aim a location; every actor in the 21-cell area takes FIRE damage 1..20 (double for the fire-weak, none for the fire-immune — §5b's flags); then every keg within 2 of the centre explodes and every door that is not magically locked is blown up (usecode_use.md's keg blast) |
+| Lightning (5) | aim an actor: 1..30 damage |
+| Pickpocket (5) | aim an actor: its first carried (not readied, not a container) item passes to the party pack — "<name>." and "Success" — and the Avatar loses 5 karma; a bare NPC: "No effect" |
+| Seance (5) | aim a dead body (339 / dead gargoyle 341 / dead cyclops 340) whose quality names an actor: that actor's conversation opens; the ghost (352, actor 91) gets its talk flag 7 and talks; else "No effect" |
+| Flame / Poison / Energy / Death Wind (6/6/7/8) | aim a location: the wind strikes a line of FIVE cells through the target — the target and the cells one and two tiles out on both sides. For an orthogonal aim the line runs at right angles to it; for a diagonal aim it is the two orthogonal directions flanking the aim (the reference's projectile offset table reduced to the eight aims). Everyone on those cells but the caster: Flame = fire damage 1..20 (flags as Explosion); Poison = §5b's strength roll; Energy = 1..30 damage; Death = §5b's kill (undead immune, the contest) |
+| Hail Storm (6) | aim a location: 10..29 hailstones fall on the 5×5 around it (each at target + two triangular rolls, (d30+d30−24)/16 tiles on each axis); a stone landing on an actor does 1 damage: "Success" |
+| Negate Magic (6) | timer 13 (the storm) = 20 turns: "No magic at this time!" — nobody can begin a spell while it runs (the storm cloak holds the same timer, equipment.md §8); foes cannot fire their charges either (combat.md §7b) |
+| Replicate (6) | aim an object with tileflags3 bit3: a temporary copy lands on a random free tile within ±5 of the caster (8 tries): "Success" / "Failed"; else "No effect" |
+| Web (6) | aim a location: webs (object 53) fill the free cells of the 3×3 around it: "Success". An actor standing on a web (not a giant spider 361) each turn: str < d30 → paralyzed, "<name> is stuck in a web!" |
+| Chain Bolt (7) | aim an actor: 1..30 damage, then up to 7 jumps — each to the nearest other living actor within 4 of the CASTER (distance from the last victim, ties by coin), 1..30 each; stops when nobody is left (the caster is never a link, see above) |
+| Enchant (7) | the party must carry the staff (78): "with:" then a second spell menu (not Enchant itself); the staff takes a charge (object 336, quality = the chosen spell's number); 10 charges: "It's full". Only Enchant's own reagents and mana are spent |
+| Wing Strike (7) | every EVIL, visible actor within 4 of the player is struck for 1..20; none: "No foes." |
+| Eclipse (8) | timer 15 = 20 turns: the sun is gone — outdoors is as dark as a dungeon until it ends (NPC torches during an eclipse: checklist item 5) |
+| Resurrect (8) | aim a body (339 / 340 / 341 / 354, or a dog 349 / horse carcass 134) whose quality names an actor below the temporary range: the actor stands up on the body's tile at 1 HP and the body is gone (its contents spill to the tile first); quality 0: "The corpse is too old!"; after Armageddon: "No effect" |
+| Slime (8) | every EVIL land creature within 5 of the player that loses the contest BECOMES a slime (375) — appearance and type change, hit points stay; slimes beside each other join frames (bits N/E/S/W) |
+| Time Stop (8) | timer 14 = 10 turns: nothing but the Avatar moves — no creature (nor companion) steps, no field, timer or condition ticks (the clock still shows the turns passing — deviation) |
+| Tremor (8) | every EVIL creature within 5 of the caster that does not FLY takes 1..30: "Success" (no screen shake yet) |
+| Armageddon (8) | every actor but the Avatar (1) and Lord British (5) dies, bodies and all; NPCs will not talk afterwards and Resurrect fails; not saved (the reference's flag resets on load) |
+
+**Bodies.** A slain NPC (a real actor, not a summon) leaves a dead body — 339, or a dead gargoyle
+341 for the winged/plain gargoyle types — with quality = its actor number, so Seance and
+Resurrect have something to work on. Bodies are temporary (not saved — persistence: item 12).
+**Traps.** Opening a trapped door or chest fires the trap on the Avatar and removes it: one of
+Acid (1..20 damage), Poison, Bomb (1..20 fire damage to everyone within the 21-cell area) or Gas
+(everyone within the area poisoned) — the reference's actor_use_effect. The pristine save ships six
+such traps (chests and steel doors). A trap the Trap spell adds is temporary (item 12).
+**The vanished object** is saved (objlist 0x1c13) and reloaded; the timers 1 / 13 / 14 / 15 are
+saved in the 0x1c03 timer block.
+
 ## 6. Casting flow (engine algorithm)
 
 C)ast, then the caster (default = Avatar) and the spell are chosen; U6 selects a
@@ -494,8 +615,48 @@ Add ONE hook to the RuleSet struct (engine/ruleset.h):
   the modeled amount and consumes Gi+SS+1 mana; Light sets a light radius).
 - On-target: C)ast in gamedemo → cast Heal/Light on the TT, capture the message
   + state change (like the combat/USE captures).
+- `MAGICFX.REQ` (§5b, seeded RNG so TT and Falcon agree): '1' Mass Sleep on four dogs in the
+  area (+ one on an excluded corner stays awake); '2' Charm turns a gargoyle into an ally that
+  strikes its neighbour, the charm later wears off and its hostility returns; '3' Fear sets two
+  gargoyles fleeing, a skeleton (undead) is unmoved; '4' Confuse turns two evil gargoyles into
+  allies, a dog is untouched; '5' Mass Kill slays the gargoyle, spares the skeleton, blows a
+  keg in the area; '6' the wear-off rolls: turns until sleep / paralysis / curse / protection
+  end, poison's slow damage and its persistence; '7' Dispel Magic clears every condition
+  (Success) and then finds nothing (No effect).
+- `SPELLS.REQ` (§5f, seeded RNG): '1' Douse/Ignite a brazier, Ignite a keg; '2' Magic Lock + Unlock
+  Magic + Detect Magic on a spawned door and chest; '3' Trap, Detect Trap, Untrap, then a trapped chest
+  opened; '4' Vanish + Reappear (and the save round-trip of 0x1c13) and Replicate; '5' Lightning,
+  Disable, Chain Bolt on three gargoyles; '6' Explosion over a gargoyle + keg; Flame Wind's five cells;
+  Death Wind vs a skeleton; '7' Tremor spares a bat, Wing Strike, Hail Storm, Repel Undead; '8' Web
+  sticks a dog, Slime converts a gargoyle, Animate a sword; '9' Infravision / Eclipse / Time Stop /
+  Negate Magic timers + their save round-trip; 'a' Wind Change; 'b' Pickpocket (record moves to the
+  pack, karma −5), Seance, Resurrect a slain NPC's body; 'c' Enchant the staff, Armageddon.
 
 ## 10. Status
+§5f VERIFIED 2026-10-27 (SPELLS.REQ 1-c, seeded RNG, identical logs on emulated TT and the stock 4 MB Falcon):
+Douse / Ignite toggle a brazier and light a keg; Magic Lock puts a door at frame 13 and a chest at 3, USE refuses, Unlock
+Magic reverses both, an open door is refused; Trap / Detect Trap / Untrap on a spawned chest, the trap fires on opening
+(Bomb! hurt the whole party), the save's own trapped chest at (293,351) is sensed, untrapped and its record deleted on
+save (6 → 5 traps); Vanish removes a chair and the slot survives a save/load, Reappear / Replicate put it back and copy
+it, a door is refused; Lightning, Chain Bolt (all three gargoyles hurt) and Disable (a dog left at 1 HP, "critical!");
+Explosion hurts the gargoyle and sets off the keg, Flame Wind hits the target and the cells two north / one south of it
+and spares the dog three out, Death Wind spares the skeleton and kills the dog; Wing Strike hurts the gargoyle and the
+gazer, Tremor spares the flying gazer, Hail Storm lands 8 stones on the gargoyle, Repel Undead sets the skeleton fleeing;
+Web lays 8 webs and holds the dog, Slime turns the gargoyle into a slime, Animate raises a sword as an ally; Eclipse
+darkens noon to the night ambient (255 → 119), Infravision lights a creature's cell, Time Stop freezes three turns and the
+keg fuse, Negate Magic refuses a cast ("No magic at this time!"), all four timers and the vanish slot round-trip a save;
+Wind Change sets north / southeast; Pickpocket takes a gold coin from NPC 62 (karma −5, the record gone), Seance opens the
+body's conversation, Resurrect raises the NPC at 1 HP and a slain NPC leaves a body with its number; Enchant stores
+charge 17 (Magic Arrow) and refuses the 11th, Armageddon leaves only Lord British (silent) and Resurrect refuses.
+Host `make magictest` (80 spells, Armageddon = 112) passes.
+§5b VERIFIED 2026-10-27 (MAGICFX.REQ 1-7, seeded RNG, byte-identical logs on emulated TT and the stock
+4 MB Falcon): Mass Sleep sleeps 2 of 4 dogs in the 21-cell area and leaves the corner dog awake, Mass
+Awaken wakes them; Charm turns a gargoyle into an ally that wounds its neighbour (30 → 21 HP in 6 turns),
+the charm lifts after 125 turns (int 1) and its hostility returns; Fear sets a gargoyle fleeing and
+leaves the skeleton (undead) unmoved; Confuse turns a gargoyle into a lasting ally, a dog untouched;
+Mass Kill slays the gargoyle, spares the skeleton and sets off the keg in the area; the wear-off rolls
+end sleep after 14 turns, paralysis 6, curse 8, protection 35, and poison costs 7 HP in 80 turns and
+persists; Dispel Magic clears every condition then reports No effect. Host `make magictest` passes.
 IN PROGRESS — core implemented + VALIDATED. Spec written; reagent/spellbook
 obj_n + mana-cost rule CONFIRMED from data/reference; spell table probable.
 engine/magic.c (table + gate-check) unit-tested (`make magictest` ALL PASS);

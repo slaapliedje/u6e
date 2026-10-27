@@ -115,6 +115,19 @@ void sav_get_date(const uint8_t *d, int32_t off, int *day, int *month, int *year
 /* the powder-keg fuse (objlist 0x1c4b, u16) */
 void sav_set_keg_timer(uint8_t *d, int32_t off, int t);
 int  sav_get_keg_timer(const uint8_t *d, int32_t off);
+/* the 16 effect timers (objlist 0x1c03 + idx, one byte each; objlist.md): 13 = the storm cloak's magical storm */
+void sav_set_timer(uint8_t *d, int32_t off, int idx, int val);
+int  sav_get_timer(const uint8_t *d, int32_t off, int idx);
+/* the VANISHED object (objlist 0x1c13, u16 LE; magic_skills.md §5f): obj_n, + 1023 + frame when the frame is not 0; 0 = none */
+void sav_set_vanish(uint8_t *d, int32_t off, int v);
+int  sav_get_vanish(const uint8_t *d, int32_t off);
+/* Delete the first CARRIED (in-inventory, not readied, not a container) record of actor `owner` with
+ * object number obj_n from the actor-inventory chunk (Pickpocket, magic_skills.md §5f). Chunk-local
+ * container links are re-indexed like sav_delete_record. Returns the new length, or -1 (not found). */
+int32_t sav_delete_inv_record(uint8_t *d, int32_t n, int owner, int obj_n);
+/* Delete the first IN-CONTAINER record of object child_obj_n held by the on-map container at (x,y) of
+ * `level` with obj_n cont_obj_n (Untrap / a fired trap, §5f). Returns the new length, or -1. */
+int32_t sav_delete_contained(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int cont_obj_n, int child_obj_n);
 int  sav_get_actor_worktype(const uint8_t *d, int32_t off, int actor);
 
 /* Patch the player's name (objlist 0xf00: up to 13 characters + NUL, Nuvie's new-game field). */
@@ -142,5 +155,26 @@ int sav_write_rebuilt(const char *path, const uint8_t *d, int32_t n, const uint8
 
 /* Encode one 8-byte object record (nuvie_save.md): a carried/readied record has owner in x. */
 void sav_encode_record(uint8_t *r, int status, int x, int y, int z, int obj_n, int frame, int qty, int quality);
+
+/* ---- M)ove into a container (docs/rules/usecode_use.md "M)ove"): record relocation ----------
+ * A thing pushed into a map container becomes an IN-CONTAINER record of that container: chunk-local
+ * links (objblk.md §2) mean the record must sit in the holder's chunk, after the holder. */
+/* Locate the on-map record (x,y,obj_n) of `level`: its position's chunk first, then every chunk
+ * of the object region (a record flipped on-map inside the inventory chunk — a dropped item —
+ * loads by STATUS, so it may sit anywhere). Returns the chunk's count-word offset and *k its
+ * index in that chunk, or -1. */
+int32_t sav_locate_onmap(const uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int *k);
+/* Index of the in-container record of chunk `cpos` linked to record parent_k with obj_n (and
+ * quality, when >= 0), or -1. */
+int sav_find_child(const uint8_t *d, int32_t n, int32_t cpos, int parent_k, int obj_n, int quality);
+/* Delete record k of chunk cpos (childless only; links re-indexed). Returns the new length or -1. */
+int32_t sav_delete_at(uint8_t *d, int32_t n, int32_t cpos, int k);
+/* Set record k's 16-bit count (bytes 6-7, a stackable's qty16) in chunk cpos. */
+void sav_set_rec_qty(uint8_t *d, int32_t n, int32_t cpos, int k, int qty);
+/* Move record src_k of chunk src_cpos, together with every record contained in it (at any depth),
+ * to the END of chunk dst_cpos as the contents of record dst_k. The two chunks may be the same
+ * one. The buffer must have room (`cap`); up to 64 records travel. Returns the new length, or -1
+ * with nothing changed. */
+int32_t sav_recontain(uint8_t *d, int32_t n, int32_t cap, int32_t src_cpos, int src_k, int32_t dst_cpos, int dst_k);
 
 #endif /* U6E_SAVE_H */

@@ -130,6 +130,11 @@ combat system's concern.
 (Human-type rows are what a hatched bandit / guard uses; vehicles omitted.) A type not in the
 table hatches with 10/10/10, 30 hp, level 1 — the original's fallback.
 
+**Innate spells** (the reference table's spell column, shipped in monsters.c `monster_spells`; combat.md §7b):
+daemon 17/128/34/80, dragon 34/83/68/96/119, drake 34/68, winged gargoyle 68/65/69, gazer 20/68/80,
+ghost 128/99, hydra 69/96/98/68, mage 17/34/20/49/68/80/69/83, mimic 18/80, reaper 17/80/66/68,
+sea serpent 34/83/51, giant spider 89, giant squid 17/68, wisp 20/69/129, tangle-vine flower 20.
+
 ## 5. u6e v1 simplifications (documented deviations)
 
 - Creatures hatch into the fixed 256-actor table's FREE slots (`g_atile == 0xffff`, high
