@@ -58,7 +58,7 @@ static void set_svar(cvm_t*vm,unsigned idx,const char*s){ idx=SVI(idx); int k=0;
 
 void cvm_game_init(cvm_game_t*g,uint32_t seed){
     for(int i=0;i<256;i++){ g->talk_flags[i]=0; g->in_party[i]=0;
-        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->player_obj[i]=0; }
+        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->player_obj[i]=0; g->nearby[i]=0; }
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
     g->gold=0; g->karma=0; g->avatar_num=0; g->portrait_npc=-1; g->mutations=0;
@@ -170,7 +170,7 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case OP_SVAR: a=POP(); PUSH(a); break;                        /* SVAR -> svar handle */
       case 0x9b: a=POP(); PUSH(0); break;                           /* WEIGHT      */
       case 0x9d: a=POP(); PUSH(0); break;                           /* HORSED      */
-      case 0xd7: a=POP(); PUSH(0); break;                           /* NPCNEARBY   */
+      case 0xd7: a=POP(); PUSH(vm->g->nearby[npc_num(vm,a)&0xff]); break;   /* NPCNEARBY: within 5 tiles of the speaker (usecode_vm.md §6) */
       case OP_WOUNDED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->dead[np]?1:0); } break;
       case OP_POISONED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->poisoned[np]?1:0); } break;
       case 0xe1: a=POP(); PUSH(1); break;                           /* LVL  ->1    */

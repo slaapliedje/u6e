@@ -116,6 +116,15 @@ static uint8_t        g_wt_pushed[256];         /* what the VM saw before the tu
 static uint8_t        g_torch_fuel[U6_MAX_ACTORS]; /* turns of fuel left in a LIT readied torch (0 = unlit; usecode_use.md) */
 static uint8_t        g_keg_timer;               /* powder-keg fuse: turns until every lit keg explodes (0 = none) */
 static uint8_t        g_keg_carried;             /* a lit keg in the pack explodes at the party's feet */
+static int            g_day0=4, g_month0=7, g_year0=161;   /* the game date at load (objlist 0x1bf5..8); the clock advances it (moongates.md §1) */
+static int            g_gate_hour=-1;            /* hour the natural moongates were last refreshed (-1 = refresh now) */
+static int16_t        g_gate_idx[8]={-1,-1,-1,-1,-1,-1,-1,-1};   /* the temporary gate object the engine raised per moonstone */
+static rng_t          g_crng;                   /* combat RNG (seeded at init) */
+static int            g_mantra, g_mantra_rune;    /* typing a rune's mantra (usecode_use.md); which rune (0..7) */
+static int            g_peer_on;                 /* the gem's 48x48 overview is up until a key */
+static int            g_potion_frame;            /* the potion colour awaiting "On whom:" */
+static void date_from_save(const uint8_t *d, int32_t ol){ sav_get_date(d, ol, &g_day0, &g_month0, &g_year0);
+    if(g_day0<1||g_day0>28) g_day0=1; if(g_month0<1||g_month0>12) g_month0=1; }
 static uint8_t        g_amaxhp[U6_MAX_ACTORS]; /* HP at load (=max), for the flee threshold (CB4) */
 static uint8_t        g_aflee[U6_MAX_ACTORS];  /* 1 = fleeing: badly-hurt actor retreats (CB4)    */
 static int            g_combat_mode;           /* C)ombat mode: party auto-fights adjacent foes (CB4) */
@@ -2958,6 +2967,14 @@ static int  ship_aboard(void);                               /* cannons.md: the 
 static void ship_struck(int att);                            /* an enemy's hit on the party's ship -> hull (defined with the cannon code) */
 static int  cannon_fire(world_t*w,int idx);                  /* U)se a fixed cannon (221) */
 static void dunguse_tick(const world_t*w);                   /* torch fuel + keg fuse, once per world turn (usecode_use.md) */
+static void moongates_update(const world_t*w);               /* natural moongates follow the moons (moongates.md §2) */
+static void moonstone_set(int i,int x,int y,int z);          /* the save's moonstone table (moongates.md §4) */
+static int  orb_gate(world_t*w,int dx,int dy);               /* the Orb of the Moons' "Where:" answer (§3) */
+static void cur_date(const world_t*w,int*day,int*month,int*year);   /* day/month/year from the clock (§1) */
+static void draw_peer(const world_t*w);                      /* the gem's overview (usecode_use.md) */
+static int  actor_objn(int i);                               /* the object number behind an actor's base tile */
+static void mantra_submit(world_t*w);                        /* a rune's typed mantra */
+static void potion_to_member(int m);                         /* a potion on party member m */
 static void moved_register(int idx);                         /* a moved object's record stays findable (vehicles.md §6) */
 static int  sees_party(const world_t*w,int i);              /* aggro-on-sight: range + LOS (defined below) */
 static int  blocks_sight(int tile);                         /* sight-blocker test (defined below) */
@@ -2976,6 +2993,7 @@ static void step_npcs(const world_t*w)
     wind_tick(w->level);                               /* the wind change timer (wind.md §1) */
     wt_force_tick();                                   /* forced worktypes expire with the schedule (usecode_vm.md §6b) */
     dunguse_tick(w);                                   /* a lit torch burns, a keg fuse runs down (usecode_use.md) */
+    if(g_hour!=g_gate_hour) moongates_update(w);       /* the moons moved: natural gates appear / vanish (moongates.md §2) */
     if(g_spell_light_turns>0) g_spell_light_turns--;   /* Light spell decays a turn per step */
     if(g_xray_turns>0) g_xray_turns--;                 /* X-ray see-through decays a turn (§5e) */
     for(int i=0;i<U6_MAX_ACTORS;i++) if(g_ainvis[i]) g_ainvis[i]--;   /* Invisibility wears off (§5) */
@@ -4596,7 +4614,7 @@ static void draw_conversation(uint8_t col)
         }
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
-            const char*p = g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-(dir)?":"Attack-(dir)?"):g_pending_verb=='L'?"Look-(dir)?":
+            const char*p = g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-(dir)?":"Attack-(dir)?"):g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?"Cast-(dir)?":
                            g_pending_verb=='T'?"Talk-(dir)?":"Move-(dir)?";
@@ -4674,6 +4692,17 @@ static void sync_worktype_in(void)
 {
     for(int i=0;i<256;i++){ int v=(i<U6_MAX_ACTORS && g_atile[i]!=0xffff)?npc_live_worktype(i):0;
         g_cg.worktype[i]=(uint8_t)v; g_wt_pushed[i]=(uint8_t)v; }
+}
+/* NPCNEARBY (usecode_vm.md §6): who stands within 5 tiles of the speaker, on its level */
+static void sync_nearby_in(int npc)
+{
+    for(int i=0;i<256;i++) g_cg.nearby[i]=0;
+    if(npc<0||npc>=U6_MAX_ACTORS||g_atile[npc]==0xffff) return;
+    int nx=g_actx[npc], ny=g_acty[npc], nz=g_actz[npc];
+    for(int i=1;i<U6_MAX_ACTORS;i++){ if(g_atile[i]==0xffff||g_actz[i]!=nz) continue;
+        int dx=(int)g_actx[i]-nx, dy=(int)g_acty[i]-ny; if(dx<0)dx=-dx; if(dy<0)dy=-dy;
+        if(dx<=5&&dy<=5) g_cg.nearby[i]=1; }
+    g_cg.nearby[npc]=1;
 }
 static void sync_worktype_out(void)
 {
@@ -4807,7 +4836,7 @@ static void talk(int id)
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf);
     if(got<=0) return;
 
-    sync_party_in(); sync_inv_in(); sync_worktype_in();   /* persistent g_cg + real party + inventory + live worktypes */
+    sync_party_in(); sync_inv_in(); sync_worktype_in(); sync_nearby_in(id);   /* persistent g_cg + real party + inventory + live worktypes + who is near */
     g_cg.hour=(uint8_t)g_hour;                   /* $T greeting word tracks the game clock */
     cvm_init(&g_cv,g_script_buf,got,&g_cg,id,g_avatar_name,g_avatar_title);
     cvm_status st=cvm_run(&g_cv);
@@ -5367,6 +5396,18 @@ static int balloon_land(world_t*w)
     msgcat(0,"Only next to land.");
     return 1; }
 /* U)se of a carried item (wind.md §1/§4): the fan turns the wind; the balloon inflates beside us */
+/* buckets (usecode_use.md): a well / a cow fills an empty bucket (178) with water (179) / milk (180) */
+static int fill_bucket(int filled)
+{
+    if(objworld_count(&g_ow,178)>0){ objworld_consume(&g_ow,178,1); inv_add_objn(filled,1); msgcat(0,"Done"); return 1; }
+    msgcat(0,(objworld_count(&g_ow,179)>0||objworld_count(&g_ow,180)>0)?"You need an empty bucket.":"You need a bucket."); return 0;
+}
+/* the churn: a bucket of milk -> butter (96) + the empty bucket */
+static int use_churn(void)
+{
+    if(objworld_count(&g_ow,180)<=0){ msgcat(0,"You need some milk."); return 0; }
+    objworld_consume(&g_ow,180,1); inv_add_objn(178,1); inv_add_objn(96,1); msgcat(0,"Done"); return 1;
+}
 static int use_pack_item(world_t*w,int on)
 {   if(on==212){ g_wind=(g_wind==WIND_CALM)?0:((g_wind+1)&7); g_wind_timer=1+rng_range(&g_wind_rng,30);
         msgcat(0,"You feel a breeze."); return 1; }
@@ -5388,6 +5429,44 @@ static int use_pack_item(world_t*w,int on)
         o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;
         objworld_consume(&g_ow,420,1);
         build_blocked(); msgcat(0,"Done!"); return 1; }
+    if(on==87){                                                /* the Orb of the Moons (moongates.md §3): ask where */
+        if(!(g_cg.talk_flags[5]&0x20)){ msgcat(0,"You can't figure out how to use it."); return 0; }
+        msgcat(0,"Where:"); return 2; }
+    if(on==73){                                                /* bury a moonstone where the Avatar stands (§4) */
+        int sidx=g_inv_sel;                                    /* the selected row, else the first moonstone in the pack */
+        if(sidx<0||sidx>=g_ow.ninv||g_ow.inv[sidx].obj_n!=73){ sidx=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==73){ sidx=k; break; } if(sidx<0) return 0; }
+        int t=world_tile(w,w->px,w->py);
+        if(!((t>=1&&t<=7)||(t>=16&&t<=111))){ msgcat(0,"Cannot be buried here!"); return 0; }
+        int fr=(int)g_ow.inv[sidx].tile-basetile(73); if(fr<0||fr>7) fr=0;
+        int slot=-1; if(g_ow.nobjs<MAXWOBJ) slot=(int)g_ow.nobjs++;
+        else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE){ slot=j; break; }
+        if(slot<0){ msgcat(0,"Cannot be buried here!"); return 0; }
+        wobj_t*o=&g_wobj[slot]; o->obj_n=73; o->tile=g_ow.inv[sidx].tile; o->qty=1; o->quality=g_ow.inv[sidx].quality;
+        o->x=w->px; o->y=w->py; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;
+        for(int k=sidx;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;
+        if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
+        build_blocked(); moonstone_set(fr,(int)w->px,(int)w->py,w->level); moongates_update(w);
+        msgcat(0,"buried."); return 1; }
+    if(on==264){                                               /* fishing pole (usecode_use.md): next to water, 1 in 5 */
+        static const int FX[8]={1,-1,0,0,1,-1,1,-1}, FY[8]={0,0,1,-1,1,-1,-1,1}; int near=0;
+        for(int k=0;k<8&&!near;k++) if(tile_is_water(w,(w->px+FX[k])&(U6_SURFACE_TILES-1),(w->py+FY[k])&(U6_SURFACE_TILES-1))) near=1;
+        if(!near){ msgcat(0,"You need to stand next to water."); return 0; }
+        if(rng_range(&g_crng,100)<=20){ inv_add_objn(265,1); msgcat(0,"You catch a fish!"); } else msgcat(0,"Nothing bites."); return 1; }
+    if(on==93){                                                /* sextant: surface / gargoyle world only */
+        if(w->level!=0 && w->level!=5){ msgcat(0,"Not usable"); return 0; }
+        int x=(int)w->px/(w->level?2:8), y=(int)w->py/(w->level?2:8); char lon,lat;
+        if(x>38){ lon='E'; x-=38; } else { x=38-x; lon='W'; }
+        if(y>45){ lat='S'; y-=45; } else { y=45-y; lat='N'; }
+        char t1[3]={'{',lat,0}, t2[3]={'{',lon,0};
+        g_msg[0]=0; int n=msgcat_int(0,y); n=msgcat(n,t1); n=msgcat(n,", "); n=msgcat_int(n,x); msgcat(n,t2); return 1; }
+    if(on==275){                                               /* a potion: on whom? (digit 1..5) */
+        int sidx=g_inv_sel;
+        if(sidx<0||sidx>=g_ow.ninv||g_ow.inv[sidx].obj_n!=275){ sidx=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==275){ sidx=k; break; } if(sidx<0) return 0; }
+        g_potion_frame=(int)g_ow.inv[sidx].tile-basetile(275); msgcat(0,"On whom:"); return 3; }
+    if(on>=242&&on<=249){                                      /* a rune: type its mantra */
+        g_mantra=1; g_mantra_rune=on-242; g_inlen=0; g_inbuf[0]=0; msgcat(0,"Mantra: "); return 1; }
+    if(on==77){                                                /* the gem: peer at the land around (a key closes it) */
+        objworld_consume(&g_ow,77,1); g_peer_on=1; msgcat(0,"You peer into the gem."); return 1; }
     if(on==90){                                                /* a torch from the pack (usecode_use.md) */
         if(g_torch_fuel[1]>0){ for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==90){ (void)equip_unready(g_aready[1],sl); break; }
             g_torch_fuel[1]=0; equip_refold(1); msgcat(0,"A torch burned out."); return 1; }   /* put out = used up */
@@ -5519,6 +5598,10 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         }
         msgcat(n,".");
     } else if(verb=='G'){
+        if(idx>=0 && (g_wobj[idx].obj_n==84||g_wobj[idx].obj_n==85)){   /* a moongate stands on the tile: take what lies beneath it */
+            int alt=-1; for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+                if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && o->obj_n!=84 && o->obj_n!=85){ alt=j; break; } }
+            if(alt>=0) idx=alt; }
         if(idx<0){ msgcat(0,"Nothing to get there."); }
         else {
             obj_name(g_wobj[idx].tile,nm,sizeof nm);
@@ -5531,6 +5614,8 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
                 n=msgcat(0,"You get "); n=msgcat_int(n,q); n=msgcat(n," gold."); recompose=1;
             }
             else if(objworld_get(&g_ow,idx)){
+                if(g_wobj[idx].obj_n==73){ int fr=(int)g_wobj[idx].tile-basetile(73);          /* a dug-up moonstone: its gate is gone (moongates.md §4) */
+                    if(fr>=0&&fr<8){ moonstone_set(fr,0,0,0); moongates_update(w); } }
                 n=msgcat(0,"You get ");
                 if(q>1){ n=msgcat_int(n,q); n=msgcat(n," "); }    /* "You get 30 gold." */
                 else n=msgcat(n,"the ");
@@ -5565,15 +5650,18 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         if(g_veh_kind==412||g_veh_kind==414||g_veh_kind==415) return vehicle_exit(w);   /* aboard: U = disembark (vehicles.md §3.1) */
         if(g_veh_kind==423) return balloon_land(w);                        /* in the balloon: U = land (wind.md §4) */
         if(g_veh_kind==431) return horse_dismount(w);                      /* mounted: U = dismount (§4) */
+        { int h=horse_actor_at(tx,ty); if(h>=0) return horse_mount(w,h);                      /* an actor on the tile comes first (as the original): a horse (§4) */
+          int c=npc_at(w,tx,ty); if(c>=0 && actor_objn(c)==428) return fill_bucket(180); }   /* a cow (usecode_use.md) */
         if(idx>=0 && (g_wobj[idx].obj_n==412||g_wobj[idx].obj_n==414||g_wobj[idx].obj_n==415)) return use_boat(w,idx);
         if(idx>=0 && g_wobj[idx].obj_n==423) return use_balloon(w,idx);
         if(idx>=0 && g_wobj[idx].obj_n==221) return cannon_fire(w,idx);                   /* a fixed cannon (cannons.md §3) */
+        if(obj_idx_at(tx,ty,181)>=0) return use_churn();                                 /* churn (usecode_use.md) */
+        if(obj_idx_at(tx,ty,233)>=0) return fill_bucket(179);                            /* well */
         { int pi=obj_idx_at(tx,ty,278); if(pi<0) pi=obj_idx_at(tx,ty,280);                /* a passthrough shares its tile with floor objects: find it by type (usecode_use.md) */
           if(pi>=0) return use_passthrough(w,pi); }
         if(idx>=0 && (g_wobj[idx].obj_n==305||g_wobj[idx].obj_n==106||g_wobj[idx].obj_n==308))
             return use_transition_object(w,idx);                             /* ladder / hole (map_levels.md §4) */
-        if(idx<0){ int h=horse_actor_at(tx,ty);
-                   if(h>=0) return horse_mount(w,h);                       /* U at a wandering horse (§4) */
+        if(idx<0){
                    msgcat(0,"Nothing to use there."); }
         else recompose = use_object(idx);
     }
@@ -5826,7 +5914,7 @@ static void cursor_pos(int lx,int ly,int*ox,int*oy)
 static void present_frame(void)
 {
 #ifdef HAVE_RDR_ST
-  if(g_native_planar){                                    /* panel from g_back, inner map from planar */
+  if(g_native_planar && !g_peer_on){                      /* panel from g_back, inner map from planar (the gem's view is drawn into g_back) */
       rdr_pcursor_invalidate();                           /* the full c2p erases any planar cursor */
       rdr_present_rect(0,0,LW,LH);                         /* full 1:1 c2p of g_back (inner map stale), no Vsync */
       rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
@@ -5953,7 +6041,6 @@ static int npc_at(const world_t*w,int x,int y)
     return -1;
 }
 
-static rng_t g_crng;                                  /* combat RNG (seeded at init) */
 
 /* sync the roster's displayed HP from the live g_ahp[] after combat. */
 static void sync_party_hp(void){
@@ -7022,6 +7109,7 @@ static int cast_menu_submit(world_t*w){
 static int resolve_target(world_t*w,int verb,int dx,int dy)
 {
     if(verb=='C'){ return cast_spell(w, g_nparty?g_party[0].actor:1, g_cast_spell, dx, dy); }
+    if(verb=='O'){ return orb_gate(w,dx,dy); }        /* the Orb of the Moons: where the red gate opens (moongates.md §3) */
     if(verb=='A'){ return do_attack(w,dx,dy); }
     if(verb=='L'){ do_verb(w,'L',dx,dy); return 0; }
     if(verb=='U'){ return do_verb(w,'U',dx,dy); }   /* recompose: doors, vehicle board/exit move the view */
@@ -7184,7 +7272,9 @@ static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only)
         int on = b[4] | ((b[5] & 3) << 8);
         int direct = (cur == b);
         if(direct && loc == 0x18){                            /* readied on the holder itself */
-            (void)equip_ready(g_aready[owner], on); continue; }
+            (void)equip_ready(g_aready[owner], on);
+            if(on == 90 && ((b[5] >> 2) & 0x3f) == 1) g_torch_fuel[owner] = b[6] ? b[6] : 1;   /* a lit torch relights with its fuel */
+            continue; }
         if(on == 88){ int q = (b[7] << 8) | b[6]; g_cg.gold += q; continue; }   /* coins -> the gold pool */
         if(on == 58){                                         /* a spell in the spellbook -> known */
             int q = b[7];
@@ -7211,8 +7301,9 @@ static int build_party_records(uint8_t *out)
     int nr = 0, book = -1;
     for(int a = 1; a < U6_MAX_ACTORS && nr < PARTY_REC_MAX; a++){      /* members, and those who left with their gear */
         if(!g_pooled[a]) continue;
-        for(int sl = 0; sl < EQ_NSLOTS && nr < PARTY_REC_MAX; sl++) if(g_aready[a][sl])
-            sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], 0, 0, 0); }
+        for(int sl = 0; sl < EQ_NSLOTS && nr < PARTY_REC_MAX; sl++) if(g_aready[a][sl]){
+            int fr = 0, q = 0; if(g_aready[a][sl] == 90 && g_torch_fuel[a]){ fr = 1; q = g_torch_fuel[a]; }   /* a lit torch: frame 1 + fuel (usecode_use.md) */
+            sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], fr, q, 0); } }
     for(int k = 0; k < g_ow.ninv && nr < PARTY_REC_MAX; k++){ const invitem_t *it = &g_ow.inv[k];
         int on = it->obj_n, fr = (int)it->tile - basetile(on); if(fr < 0 || fr > 63) fr = 0;
         if(on == 58) continue;                                /* spells are written from the known set */
@@ -7263,6 +7354,8 @@ static int do_save(const world_t *w)
     for(int i=2;i<U6_MAX_ACTORS;i++)                     /* each NPC's CURRENT worktype (objlist 0x11f1; usecode_vm.md §6b) */
         if(g_atile[i]!=0xffff && (g_wt_force[i] || g_actors[i].nsched>0)) sav_set_actor_worktype(d, off, i, npc_live_worktype(i));
     { int mod=clock_minutes(w); sav_set_clock(d, off, mod%60, mod/60); }   /* game clock */
+    { int dd,mm,yy; cur_date(w,&dd,&mm,&yy); sav_set_date(d, off, dd, mm, yy); }   /* the date the clock reached (moongates.md §1) */
+    sav_set_keg_timer(d, off, g_keg_timer);                                      /* a burning fuse (usecode_use.md) */
     if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma);  /* created-avatar identity */
     { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
       sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
@@ -7282,6 +7375,7 @@ static int do_save(const world_t *w)
  * survives unless `reset_pack`. Returns the object count, or -1 (no memory / bad layout). */
 static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pack)
 {
+    for(int i=0;i<8;i++) g_gate_idx[i]=-1; g_gate_hour=-1;   /* the level's objects are rebuilt: raise the moongates afresh */
     int32_t so, se, iv = sav_inv_off(d, n), ive = sav_inv_end(d, n);
     if(!sav_level_span(d, n, level, &so, &se) || ive < 0) return -1;
     plat_mark mk = plat_chip_mark();
@@ -7352,12 +7446,161 @@ static int use_transition_object(world_t *w, int idx)
     return do_transition(w, kind, o->quality);
 }
 /* after a successful step: standing on a cave mouth (326) or a hole (308) descends (§4 PASS triggers) */
+/* ---- moongates, the orb and moonstones (docs/rules/moongates.md) ------------------------- */
+/* red-gate destinations by the orb position (quality); (0,0,0) = nowhere */
+static const uint16_t RED_GATE[26][3]={
+    {0,0,0},{899,499,0},{935,262,0},{435,395,0},{503,358,0},{147,883,0},{919,934,0},{68,45,5},{307,352,0},
+    {188,45,5},{159,942,0},{739,699,0},{0,0,0},{0,0,0},{0,0,0},{227,131,0},{23,22,1},{128,86,5},{108,221,5},
+    {923,876,0},{295,38,0},{75,507,0},{327,822,0},{387,787,0},{831,166,0},{667,67,0} };
+/* the date the clock has reached: 28-day months, 12-month years (§1) */
+static void cur_date(const world_t*w,int*day,int*month,int*year)
+{
+    int32_t total=(int32_t)g_start_min+(int32_t)w->clock; int days=(int)(total/1440);
+    int d=g_day0-1+days, m=g_month0-1, y=g_year0;
+    m+=d/28; d%=28; y+=m/12; m%=12;
+    *day=d+1; *month=m+1; *year=y;
+}
+static void moon_phases(int day,int*pt,int*pf)
+{   int x=day-1; if(x<0) x=0;
+    *pt=((8*x+7)/14)&7;                             /* round((day-1)/1.75) mod 8 */
+    { int b=(x%9)-1; *pf=b>=0?b:0; } }              /* max(0, (day-1) mod round(1.1667*8) - 1) */
+static int moon_pos_t(int day,int hour){ int pt,pf; moon_phases(day,&pt,&pf); return (hour+1+3*pt)%24; }
+static int moon_pos_f(int day,int hour){ int pt,pf; moon_phases(day,&pt,&pf); int v=hour-1+3*pf; return v<0?255:(v%24); }
+static int moon_visible(int day,int hour){ int a=moon_pos_t(day,hour), b=moon_pos_f(day,hour); return (a>=5&&a<=19)||(b>=5&&b<=19); }
+static int moonstone_get(int i,int*x,int*y,int*z)
+{   if(!g_savetmpl||g_objlist_off<0||i<0||i>7) return 0;
+    const uint8_t*e=g_savetmpl+g_objlist_off+0x1c1b+i*6; *x=e[0]|(e[1]<<8); *y=e[2]|(e[3]<<8); *z=e[4]|(e[5]<<8); return 1; }
+static void moonstone_set(int i,int x,int y,int z)
+{   if(!g_savetmpl||g_objlist_off<0||i<0||i>7) return;
+    uint8_t*e=g_savetmpl+g_objlist_off+0x1c1b+i*6;
+    e[0]=(uint8_t)x; e[1]=(uint8_t)(x>>8); e[2]=(uint8_t)y; e[3]=(uint8_t)(y>>8); e[4]=(uint8_t)z; e[5]=(uint8_t)(z>>8); }
+/* a temporary world object (never written back) */
+static int temp_obj_new(int obj_n,int frame,int x,int y,int quality)
+{
+    int slot=-1; if(g_ow.nobjs<MAXWOBJ) slot=(int)g_ow.nobjs++;
+    else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE && !g_wobj[j].dirty){ slot=j; break; }
+    if(slot<0) return -1;
+    wobj_t*o=&g_wobj[slot]; o->obj_n=(uint16_t)obj_n; o->tile=(uint16_t)(basetile(obj_n)+frame);
+    o->x=(uint16_t)x; o->y=(uint16_t)y; o->qty=1; o->quality=(uint8_t)quality;
+    o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; return slot;
+}
+/* natural gates (85) stand on this level's buried moonstones while a moon is visible (§2) */
+static void moongates_update(const world_t*w)
+{
+    int day,mo,yr; cur_date(w,&day,&mo,&yr); int vis=moon_visible(day,g_hour), changed=0;
+    for(int i=0;i<8;i++){ int x,y,z; if(!moonstone_get(i,&x,&y,&z)) continue;
+        int gi=g_gate_idx[i];
+        if(gi>=0 && (!vis || !(x||y) || z!=w->level || !g_wobj[gi].alive || g_wobj[gi].obj_n!=85)){
+            if(g_wobj[gi].alive && g_wobj[gi].obj_n==85){ g_wobj[gi].alive=0; changed=1; } g_gate_idx[i]=-1; }
+        if(vis && (x||y) && z==w->level && g_gate_idx[i]<0 && obj_idx_at(x,y,85)<0){
+            g_gate_idx[i]=(int16_t)temp_obj_new(85,1,x,y,0); changed=1; } }
+    if(changed) build_blocked();
+    g_gate_hour=g_hour;
+}
+/* carry the party to (x,y) on level z — the ladder's level switch when z differs (§5) */
+static int travel_to(world_t*w,int x,int y,int z)
+{
+    if(z==w->level){ teleport_party(w,x,y); moongates_update(w); return 1; }
+    if(z<0||z>5||!g_savetmpl) return 0;
+    int lv0=w->level; uint16_t px0=w->px, py0=w->py;
+    (void)objects_reconcile(w);
+    w->level=z;
+    if(level_decode(g_savetmpl,g_savetmpl_len,z,0)<0){
+        w->level=lv0; w->px=px0; w->py=py0; (void)level_decode(g_savetmpl,g_savetmpl_len,lv0,0); g_cur_level=lv0; build_blocked();
+        msgcat(0,"Not enough memory to travel."); return 0; }
+    g_cur_level=z; build_blocked(); teleport_party(w,x,y); g_show_inv=0; (void)g_tmpdm_invalidate();
+    moongates_update(w); return 1;
+}
+/* ---- runes, potions, the gem (docs/rules/usecode_use.md) --------------------------------- */
+static const char *const MANTRA[8]={"AHM","MU","RA","BEH","CAH","SUMM","OM","LUM"};
+/* the typed mantra: right word beside the shrine's field (51, quality = rune) removes it for good
+ * and silences the gargoyle eggs within 20 tiles */
+static void mantra_submit(world_t*w)
+{
+    int r=g_mantra_rune; if(r<0||r>7) return;
+    const char*m=MANTRA[r]; int ok=1;
+    for(int k=0;m[k]||g_inbuf[k];k++){ int a=g_inbuf[k], b=m[k]; if(a>='a'&&a<='z') a-=32; if(a!=b){ ok=0; break; } }
+    if(!ok){ msgcat(0,"Wrong mantra!"); return; }
+    int span=(w->level==0)?U6_SURFACE_TILES:256, fi=-1;
+    for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive||o->obj_n!=51||o->quality!=(uint8_t)r) continue;
+        int dx=((int)o->x-(int)w->px)&(span-1); if(dx>span/2) dx=span-dx; int dy=((int)o->y-(int)w->py)&(span-1); if(dy>span/2) dy=span-dy;
+        if(dx<2&&dy<2){ fi=j; break; } }
+    if(fi<0){ msgcat(0,"No effect!"); return; }
+    int fx=g_wobj[fi].x, fy=g_wobj[fi].y;
+    g_wobj[fi].alive=0; g_wobj[fi].dirty=WOBJ_DIRTY_DESTROYED; build_blocked();
+    for(int e=0;e<g_neggs;e++){ int dx=(int)g_eggs[e].x-fx, dy=(int)g_eggs[e].y-fy; if(dx<0)dx=-dx; if(dy<0)dy=-dy; if(dx>=20||dy>=20) continue;
+        for(int k=0;k<g_eggs[e].nemb;k++){ int on=g_emb[g_eggs[e].emb+k].obj_n; if(on==362||on==363){ g_eggs[e].chance=0; break; } } }
+    msgcat(0,"Done!");
+}
+/* a potion (g_potion_frame) on party member m */
+static void potion_to_member(int m)
+{
+    if(m<0||m>=g_nparty){ msgcat(0,"nobody"); return; }
+    int a=g_party[m].actor; if(a<1||a>=U6_MAX_ACTORS) return;
+    int row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==275 && ((int)g_ow.inv[k].tile-basetile(275))==g_potion_frame){ row=k; break; }
+    if(row<0){ msgcat(0,"No effect"); return; }
+    if(g_ow.inv[row].qty>1) g_ow.inv[row].qty--;
+    else { for(int k=row;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0; }
+    int n=msgcat(0,g_party[m].name); n=msgcat(n,": ");
+    switch(g_potion_frame){
+    case 0: g_asleep[a]=0; msgcat(n,"awake."); break;                       /* blue */
+    case 1: g_poison[a]=0; msgcat(n,"cured."); break;                       /* red */
+    case 2: if(g_amaxhp[a]) g_ahp[a]=g_amaxhp[a]; msgcat(n,"healed."); break;   /* yellow */
+    case 3: g_poison[a]=10; msgcat(n,"poisoned!"); break;                   /* green */
+    case 4: g_asleep[a]=8; msgcat(n,"falls asleep."); break;                /* orange */
+    case 5: g_protect[a]=30; msgcat(n,"protected."); break;                 /* purple */
+    case 6: g_ainvis[a]=1; msgcat(n,"vanishes!"); break;                    /* black */
+    default: msgcat(n,"No effect"); break; }                                /* white: the original's x-ray */
+    sync_party_hp();
+}
+/* the gem's overview: 48x48 tiles around the party, chunk-aligned, one 3x3 block per tile */
+static void draw_peer(const world_t*w)
+{
+    int span=(w->level==0)?U6_SURFACE_TILES:256;
+    int ox=((int)w->px-((int)w->px&7)-18)&(span-1), oy=((int)w->py-((int)w->py&7)-18)&(span-1);
+    int bx=MAPX+MAP_INSET+16, by=MAPY+MAP_INSET+16;
+    for(int ty=0;ty<48;ty++) for(int tx=0;tx<48;tx++){
+        int mx=(ox+tx)&(span-1), my=(oy+ty)&(span-1);
+        int bt=world_tile(w,mx,my), t=bt; int oi=objworld_at(&g_ow,mx,my); if(oi>=0) t=obj_tile(&g_wobj[oi]);
+        uint8_t c=g_tileset[(int32_t)t*256+8*16+8]; if(c==255) c=g_tileset[(int32_t)bt*256+8*16+8];
+        if(mx==(int)w->px && my==(int)w->py) c=0x0c;                   /* the party: the text palette's red */
+        for(int yy=0;yy<3;yy++) for(int xx=0;xx<3;xx++) ui_px(bx+tx*3+xx,by+ty*3+yy,c); }
+}
+/* stepping onto a gate (§2 blue / §3 red) */
+static int enter_moongate(world_t*w,int idx)
+{
+    const wobj_t*g=&g_wobj[idx]; int x=-1,y=-1,z=0, day,mo,yr; cur_date(w,&day,&mo,&yr);
+    if(g->obj_n==84){
+        if(objworld_count(&g_ow,87)<=0){ msgcat(0,"You forgot the Orb of the Moons!"); return 1; }
+        int q=g->quality; if(q<26 && (RED_GATE[q][0]||RED_GATE[q][1])){ x=RED_GATE[q][0]; y=RED_GATE[q][1]; z=RED_GATE[q][2]; }
+    } else {
+        int pt,pf; moon_phases(day,&pt,&pf);
+        int at=moon_pos_t(day,g_hour)-12, af=moon_pos_f(day,g_hour)-12; if(at<0) at=-at; if(af<0) af=-af;
+        int ph=(at<af)?pt:pf, mx,my,mz;                      /* the moon nearer the zenith decides */
+        if(ph>=1 && moonstone_get(8-ph,&mx,&my,&mz) && (mx||my)){ x=mx; y=my; z=mz; }
+    }
+    if(x<0){ msgcat(0,"The moongate leads nowhere."); return 1; }
+    if(!travel_to(w,x,y,z)) return 1;
+    msgcat(0,"You step through the moongate."); return 1;
+}
+/* the orb's answer to "Where:": a red gate at (dx,dy) whose quality is the orb position (§3) */
+static int orb_gate(world_t*w,int dx,int dy)
+{
+    int px=3+dx, py=2+dy;
+    if(px<0||px>5||py<0||py>4){ msgcat(0,"Failed."); return 1; }
+    int span=(w->level==0)?U6_SURFACE_TILES:256, tx=(w->px+dx)&(span-1), ty=(w->py+dy)&(span-1);
+    if((!dx&&!dy) || npc_at(w,tx,ty)>=0 || !world_is_passable(w,tx,ty)){ msgcat(0,"Failed."); return 1; }
+    int pos=px+py*5; if(pos>=12&&pos<=14) pos=0;
+    if(temp_obj_new(84,1,tx,ty,pos)<0){ msgcat(0,"Failed."); return 1; }
+    build_blocked(); msgcat(0,"a red moon gate appears."); return 1;
+}
 static int step_triggers(world_t *w)
 {
     eggs_update(w,0);                                              /* a new 8x8 block? (eggs.md §2) */
     if(g_veh_kind) return 0;
     int idx=objworld_at(&g_ow, w->px, w->py); if(idx<0) return 0;
     int on=g_wobj[idx].obj_n;
+    if(on==84||on==85) return enter_moongate(w,idx);              /* a moongate (moongates.md §2/§3) */
     if(on==326) return do_transition(w, WL_DOWN, g_wobj[idx].quality);
     if(on==308) return do_transition(w, WL_HOLE, g_wobj[idx].quality);
     return 0;
@@ -7406,6 +7649,9 @@ static int load_game(world_t *w)
     /* 1) WORLD OBJECTS of the Avatar's level (map_levels.md §4b; the pooled pack is rebuilt below) */
     if(level_decode(d, n, w->level, 1) < 0){ plat_chip_reset(mk); msgcat(0,"Not enough memory to load."); return 0; }
     g_start_min = (int)d[ol + 0x1bf4] * 60 + d[ol + 0x1bf3]; w->clock = 0;
+    date_from_save(d, ol);                                                      /* day / month / year (moongates.md §1) */
+    g_keg_timer = (uint8_t)(sav_get_keg_timer(d, ol) & 0xff); g_keg_carried = 0;    /* the keg fuse */
+    for(int i = 0; i < U6_MAX_ACTORS; i++) g_torch_fuel[i] = 0;                 /* relit below from the readied records */
     g_cg.avatar_sex = d[ol + 0x1c71]; g_cg.karma = d[ol + 0x1bf9];
     if(d[ol + 0xf00]){ int o = 0;                                            /* player name (0xf00, <=13 + NUL) */
         while(o < 13 && d[ol + 0xf00 + o]){ g_avatar_name[o] = (char)d[ol + 0xf00 + o]; o++; }
@@ -8765,6 +9011,8 @@ int main(int argc, char **argv)
                magic_seed_items();
                talk_state_from_save(g_savetmpl, g_objlist_off);                 /* what NPCs already told us */
                wind_from_save(g_savetmpl, g_objlist_off);                       /* the wind (wind.md §1) */
+               date_from_save(g_savetmpl, g_objlist_off);                       /* the game date (moongates.md §1) */
+               g_keg_timer=(uint8_t)(sav_get_keg_timer(g_savetmpl, g_objlist_off)&0xff);
                eggs_load_level(g_savetmpl, g_savetmpl_len, 0); }                /* the surface's eggs (eggs.md) */
         /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
          * a created character (g_cc_done) keeps the name it was given */
@@ -8947,6 +9195,132 @@ int main(int argc, char **argv)
                     else Cconws("VEH no horse spot\r\n"); }
             } } }
 
+    /* headless SMALL-HANDLER checks (usecode_use.md): SMALLUSE.REQ byte = mode. */
+    {   int32_t sl_=0; const uint8_t*sq=(const uint8_t*)plat_load_file("SMALLUSE.REQ",1,&sl_);
+        if(sq && sl_>0){ int mode=sq[0];
+            #define NEAREST_OBJ2(COND) ({ int best=-1, bd=1<<30; for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue; if(!(COND)) continue; \
+                int cx=(int)o->x-(int)w.px, cy=(int)o->y-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; best=i; } } best; })
+            if(mode=='1'){
+                int wi=NEAREST_OBJ2(o->obj_n==233); dbg_num("SU well found=", wi>=0);
+                (void)do_verb(&w,'U',1,0); Cconws(g_msg); Cconws("\r\n");       /* no bucket yet: a plain use somewhere */
+                if(wi>=0){ inv_add_objn(178,1); teleport_party(&w,(g_wobj[wi].x+1)&(U6_SURFACE_TILES-1),g_wobj[wi].y);
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n"); dbg_num("SU water buckets=", objworld_count(&g_ow,179)); dbg_num("SU empty buckets=", objworld_count(&g_ow,178)); }
+                int ci=NEAREST_OBJ2(o->obj_n==181); dbg_num("SU churn found=", ci>=0);
+                if(ci>=0){ teleport_party(&w,(g_wobj[ci].x+1)&(U6_SURFACE_TILES-1),g_wobj[ci].y);
+                    (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n");       /* no milk */
+                    inv_add_objn(180,1); (void)do_verb(&w,'U',-1,0); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("SU butter=", objworld_count(&g_ow,96)); dbg_num("SU empty buckets=", objworld_count(&g_ow,178)); dbg_num("SU milk left=", objworld_count(&g_ow,180)); }
+                int cow=hatch_creature(&w,w.px,w.py,428,ALIGN_NEUTRAL);
+                if(cow>=0){ g_actx[cow]=(uint16_t)((w.px+1)&(U6_SURFACE_TILES-1)); g_acty[cow]=w.py; g_actz[cow]=(uint8_t)w.level;
+                    dbg_num("SU cow objn=", actor_objn(cow)); (void)do_verb(&w,'U',1,0); Cconws(g_msg); Cconws("\r\n"); dbg_num("SU milk buckets=", objworld_count(&g_ow,180)); g_atile[cow]=0xffff; }
+            }
+            if(mode=='2'){
+                inv_add_objn(264,1); (void)use_pack_item(&w,264); Cconws(g_msg); Cconws("\r\n");   /* at the start: no water */
+                int fx=-1,fy=-1; static const int FX[8]={1,-1,0,0,1,-1,1,-1}, FY[8]={0,0,1,-1,1,-1,-1,1};
+                for(int rr=1;rr<300 && fx<0;rr++) for(int e=-rr;e<=rr && fx<0;e++) for(int side=0;side<4 && fx<0;side++){
+                    int x=(side<2)?(int)w.px+e:(side==2?(int)w.px-rr:(int)w.px+rr), y=(side==0)?(int)w.py-rr:(side==1?(int)w.py+rr:(int)w.py+e);
+                    x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1); if(!world_is_passable(&w,x,y)) continue;
+                    for(int k=0;k<8;k++) if(tile_is_water(&w,(x+FX[k])&(U6_SURFACE_TILES-1),(y+FY[k])&(U6_SURFACE_TILES-1))){ fx=x; fy=y; break; } }
+                dbg_num("SU shore found=", fx>=0);
+                if(fx>=0){ teleport_party(&w,fx,fy); int casts=0; while(objworld_count(&g_ow,265)==0 && casts<60){ (void)use_pack_item(&w,264); casts++; }
+                    dbg_num("SU fish=", objworld_count(&g_ow,265)); dbg_num("SU casts=", casts); Cconws(g_msg); Cconws("\r\n"); }
+            }
+            if(mode=='3'){ inv_add_objn(93,1); (void)use_pack_item(&w,93); Cconws("SU sextant: "); Cconws(g_msg); Cconws("\r\n");
+                dbg_num("SU x/8=", (int)w.px/8); dbg_num("SU y/8=", (int)w.py/8); }
+            if(mode=='4'){
+                static const int order[8]={3,1,2,4,0,5,6,7};     /* green, red, yellow, orange, blue, purple, black, white */
+                g_ahp[1]=5; g_amaxhp[1]=g_amaxhp[1]?g_amaxhp[1]:30;
+                for(int k=0;k<8;k++){ int fr=order[k]; inv_add_objn(275,1); int row=-1; for(int j=0;j<g_ow.ninv;j++) if(g_ow.inv[j].obj_n==275){ row=j; break; }
+                    if(row<0) break; g_ow.inv[row].tile=(uint16_t)(basetile(275)+fr); g_inv_sel=row;
+                    int r=use_pack_item(&w,275); if(r==3) potion_to_member(0);
+                    dbg_num("SU potion frame=", fr); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("SU  poison=", g_poison[1]); dbg_num("SU  hp=", g_ahp[1]); dbg_num("SU  asleep=", g_asleep[1]); dbg_num("SU  protect=", g_protect[1]); dbg_num("SU  invis=", g_ainvis[1]); }
+                g_ainvis[1]=0; g_asleep[1]=0;
+            }
+            if(mode=='5'){
+                int fi=NEAREST_OBJ2(o->obj_n==51); dbg_num("SU field found=", fi>=0);
+                if(fi>=0){ int q=g_wobj[fi].quality; dbg_num("SU field quality=", q); if(q>7) q=7;
+                    inv_add_objn(242+q,1); teleport_party(&w,(g_wobj[fi].x+1)&(U6_SURFACE_TILES-1),g_wobj[fi].y);
+                    (void)use_pack_item(&w,242+q); dbg_num("SU mantra prompt=", g_mantra);
+                    const char*bad="XYZ"; g_inlen=0; while(bad[g_inlen]){ g_inbuf[g_inlen]=bad[g_inlen]; g_inlen++; } g_inbuf[g_inlen]=0;
+                    mantra_submit(&w); Cconws(g_msg); Cconws("\r\n"); dbg_num("SU field alive after wrong=", g_wobj[fi].alive);
+                    const char*good=MANTRA[q]; g_inlen=0; while(good[g_inlen]){ g_inbuf[g_inlen]=(char)(good[g_inlen]|0x20); g_inlen++; } g_inbuf[g_inlen]=0;   /* lower case: case-insensitive */
+                    mantra_submit(&w); Cconws(g_msg); Cconws("\r\n"); dbg_num("SU field alive after right=", g_wobj[fi].alive); g_mantra=0; }
+            }
+            if(mode=='6'){ inv_add_objn(77,1); (void)use_pack_item(&w,77); dbg_num("SU peer on=", g_peer_on); dbg_num("SU gems left=", objworld_count(&g_ow,77));
+                compose_map(&w); draw_peer(&w); dbg_num("SU peer drawn=", 1); g_peer_on=0; }
+            if(mode=='7'){
+                inv_add_objn(90,1); (void)use_pack_item(&w,90); g_torch_fuel[1]=123; g_keg_timer=2;
+                (void)do_save(&w); g_torch_fuel[1]=0; g_keg_timer=0; for(int sl2=0;sl2<EQ_NSLOTS;sl2++) if(g_aready[1][sl2]==90) g_aready[1][sl2]=0;
+                int ok=load_game(&w); dbg_num("SU loaded=", ok); dbg_num("SU torch fuel after load=", g_torch_fuel[1]);
+                dbg_num("SU torch in hand after load=", g_aready[1][EQ_ARM]==90||g_aready[1][EQ_ARM2]==90); dbg_num("SU keg timer after load=", g_keg_timer);
+            }
+            if(mode=='8'){
+                int cu=49; dbg_num("SU culham present=", g_atile[cu]!=0xffff);
+                int cx=g_actx[cu], cy=g_acty[cu], cz=g_actz[cu];
+                g_actx[44]=(uint16_t)((cx+1)&(U6_SURFACE_TILES-1)); g_acty[44]=(uint16_t)cy; g_actz[44]=(uint8_t)cz;
+                g_actx[46]=(uint16_t)((cx-1)&(U6_SURFACE_TILES-1)); g_acty[46]=(uint16_t)cy; g_actz[46]=(uint8_t)cz;
+                talk(cu); dbg_num("SU nearby44=", g_cg.nearby[44]); dbg_num("SU nearby46=", g_cg.nearby[46]); dbg_num("SU nearby5=", g_cg.nearby[5]);
+                static const char*const kws[3]={"name","job","gyps"};
+                for(int k=0;k<3;k++){ const char*kw=kws[k]; g_inlen=0; while(kw[g_inlen]){ g_inbuf[g_inlen]=kw[g_inlen]; g_inlen++; } g_inbuf[g_inlen]=0; submit_input(); }
+                dbg_num("SU force44=", g_wt_force[44]); dbg_num("SU force46=", g_wt_force[46]); dbg_num("SU force45=", g_wt_force[45]); dbg_num("SU force50=", g_wt_force[50]); end_talk();
+            }
+            #undef NEAREST_OBJ2
+        }
+    }
+    /* headless MOONGATE checks (moongates.md §6): MOONGATE.REQ byte = mode. */
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("MOONGATE.REQ",1,&gl);
+        if(gq && gl>0){ int mode=gq[0];
+            if(mode=='1'){
+                inv_add_objn(87,1); g_cg.talk_flags[5]|=0x20;
+                int r=use_pack_item(&w,87); dbg_num("MG orb asks where=", r==2); Cconws(g_msg); Cconws("\r\n");
+                static const int tries[6][2]={{1,-1},{0,-1},{-1,-1},{1,1},{0,1},{-1,1}}; int gi=-1, q=-1;
+                for(int k=0;k<6 && gi<0;k++){ int dx=tries[k][0], dy=tries[k][1];
+                    (void)orb_gate(&w,dx,dy);
+                    gi=obj_idx_at((w.px+dx)&(U6_SURFACE_TILES-1),(w.py+dy)&(U6_SURFACE_TILES-1),84);
+                    if(gi>=0) q=g_wobj[gi].quality; }
+                Cconws(g_msg); Cconws("\r\n"); dbg_num("MG red gate=", gi>=0); dbg_num("MG quality=", q<0?0:q);
+                if(gi>=0){ w.px=g_wobj[gi].x; w.py=g_wobj[gi].y; (void)step_triggers(&w); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("MG level=", w.level); dbg_num("MG x=", (int)w.px); dbg_num("MG y=", (int)w.py);
+                    dbg_num("MG expected x=", RED_GATE[q][0]); dbg_num("MG expected y=", RED_GATE[q][1]); dbg_num("MG expected z=", RED_GATE[q][2]); }
+            }
+            if(mode=='2'){
+                g_day0=5; g_month0=7; g_year0=161; g_start_min=12*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+                { int day,mo,yr; cur_date(&w,&day,&mo,&yr); int pt,pf; moon_phases(day,&pt,&pf);
+                  dbg_num("MG day=", day); dbg_num("MG phaseT=", pt); dbg_num("MG phaseF=", pf); dbg_num("MG visible@12=", moon_visible(day,12)); dbg_num("MG visible@16=", moon_visible(day,16)); }
+                int sx,sy,sz; (void)moonstone_get(0,&sx,&sy,&sz); dbg_num("MG stone1 x=", sx); dbg_num("MG stone1 y=", sy);
+                teleport_party(&w,(sx-1)&(U6_SURFACE_TILES-1),sy); moongates_update(&w);
+                dbg_num("MG gate present=", obj_idx_at(sx,sy,85)>=0);
+                g_start_min=16*60; g_hour=clock_hour(&w); moongates_update(&w); dbg_num("MG gate gone@16=", obj_idx_at(sx,sy,85)<0);
+                g_start_min=12*60; g_hour=clock_hour(&w); moongates_update(&w); dbg_num("MG gate back@12=", obj_idx_at(sx,sy,85)>=0);
+                w.px=(uint16_t)sx; w.py=(uint16_t)sy; (void)step_triggers(&w); Cconws(g_msg); Cconws("\r\n");
+                dbg_num("MG level=", w.level); dbg_num("MG x=", (int)w.px); dbg_num("MG y=", (int)w.py);
+                { int ex,ey,ez; (void)moonstone_get(6,&ex,&ey,&ez); dbg_num("MG expected x=", ex); dbg_num("MG expected y=", ey); dbg_num("MG expected z=", ez); }
+            }
+            if(mode=='3'){
+                inv_add_objn(73,1); int r=use_pack_item(&w,73); Cconws(g_msg); Cconws("\r\n"); dbg_num("MG bury at start refused=", r==0);
+                int gx=-1,gy=-1;                                   /* bare ground near the start */
+                for(int rr=1;rr<200 && gx<0;rr++) for(int e=-rr;e<=rr && gx<0;e++) for(int side=0;side<4 && gx<0;side++){
+                    int x=(side<2)?(int)w.px+e:(side==2?(int)w.px-rr:(int)w.px+rr), y=(side==0)?(int)w.py-rr:(side==1?(int)w.py+rr:(int)w.py+e);
+                    x&=(U6_SURFACE_TILES-1); y&=(U6_SURFACE_TILES-1); int t=world_tile(&w,x,y);
+                    if(((t>=1&&t<=7)||(t>=16&&t<=111)) && world_is_passable(&w,x,y) && objworld_at(&g_ow,x,y)<0){ gx=x; gy=y; } }
+                dbg_num("MG ground found=", gx>=0);
+                if(gx>=0){ teleport_party(&w,gx,gy); r=use_pack_item(&w,73); Cconws(g_msg); Cconws("\r\n");
+                    int mx,my,mz; (void)moonstone_get(0,&mx,&my,&mz);
+                    dbg_num("MG buried=", r==1); dbg_num("MG table0 at avatar=", mx==(int)w.px && my==(int)w.py); dbg_num("MG stone on map=", obj_idx_at(w.px,w.py,73)>=0);
+                    dbg_num("MG gate on stone=", obj_idx_at(w.px,w.py,85)>=0);
+                    (void)do_verb(&w,'G',0,0); Cconws(g_msg); Cconws("\r\n");
+                    (void)moonstone_get(0,&mx,&my,&mz); dbg_num("MG table0 cleared=", mx==0&&my==0); dbg_num("MG stone back in pack=", objworld_count(&g_ow,73)); }
+            }
+            if(mode=='4'){
+                int d0,m0,y0; cur_date(&w,&d0,&m0,&y0); dbg_num("MG day0=", d0); dbg_num("MG month0=", m0); dbg_num("MG year0=", y0); dbg_num("MG hour0=", g_hour);
+                w.clock+=50*60; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+                int d1,m1,y1; cur_date(&w,&d1,&m1,&y1); dbg_num("MG day1=", d1); dbg_num("MG hour1=", g_hour);
+                (void)do_save(&w); int sd,sm,sy2; sav_get_date(g_savetmpl,g_objlist_off,&sd,&sm,&sy2);
+                dbg_num("MG saved day=", sd); dbg_num("MG saved month=", sm); dbg_num("MG saved year=", sy2);
+            }
+        }
+    }
     /* headless DUNGEON-OBJECT checks (usecode_use.md): DUNGUSE.REQ byte = mode. */
     {   int32_t ul=0; const uint8_t*uq=(const uint8_t*)plat_load_file("DUNGUSE.REQ",1,&ul);
         if(uq && ul>0){ int mode=uq[0];
@@ -10590,10 +10964,11 @@ int main(int argc, char **argv)
         /* During gameplay (NOT text entry), drain any backlog to the NEWEST key so a
          * held arrow doesn't queue up behind a slow compose and lag the avatar. Text
          * entry (conversation / cast menu) keeps every keystroke. */
-        if (key && !g_await_input && !g_casting) {
+        if (key && !g_await_input && !g_casting && !g_mantra) {
             int k2, guard=0; while ((k2=plat_input_raw()) && ++guard<64) key=k2;
         }
         int redraw=0;
+        if (key && g_peer_on){ g_peer_on=0; compose_map(&w); draw_border_tiles(); redraw=1; key=0; }   /* any key closes the gem's view */
         if (key) {
             int a = key & 0xFF;
             g_travel_active=0;                       /* any key press cancels click-to-travel */
@@ -10604,6 +10979,12 @@ int main(int argc, char **argv)
                 else if (a>=0x20 && a<0x7f && g_inlen<CVM_INPUT-1) {         /* a char */
                     g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0; redraw=1;
                 }
+            } else if (g_mantra) {                   /* typing a rune's mantra (usecode_use.md) */
+                if      (a==0x0d) { mantra_submit(&w); g_mantra=0; compose_map(&w); draw_border_tiles(); redraw=1; }
+                else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } { int n=msgcat(0,"Mantra: "); msgcat(n,g_inbuf); } redraw=1; }
+                else if (a==0x1b) { g_mantra=0; g_msg[0]=0; redraw=1; }
+                else if (a>=0x20 && a<0x7f && g_inlen<CVM_INPUT-1) { g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0;
+                    { int n=msgcat(0,"Mantra: "); msgcat(n,g_inbuf); } redraw=1; }
             } else if (g_casting) {                  /* choosing a spell in the C)ast menu */
                 if      (a==0x0d) { if(cast_menu_submit(&w)){ compose_map(&w); draw_border_tiles(); } redraw=1; }  /* Enter: select */
                 else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } redraw=1; }                              /* Bksp */
@@ -10629,10 +11010,12 @@ int main(int argc, char **argv)
                     else if (g_pending_verb=='E' && (a=='e'||a=='E') && !(dx||dy) && g_ow.ninv>0){
                         g_inv_sel=(g_inv_sel+1)%g_ow.ninv; equip_prompt(); redraw=1;  /* E again -> next item */
                     }
+                    else if (g_pending_verb=='P' && a>='1' && a<='5' && !(dx||dy)){
+                        potion_to_member(a-'1'); g_pending_verb=0; g_show_inv=0; redraw=1; }     /* a potion: on whom (usecode_use.md) */
                     else if (g_pending_verb=='E' && a>='1' && a<='5' && !(dx||dy)){
                         equip_to_member(a-'1'); redraw=1;                             /* 1..5 -> that member */
                     }
-                    else if (g_pending_verb=='E' && (dx||dy)) { }                     /* E ignores directions */
+                    else if ((g_pending_verb=='E'||g_pending_verb=='P') && (dx||dy)) { }   /* E / On-whom ignore directions */
                     else if (g_pending_verb=='U' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){
                         if(!g_use_pack){ g_use_pack=1; g_show_inv=1; g_inv_sel=0; }     /* U again -> use a carried item */
                         else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;                        /* ... U once more -> next item */
@@ -10640,8 +11023,9 @@ int main(int argc, char **argv)
                           int n=msgcat(0,"Use the "); n=msgcat(n,dn); msgcat(n,"? (U=next, Enter=use)"); }
                         redraw=1; }
                     else if (g_pending_verb=='U' && g_use_pack && a==0x0d && !(dx||dy)){
-                        if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) (void)use_pack_item(&w, g_ow.inv[g_inv_sel].obj_n);
-                        g_pending_verb=0; g_show_inv=0; g_use_pack=0;
+                        { int pr=0; if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) pr=use_pack_item(&w, g_ow.inv[g_inv_sel].obj_n);
+                          g_pending_verb=(pr==2)?'O':(pr==3)?'P':0; }                      /* 2 = the orb asks "Where:", 3 = a potion asks "On whom:" */
+                        g_show_inv=0; g_use_pack=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=0; g_show_inv=0; redraw=1; }
@@ -10769,7 +11153,7 @@ int main(int argc, char **argv)
          * doubled present) Vsyncs internally, so don't Vsync again after it — the old code
          * did both, halving the rate to 30Hz whenever the mouse moved. The cheaper paths
          * (map-only present, or idle) rely on the explicit Vsync here. */
-        if (redraw) present_frame();                           /* full present (Vsyncs internally) */
+        if (redraw){ if(g_peer_on) draw_peer(&w); present_frame(); }   /* full present (Vsyncs internally); the gem's view over the map */
         else { if (moved||anim_redraw) present_map();           /* map window (walk / tile anim) */
                else if (mouse_moved) present_cursor();         /* bare mouse move: cheap cursor-only */
                Vsync(); }

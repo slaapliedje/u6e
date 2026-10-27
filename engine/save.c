@@ -394,6 +394,19 @@ void sav_set_clock(uint8_t *d, int32_t off, int minute, int hour)
     d[off + 0x1bf3] = (uint8_t)minute;
     d[off + 0x1bf4] = (uint8_t)hour;
 }
+/* The game date after the clock (objlist 0x1bf5 day, 0x1bf6 month, 0x1bf7-8 year LE; moongates.md §1). */
+void sav_set_date(uint8_t *d, int32_t off, int day, int month, int year)
+{
+    d[off + 0x1bf5] = (uint8_t)day; d[off + 0x1bf6] = (uint8_t)month;
+    d[off + 0x1bf7] = (uint8_t)year; d[off + 0x1bf8] = (uint8_t)(year >> 8);
+}
+/* the powder-keg fuse (objlist 0x1c4b, u16 LE; usecode_use.md) */
+void sav_set_keg_timer(uint8_t *d, int32_t off, int t){ d[off + 0x1c4b] = (uint8_t)t; d[off + 0x1c4c] = (uint8_t)(t >> 8); }
+int  sav_get_keg_timer(const uint8_t *d, int32_t off){ return d[off + 0x1c4b] | (d[off + 0x1c4c] << 8); }
+void sav_get_date(const uint8_t *d, int32_t off, int *day, int *month, int *year)
+{
+    *day = d[off + 0x1bf5]; *month = d[off + 0x1bf6]; *year = d[off + 0x1bf7] | (d[off + 0x1bf8] << 8);
+}
 
 /* Patch the avatar's identity: gender @0x1c71 (0=male, 1=female), selected portrait
  * @0x1c72, karma @0x1bf9 (objlist.md §Player fields). */

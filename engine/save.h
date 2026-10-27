@@ -109,6 +109,12 @@ int  sav_get_wind(const uint8_t *d, int32_t off);
 void sav_set_actor_level_mana(uint8_t *d, int32_t off, int actor, int level, int mana);
 /* the per-actor WORKTYPE byte (objlist 0x11f1): a conversation's WORKTYPE / the live schedule code */
 void sav_set_actor_worktype(uint8_t *d, int32_t off, int actor, int wt);
+/* the game date (0x1bf5 day / 0x1bf6 month / 0x1bf7-8 year; moongates.md §1) */
+void sav_set_date(uint8_t *d, int32_t off, int day, int month, int year);
+void sav_get_date(const uint8_t *d, int32_t off, int *day, int *month, int *year);
+/* the powder-keg fuse (objlist 0x1c4b, u16) */
+void sav_set_keg_timer(uint8_t *d, int32_t off, int t);
+int  sav_get_keg_timer(const uint8_t *d, int32_t off);
 int  sav_get_actor_worktype(const uint8_t *d, int32_t off, int actor);
 
 /* Patch the player's name (objlist 0xf00: up to 13 characters + NUL, Nuvie's new-game field). */

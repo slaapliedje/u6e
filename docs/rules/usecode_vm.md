@@ -145,6 +145,10 @@ deterministic RNG seam so golden-transcript tests are reproducible.
       cured member loses the poison, a resurrected one stands at 1 HP, a HEALed one is at full HP
       (`healed_full` records the op). INVSYNC.BIN prints the HEALSYNC round trip.
 - [x] WORKTYPE acts on the LIVE NPC (2026-10-26) — §6b.
+- [x] NPCNEARBY (0xd7) answers from the live world (2026-10-27): 1 when the asked NPC stands
+      within 5 tiles of the speaker on the same level (the reference's is_nearby threshold); the
+      speaker's neighbourhood is pushed into the VM before each conversation (Culham's brawl now
+      reaches the two guards it checks for).
 - [ ] DATA/DPRINT data-block strings (some answers reference indexed strings).
 - [ ] Per-game opcode deltas (Savage/Martian) behind a RuleSet hook.
 - [ ] Interactive keyword TYPING on-target (line input); INPUT/INPUTNUM vars.

@@ -41,6 +41,7 @@ typedef struct {
     uint8_t  dead[256];        /* 1 = dead until RESURRECT                      */
     uint8_t  healed_full[256]; /* 1 = HEAL ran on this NPC this conversation (host restores HP) */
     uint8_t  worktype[256];    /* per-NPC schedule worktype (WORKTYPE)          */
+    uint8_t  nearby[256];      /* 1 = NPC n stands within 5 tiles of the speaker (NPCNEARBY) */
     int16_t  player_obj[256];  /* player's count per object number             */
     uint8_t  hour;             /* game-clock hour 0..23, for the $T greeting    */
 } cvm_game_t;

@@ -199,6 +199,58 @@ free; '5' a lit keg: "Powder lit!", three turns later the keg and the door besid
 Found on the way: object blocking used Impassable|Wall; the reference blocks on Impassable only, and
 the Wall-only tiles are doorways, arches and the open secret door frames — fixed (tileflag.md).
 
+## Well, cow, churn, fishing pole, sextant, potions, runes, peer gem (IMPLEMENTED 2026-10-27)
+
+> Derived from: READING ScummVM/Nuvie `usecode/u6_usecode.cpp` fill_bucket / use_well / use_cow /
+> use_churn / use_fishing_pole / use_sextant / use_potion (+ the potion colour order) / use_rune
+> (+ the eight mantras) / remove_gargoyle_egg / use_peer_gem, `core/effect.cpp` PeerEffect — to
+> understand the behaviour; re-expressed, no code transcribed. Object presence checked in the
+> user's own data (9 wells, 2 churns, 13 buckets, 62 potions, 8 shrine force fields, 3 runes on
+> the map and 3 carried by NPCs, 13 gems).
+
+- **Bucket (178) / well (233) / cow (actor 428) / churn (181).** U)se a well or a cow with an
+  empty bucket in the pack: the bucket becomes a bucket of water (179) / of milk (180) — "Done";
+  without one: "You need a bucket." (or "You need an empty bucket." when only full ones are
+  carried). U)se a churn with a bucket of milk: butter (96) plus the empty bucket back — "Done";
+  else "You need some milk.".
+- **Fishing pole (264).** U)se it standing next to water: a 1-in-5 chance of a fish (265) into
+  the pack; away from water "You need to stand next to water.".
+- **Sextant (93).** U)se on the surface or in the gargoyle world: the position as
+  `lat{N|S, lon{E|W` (the font's `{` is the degree sign): surface x/8 and y/8 against the
+  meridians 38 / 45, the gargoyle world x/2, y/2. Elsewhere "Not usable".
+- **Potions (275, frame = colour).** U)se asks "On whom:" — a party member by number 1..5 (only
+  the party can be dosed). blue 0 wakes a sleeper, red 1 cures poison, yellow 2 heals to full,
+  green 3 poisons, orange 4 puts to sleep, purple 5 protects, black 6 makes invisible, white 7
+  (the original's x-ray vision) has no effect here. The potion is used up.
+- **Runes (242..249 = the eight virtues, Honesty first).** U)se asks "Mantra:" — a typed word.
+  The right mantra (Honesty AHM, Compassion MU, Valor RA, Justice BEH, Sacrifice CAH, Honor SUMM,
+  Spirituality OM, Humility LUM) while standing next to the shrine's force field (51, quality =
+  the rune's index) removes the field for good — "Done!" — and silences any gargoyle egg within
+  20 tiles (the shrine guardians); elsewhere "No effect!"; a wrong word "Wrong mantra!".
+- **Peer gem (77).** U)se: the map window shows the 48×48-tile area around the party (aligned
+  to the 8-tile chunk, each tile one 3×3 block of its centre colour, the party a white dot)
+  until a key is pressed; the gem is used up.
+
+Persistence: a removed shrine field is deleted from the save; a silenced egg is only silenced
+for the session (v1); buckets/butter/fish are ordinary pack items.
+
+Status: VERIFIED 2026-10-27 — SMALLUSE.REQ 1-8 on emulated TT and the stock 4 MB Falcon (identical):
+'1' a well fills the bucket (water 1, empties 0), the churn refuses without milk then makes butter
+and returns the bucket, a cow beside the party fills it with milk (the actor on a tile is tried
+before the tile's objects — a table under the cow had been answering first); '2' no water at the
+start, on a shore a fish on the fifth cast; '3' the sextant says 1{N, 0{W at (307,352); '4' the
+eight potions on the Avatar: poisoned → cured → healed to full → asleep → awake → protected →
+invisible → white "No effect"; '5' the Honesty shrine's field (quality 1 nearest the start): "Wrong
+mantra!" leaves it, the right mantra typed in lower case removes it — "Done!"; '6' the gem is used
+up and the overview drawn; '7' a lit torch (fuel 123) and a 2-turn keg fuse come back through
+S)ave + load with the torch in hand; '8' with NPCs 44 and 46 moved beside Culham the VM's
+NPCNEARBY sees them and the brawl sets 0x99 on 44, 46, 45 and 50.
+
+## Torch and keg state across a save (2026-10-27)
+A lit readied torch's record is saved with frame 1 and its fuel in qty, and relit with that fuel
+on load; the keg fuse (objlist 0x1c4b, u16) is saved and restored (a lit keg carried in the pack
+is not — its fuse simply resumes on any lit keg on the map).
+
 ## Other use handlers (TODO — same dispatcher, future slices)
 - Magic lock/unlock spells; persisting field/consumed-item/hunger state to the save.
 - Readables (signs/books/tombstones) → show text — DONE (docs/formats/strings.md;
