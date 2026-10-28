@@ -48,10 +48,33 @@ int weapon_range(int obj_n)
     case 54: return 7;   /* magic bow      */
     case 33: return 4;   /* sling          */
     case 37: return 3;   /* throwing axe   */
-    case 36: return 3;   /* spear (thrown) */
-    case 49: return 4;   /* boomerang      */
+    case 36: return 4;   /* spear (thrown) */
+    case 49: return 5;   /* boomerang      */
+    case 91: return 4;   /* Zu Ylem        */
+    case 79: return 7;   /* lightning wand */
+    case 80: return 7;   /* fire wand      */
     case 412: return 5;  /* a ship's cannons (cannons.md §1) */
     default: return 1;   /* melee          */
+    }
+}
+
+/* §6b the tile a weapon throws or shoots (0 = not a missile weapon). */
+int weapon_missile(int obj_n)
+{
+    switch (obj_n){
+    case 33: return 398;   /* sling: a stone      */
+    case 36: return 547;   /* spear               */
+    case 37: return 548;   /* throwing axe        */
+    case 38: return 549;   /* dagger (thrown)     */
+    case 41: case 54: return 566;   /* bow, magic bow: an arrow */
+    case 42: case 50: return 567;   /* crossbow, triple crossbow: a bolt */
+    case 49: return 560;   /* boomerang           */
+    case 83: return 601;   /* flask of oil        */
+    case 91: return 612;   /* Zu Ylem             */
+    case 79: return 392;   /* lightning wand      */
+    case 80: return 393;   /* fire wand           */
+    case 412: return 399;  /* a ship's cannons: the cannonball (cannons.md §1) */
+    default: return 0;
     }
 }
 

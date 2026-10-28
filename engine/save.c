@@ -212,6 +212,16 @@ int32_t sav_delete_contained(uint8_t *d, int32_t n, int32_t surf_off, int level,
     }
     return -1;
 }
+/* record k of chunk cpos goes ON THE MAP at (x,y,z): its location bits clear and the link bytes
+ * become coordinates (a broken container's contents spill; rules/combat.md §3b). */
+void sav_spill_k(uint8_t *d, int32_t cpos, int k, int x, int y, int z)
+{
+    uint8_t *r = d + cpos + 2 + k * 8;
+    r[0] = (uint8_t)(r[0] & ~0x18);
+    r[1] = (uint8_t)(x & 0xff);
+    r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
+    r[3] = (uint8_t)(((y >> 6) & 0x0f) | ((z & 0x0f) << 4));
+}
 int32_t sav_delete_inv_record(uint8_t *d, int32_t n, int owner, int obj_n)
 {
     int32_t cpos = sav_inv_off(d, n);
@@ -448,6 +458,9 @@ void sav_set_date(uint8_t *d, int32_t off, int day, int month, int year)
 void sav_set_keg_timer(uint8_t *d, int32_t off, int t){ d[off + 0x1c4b] = (uint8_t)t; d[off + 0x1c4c] = (uint8_t)(t >> 8); }
 int  sav_get_keg_timer(const uint8_t *d, int32_t off){ return d[off + 0x1c4b] | (d[off + 0x1c4c] << 8); }
 void sav_set_timer(uint8_t *d, int32_t off, int idx, int val){ if (idx >= 0 && idx < 16) d[off + 0x1c03 + idx] = (uint8_t)val; }
+/* the rest counter: hours until resting may heal the party again (objlist 0x1bf2; rules/rest.md §4) */
+void sav_set_rest_counter(uint8_t *d, int32_t off, int val){ d[off + 0x1bf2] = (uint8_t)val; }
+int  sav_get_rest_counter(const uint8_t *d, int32_t off){ return d[off + 0x1bf2]; }
 void sav_set_vanish(uint8_t *d, int32_t off, int v){ d[off + 0x1c13] = (uint8_t)v; d[off + 0x1c14] = (uint8_t)(v >> 8); }
 int  sav_get_vanish(const uint8_t *d, int32_t off){ return d[off + 0x1c13] | (d[off + 0x1c14] << 8); }
 int  sav_get_timer(const uint8_t *d, int32_t off, int idx){ return (idx >= 0 && idx < 16) ? d[off + 0x1c03 + idx] : 0; }

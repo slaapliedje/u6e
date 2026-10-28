@@ -11,7 +11,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M6
 >   confirmed against real TILEFLAG via tools/tflagprobe. Symptom + behaviour verified by
 >   rendering the user's save in ScummVM headless (xvfb + `scummvm -x N`) vs our engine.
 > - Confidence : model confirmed; some numbers (min-brightness, radii) to tune vs ScummVM.
-> - Last updated : 2026-06-26
+> - Last updated : 2026-10-27
 
 ## 1. The two independent effects (U6 combines both)
 1. **Visibility (line-of-sight)** — you only see tiles reachable from the avatar without
@@ -34,6 +34,22 @@ From the game hour (GameClock) — Nuvie `createLightOverlay()`:
 - Night: ambient = **cur_min_brightness** (low; tune ~ a small value).
 - Dawn (5) / dusk (19): smooth transition between min and 255.
 - Eclipse / dungeon: forced to min. X-ray cheat: 255.
+- u6e: an eclipse (objlist timer 15, the Eclipse spell — magic_skills.md §5f) makes the surface
+  hour count as NIGHT (outdoors LIGHT_NIGHT_AMB, indoors LIGHT_INDOOR_AMB), exactly the night
+  rule; the reference's eclipse, night and dungeon are all the same minimum.
+
+## 2b. The sky strip (the party panel's top row)
+Read from the reference's SunMoonStripWidget to understand; positions re-expressed.
+- Surface and level 5: 8 ribbon tiles 352..359 at x = 8 + 16·i. A body at arc slot `p` (0..14)
+  is drawn at x = 8 + 7·16 − 8·p with the y offsets 6,3,1,−1,−2,−3,−4,−4,−4,−3,−2,−1,1,3,6.
+- The sun: slot = hour − 5 for hours 5..19; tile 361 (orange) at 5 and 19, 362 (yellow) at 6..18,
+  **363 (eclipsed) at any of those hours while timer 15 runs**. u6e draws the eclipsed sun only
+  while the sun is up (the reference indexes its 15-slot table with hour − 5 at any hour).
+- The moons: Trammel and Felucca at the positions of moongates.md §1 (visible when 5..19, slot =
+  position − 5), tile 584 for phase 0, else 584 + 8 − phase (the tile list runs backwards).
+  **During an eclipse no moon is drawn.**
+- Other levels: the cave ribbon — tile 372 at x = 8, tile 373 at x = 8 + 16·i for i = 1..7, tile 374
+  at x = 8 + 7·16 + 8.
 
 CRUCIAL: this full-daylight ambient applies **OUTDOORS only**. Indoors (under a roof) the
 ambient is the low value even at day — that's why the 08:00 castle interior is dark away
@@ -98,6 +114,9 @@ IMPLEMENTATION (mkworld build_indoor_rle, docs path in lighting.md):
 ## 6. Test hooks
 ScummVM ground-truth: `xvfb-run`/Xvfb + `scummvm -x <slot> ultima6` + `import -window`,
 crop the map window, compare to our `make m5-svm` / a positioned capture at matched scale.
+`READYFX.REQ` '7' (usecode_use.md): the eclipse — sun tile 362 → 363 and back, moons hidden, the
+noon view-corner light falls from 255 to the night value, an NPC's torch follows the hour ticks;
+the run ends with the eclipse on at noon so a capture shows the strip and the dark map.
 
 ## 7. Status
 - Stage B DONE: indoor bitmap via Nuvie roof_map_00.dat (U6WI).

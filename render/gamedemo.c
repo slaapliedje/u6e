@@ -135,6 +135,9 @@ static uint8_t        g_armageddon;              /* Armageddon was cast: nobody 
 static int            g_enchant_mode;            /* the C)ast menu is choosing the staff's charge (Enchant, §5f) */
 static int            g_enchant_pick=-1;         /* test hook: Enchant's charge spell, preset */
 static int            g_torch_hour=-1;           /* hour the NPCs' torches were last lit/doused (-1 = do it now) */
+static int            g_resting;                 /* 1 = the party camps (rest.md §3): rest turns run, members stay put */
+static uint8_t        g_rest_counter;            /* hours until resting may heal again (objlist 0x1bf2; rest.md §4) */
+static int            g_rest_hr=-1;              /* the hour the rest counter last ticked at (-1 = unknown) */
 static int            g_game_over;               /* the Codex has vanished: show the ending and leave */
 static int            g_free_cast;               /* the staff's charge: cast without mana or reagents */
 static void date_from_save(const uint8_t *d, int32_t ol){ sav_get_date(d, ol, &g_day0, &g_month0, &g_year0);
@@ -453,8 +456,11 @@ static void fe_group_free(int depth);
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
 static char           g_msg[160];          /* latest verb result line              */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
+static const char* rest_prompt_text(void);  /* fwd: the R)est prompt line (rest.md §2) */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
 static int            g_fx_on;             /* one-tile overlay drawn over everything: a cannonball in flight / a burst (cannons.md §1) */
+#define TILE_TARGET_CURSOR 365               /* the A)ttack crosshair (combat.md §6b) */
+static int            g_tcur_dx, g_tcur_dy;/* the crosshair's offset from the Avatar while 'A' is armed */
 static uint16_t       g_fx_tile; static int g_fx_x, g_fx_y;
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
 static int            g_use_pack;                 /* U)se armed on a carried item (U pressed twice) */
@@ -2993,6 +2999,7 @@ static void moongates_update(const world_t*w);               /* natural moongate
 static void moonstone_set(int i,int x,int y,int z);          /* the save's moonstone table (moongates.md §4) */
 static int  orb_gate(world_t*w,int dx,int dy);               /* the Orb of the Moons' "Where:" answer (§3) */
 static void cur_date(const world_t*w,int*day,int*month,int*year);   /* day/month/year from the clock (§1) */
+static void moon_phases(int day,int*pt,int*pf); static int moon_pos_t(int day,int hour); static int moon_pos_f(int day,int hour);   /* the moons (moongates.md §1), for the sky strip */
 static void draw_peer(const world_t*w);                      /* the gem's overview (usecode_use.md) */
 static int  actor_objn(int i);                               /* the object number behind an actor's base tile */
 static void mantra_submit(world_t*w);                        /* a rune's typed mantra */
@@ -3031,6 +3038,7 @@ static void step_npcs(const world_t*w)
     dunguse_tick(w);                                   /* a lit torch burns, a keg fuse runs down (usecode_use.md) */
     ready_fx_tick();                                   /* rings, the storm cloak: per-turn effects + vanishing (equipment.md §8) */
     if(g_hour!=g_torch_hour) npc_torches_update(w);    /* NPCs light / douse their torches on the hour (usecode_use.md) */
+    if(g_hour!=g_rest_hr){ if(g_rest_hr>=0 && g_rest_counter) g_rest_counter--; g_rest_hr=g_hour; }   /* the rest counter counts hours (rest.md §4) */
     if(g_hour!=g_gate_hour) moongates_update(w);       /* the moons moved: natural gates appear / vanish (moongates.md §2) */
     if(g_spell_light_turns>0) g_spell_light_turns--;   /* Light spell decays a turn per step */
     if(g_xray_turns>0) g_xray_turns--;                 /* X-ray see-through decays a turn (§5e) */
@@ -3056,6 +3064,7 @@ static void step_npcs(const world_t*w)
             if(g_summon[i]){ g_summon[i]=0; g_summon_life[i]=0; }   /* a slain/gone summon frees its slot (§5c) */
             if(g_ally[i]||g_charm[i]){ g_ally[i]=0; g_charm[i]=0; }  /* a slain ally / charmed foe */
             continue; }
+        if(g_resting && is_party_member(i)){ g_amoved[i]=0; continue; }   /* the camp: nobody follows or fights (rest.md §3) */
         if(g_asleep[i]){ g_asleep[i]--; g_amoved[i]=0; continue; }  /* sleep: skip the turn (§5a/§5b) */
         if(g_paralyze[i]){ g_paralyze[i]--; g_amoved[i]=0; continue; }  /* paralyze: skip the turn (§5b) */
         if(g_summon[i]){                                          /* summoned creature: lifetime + allied AI (§5c) */
@@ -4359,6 +4368,8 @@ static void compose_map(const world_t*w)
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     if(g_fx_on){ int32_t fvx=((int32_t)g_fx_x-left)&(U6_SURFACE_TILES-1), fvy=((int32_t)g_fx_y-top)&(U6_SURFACE_TILES-1);
         if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); }   /* a cannonball / burst over everything (cannons.md §1) */
+    if(g_pending_verb=='A'){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;                /* the A)ttack crosshair (combat.md §6b) */
+        if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); }
     PH_END(1);
     PH_BEGIN();
     /* Blit terrain shifted in by INSET px so the outer ring stays PAPYRUS (from
@@ -4670,7 +4681,7 @@ static void draw_conversation(uint8_t col)
         }
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
-            const char*p = g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-(dir)?":"Attack-(dir)?"):g_pending_verb=='L'?"Look-(dir)?":
+            const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-":"Attack-"):g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?((g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change"))?"Direction-":"Cast-(dir)?"):
                            g_pending_verb=='T'?"Talk-(dir)?":g_pending_verb=='N'?"To-(dir)?":"Move-(dir)?";
@@ -4700,10 +4711,9 @@ static void wind_from_save(const uint8_t *d, int32_t ol)
  * shows its date/wind line — verified against ScummVM (refshots/u6_gameplay.png).
  * Drawn after compose_map + draw_border_tiles so it sits on top of the border. */
 static int put2(char*s,int k,int v){ if(v>=10) s[k++]=(char)('0'+(v/10)%10); s[k++]=(char)('0'+v%10); return k; }
-static void draw_status(const world_t*w,uint8_t col)
+static void status_text(const world_t*w,char*s)
 {
-    int m=clock_minutes(w), hh=m/60, mm=m%60;
-    char s[40]; int k=0;
+    int m=clock_minutes(w), hh=m/60, mm=m%60; int k=0;
     k=put2(s,k,hh); s[k++]=':'; k=put2(s,k,mm);           /* HH:MM */
     { const char*t=" Lv"; while(*t) s[k++]=*t++; }
     s[k++]=(char)('0'+(g_alevel[1]<10?g_alevel[1]:9));    /* avatar exp level */
@@ -4711,7 +4721,16 @@ static void draw_status(const world_t*w,uint8_t col)
     k=put2(s,k,g_amana[1]); s[k++]='/'; k=put2(s,k,g_amaxmana[1]);
     { const char*t=" Wind:"; while(*t) s[k++]=*t++; t=WIND_NAME[g_wind<=WIND_CALM?g_wind:WIND_CALM]; while(*t) s[k++]=*t++; }
     s[k]=0;
-    ui_text(MAPX+4, MAPY+MAPSZ-10, s, col);               /* bottom border of the map window */
+}
+static void draw_status(const world_t*w,uint8_t col)
+{
+    char s[40]; status_text(w,s);
+    /* the bottom border row is papyrus under transparent border tiles; the clock changes without a
+     * scroll (a pass, a camp), so the old text must go first: papyrus, the row's tiles, then the text */
+    int y0=MAPY+MAPSZ-16, x1=MAPX+(VT-1)*16;
+    for(int y=y0;y<y0+16 && y<LH;y++) memcpy(ROW(y)+MAPX, g_paper+(int32_t)y*LW+MAPX, MAPSZ);
+    blit_tile(MAPX,y0,435,1); blit_tile(x1,y0,437,1); for(int c=1;c<VT-1;c++) blit_tile(MAPX+c*16,y0,436,1);
+    ui_text(MAPX+4, MAPY+MAPSZ-10, s, col);
 }
 
 /* Resolve NPC `id`'s name from the game's own CONVERSE data (the VM sets npcname
@@ -5804,13 +5823,14 @@ static void ready_fx_tick(void)
     if(cloak && !g_storm) g_storm=1;                         /* ... but a worn cloak holds it at 1 */
     if(hp_changed) sync_party_hp();
 }
-/* NPCs outside the party light a readied torch at night or underground and douse it by day
- * (the reference's handle_lightsource, hourly); their torches never burn down (usecode_use.md) */
+/* NPCs outside the party light a readied torch at night, during an eclipse (timer 15) or when
+ * THEIR level is underground, and douse it by day (the reference's handle_lightsource, on the
+ * hour); their torches never burn down (usecode_use.md) */
 static void npc_torches_update(const world_t*w)
-{   g_torch_hour=g_hour;
-    int dark=(g_hour<6 || g_hour>18 || g_eclipse || (w->level!=0 && w->level!=5));
-    for(int i=2;i<U6_MAX_ACTORS;i++){ if(is_party_member(i) || g_atile[i]==0xffff) continue;
+{   g_torch_hour=g_hour; (void)w;
+    for(int i=2;i<U6_MAX_ACTORS;i++){ if(is_party_member(i) || g_atile[i]==0xffff || g_actz[i]==0xff) continue;
         if(!has_readied(i,90)) continue;
+        int dark=(g_hour<6 || g_hour>18 || g_eclipse || (g_actz[i]!=0 && g_actz[i]!=5));
         g_torch_fuel[i]=(uint8_t)(dark?255:0); }
 }
 static void equip_to_member(int pi)
@@ -5866,19 +5886,30 @@ static void draw_inventory(uint8_t col)
       ui_text(PANX+6, 182, g, 14); }
 }
 
-/* U6's sun/moon strip (SunMoonStripWidget): 8 sky-ribbon tiles 352..359, with the
- * sun (361/362) and a moon (584) drawn at their arc positions by the game clock. */
+/* U6's sun/moon strip (the reference's SunMoonStripWidget, read to understand; lighting.md §2b):
+ * 8 sky-ribbon tiles 352..359; the sun at arc slot hour-5 (361 orange at 5 and 19, 362 yellow
+ * 6..18, 363 ECLIPSED while timer 15 runs — only while the sun is up); the two moons at their
+ * positions (moongates.md §1) with their phase tiles (584 full, else 584+8-phase); an eclipse
+ * hides the moons. Below the surface and the gargoyle world the strip is the cave ribbon. */
+static int sky_sun_tile(int hh){ if(hh<5||hh>19) return 0; return g_eclipse?363:((hh==5||hh==19)?361:362); }
+static int sky_moons(int day,int hh,int*tile,int*pos)        /* the visible moons (0..2); none during an eclipse */
+{   if(g_eclipse) return 0;
+    int n=0, pt,pf; moon_phases(day,&pt,&pf); int pa=moon_pos_t(day,hh), pb=moon_pos_f(day,hh);
+    if(pa>=5&&pa<=19){ tile[n]=pt?584+8-pt:584; pos[n++]=pa-5; }
+    if(pb>=5&&pb<=19){ tile[n]=pf?584+8-pf:584; pos[n++]=pb-5; }
+    return n; }
 static void draw_sky(void)
 {
     static const signed char sy[15]={6,3,1,-1,-2,-3,-4,-4,-4,-3,-2,-1,1,3,6};
     int ax=PANX, ay=4, hh=g_minutes/60;
+    if(g_cur_level!=0 && g_cur_level!=5){                          /* underground: the cave ribbon 372 / 373 x7 / 374 */
+        blit_tile(ax+8, ay, 372, 1); for(int i=1;i<8;i++) blit_tile(ax+8+i*16, ay, 373, 1); blit_tile(ax+8+7*16+8, ay, 374, 1);
+        return; }
     for(int i=0;i<8;i++) blit_tile(ax+8+i*16, ay, 352+i, 1);     /* sky ribbon */
-    if(hh>=5 && hh<=19){                                          /* sun: pos = hour-5 */
-        int p=hh-5, st=(hh==5||hh==19)?361:362;
-        blit_tile(ax+8+7*16-p*8, ay+sy[p], st, 1);
-    }
-    int mp=(hh+12)%24;                                            /* a moon, ~opposite */
-    if(mp>=5 && mp<=19){ int p=mp-5; blit_tile(ax+8+7*16-p*8, ay+sy[p], 584, 1); }
+    int st=sky_sun_tile(hh); if(st){ int p=hh-5; blit_tile(ax+8+7*16-p*8, ay+sy[p], (uint16_t)st, 1); }
+    int day=1,mo,yr; if(g_wp) cur_date(g_wp,&day,&mo,&yr);
+    int mt[2],mp[2], nm=sky_moons(day,hh,mt,mp);
+    for(int k=0;k<nm;k++) blit_tile(ax+8+7*16-mp[k]*8, ay+sy[mp[k]], (uint16_t)mt[k], 1);
 }
 
 /* the party: each member's sprite icon + name + right-aligned HP (top-right,
@@ -6539,22 +6570,6 @@ static void cannon_damage_actor(int id,int dmg,const char*hit_verb,const char*ki
     else { g_ahp[id]=(uint8_t)(hp-dmg); int n=msgcat(0,hit_verb); n=msgcat(n,nm); msgcat(n,"!"); if(!party) check_flee(id); }
     if(party) sync_party_hp();
 }
-/* A)ttack aboard a ship (§1): the cannons fire along (dx,dy); the ship is the weapon (range 5,
- * damage 30, dexterity 30). Returns 1 (recompose). */
-static int ship_fire(world_t*w,int dx,int dy){
-    int ha,hs,hx,hy;
-    (void)cannonball_fly(w,(int)w->px,(int)w->py,dx,dy,weapon_range(412),&ha,&hs,&hx,&hy);
-    if(ha>=0){
-        int fdex=g_adex[ha]?g_adex[ha]:15;
-        if(!combat_hit(30,fdex,&g_crng)){ char nm[24]; obj_name(npc_tile(ha),nm,sizeof nm);
-            if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
-            int n=msgcat(0,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return 1; }
-        cannon_damage_actor(ha,status_dmg(ha,combat_damage(weapon_dmg(412),g_aac[ha],&g_crng)),"Hit ","Killed ");
-        return 1; }
-    if(hs>=0){ msgcat(0, ship_obj_hull_hit(hs,combat_damage(weapon_dmg(412),0,&g_crng))?"Ship broke!":"The ship is hit!"); return 1; }
-    msgcat(0,"The cannonball bursts.");
-    return 1;
-}
 /* U)se a fixed cannon (§3): "Fire!" — the ball flies 5 tiles in the cannon's facing; a flat 32
  * to the first actor, 20 off a ship's hull. */
 static int cannon_fire(world_t*w,int idx){
@@ -6569,12 +6584,17 @@ static int cannon_fire(world_t*w,int idx){
 /* The party's ship breaks (§2): the parts are destroyed, a raft remains at the centre's tile and
  * the party is aboard it. The centre record is retyped 412 -> 415, front/back are deleted (§4). */
 static void ship_break(void){
-    int ci=g_veh_o[0];
+    int ci=g_veh_o[0]; world_t*w=(world_t*)g_wp;                  /* the live world: the party rides the raft */
     for(int k=1;k<3;k++){ int i=g_veh_o[k]; if(i>=0){ g_wobj[i].alive=0; g_wobj[i].dirty=WOBJ_DIRTY_DESTROYED; } }
     wobj_t*c=&g_wobj[ci]; c->obj_n=415; c->tile=(uint16_t)basetile(415); c->qty=0;
     if(c->dirty!=WOBJ_DIRTY_DROPPED) c->dirty=WOBJ_DIRTY_STATE;
     g_veh_kind=415; g_veh_o[1]=g_veh_o[2]=-1;
-    build_blocked(); (void)g_tmpdm_invalidate();
+    build_blocked();
+    if(w){ static const int TX[4]={0,0,1,-1}, TY[4]={-1,1,0,0}; int M=U6_SURFACE_TILES-1;   /* the raft is tossed out from the centre: N, S, E, W (§2) */
+        for(int k=0;k<4;k++){ int nx=((int)c->x+TX[k])&M, ny=((int)c->y+TY[k])&M;
+            if(veh_can_enter(w,nx,ny,0) && npc_at(w,nx,ny)<0){ moved_register(ci); c->x=(uint16_t)nx; c->y=(uint16_t)ny;
+                w->px=(uint16_t)nx; w->py=(uint16_t)ny; build_blocked(); break; } } }
+    (void)g_tmpdm_invalidate();
     msgcat(0,"Ship broke!");
 }
 /* an enemy's attack on the party aboard a ship (§2): hit roll against the ship's dexterity 30,
@@ -6624,37 +6644,118 @@ static void dunguse_tick(const world_t*w)
             equip_refold(a); msgcat(0,"A torch burned out."); } }
     if(g_keg_timer>0 && --g_keg_timer==0) keg_explode_all(w);
 }
+/* ---- A)ttack (combat.md §6b): the crosshair, the shot and what it lands on ---------------------- */
+static int attack_range(void){ return ship_aboard()?weapon_range(412):weapon_range(g_avatar_weapon); }
+/* the crosshair walks a step, within the weapon's range and the view; returns 1 if it moved */
+static int attack_cursor_move(int dx,int dy){
+    int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy, ax=nx<0?-nx:nx, ay=ny<0?-ny:ny, d=ax>ay?ax:ay;
+    if(d>attack_range() || d>VT/2) return 0;
+    g_tcur_dx=nx; g_tcur_dy=ny; return 1; }
+static void arm_attack(void){ g_pending_verb='A'; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; }
+/* a broken container (§3b): its contents lie where it stood and the save follows at once — the children's
+ * records go on the map, whatever still hangs under it (a fired trap) loses its record, then the holder's
+ * own record (childless now) is deleted; the live object is forgotten like a temporary one */
+static int objects_reconcile(const world_t *w);
+static int is_temp_obj(int i); static int rec_locate(int i,int32_t*cpos,int*k,int depth); static int msg_tail(void); static void moved_forget(int i);   /* (defined below) */
+static void obj_break_persist(const world_t*w,int oi){
+    wobj_t*o=&g_wobj[oi]; int hx=o->x, hy=o->y, lv=w->level; int32_t cpos=0; int k=-1, have=0;
+    if(!is_temp_obj(oi)){ (void)objects_reconcile(w); have=rec_locate(oi,&cpos,&k,0); }
+    { int n=msg_tail(); (void)spill_container(oi,&n); }
+    for(int j=0;j<g_ow.nobjs;j++){ wobj_t*c=&g_wobj[j];
+        if(c->origin!=(uint16_t)oi || !c->alive) continue;                       /* spilled from this holder */
+        c->origin=WOBJ_PARENT_NONE; if(is_temp_obj(j)) continue;
+        if(have){ int ck=sav_find_child(g_savetmpl,g_savetmpl_len,cpos,k,c->obj_n,is_stackable(c->obj_n)?-1:c->quality);
+            if(ck>=0) sav_spill_k(g_savetmpl,cpos,ck,hx,hy,lv); }
+        c->dirty=WOBJ_DIRTY_STATE; }
+    for(int j=0;j<g_ow.nobjs;j++){ wobj_t*c=&g_wobj[j]; if(c->alive || c->parent!=(uint16_t)oi) continue;   /* a fired trap */
+        if(have && !is_temp_obj(j)){ int ck=sav_find_child(g_savetmpl,g_savetmpl_len,cpos,k,c->obj_n,-1);
+            if(ck>=0){ int32_t nn=sav_delete_at(g_savetmpl,g_savetmpl_len,cpos,ck); if(nn>0){ g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(g_savetmpl,nn); } } }
+        c->parent=WOBJ_PARENT_NONE; c->dirty=0; g_wtemp[j>>3]|=(uint8_t)(1u<<(j&7)); }
+    if(have){ int32_t nn=sav_delete_at(g_savetmpl,g_savetmpl_len,cpos,k); if(nn>0){ g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(g_savetmpl,nn); } }
+    moved_forget(oi); o->alive=0; o->dirty=0; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; g_wtemp[oi>>3]|=(uint8_t)(1u<<(oi&7));
+    build_blocked();
+}
+/* an attack lands on an OBJECT (the reference's object branch of actor_hit; §3b): a non-stackable object with
+ * a count breaks when the count is at most the weapon's damage — its trap fires on the attacker, its contents
+ * spill, a mirror cracks and costs karma — else the count drops; magically locked doors and open chests are
+ * proof; stackables and countless objects take nothing. Returns 1 if anything happened. */
+static int obj_hit(const world_t*w,int oi,int dmg){
+    wobj_t*o=&g_wobj[oi]; int on=o->obj_n, fr=(int)o->tile-basetile(on);
+    char nm[24]; obj_name(o->tile,nm,sizeof nm); if(!nm[0]){ nm[0]='i'; nm[1]='t'; nm[2]=0; }
+    if(on==366){ int n=msg_tail(); msgcat(n,"Tangle vine killed!"); return 1; }
+    if(is_stackable(on) || o->qty==0) return 0;
+    if(on>=297&&on<=300 && fr>=12) return 0;
+    if(on==98 && fr==3) return 0;
+    if((int)o->qty>dmg){ o->qty=(uint16_t)(o->qty-dmg); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; return 1; }
+    { int n=msg_tail(); n=msgcat(n,nm); msgcat(n," broken!"); }
+    if(trap_child(oi)>=0) trap_fire(oi);
+    if(on==123){ o->tile=(uint16_t)(basetile(123)+2); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE;   /* a mirror cracks */
+        g_cg.karma=(int16_t)(g_cg.karma>10?g_cg.karma-10:0); return 1; }
+    obj_break_persist(w,oi);
+    return 1;
+}
+/* A)ttack at the tile (dx,dy) from the Avatar: the crosshair's choice, or a click (§6b). Aboard a ship the
+ * cannons are the weapon (cannons.md §1). Melee strikes the tile; a missile weapon, or any target beyond
+ * reach, shoots: the hit roll first, a miss at a foe scatters the aim a tile, then the missile flies the line
+ * and lands where a missile boundary stops it, else on the aimed tile — whoever or whatever is there takes
+ * the blow (an object always; a foe met by scattered aim gets a second roll). Returns 1 = a turn spent. */
 static int do_attack(world_t*w,int dx,int dy)
 {
-    if(!dx && !dy) return 0;
-    if(g_veh_kind==412) return ship_fire(w,dx,dy);          /* aboard a ship: the cannons (cannons.md §1) */
-    int wobj=g_avatar_weapon, range=weapon_range(wobj), wmax=weapon_dmg(wobj);
-    if(wmax<=0) wmax=4;                                   /* unarmed fallback */
-    int id=-1, tx=(int)w->px, ty=(int)w->py;
-    for(int r=1;r<=range;r++){                            /* first actor along the line (§6) */
-        tx=(int)((w->px+dx*r)&(U6_SURFACE_TILES-1)); ty=(int)((w->py+dy*r)&(U6_SURFACE_TILES-1));
-        id=npc_at(w,tx,ty); if(id>=0) break;
-        if(sight_blocked_at(w,tx,ty)){ id=-1; break; }    /* arrow stops at a wall */
+    int M=U6_SURFACE_TILES-1, ship=(g_veh_kind==412);
+    int wobj=ship?412:g_avatar_weapon, range=weapon_range(wobj), wmax=weapon_dmg(wobj), mis=weapon_missile(wobj);
+    if(wmax<=0) wmax=4;                                           /* unarmed */
+    int ax=dx<0?-dx:dx, ay=dy<0?-dy:dy, dist=ax>ay?ax:ay;
+    if(dist==0) return 0;
+    if(dist>range){ msgcat(0,"Out of range!"); return 0; }
+    int tx=((int)w->px+dx)&M, ty=((int)w->py+dy)&M;
+    int ranged=(wobj!=40 && wobj!=47) && (dist>1 || mis);          /* the morning star and halberd reach, never shoot */
+    int id=npc_at(w,tx,ty), oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
+    { char nm[24]; nm[0]=0;                                        /* what the crosshair rests on */
+      if(id>=0) obj_name(npc_tile(id),nm,sizeof nm); else if(oi>=0) obj_name(g_wobj[oi].tile,nm,sizeof nm); else obj_name(world_tile(w,tx,ty),nm,sizeof nm);
+      int n=msgcat(0,nm[0]?nm:"nothing"); msgcat(n,"."); }
+    int atk=ship?30:status_hit_role(1,g_adex[1]?g_adex[1]:15);
+    int hit=(id>=0) ? combat_hit(atk,g_adex[id]?g_adex[id]:15,&g_crng) : (oi>=0);
+    if(ranged){
+        if(!hit && id>=0){ tx=(tx+(int)rng_range(&g_crng,3)-1)&M; ty=(ty+(int)rng_range(&g_crng,3)-1)&M; }   /* a miss lands beside */
+        int sx=(int)w->px, sy=(int)w->py, fx=sx, fy=sy;
+        { int ddx=tx-sx, ddy=ty-sy; if(ddx>512) ddx-=1024; if(ddx<-512) ddx+=1024; if(ddy>512) ddy-=1024; if(ddy<-512) ddy+=1024;
+          int adx=ddx<0?-ddx:ddx, ady=ddy<0?-ddy:ddy, stx=ddx<0?-1:1, sty=ddy<0?-1:1, err=adx-ady, cx=sx, cy=sy, steps=0;
+          while(cx!=tx || cy!=ty){ int e2=2*err; if(e2>-ady){ err-=ady; cx=(cx+stx)&M; } if(e2<adx){ err+=adx; cy=(cy+sty)&M; }
+              steps++; if(steps>16) break;
+              fx=cx; fy=cy;
+              if(missile_boundary_at(w,cx,cy)) break;                      /* it stops at the boundary tile */
+              if(mis) fx_show(w,cx,cy,mis,2); }
+          g_fx_last_dist=steps; }
+        if(wobj==412) fx_show(w,fx,fy,TILE_EXPLOSION,6);                   /* the cannonball bursts where it lands */
+        if(mis) fx_clear(w);
+        tx=fx; ty=fy;
+        id=npc_at(w,tx,ty); oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
+        if(!hit) hit=(id>=0) ? combat_hit(atk,g_adex[id]?g_adex[id]:15,&g_crng) : (oi>=0);
     }
-    if(id<0){ msgcat(0, range>1?"No target in range.":"Nobody to attack there."); return 1; }
-    g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1;       /* striking it makes it fight back (CB2); a struck coward turns to ASSAULT; a struck foe knows where you are */
-    char nm[24]; obj_name(npc_tile(id),nm,sizeof nm);
-    if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
-    int atk=g_adex[1]?g_adex[1]:15, fdex=g_adex[id]?g_adex[id]:15;
-    if(!combat_hit(status_hit_role(1,atk),fdex,&g_crng)){ /* §2 hit check; curse penalises the Avatar (§5b) */
-        int n=msgcat(0,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return 1; }
-    int dmg=status_dmg(id,combat_damage(wmax,g_aac[id],&g_crng));  /* weapon vs armour, then Protection (§5b) */
-    if(dmg<=0){ int n=msgcat(0,nm); n=msgcat(n," grazed."); return 1; }
-    int hp=g_ahp[id]?g_ahp[id]:30;
-    if(dmg>=hp){                                          /* killed */
-        g_ahp[id]=0; g_atile[id]=0xffff;                 /* remove from world (actor_pos skips) */
-        int gain=kill_exp(id,dmg);                       /* §3 exp-award table */
-        int n=msgcat(0,"Killed "); n=msgcat(n,nm); n=msgcat(n,"! +"); n=msgcat_int(n,gain); msgcat(n,"exp");
-        grant_exp(1,gain);   /* the Avatar's kill; gated by training */
-    } else {
-        g_ahp[id]=(uint8_t)(hp-dmg);
-        int n=msgcat(0,"Hit "); n=msgcat(n,nm); n=msgcat(n,"!");
-        if(check_flee(id)) msgcat(n," It flees!");    /* CB4: wounded below 1/4 HP -> flees */
+    if(id>=0){
+        char nm[24]; obj_name(npc_tile(id),nm,sizeof nm); if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
+        if(!hit){ int n=msg_tail(); n=msgcat(n,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return 1; }
+        int dmg=status_dmg(id,combat_damage(wmax,g_aac[id],&g_crng));  /* weapon vs armour, then Protection (§5b) */
+        if(ship){ cannon_damage_actor(id,dmg,"Hit ","Killed "); return 1; }   /* the vehicle is the slayer: no experience */
+        g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1;       /* striking it makes it fight back (CB2); a struck coward turns to ASSAULT; a struck foe knows where you are */
+        if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); return 1; }
+        int hp=g_ahp[id]?g_ahp[id]:30;
+        if(dmg>=hp){                                          /* killed */
+            g_ahp[id]=0; g_atile[id]=0xffff;                 /* remove from world (actor_pos skips) */
+            int gain=kill_exp(id,dmg);                       /* §3 exp-award table */
+            int n=msg_tail(); n=msgcat(n,"Killed "); n=msgcat(n,nm); n=msgcat(n,"! +"); n=msgcat_int(n,gain); msgcat(n,"exp");
+            grant_exp(1,gain);   /* the Avatar's kill; gated by training */
+        } else {
+            g_ahp[id]=(uint8_t)(hp-dmg);
+            int n=msg_tail(); n=msgcat(n,"Hit "); n=msgcat(n,nm); msgcat(n,"!");
+            if(check_flee(id)) msgcat(n," It flees!");    /* CB4: wounded below 1/4 HP -> flees */
+        }
+        return 1;
+    }
+    if(oi>=0){
+        int hs=other_ship_centre_at(tx,ty);                   /* another ship's centre: its hull (cannons.md §2) */
+        if(hs>=0){ int n=msg_tail(); msgcat(n, ship_obj_hull_hit(hs,combat_damage(wmax,0,&g_crng))?"Ship broke!":"The ship is hit!"); return 1; }
+        (void)obj_hit(w,oi,wmax); return 1;
     }
     return 1;
 }
@@ -7832,26 +7933,131 @@ static int map_click_delta(int lx,int ly,int *dx,int *dy)
  * (SAVE.000) we loaded at startup. We model the avatar's position here (objlist
  * actor 1); other regions are preserved from the template. Big-endian-safe — the
  * save writer encodes every multi-byte field byte-wise (engine/save.c). */
-/* R)est: camp for ~6 game-hours; the party's HP + magic points are restored to
- * max and NPCs re-place to their now-current schedule. (U6 Rest/camp — no random
- * encounter yet.) Returns 1 (recompose). */
+/* ---- R)est: camping (docs/rules/rest.md) ------------------------------------------------------ */
+static int      g_rest_turns;            /* rest turns (ten game minutes each) left to sleep */
+static int      g_rest_stage;            /* the prompt: 1 = "How many hours?", 2 = "Who will guard?" */
+static int      g_rest_hours, g_rest_guard;   /* the answers (guard = party index, -1 = none) */
+static char     g_rest_buf[4]; static int g_rest_len;
+static int      g_rest_fire=-1;          /* the campfire's object index */
+static int      g_rest_fed, g_rest_meal; /* members that had food; the mealtime line to print next */
+static uint32_t g_rest_tick;             /* 200 Hz stamp of the last rest turn */
+static uint16_t g_rest_base[8]; static uint8_t g_rest_tpd[8], g_rest_slept[8];   /* shapes to restore; who slept */
+#define REST_TURN_TICKS 25               /* one rest turn per 1/8 s: eight hours pass in six seconds */
+/* a town: a MAP tile within 5 of (x,y) with the Wall flag and a wall-direction bit (rest.md §1) */
+static int rest_in_town_at(const world_t*w,int x,int y)
+{   for(int dy=-5;dy<=5;dy++) for(int dx=-5;dx<=5;dx++){ int t=world_tile(w,x+dx,y+dy);
+        if((g_tflags1[t]&0x04) && (g_tflags1[t]&0xf0)) return 1; }
+    return 0; }
+static const char* rest_refusal(const world_t*w)      /* the reason the party cannot camp here, or 0 */
+{   int px=(int)w->px, py=(int)w->py, M=U6_SURFACE_TILES-1;
+    if(g_combat_mode) return "-Not while in Combat!";
+    if(g_veh_horse>=0) return "-Dismount first!";
+    if(veh_aboard() && !ship_aboard()) return "-Can not be repaired!";
+    if(rest_in_town_at(w,px,py)) return "-Only in the wilderness!";
+    for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(is_party_member(i) || g_ainvis[i] || !actor_pos(i,&ax,&ay)) continue;
+        int cx=ax>px?ax-px:px-ax, cy=ay>py?ay-py:py-ay, d=cx>cy?cx:cy;
+        if(d<=24 && actor_hostile(i) && g_ahp[i]>0) return "-Not while foes are near!"; }
+    if(!veh_aboard()) for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(is_party_member(i) || !actor_pos(i,&ax,&ay)) continue;
+        int cx=ax>px?ax-px:px-ax, cy=ay>py?ay-py:py-ay; if(cx<=5 && cy<=5) return "-Not while others are near!"; }
+    if(!veh_aboard()) for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++)
+        if(!world_is_passable(w,(px+dx)&M,(py+dy)&M)) return "-Not enough room!";
+    return 0; }
+static const char* rest_prompt_text(void)
+{   static char s[32]; const char*p=g_rest_stage==2?"Who will guard? ":"How many hours? "; int n=0;
+    while(*p) s[n++]=*p++; for(int k=0;k<g_rest_len;k++) s[n++]=g_rest_buf[k]; s[n++]='_'; s[n]=0; return s; }
+/* the party lies down (sleepers show their body shape; the guard stands) or stands up again */
+static void rest_pose(int p,int a,int down)
+{   if(a==1){ g_avatar_ovr=down?(uint16_t)basetile(339):0; return; }
+    if(down){ int on=actor_objn(a), body=(on==362||on==363)?341:(g_atpd[a]==4?339:0); if(!body) return;
+        g_abase[a]=(uint16_t)basetile(body); g_atile[a]=g_abase[a]; g_atpd[a]=0; }
+    else { g_abase[a]=g_rest_base[p]; g_atpd[a]=g_rest_tpd[p]; g_atile[a]=g_abase[a]; } }
+/* the camp: a lit campfire on the Avatar's tile, the party in the ring around it (rest.md §3) */
+static void rest_start(world_t*w,int hours,int guard)
+{
+    static const int SX[8]={0,0,1,-1,1,-1,1,-1}, SY[8]={-1,1,0,0,-1,1,1,-1};   /* the ring by member index */
+    int fx=(int)w->px, fy=(int)w->py, M=U6_SURFACE_TILES-1, tx[8], ty[8], nt=0;
+    g_pending_verb=0; g_rest_stage=0;
+    g_rest_fire=temp_obj_new(253,1,fx,fy,0);
+    for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        int sx=(fx+SX[p])&M, sy=(fy+SY[p])&M, ok=0;
+        for(int k=0;k<9 && !ok;k++){ if(k){ sx=(fx+SX[k-1])&M; sy=(fy+SY[k-1])&M; }   /* my slot, else the first free ring tile */
+            int occ=npc_at(w,sx,sy); ok=world_is_passable(w,sx,sy) && (occ<0 || is_party_member(occ));   /* the party itself is being re-seated */
+            for(int j=0;j<nt && ok;j++) if(tx[j]==sx && ty[j]==sy) ok=0; }
+        if(!ok){ sx=fx; sy=fy; }
+        tx[nt]=sx; ty[nt]=sy; nt++;
+        if(a==1){ w->px=(uint16_t)sx; w->py=(uint16_t)sy; } else { g_actx[a]=(uint16_t)sx; g_acty[a]=(uint16_t)sy; g_actz[a]=(uint8_t)w->level; }
+        { int dx=fx-sx, dy=fy-sy; g_facing[a]=(uint8_t)(dy<0?0:dy>0?2:dx>0?1:3); g_amoved[a]=0; }   /* everyone faces the fire */
+        g_rest_base[p]=g_abase[a]; g_rest_tpd[p]=g_atpd[a]; g_rest_slept[p]=0; }
+    build_blocked();
+    g_resting=1; g_rest_turns=hours*6; g_rest_guard=guard; g_rest_fed=0; g_rest_meal=0; g_rest_tick=plat_ticks_200hz();
+}
+/* waking (rest.md §4): the fire goes out; the fed sleepers heal if the rest counter allows; everyone stands up */
+static void rest_finish(world_t*w)
+{
+    if(g_rest_fire>=0 && g_rest_fire<g_ow.nobjs && g_wobj[g_rest_fire].obj_n==253) g_wobj[g_rest_fire].tile=(uint16_t)basetile(253);
+    int can_heal=(g_rest_counter==0), n=0; g_msg[0]=0;
+    for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        if(can_heal && g_rest_slept[p] && p<g_rest_fed){
+            int mx=g_amaxhp[a]?g_amaxhp[a]:30, d=mx-(int)g_ahp[a];
+            if(d>0){ if(d==1) d=2; int h=(int)g_ahp[a]+(int)rng_range(&g_crng,(uint32_t)(d/2))+d/2; if(h>mx) h=mx; g_ahp[a]=(uint8_t)h;
+                n=msgcat(n,g_party[p].name); n=msgcat(n," has healed. "); } }
+        rest_pose(p,a,0); }
+    if(can_heal) g_rest_counter=12;
+    sync_party_hp(); g_resting=0; g_rest_turns=0; build_blocked(); (void)w;
+}
+/* one rest turn: a mealtime line, the sleep lines, then an hour's worth of world turns six at a time */
+static void rest_tick(world_t*w)
+{
+    if(!g_resting) return;
+    if(g_rest_meal==0){ int n=msgcat(0,"Mealtime!");                                       /* a bard plays */
+        for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a>1 && actor_objn(a)==386){ g_abase[a]=(uint16_t)basetile(392); g_atile[a]=g_abase[a];
+            n=msgcat(n," "); n=msgcat(n,g_party[p].name); n=msgcat(n," plays a tune."); break; } }
+        g_rest_meal++; return; }
+    if(g_rest_meal<=g_nparty){ int p=g_rest_meal-1, a=g_party[p].actor, k=-1;                  /* each member eats */
+        for(int i=0;i<g_ow.ninv;i++) if(is_food_objn(g_ow.inv[i].obj_n)==1){ k=i; break; }
+        int n=msgcat(0,g_party[p].name);
+        if(k>=0){ objworld_consume(&g_ow,g_ow.inv[k].obj_n,1); msgcat(n," has food."); g_rest_fed++;
+            if(a>=1 && a<U6_MAX_ACTORS){ int f=g_afood[a]+40; g_afood[a]=(uint8_t)(f>FOOD_MAX?FOOD_MAX:f); } }
+        else msgcat(n," has no food.");
+        g_rest_meal++; return; }
+    if(g_rest_meal==g_nparty+1){ g_msg[0]=0;                                                 /* the sleep */
+        for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+            if(a>1 && actor_objn(a)==386){ g_abase[a]=g_rest_base[p]; g_atile[a]=g_abase[a]; }   /* the lute is put away */
+            if(p==g_rest_guard){ int n=msgcat(0,g_party[p].name); msgcat(n," stands guard while the party rests."); }
+            else { g_rest_slept[p]=1; rest_pose(p,a,1); } }
+        g_rest_meal++; return; }
+    w->clock+=10; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w);               /* the night passes */
+    if(--g_rest_turns<=0) rest_finish(w);
+}
+/* the prompts (rest.md §2): digits, Backspace, Enter commits, Esc cancels; returns 1 (consumed) */
+static int rest_key(world_t*w,int a)
+{
+    if(!g_rest_stage) return 0;                                                   /* no prompt armed */
+    if(a>='0'&&a<='9'){ if(g_rest_len<2){ g_rest_buf[g_rest_len++]=(char)a; g_rest_buf[g_rest_len]=0; } return 1; }
+    if(a==0x08){ if(g_rest_len) g_rest_buf[--g_rest_len]=0; return 1; }
+    if(a==0x1b){ g_pending_verb=0; g_rest_stage=0; g_msg[0]=0; return 1; }
+    if(a!=0x0d) return 1;
+    int v=0; for(int k=0;k<g_rest_len;k++) v=v*10+(g_rest_buf[k]-'0');
+    if(g_rest_stage==1){
+        if(v==0){ g_pending_verb=0; g_rest_stage=0; return 1; }                   /* 0 / nothing: never mind */
+        g_rest_hours=v;
+        if(g_nparty>1){ g_rest_stage=2; g_rest_len=0; g_rest_buf[0]=0; return 1; }
+        rest_start(w,g_rest_hours,-1); return 1; }
+    { int g=(v>=1 && v<=g_nparty)?v-1:-1; int n=msgcat(0,"Who will guard? "); msgcat(n,g<0?"none":g_party[g].name);
+      rest_start(w,g_rest_hours,g); }
+    return 1;
+}
+/* R)est (the key and the command-bar icon): the refusals, a ship's repair (cannons.md §2), else the prompts */
 static int do_rest(world_t *w)
 {
-    if(veh_aboard()){                                       /* cannons.md §2: resting aboard a ship repairs the hull */
-        if(g_veh_kind!=412){ msgcat(0,"Can not be repaired!"); return 1; }
+    if(g_resting) return 0;
+    { const char*r=rest_refusal(w); if(r){ int n=msgcat(0,"Rest"); msgcat(n,r); return 1; } }
+    if(ship_aboard()){                                      /* cannons.md §2: resting aboard a ship repairs the hull */
         wobj_t*c=&g_wobj[g_veh_o[0]]; int h=(int)c->qty+5; if(h>100) h=100; c->qty=(uint16_t)h;
         if(c->dirty!=WOBJ_DIRTY_DROPPED) c->dirty=WOBJ_DIRTY_STATE;
         w->clock += 5; g_hour=clock_hour(w); g_minutes=clock_minutes(w);
         int n=msgcat(0,"Hull Strength: "); n=msgcat_int(n,h); msgcat(n,"%"); return 1; }
-    w->clock += 6*60;                                   /* advance 6 game-hours */
-    g_hour=clock_hour(w); g_minutes=clock_minutes(w);
-    init_npcs();                                        /* re-seed NPCs at their new scheduled spots */
-    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor;
-        if(a>=0 && a<U6_MAX_ACTORS){
-            if(g_amaxhp[a]) g_ahp[a]=g_amaxhp[a];
-            g_amana[a]=g_amaxmana[a]; } }
-    sync_party_hp();
-    msgcat(0,"Thou campest. Rested, thy powers are restored.");
+    g_pending_verb='R'; g_rest_stage=1; g_rest_len=0; g_rest_buf[0]=0; g_rest_hours=0; g_rest_guard=-1; msgcat(0,"Rest");
     return 1;
 }
 /* Reconcile the CURRENT level's object changes + the party's readied gear into the save template
@@ -8048,6 +8254,7 @@ static int do_save(const world_t *w)
     sav_set_keg_timer(d, off, g_keg_timer);                                      /* a burning fuse (usecode_use.md) */
     sav_set_timer(d, off, 13, g_storm);                                          /* the storm cloak's magical storm (equipment.md §8) */
     sav_set_timer(d, off, 1, g_infravision); sav_set_timer(d, off, 14, g_time_stop); sav_set_timer(d, off, 15, g_eclipse);   /* §5f */
+    sav_set_rest_counter(d, off, g_rest_counter);                                /* hours until resting heals again (rest.md §4) */
     sav_set_vanish(d, off, g_vanish_obj ? (g_vanish_obj | ((int)g_vanish_frame << 10)) : 0);   /* the vanished object: obj_n | frame<<10 (objlist.md) */
     if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma);  /* created-avatar identity */
     { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
@@ -8356,6 +8563,7 @@ static int load_game(world_t *w)
     g_keg_timer = (uint8_t)(sav_get_keg_timer(d, ol) & 0xff); g_keg_carried = 0;    /* the keg fuse */
     g_storm = (uint8_t)sav_get_timer(d, ol, 13);                                    /* the magical storm (timer 13) */
     g_infravision = (uint8_t)sav_get_timer(d, ol, 1); g_time_stop = (uint8_t)sav_get_timer(d, ol, 14); g_eclipse = (uint8_t)sav_get_timer(d, ol, 15);
+    g_rest_counter = (uint8_t)sav_get_rest_counter(d, ol); g_rest_hr = -1;        /* the rest counter (rest.md §4) */
     { int v = sav_get_vanish(d, ol); g_vanish_obj = (uint16_t)(v & 1023); g_vanish_frame = (uint8_t)(v >> 10); }   /* obj_n | frame<<10 (objlist.md) */
     g_armageddon = 0;
     for(int i = 0; i < U6_MAX_ACTORS; i++) g_torch_fuel[i] = 0;                 /* relit below from the readied records */
@@ -10504,8 +10712,130 @@ int main(int argc, char **argv)
                 int ok=load_game(&w); dbg_num("FX loaded=", ok); dbg_num("FX keg carried after load=", g_keg_carried); dbg_num("FX keg timer after load=", g_keg_timer);
                 if(e>=0){ int again=-1; for(int k=0;k<g_neggs;k++) if(g_eggs[k].rec==g_eggs[e].rec){ again=k; break; } dbg_num("FX egg chance after load=", again>=0?g_eggs[again].chance:99); }
             }
+            if(mode=='7'){   /* the eclipse (magic_skills.md §5f, lighting.md §2b, usecode_use.md NPC torches) */
+                int first=-1; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(is_party_member(i)||!actor_pos(i,&ax,&ay)) continue; if(has_readied(i,90)){ first=i; break; } }
+                if(first<0){ int bd=1<<30; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(is_party_member(i)||!actor_pos(i,&ax,&ay)) continue;   /* hand the nearest NPC one */
+                        int cx=ax-(int)w.px, cy=ay-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; first=i; } }
+                    if(first>=0) (void)equip_ready(g_aready[first],90); }
+                dbg_num("FX npc with a torch=", first<0?0:first); dbg_num("FX its level=", first<0?99:g_actz[first]);
+                g_start_min=12*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); dbg_num("FX hour=", g_hour);
+                int day,mo,yr; cur_date(&w,&day,&mo,&yr); int mt[2],mp[2]; dbg_num("FX day=", day);
+                dbg_num("FX sun tile at noon=", sky_sun_tile(g_hour)); dbg_num("FX moons drawn at noon=", sky_moons(day,g_hour,mt,mp)); dbg_num("FX a moon is up=", moon_visible(day,g_hour));
+                g_torch_hour=-1; npc_torches_update(&w); dbg_num("FX npc torch out by day=", first>=0 && g_torch_fuel[first]==0);
+                uint8_t lt[VT*VT]; compute_light(&w,lt,0); int l0=lt[0];
+                g_free_cast=1; (void)cast_spell(&w,1,magic_find("Eclipse"),0,0); g_free_cast=0;
+                Cconws("FX msg: "); Cconws(g_msg); Cconws("\r\n"); dbg_num("FX eclipse timer=", g_eclipse);
+                dbg_num("FX sun tile eclipsed=", sky_sun_tile(g_hour)); dbg_num("FX moons hidden=", sky_moons(day,g_hour,mt,mp)==0);
+                compute_light(&w,lt,0); dbg_num("FX corner light before=", l0); dbg_num("FX corner light in eclipse=", lt[0]);
+                dbg_num("FX torch untouched mid-hour=", first>=0 && g_torch_fuel[first]==0);
+                g_torch_hour=-1; npc_torches_update(&w); dbg_num("FX npc torch lit on the hour=", first>=0 && g_torch_fuel[first]==255);   /* the hour tick during the eclipse */
+                for(int t=0;t<20;t++) step_npcs(&w); dbg_num("FX eclipse over after 20 turns=", g_eclipse==0);
+                dbg_num("FX torch still lit until the hour=", first>=0 && g_torch_fuel[first]==255); dbg_num("FX sun tile back=", sky_sun_tile(g_hour));
+                w.clock=60; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); dbg_num("FX hour=", g_hour); dbg_num("FX torch out at the next hour=", first>=0 && g_torch_fuel[first]==0);
+                g_cur_level=1; dbg_num("FX cave strip underground=", g_cur_level!=0 && g_cur_level!=5); g_cur_level=w.level;
+                w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); g_eclipse=20; g_torch_hour=-1; npc_torches_update(&w);   /* leave the eclipse running at noon for the capture */
+            }
             #undef FX_READY
             #undef FX_SLOT
+        }
+    }
+    /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
+    {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)plat_load_file("REST.REQ",1,&rl2_);
+        if(rr && rl2_>0){ int mode=rr[0], M=U6_SURFACE_TILES-1; rng_seed(&g_crng,0x7e57u);
+            #define RS_MSG(L) do { Cconws(L); Cconws(g_msg); Cconws("\r\n"); } while(0)
+            #define RS_FOES() do { int px_=(int)w.px, py_=(int)w.py, n_=0; for(int i_=2;i_<U6_MAX_ACTORS;i_++){ int ax_,ay_; if(is_party_member(i_)||g_ainvis[i_]||!actor_pos(i_,&ax_,&ay_)) continue; \
+                int cx_=ax_>px_?ax_-px_:px_-ax_, cy_=ay_>py_?ay_-py_:py_-ay_, d_=cx_>cy_?cx_:cy_; if(d_<=24 && actor_hostile(i_) && g_ahp[i_]>0){ if(n_<3){ dbg_num("RS  foe id=", i_); dbg_num("RS  foe objn=", actor_objn(i_)); dbg_num("RS  foe dist=", d_); dbg_num("RS  foe hostile/align=", g_hostile[i_]*10+g_align_hostile[i_]); } n_++; } } \
+                dbg_num("RS foes within 24=", n_); } while(0)
+            #define RS_CLEAR_HATCHED() do { int n_=0; for(int i_=160;i_<U6_MAX_ACTORS;i_++) if(g_temp[i_] && g_atile[i_]!=0xffff){ g_atile[i_]=0xffff; n_++; } dbg_num("RS egg hatchlings cleared=", n_); } while(0)
+            int ox=-1,oy=-1;                                   /* the first open tile outward from the canonical start */
+            for(int r=1;r<200 && ox<0;r++) for(int dy=-r;dy<=r && ox<0;dy++) for(int dx=-r;dx<=r;dx++){
+                if(dx!=-r && dx!=r && dy!=-r && dy!=r) continue;
+                int x=(307+dx)&M, y=(352+dy)&M, ok;
+                { uint16_t px0=w.px, py0=w.py; w.px=(uint16_t)x; w.py=(uint16_t)y; ok=world_is_passable(&w,x,y) && !rest_refusal(&w); w.px=px0; w.py=py0; }   /* campable there */
+                if(ok){ ox=x; oy=y; break; } }
+            dbg_num("RS open tile x=", ox); dbg_num("RS open tile y=", oy);
+            { uint16_t px0=w.px, py0=w.py; w.px=(uint16_t)ox; w.py=(uint16_t)oy; const char*r0=rest_refusal(&w); Cconws("RS refusal at open (virtual): "); Cconws(r0?r0:"none"); Cconws("\r\n"); RS_FOES(); w.px=px0; w.py=py0; }
+            if(mode=='1'){
+                (void)do_rest(&w); RS_MSG("RS castle: ");
+                g_combat_mode=1; (void)do_rest(&w); RS_MSG("RS combat: "); g_combat_mode=0;
+                teleport_party(&w,ox,oy); build_blocked(); dbg_num("RS in town there=", rest_in_town_at(&w,ox,oy));
+                RS_FOES(); RS_CLEAR_HATCHED();                                            /* an egg by the road hatches gargoyles on arrival: not the camp's business */
+                { const char*r0=rest_refusal(&w); Cconws("RS refusal after teleport: "); Cconws(r0?r0:"none"); Cconws("\r\n"); }
+                int f=hatch_creature(&w,(ox+10)&M,oy,363,ALIGN_EVIL); if(f>=0){ g_actx[f]=(uint16_t)((ox+10)&M); g_acty[f]=(uint16_t)oy; g_actz[f]=0; }
+                dbg_num("RS foe hatched=", f>=0); (void)do_rest(&w); RS_MSG("RS foe 10 east: "); if(f>=0) g_atile[f]=0xffff;
+                int o2=hatch_creature(&w,(ox+3)&M,oy,349,0); if(o2>=0){ g_actx[o2]=(uint16_t)((ox+3)&M); g_acty[o2]=(uint16_t)oy; g_actz[o2]=0; g_hostile[o2]=0; g_align_hostile[o2]=0; }
+                dbg_num("RS dog hatched=", o2>=0); (void)do_rest(&w); RS_MSG("RS dog 3 east: "); RS_FOES(); if(o2>=0) g_atile[o2]=0xffff;
+                int bi=temp_obj_new(98,0,(ox+1)&M,oy,0); build_blocked(); dbg_num("RS chest beside=", bi>=0);
+                (void)do_rest(&w); RS_MSG("RS chest beside: "); if(bi>=0){ g_wobj[bi].alive=0; build_blocked(); }
+                (void)do_rest(&w); RS_MSG("RS open: "); dbg_num("RS hours prompt armed=", g_pending_verb=='R' && g_rest_stage==1);
+                Cconws("RS prompt: "); Cconws(rest_prompt_text()); Cconws("\r\n");
+                (void)rest_key(&w,0x1b); dbg_num("RS cancelled=", g_pending_verb==0 && !g_resting);
+            }
+            if(mode=='2'){
+                teleport_party(&w,ox,oy); build_blocked(); RS_CLEAR_HATCHED();
+                g_start_min=20*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); dbg_num("RS hour=", g_hour); dbg_num("RS party size=", g_nparty);
+                g_ahp[1]=1; for(int p=1;p<g_nparty;p++){ int a=g_party[p].actor; g_ahp[a]=(uint8_t)((g_amaxhp[a]?g_amaxhp[a]:30)/2); } sync_party_hp();
+                for(int k=0;k<g_ow.ninv;k++) if(is_food_objn(g_ow.inv[k].obj_n)==1){ g_ow.inv[k]=g_ow.inv[--g_ow.ninv]; k--; }   /* start with no food ... */
+                inv_add_objn(129,2); dbg_num("RS meat carried=", objworld_count(&g_ow,129));                                  /* ... then two portions of meat */
+                g_rest_counter=0;
+                (void)do_rest(&w); RS_MSG("RS rest: "); dbg_num("RS hours prompt=", g_pending_verb=='R' && g_rest_stage==1);
+                (void)rest_key(&w,'8'); (void)rest_key(&w,0x0d); dbg_num("RS guard prompt=", g_rest_stage==2);
+                (void)rest_key(&w,'2'); (void)rest_key(&w,0x0d); RS_MSG("RS guard: "); dbg_num("RS resting=", g_resting); dbg_num("RS turns=", g_rest_turns);
+                int fi=g_rest_fire; dbg_num("RS campfire lit=", fi>=0 && g_wobj[fi].obj_n==253 && (int)g_wobj[fi].tile-basetile(253)==1);
+                int fx=fi>=0?g_wobj[fi].x:0, fy=fi>=0?g_wobj[fi].y:0;
+                for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, ax=a==1?(int)w.px:g_actx[a], ay=a==1?(int)w.py:g_acty[a];
+                    dbg_num("RS member=", p); dbg_num("RS  dx+5=", ax-fx+5); dbg_num("RS  dy+5=", ay-fy+5); dbg_num("RS  facing=", g_facing[a]); }
+                while(g_resting && g_rest_meal<=g_nparty+1){ rest_tick(&w); RS_MSG("RS meal: "); }
+                dbg_num("RS fed=", g_rest_fed); dbg_num("RS meat left=", objworld_count(&g_ow,129));
+                dbg_num("RS avatar lies down=", g_avatar_ovr==(uint16_t)basetile(339)); dbg_num("RS guard stands=", g_abase[g_party[1].actor]==g_rest_base[1]);
+                int c0=(int)w.clock; uint32_t t0=plat_ticks_200hz(); while(g_resting) rest_tick(&w); dbg_num("RS hours passed=", ((int)w.clock-c0)/60); dbg_num("RS hour now=", g_hour);
+                dbg_num("RS ms per rest turn=", (int)((plat_ticks_200hz()-t0)*5/48));
+                RS_MSG("RS wake: ");
+                dbg_num("RS avatar hp=", g_ahp[1]); dbg_num("RS avatar healed=", g_ahp[1]>1);
+                { int ga=g_party[1].actor; dbg_num("RS guard hp=", g_ahp[ga]); dbg_num("RS guard unhealed (regen only)=", g_ahp[ga]<=(g_amaxhp[ga]?g_amaxhp[ga]:30)/2+3); }
+                if(g_nparty>2){ int a2=g_party[2].actor; dbg_num("RS unfed hp=", g_ahp[a2]); dbg_num("RS unfed member unhealed (regen only)=", g_ahp[a2]<=(g_amaxhp[a2]?g_amaxhp[a2]:30)/2+3); }
+                dbg_num("RS rest counter=", g_rest_counter); dbg_num("RS fire out=", fi>=0 && (int)g_wobj[fi].tile-basetile(253)==0);
+                dbg_num("RS avatar stands=", g_avatar_ovr==0);
+                if(fi>=0){ g_wobj[fi].alive=0; build_blocked(); }                            /* clear the burnt fire for a second camp */
+                g_ahp[1]=1; sync_party_hp(); inv_add_objn(129,2);
+                (void)do_rest(&w); RS_MSG("RS again: "); (void)rest_key(&w,'8'); (void)rest_key(&w,0x0d); (void)rest_key(&w,'0'); (void)rest_key(&w,0x0d); RS_MSG("RS guard2: ");
+                while(g_resting) rest_tick(&w); RS_MSG("RS wake2: "); dbg_num("RS avatar hp2=", g_ahp[1]); dbg_num("RS avatar unhealed (counter; regen only)=", g_ahp[1]<=4); dbg_num("RS counter after 8h=", g_rest_counter);
+                (void)do_save(&w); dbg_num("RS saved counter byte=", g_savetmpl[g_objlist_off+0x1bf2]);
+                g_rest_counter=0; dbg_num("RS load ok=", load_game(&w)); dbg_num("RS counter restored=", g_rest_counter);
+                for(int t=0;t<4*6;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); } dbg_num("RS counter after 4 more hours=", g_rest_counter);
+            }
+            if(mode=='3'){                                           /* the camp held, for a capture: night, the fire lit, the party asleep */
+                teleport_party(&w,ox,oy); build_blocked(); RS_CLEAR_HATCHED();
+                g_start_min=21*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+                inv_add_objn(129,4); (void)do_rest(&w); RS_MSG("RS rest: ");
+                (void)rest_key(&w,'8'); (void)rest_key(&w,0x0d); (void)rest_key(&w,'2'); (void)rest_key(&w,0x0d);
+                while(g_resting && g_rest_meal<=g_nparty+1) rest_tick(&w);
+                if(g_resting) g_rest_turns=30000; dbg_num("RS camp held=", g_resting);
+            }
+            if(mode=='4'){
+                { const uint8_t*t6=g_tileset+(int32_t)436*256; int tr=0; for(int k=0;k<256;k++) if(t6[k]==TILE_TRANSPARENT) tr++; dbg_num("RS border tile 436 transparent px=", tr);
+                  int tr2=0; for(int k=6*16;k<14*16;k++) if(t6[k]==TILE_TRANSPARENT) tr2++; dbg_num("RS  ... in the text rows 6-13=", tr2); }
+                { uint32_t t0=plat_ticks_200hz(); for(int t=0;t<12;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
+                  dbg_num("RS castle 08h ms per plain turn=", (int)((plat_ticks_200hz()-t0)*5/12)); w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); }
+                teleport_party(&w,ox,oy); build_blocked(); RS_CLEAR_HATCHED();      /* the same spot at night, no camp: a control frame */
+                { uint32_t t0=plat_ticks_200hz(); for(int t=0;t<12;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
+                  dbg_num("RS camp 08h ms per plain turn=", (int)((plat_ticks_200hz()-t0)*5/12)); }
+                g_start_min=21*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); dbg_num("RS night control hour=", g_hour);
+                { uint32_t t0=plat_ticks_200hz(); for(int t=0;t<12;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
+                  dbg_num("RS ms per plain turn (12)=", (int)((plat_ticks_200hz()-t0)*5/12));
+                  int nh=0, nt=0, na=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay)) continue; na++; if(g_temp[i]) nt++; if(actor_hostile(i)) nh++; }
+                  dbg_num("RS actors on level=", na); dbg_num("RS hatched=", nt); dbg_num("RS hostile=", nh);
+                  t0=plat_ticks_200hz(); for(int t=0;t<12;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
+                  dbg_num("RS ms per plain turn (next 12)=", (int)((plat_ticks_200hz()-t0)*5/12));
+                  for(int i=160;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) g_atile[i]=0xffff;
+                  t0=plat_ticks_200hz(); for(int t=0;t<12;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
+                  dbg_num("RS ms per plain turn (no hatchlings)=", (int)((plat_ticks_200hz()-t0)*5/12));
+                  w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); }
+                for(int t=0;t<20;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }   /* 20 passes with a static view: does the clock text pile up? */
+                dbg_num("RS passes drawn at hour=", g_hour); }
+            #undef RS_MSG
+            #undef RS_FOES
+            #undef RS_CLEAR_HATCHED
         }
     }
     /* headless ENDING capture (docs/design/ending.md §6): ENDING.REQ byte = the beat to hold ('1'..'9', 'a'..'i' = 10..18) */
@@ -10915,14 +11245,15 @@ int main(int argc, char **argv)
                 if(s>=0){ g_actx[s]=(uint16_t)((wx+3)&(U6_SURFACE_TILES-1)); g_acty[s]=(uint16_t)wy; g_ahp[s]=40; g_amaxhp[s]=40; g_aac[s]=0; }
                 dbg_num("CANNON foe=", s>=0);
                 int before=s>=0?g_ahp[s]:0, hits=0, shots=0;
-                while(s>=0 && shots<12 && g_ahp[s]==(uint8_t)before && g_atile[s]!=0xffff){ (void)do_attack(&w,1,0); shots++; }
+                while(s>=0 && shots<12 && g_ahp[s]==(uint8_t)before && g_atile[s]!=0xffff){ (void)do_attack(&w,3,0); shots++; }   /* aimed at its tile */
                 if(s>=0) hits=(g_atile[s]==0xffff || g_ahp[s]!=(uint8_t)before);
                 dbg_num("CANNON hit=", hits); dbg_num("CANNON shots=", shots); dbg_num("CANNON hp_before=", before);
                 dbg_num("CANNON hp_after=", s>=0?(g_atile[s]==0xffff?0:g_ahp[s]):0); dbg_num("CANNON dist_east=", g_fx_last_dist);
                 Cconws(g_msg); Cconws("\r\n");
-                (void)do_attack(&w,0,-1);                          /* north over open sea: full range */
+                (void)do_attack(&w,0,-5);                          /* aimed at the open sea 5 north: the ball flies there */
                 dbg_num("CANNON burst_north=", g_fx_last_dist);
                 Cconws(g_msg); Cconws("\r\n");
+                (void)do_attack(&w,6,0); dbg_num("CANNON out of range refused=", !strcmp(g_msg,"Out of range!"));
                 if(s>=0) g_atile[s]=0xffff;
                 g_fx_on=1; g_fx_tile=TILE_CANNONBALL; g_fx_x=(wx+2)&(U6_SURFACE_TILES-1); g_fx_y=wy;   /* held for the capture: a ball in flight */
             }
@@ -10937,9 +11268,15 @@ int main(int argc, char **argv)
                     if(s>=0){ g_actx[s]=601; g_acty[s]=118; g_astr[s]=25; dbg_num("HULL gargoyle melee max=", monster_melee_max(s)); }   /* creature table dmg 15 (eggs.md §4) */
                     int tries=0; while(s>=0 && g_wobj[ci].qty==100 && tries<40){ enemy_attack(s,1); tries++; }
                     dbg_num("HULL after=", (int)g_wobj[ci].qty); Cconws(g_msg); Cconws("\r\n");
-                    (void)do_rest(&w); dbg_num("HULL rest=", (int)g_wobj[ci].qty); Cconws(g_msg); Cconws("\r\n");
+                    { uint16_t gt=s>=0?g_atile[s]:0xffff; if(s>=0) g_atile[s]=0xffff;        /* the foe steps away: a rest with foes near is refused (rest.md §1) */
+                      (void)do_rest(&w); dbg_num("HULL rest=", (int)g_wobj[ci].qty); Cconws(g_msg); Cconws("\r\n");
+                      if(s>=0) g_atile[s]=gt; }
                     g_wobj[ci].qty=5; tries=0; while(s>=0 && g_veh_kind==412 && tries<60){ enemy_attack(s,1); tries++; }
-                    dbg_num("HULL broke=", g_veh_kind==415); dbg_num("HULL raft at centre=", wobj_boat_at(415,600,119)>=0);
+                    dbg_num("HULL broke=", g_veh_kind==415);
+                    { int ri=g_veh_o[0]; dbg_num("HULL raft dx+5=", (int)g_wobj[ri].x-600+5); dbg_num("HULL raft dy+5=", (int)g_wobj[ri].y-119+5);
+                      dbg_num("HULL raft tossed=", g_wobj[ri].x!=600 || g_wobj[ri].y!=119); dbg_num("HULL party on the raft=", w.px==g_wobj[ri].x && w.py==g_wobj[ri].y);
+                      dbg_num("HULL north tile was water=", tile_is_water(&w,600,118)); int no=objworld_at(&g_ow,600,118);
+                      dbg_num("HULL north tile object=", no>=0?g_wobj[no].obj_n:0); dbg_num("HULL north tile actor=", npc_at(&w,600,118)>=0); dbg_num("HULL north enterable=", veh_can_enter(&w,600,118,0)); }
                     int parts=0; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==412 && g_wobj[j].y==119 && g_wobj[j].x>=599 && g_wobj[j].x<=601) parts++;
                     dbg_num("HULL parts alive=", parts); Cconws(g_msg); Cconws("\r\n");
                     (void)do_rest(&w); Cconws(g_msg); Cconws("\r\n");            /* on the raft: "Can not be repaired!" */
@@ -10951,10 +11288,59 @@ int main(int argc, char **argv)
                                 for(int k=0;k<cnt && pos+8<=end;k++,pos+=8){ const uint8_t*r=g_savetmpl+pos;
                                     if(r[0]&0x18) continue;
                                     int rx=r[1]|((r[2]&3)<<8), ry=(r[2]>>2)|((r[3]&0x0f)<<6), ron=r[4]|((r[5]&3)<<8);
-                                    if(ry==119 && rx>=599 && rx<=601){ if(ron==412) r412++; if(ron==415) r415++; } } } } }
+                                    if(ry>=118 && ry<=120 && rx>=599 && rx<=601){ if(ron==412) r412++; if(ron==415) r415++; } } } } }
                     dbg_num("HULL saved raft=", r415); dbg_num("HULL saved parts=", r412);
                     dbg_num("HULL objlist ok=", g_objlist_off==sav_objlist_off(g_savetmpl,g_savetmpl_len));
                 }
+            }
+            if(mode=='4'){                                          /* A)ttack on objects, the crosshair, the data facts (combat.md §3b, §6b) */
+                int M=U6_SURFACE_TILES-1; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[1][sl]=0;   /* hands free for the two-handed bow */
+                (void)equip_ready(g_aready[1],41); equip_refold(1); dbg_num("CANNON bow readied=", g_avatar_weapon==41);
+                int tx=-1,ty=-1; for(int d=3;d<=5 && tx<0;d++){ int x=(w.px+d)&M, y=w.py; if(world_is_passable(&w,x,y) && npc_at(&w,x,y)<0 && objworld_at(&g_ow,x,y)<0 && !missile_boundary_at(&w,x,y)){ tx=x; ty=y; } }
+                int free_d=tx<0?0:((tx-(int)w.px)&M); dbg_num("CANNON free tile east at=", free_d);
+                if(tx>=0){
+                    int bi=temp_obj_new(186,0,tx,ty,0); g_wobj[bi].qty=1; build_blocked();               /* a barrel with a count of 1 */
+                    (void)do_attack(&w,free_d,0); Cconws("CANNON msg: "); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("CANNON barrel broken=", !g_wobj[bi].alive); dbg_num("CANNON arrow flew=", g_fx_last_dist);
+                    int ci=temp_obj_new(98,0,tx,ty,0); g_wobj[ci].qty=25; int gi=temp_obj_new(88,0,tx,ty,0); g_wobj[gi].alive=0; g_wobj[gi].parent=(uint16_t)ci; g_wobj[gi].qty=7; build_blocked();
+                    (void)do_attack(&w,free_d,0); dbg_num("CANNON chest count after one arrow=", (int)g_wobj[ci].qty);   /* 25 - 10 */
+                    (void)do_attack(&w,free_d,0); (void)do_attack(&w,free_d,0); Cconws("CANNON msg: "); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("CANNON chest broken=", !g_wobj[ci].alive); dbg_num("CANNON gold spilled=", g_wobj[gi].alive && g_wobj[gi].parent==WOBJ_PARENT_NONE && g_wobj[gi].x==tx);
+                    g_wobj[gi].alive=0; int ki=temp_obj_new(223,0,tx,ty,0); g_wobj[ki].qty=1; build_blocked();
+                    dbg_num("CANNON keg stackable=", is_stackable(223)); (void)do_attack(&w,free_d,0); Cconws("CANNON msg: "); Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("CANNON keg broken (countable, not stackable)=", !g_wobj[ki].alive); g_wobj[ki].alive=0;
+                    int di=temp_obj_new(297,12,tx,ty,0); g_wobj[di].qty=1; build_blocked();
+                    (void)do_attack(&w,free_d,0); dbg_num("CANNON magic door untouched=", g_wobj[di].alive && g_wobj[di].qty==1); g_wobj[di].alive=0; build_blocked();
+                    (void)do_attack(&w,6,0); dbg_num("CANNON bow out of range=", !strcmp(g_msg,"Out of range!")); }
+                arm_attack(); { int mv=0; for(int k=0;k<6;k++) mv+=attack_cursor_move(1,0); dbg_num("CANNON crosshair steps east (bow 5)=", mv); dbg_num("CANNON crosshair x=", g_tcur_dx); } g_pending_verb=0;
+                for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==41) g_aready[1][sl]=0; equip_refold(1);
+                arm_attack(); { int mv=0; for(int k=0;k<3;k++) mv+=attack_cursor_move(1,0); dbg_num("CANNON crosshair steps east (hands 1)=", mv); } g_pending_verb=0;
+                { int ne=0; for(int k=0;k<g_neggs;k++) for(int j=0;j<g_eggs[k].nemb;j++) if(g_emb[g_eggs[k].emb+j].obj_n==412) ne++; dbg_num("CANNON eggs hatching ships on this level=", ne);
+                  int nd=0, ndq=0, nb=0; for(int j=0;j<g_ow.nobjs;j++){ if(!g_wobj[j].alive) continue; int on=g_wobj[j].obj_n;
+                      if(on>=297&&on<=300){ nd++; if(g_wobj[j].qty) ndq++; } else if(!is_stackable(on) && g_wobj[j].qty && on!=412 && on!=335) nb++; }
+                  dbg_num("CANNON doors on level=", nd); dbg_num("CANNON doors with a count=", ndq); dbg_num("CANNON breakable objects on level=", nb); }
+                /* a REAL breakable object: struck with the hands until it breaks; its record and its contents' records follow */
+                { int best=-1, bd=1<<30;
+                  for(int pass=0;pass<2 && best<0;pass++) for(int j=0;j<g_ow.nobjs;j++){ wobj_t*o=&g_wobj[j]; if(!o->alive || is_temp_obj(j)) continue; int on=o->obj_n;
+                      if(is_stackable(on) || !o->qty || on==412 || on==335 || (on>=297&&on<=300) || on==98 || on==123 || on==221) continue;
+                      if(npc_at(&w,o->x,o->y)>=0 || objworld_at(&g_ow,o->x,o->y)!=j) continue;   /* nobody on it; it is the top object there */
+                      if(pass==0){ int has=0; for(int c=0;c<g_ow.nobjs;c++) if(!g_wobj[c].alive && g_wobj[c].parent==(uint16_t)j && g_wobj[c].obj_n!=337){ has=1; break; } if(!has) continue; }   /* first: one with contents */
+                      int cx=(int)o->x-(int)w.px, cy=(int)o->y-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int d=cx>cy?cx:cy; if(d<bd){ bd=d; best=j; } }
+                  dbg_num("CANNON real breakable found=", best>=0);
+                  if(best>=0){ wobj_t*o=&g_wobj[best]; int ox=o->x, oy=o->y, oon=o->obj_n, oq=o->quality; dbg_num("CANNON  obj=", oon); dbg_num("CANNON  count=", (int)o->qty);
+                      int nch=0, chon=-1; for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)best && g_wobj[j].obj_n!=337){ nch++; if(chon<0) chon=g_wobj[j].obj_n; } dbg_num("CANNON  children=", nch);
+                      int ax=-1,ay=-1; static const int DX8[8]={1,-1,0,0,1,-1,1,-1}, DY8[8]={0,0,1,-1,1,-1,-1,1};
+                      for(int k=0;k<8 && ax<0;k++){ int x=(ox+DX8[k])&M, y=(oy+DY8[k])&M; if(world_is_passable(&w,x,y) && npc_at(&w,x,y)<0) { ax=x; ay=y; } }
+                      dbg_num("CANNON  stood beside it=", ax>=0);
+                      if(ax>=0){ teleport_party(&w,ax,ay); build_blocked(); int32_t surf=sav_surface_off(g_savetmpl,g_savetmpl_len); int k0=-1;
+                          dbg_num("CANNON  template: its record before=", sav_locate_onmap(g_savetmpl,g_savetmpl_len,surf,w.level,ox,oy,oon,&k0)>=0);
+                          int strikes=0; while(g_wobj[best].alive && strikes<200){ (void)do_attack(&w,ox-(int)w.px,oy-(int)w.py); strikes++; }
+                          Cconws("CANNON msg: "); Cconws(g_msg); Cconws("\r\n"); dbg_num("CANNON  strikes=", strikes); dbg_num("CANNON  broken=", !g_wobj[best].alive);
+                          dbg_num("CANNON  template: its record after=", sav_locate_onmap(g_savetmpl,g_savetmpl_len,surf,w.level,ox,oy,oon,&k0)>=0);
+                          if(chon>=0){ int k1=-1; int32_t c1=sav_locate_onmap(g_savetmpl,g_savetmpl_len,surf,w.level,ox,oy,chon,&k1); dbg_num("CANNON  template: a child now on the map there=", c1>=0);
+                              if(c1>=0){ const uint8_t*r=g_savetmpl+c1+2+k1*8; dbg_num("CANNON  child record status loc bits=", r[0]&0x18); } }
+                          dbg_num("CANNON  objlist ok=", g_objlist_off==sav_objlist_off(g_savetmpl,g_savetmpl_len));
+                          (void)do_save(&w); dbg_num("CANNON  saved=", 1); (void)oq; } } }
             }
             if(mode=='3' && wx>=0){
                 /* a fixed cannon on the sea facing east: a gargoyle 2 tiles east, then a ship centre 3 tiles east */
@@ -11932,9 +12318,9 @@ int main(int argc, char **argv)
                 dbg_num("mana +regen 16t =", g_amana[av]);           /* +2 (1 per 8 turns) */
                 dbg_num("regen delta     =", g_amana[av]-before);    /* 2 */
                 g_ahp[av]=g_amaxhp[av]>40?(uint8_t)(g_amaxhp[av]-40):1;
-                do_rest(&w);
-                dbg_num("mana after rest =", g_amana[av]);           /* = max 30 */
-                dbg_num("hp after rest   =", g_ahp[av]);             /* = maxhp */
+                rest_start(&w,8,-1); while(g_resting) rest_tick(&w);   /* an eight-hour camp (rest.md) */
+                dbg_num("mana after rest =", g_amana[av]);           /* regenerated over the 48 turns slept */
+                dbg_num("hp after rest   =", g_ahp[av]);             /* healed if fed and the rest counter allowed */
             } else if(mode==25){                          /* PLAY: click-to-travel pathing */
                 int M=U6_SURFACE_TILES-1, startx=(int)w.px;
                 /* a cardinal direction with 3 clear passable tiles ahead = a reachable target */
@@ -12415,6 +12801,7 @@ int main(int argc, char **argv)
         }
         int redraw=0;
         if (key && g_peer_on){ g_peer_on=0; compose_map(&w); draw_border_tiles(); redraw=1; key=0; }   /* any key closes the gem's view */
+        if (key && g_resting) key=0;                 /* the camp takes no input (rest.md §3) */
         if (key) {
             int a = key & 0xFF;
             g_travel_active=0;                       /* any key press cancels click-to-travel */
@@ -12450,7 +12837,14 @@ int main(int argc, char **argv)
                     redraw=1; a=0; in=IN_NONE; dx=dy=0;            /* digit unreadied an item: stay in the view */
                 } else if (g_show_status) { g_show_status=0; redraw=1; }  /* any other key returns (then still acts) */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
-                    if (g_pending_verb=='D' && (a=='d'||a=='D') && !(dx||dy) && g_ow.ninv>0){
+                    if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='A' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: the attack lands there */
+                        (void)resolve_target(&w,'A',cx,cy); g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0;
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='R'){ (void)rest_key(&w,a);                   /* the R)est prompts (rest.md §2) */
+                        if(g_resting || !g_pending_verb){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
+                    else if (g_pending_verb=='D' && (a=='d'||a=='D') && !(dx||dy) && g_ow.ninv>0){
                         g_inv_sel=(g_inv_sel+1)%g_ow.ninv; drop_prompt(); redraw=1;   /* D again -> next item */
                     }
                     else if (g_pending_verb=='E' && (a=='e'||a=='E') && !(dx||dy) && g_ow.ninv>0){
@@ -12478,7 +12872,7 @@ int main(int argc, char **argv)
                     else if (a==0x1b) { g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
                 }
                 else if (((key>>8)&0xFF)==0x3B) { music_cycle_pref(); msgcat(0, music_pref_label()); redraw=1; }  /* F1: music source */
-                else if (a=='a'||a=='A') { g_pending_verb='A'; g_msg[0]=0; if(ship_aboard()) msgcat(0,"Attack with ship cannons-"); g_show_inv=0; redraw=1; }  /* A)ttack */
+                else if (a=='a'||a=='A') { arm_attack(); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }  /* A)ttack: the crosshair (combat.md §6b) */
                 else if (a=='c'||a=='C') { open_cast_menu(); redraw=1; }                              /* C)ast: open the spell menu */
                 else if (a=='b'||a=='B') { g_combat_mode=!g_combat_mode; g_show_inv=0;                /* B)attle: combat-mode toggle (moved off 'c') */
                     msgcat(0, g_combat_mode?"Combat mode!":"Peace mode."); redraw=1; }
@@ -12524,6 +12918,7 @@ int main(int argc, char **argv)
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                 else if (v=='C'){ open_cast_menu(); }        /* Cast icon opens the spell menu */
                 else if (v=='D'){ g_msg[0]=0; arm_drop(); }  /* Drop icon: open the pack + arm the drop */
+                else if (v=='A'){ arm_attack(); }           /* Attack icon: the crosshair */
                 else if (v){ g_pending_verb=v; g_msg[0]=0; g_show_inv=0; }
                 else  { msgcat(0,"Not yet implemented."); g_pending_verb=0; g_show_inv=0; }
                 redraw=1;
@@ -12539,8 +12934,9 @@ int main(int argc, char **argv)
                 if (!g_casting && map_click_delta(g_mx,g_my,&dx,&dy)) {
                     if (g_talking||g_show_inv){ end_talk(); g_show_inv=0; }
                     if (g_pending_verb) {                       /* an armed verb acts on that ONE tile */
+                        int pv=g_pending_verb; if(pv=='A') g_pending_verb=0;   /* the crosshair goes before the shot is drawn */
                         g_mouse_target=1;
-                        if (resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); }
+                        if (resolve_target(&w,pv,dx,dy)){ compose_map(&w); draw_border_tiles(); }
                         g_mouse_target=0; g_pending_verb=g_next_verb; g_next_verb=0;
                     } else if (dx||dy) {                        /* plain click: WALK there (click-to-travel) */
                         g_travel_tx=(int)((w.px+dx)&(U6_SURFACE_TILES-1));
@@ -12553,6 +12949,8 @@ int main(int argc, char **argv)
         }
         /* click-to-travel: while a destination is set and the player is idle, step ONE tile
          * toward it each loop (pathfinding around walls). Any key press cancels it (above). */
+        if (g_resting) { uint32_t t=plat_ticks_200hz();                               /* the camp: a rest turn per 1/8 s (rest.md §3) */
+            if (t-g_rest_tick>=REST_TURN_TICKS) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
         if (g_travel_active && !key && !g_talking && !g_show_inv && !g_casting && !g_pending_verb) {
             if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;   /* arrived */
             else { int sx,sy;

@@ -80,6 +80,19 @@ victim was evil); else `hp -= max`. 255 = instant kill (glass sword, god-mode). 
   per-trainer specialty needs the trainer→stat NPC list), and Lord British doubles as the
   stat-trainer.
 
+## 3b. Attacks on OBJECTS (actor_hit's object branch; 2026-10-27)
+When the blow lands on a tile with no actor, the TOP object there is the defender (what the
+cursor shows). A tangle vine (366) is "killed" (a message). Otherwise only a **non-stackable
+object with a nonzero count** can be hurt — the count is its strength (262 of the surface's 357
+doors carry one; chests, barrels, crates, chairs, kegs do too) — never a magically locked door
+(297-300, frame ≥ 12) or an open chest (98 frame 3). The weapon's MAXIMUM damage (not a roll)
+comes off the count; when the count is at most the damage the object is **broken**:
+`<name> broken!`, its trap (337) fires on the attacker, its contents spill onto its tile, a
+mirror (123) cracks (frame 2) and costs 10 karma instead of vanishing, anything else is gone.
+u6e persists a break at once: the contents' records go on the map (sav_spill_k), a fired
+trap's record and then the holder's own record are deleted (objblk.md order holds: the holder
+is childless by then).
+
 ## 4. Weapon damage table (weapon_dmg_tbl, obj_n → max dmg)
 sling 33=6, club 34=8, main gauche 35=8, spear 36=10, throwing axe 37=10, dagger 38=6,
 mace 39=15, morning star 40=15, bow 41=10, crossbow 42=12, sword 43=15, two-h hammer 44=20,
@@ -100,6 +113,27 @@ Melee = adjacent (Chebyshev 1). Reach weapons morning star(40)/halberd(47) hit a
 gate too. Ranged: bow 41=5, crossbow 42=7, magic bow 54=7, sling/thrown shorter; a ranged
 attack also needs a clear line (map_line_hit_check). MVP is MELEE only. The SHIP as a weapon
 (412: range 5, damage 30, a cannonball missile) is docs/rules/cannons.md.
+
+## 6b. Targeting and projectiles (A)ttack; 2026-10-27)
+- A)ttack arms a **crosshair** (tile 365) on the Avatar; the arrow keys walk it one tile at a
+  time, never beyond the weapon's range (Chebyshev distance; hands = 1) nor the view; Enter
+  attacks the tile under it, Esc cancels, a click attacks the clicked tile (beyond range:
+  `Out of range!`, no turn). Aboard a ship the weapon is the ship (cannons.md §1). The scroll
+  names what the crosshair rests on (the actor, else the top object, else the terrain).
+- **Melee** (an adjacent tile with a non-missile weapon; the morning star and halberd never
+  shoot): the hit roll (§2) and the blow (§3), or §3b on an object.
+- **A shot** (a missile weapon, or any target beyond one tile): the hit roll against the actor
+  on the aimed tile first; a miss at a foe **scatters** the aim by −1..1 in x and y. Then the
+  missile flies the line (Bresenham) from the attacker: it stops ON a tile with the missile
+  boundary flag (tileflags2 bit 5, base or object tile) — actors and other objects do not stop
+  it — else it reaches the aimed tile. Whoever stands where it lands is the defender: a foe met
+  only by scattered aim gets a second hit roll; an object there is hit outright (§3b); nothing
+  there, nothing happens. The missile tile is drawn tile by tile: sling 398, spear 547, throwing
+  axe 548, dagger 549, bow/magic bow 566 (arrow), crossbows 567 (bolt), boomerang 560, oil
+  flask 601, Zu Ylem 612, lightning wand 392, fire wand 393, cannons 399.
+- Ranges (§6): spear 4 and boomerang 5 as the reference's table; Zu Ylem 4, wands 7.
+- Not modelled: the "half damage" creature flag, the triple crossbow's three bolts, thrown
+  weapons landing on the map, ammunition (bows need no arrows), "pass." on the Avatar's own tile.
 
 ## 7. Enemy AI (worktype)
 Hostile actors run worktype ASSAULT: each turn, path one step toward the nearest party member

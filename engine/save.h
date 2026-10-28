@@ -117,6 +117,8 @@ void sav_set_keg_timer(uint8_t *d, int32_t off, int t);
 int  sav_get_keg_timer(const uint8_t *d, int32_t off);
 /* the 16 effect timers (objlist 0x1c03 + idx, one byte each; objlist.md): 13 = the storm cloak's magical storm */
 void sav_set_timer(uint8_t *d, int32_t off, int idx, int val);
+void sav_set_rest_counter(uint8_t *d, int32_t off, int val);   /* objlist 0x1bf2 (rules/rest.md §4) */
+int  sav_get_rest_counter(const uint8_t *d, int32_t off);
 int  sav_get_timer(const uint8_t *d, int32_t off, int idx);
 /* the VANISHED object (objlist 0x1c13, u16 LE; magic_skills.md §5f): obj_n, + 1023 + frame when the frame is not 0; 0 = none */
 void sav_set_vanish(uint8_t *d, int32_t off, int v);
@@ -169,6 +171,7 @@ int32_t sav_locate_onmap(const uint8_t *d, int32_t n, int32_t surf_off, int leve
 int sav_find_child(const uint8_t *d, int32_t n, int32_t cpos, int parent_k, int obj_n, int quality);
 /* Delete record k of chunk cpos (childless only; links re-indexed). Returns the new length or -1. */
 int32_t sav_delete_at(uint8_t *d, int32_t n, int32_t cpos, int k);
+void    sav_spill_k(uint8_t *d, int32_t cpos, int k, int x, int y, int z);   /* a contained record goes on the map (combat.md §3b) */
 /* Set record k's 16-bit count (bytes 6-7, a stackable's qty16) in chunk cpos. */
 void sav_set_rec_qty(uint8_t *d, int32_t n, int32_t cpos, int k, int qty);
 /* Move record src_k of chunk src_cpos, together with every record contained in it (at any depth),

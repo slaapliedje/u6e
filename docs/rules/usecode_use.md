@@ -372,9 +372,12 @@ ScummVM's hatches it again.
   truth / love / courage." instead of the object's name (the shrines' braziers; quality 0 or >3 is
   an ordinary brazier).
 - **NPC torches**: every hour (and after a load or a level change) each actor OUTSIDE the party
-  with a torch readied lights it when the hour is before 6 or after 18, or on any level other than
-  the surface and level 5 (the gargoyle world; the original also lights them during an eclipse —
-  not modelled), and puts it out otherwise; NPC torches never burn down. A COMPANION's lit torch
+  with a torch readied lights it when the hour is before 6 or after 18, during an **eclipse**
+  (timer 15, magic_skills.md §5f), or when the ACTOR's own level is other than the surface and
+  level 5 (the gargoyle world), and puts it out otherwise; NPC torches never burn down. The check
+  runs on the hour, as the reference's schedule tick does: an eclipse cast mid-hour lights their
+  torches only if it still runs at the next hour, and a torch lit during it stays lit until the
+  first hour after it ends. A COMPANION's lit torch
   burns down like the Avatar's (1-in-2 per turn) and is saved with its fuel. Every lit torch on the
   level lights its bearer's tile at emitter level 3.
 - Test hook `READYFX.REQ`: '1' rings + cloak + amulet (equipment.md §8); '2' the staff fires a
@@ -382,7 +385,9 @@ ScummVM's hatches it again.
   x-ray turns, a quality-1 brazier → "The flame of truth."; '4' NPC torches light at 22:00 and
   douse at 12:00, a companion's torch burns down; '5' the cube: "No Effect!" without the lenses,
   the Codex vanishes with them + 8 stones; '6' a silenced egg's chance byte and a carried lit keg
-  survive S)ave → load.
+  survive S)ave → load; '7' the eclipse: the sky strip's sun becomes tile 363 and the moons go, the
+  noon ambient drops to night's, an NPC's torch is out at noon, lit by the hour tick during the
+  eclipse, still lit when the eclipse ends mid-hour, out at the next hour (lighting.md §2b).
   VERIFIED 2026-10-27, modes 1-6 identical on emulated TT and the stock 4 MB Falcon: a Light charge
   gives 30 light turns for no mana and leaves one charge, the Magic Arrow charge arms the direction
   prompt, an empty staff says "Nothing happens."; the white potion gives 30 x-ray turns; the

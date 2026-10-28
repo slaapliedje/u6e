@@ -528,7 +528,7 @@ Tasks
       npc_pathstep (any key cancels) instead of stepping a single tile — validated
       headlessly (`drive.sh` mode 25: 315→318, 3 steps, arrived).
       PLAYABILITY (2026-07-08): a magic-using play session is now sustainable —
-      R)est (the 'r' key + the Rest command-bar icon 8) camps ~6 game-hours,
+      R)est (the 'r' key + the Rest command-bar icon 8) — now the full camp of rules/rest.md —
       re-places NPCs by the new hour (init_npcs), and restores every party member's
       HP + magic points to max; PASSIVE REGEN in step_npcs (+1 mana / 8 turns,
       +1 HP / 24 turns) recovers while walking; and the status line now shows the
