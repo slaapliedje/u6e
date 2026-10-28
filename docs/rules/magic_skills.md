@@ -325,11 +325,12 @@ dragons, drakes, daemons, the balloon). "No effect" is printed for an immune tar
 - **Poison** (2): the strength roll, else Failed. **Sleep** (2): the contest. **Paralyze** (5),
   **Curse** (3): always take. **Charm** (6): the contest; a hostile becomes the party's ally —
   "X is charmed."; charming an already charmed actor frees it. (u6e asks for a hostile target:
-  "It is not hostile.") **Kill** (7): undead → No effect; the contest; else the target dies
+  "Failed" — the reference's only failure word) **Kill** (7): undead → No effect; the contest; else the target dies
   outright and the caster earns its experience. **Dispel Magic** (1): clears sleep, poison,
   paralysis and charm on the target — Success / No effect.
 - Messages follow the reference: "Success", "Failed", "No effect"; the condition lines
-  "X falls asleep." / "X is poisoned." / "X is paralyzed." / "X is cursed." / "X is charmed.".
+  only what the reference prints (§5g): Poison / Sleep succeed silently, "X is paralyzed.", Curse
+  "Success", "X is charmed.".
 
 **Area spells** (aim a direction: the centre is the first actor within 5 tiles, else the last
 open tile of the line; the AREA is the 5×5 square around the centre minus its four corners — the
@@ -516,11 +517,14 @@ sequence — deviation).
 
 **Bodies.** A slain NPC (a real actor, not a summon) leaves a dead body — 339, or a dead gargoyle
 341 for the winged/plain gargoyle types — with quality = its actor number, so Seance and
-Resurrect have something to work on. Bodies are temporary (not saved — persistence: item 12).
+Resurrect have something to work on. A real NPC's body is SAVED (a new record holding its inventory;
+usecode_use.md "Created and destroyed objects persist", 2026-10-28); a temporary creature's is not.
 **Traps.** Opening a trapped door or chest fires the trap on the Avatar and removes it: one of
 Acid (1..20 damage), Poison, Bomb (1..20 fire damage to everyone within the 21-cell area) or Gas
 (everyone within the area poisoned) — the reference's actor_use_effect. The pristine save ships six
-such traps (chests and steel doors). A trap the Trap spell adds is temporary (item 12).
+such traps (chests and steel doors). A trap the Trap spell adds is SAVED as a contained record under
+its holder, and Untrap deletes it (2026-10-28). Webs are saved too; fields and Reappear / Replicate
+copies stay temporary, as the reference flags them.
 **The vanished object** is saved (objlist 0x1c13) and reloaded; the timers 1 / 13 / 14 / 15 are
 saved in the 0x1c03 timer block.
 
@@ -539,7 +543,7 @@ engine flow:
    pass spell_num directly. (Combat-mode toggle moved off 'c' to 'b' + the
    Combat command-bar icon.)
 2. **Gate checks**, in order, each with its own failure message:
-   - spell known (in spellbook)          → else "Thou dost not know that spell."
+   - spell known (in spellbook)          → else "That spell is not in thy spellbook!"
    - `circle(spell) <= castable_circle`   → else "Thou art not experienced enough."
    - all required reagents present        → else "No reagents."
    - `current_mana >= mana_cost`          → else "Not enough magic points."
@@ -563,6 +567,52 @@ Add ONE hook to the RuleSet struct (engine/ruleset.h):
 - **Martian Dreams**: no Britannian magic; psychic powers / era gadgets —
   override likewise. The spell TABLE and reagent list are U6-only data; the
   casting *machinery* (mana pool, gate checks, dispatcher) is shared.
+
+## 5g. Messages — the reference's words (AUDIT 2026-10-28, checklist item 16)
+
+> Provenance: READING every one of the reference's 80 U6 spell scripts (`magic/circle_XX/*.lua`), its
+> `magic.lua` result helpers and `core/magic.cpp` cast gate — to understand what each prints; re-expressed.
+
+The framework prints only five result words: **Success**, **No effect**, **Failed**, **Blocked!**,
+**Not possible**; a missing target after the "On whom: / On what: / Location: " prompt prints
+**nothing**. Hit damage speaks through the combat messages ("X hits Y", "Killed X!"). Most spells
+print NOTHING of their own; the exceptions and the words we now use:
+
+| Spell | Reference | Was (u6e) |
+|---|---|---|
+| cast gate | `That spell is not in thy spellbook!` · `Not enough magic points.` · `No Reagents.` · `No magic at this time!` | "Thou dost not know that spell." · "Not enough magic points!" · "Thou hast not the reagents!" |
+| no target | `nothing` | "<Spell>: no target." |
+| Heal, Great Heal | Success (a dead target: No effect) | "Heal! +N HP" |
+| Light, Great Light, Infravision, Eclipse, Time Stop, Negate Magic, Peer, Help, Armageddon, Slime, Summon, Seance, Fireball, Explosion, Flame / Poison / Energy / Death Wind, Chain Bolt, Lightning | nothing (the effect is the message) | flavour lines, "Success" |
+| Create Food | `Create N food.`, N = 1..10 portions | one portion, "Thou hast conjured food!" |
+| Unlock Magic | `unlocked!` / No effect | "The magical lock dissolves!" / "There is no lock…" |
+| Fire / Poison / Sleep / Energy Field | Success / Not possible | "<Spell>!" |
+| Dispel Field | Success / No effect | "The field vanishes." / "There is no field there." |
+| Poison, Sleep | Failed / No effect; success silent | "X is poisoned." / "X falls asleep." |
+| Paralyze | `X is paralyzed.` | same |
+| Curse | Success | "X is cursed." |
+| Charm | `X is charmed.` / Failed | same; our non-hostile refusal now says Failed |
+| Protection, Mass Protect | Success | "<Spell> shields the party!" |
+| Conjure | Success / Failed | "Conjure!" / "No room to summon." |
+| Insect Swarm | Success | "Insect Swarm!" |
+| Clone | Success / No effect | "Cloned the X!" / "No room to clone." |
+| Gate Travel | nothing either way (the reference only plays a failure sound) | three flavour lines |
+| Locate | `<lat>{N, <lon>{E` — `{` is the degree sign in U6's font; lat = \|45 − y/8\|, lon = \|38 − x/8\| | "Thou art at (x,y)." |
+| Detect Magic | `It's a <kind> potion.` (potions by frame: awaken, cure, heal, poison, sleep, protection, invisibility, xray vision, unknown) · `It's magical.` (a magical TILE) · `It shows a charge of <spell>.` (a staff) · `It's not magical.` · no object: No effect | "Thou sensest N magical auras." |
+| X-ray, Wizard Eye | `Done` | flavour |
+| Invisibility | Success / No effect | "Thou fadest from sight." |
+| Mass Invisibility, Reveal | Success | flavour |
+| Disable | Failed (the hit message otherwise) | "Success" |
+| Pickpocket | the item's name, then Success / No effect / `can't carry!` | "<item>. Success" |
+| Tremor | Success · Wing Strike: `No foes.` | same |
+| Wind Change | the direction letter after `Direction-` | same |
+
+Kept as ours (UI prompts, not script output): our direction prompts "<Spell>: aim a direction." stand in
+for the reference's target prompts, because u6e aims every spell by direction; Telekinesis keeps its own
+mechanics; Enchant's menu is the C)ast menu. The magical-tile set for Detect Magic is our own table of the
+80 tile numbers the reference lists (monsters/objects: wands, rings, amulets, moonstones, the Codex…).
+Status: VERIFIED 2026-10-28 — SPELLS.REQ 1-c and MAGICFX.REQ 1-7 rerun identical on TT + 4 MB Falcon
+with the new words; host suites + make check pass.
 
 ## 8. Open questions / to validate
 

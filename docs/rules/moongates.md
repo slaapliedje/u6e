@@ -47,6 +47,20 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
   or a dug-up stone → the gate leads nowhere and the party stays). "You step through the
   moongate."
 
+## 2b. Entering: the walk (2026-10-27; the reference's Party::walk / TimedPartyMove)
+Stepping onto a gate (blue or red, the checks of §2 / §3 passed) does not teleport at once:
+- The Avatar, already on the gate, **vanishes**: the sprite dissolves on the gate tile over four
+  steps (an ordered dither thinning it out).
+- Then the companions walk to the gate one step per 1/8 s (their own path steps, the world
+  frozen, input ignored); whoever reaches the gate tile dissolves in turn, one at a time. A
+  companion off the level, or one that cannot get there within 24 steps, is taken in without
+  the walk.
+- When everyone is in, the place changes: a **red gate is spent** (its object goes) and, for a red
+  gate, the old view **dissolves into the new one** over eight steps (the reference captures the
+  map window and pixel-fades it; blue gates change the view at once, as the reference does).
+  Then "You step through the moongate." and the companions **fall in** beside the Avatar one per
+  step. Should the other level not fit in memory, everyone comes back out beside the gate.
+
 ## 3. The Orb of the Moons (object 87) and red gates (object 84)
 
 - U)se the orb from the pack. Requirements: the orb is carried; Lord British (NPC 5) has
@@ -86,8 +100,11 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
 
 ## 5. u6e v1 simplifications (documented deviations)
 
-- No "party mode" check (the party is always together) and no walk-in animation: the party
-  is placed at the destination at once (companions beside the Avatar).
+- No "party mode" check: u6e has no solo mode, so the reference's "You must be in party mode
+  to enter." never arises.
+- The vanish is an ordered-dither thinning of the member's sprite; the reference fades random
+  pixels of a capture of the whole map window. On the ST's planar path a red gate changes the
+  view at once (no chunky view to dissolve).
 - The red gate appears without the reference's vanish effect.
 - Travel between levels goes through the same level switch as ladders (objects reconciled,
   the destination level decoded); on a 4 MB machine that can fail for lack of memory, in
@@ -100,13 +117,16 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
 first free neighbour → a red gate with the expected quality; step onto it → the party at the
 table's destination (level + x/y printed); `'2'` blue: force day 5 / hour 12 (Trammel phase 2
 visible), stand by moonstone 1 (935,262) → the gate object appears; step through → stone
-8−2 = 6 → (23,22) on level 1 → printed; then hour 2 → the gate is gone; `'3'` moonstone: bury
+8−2 = 6 → (23,22) on level 1 → printed; then hour 2 → the gate is gone; `'5'` = the blue gate of '2' held mid-walk (the first companion half dissolved) for a frame;
+`'6'` = the red gate of '1' held mid-dissolve of the view (level 8 of 16) for a frame; `'3'` moonstone: bury
 a carried stone on grass → table entry = the Avatar's tile and a stone on the map; G)et it →
 entry cleared; `'4'` date: advance the clock 50 hours → day 6 09:00 (from 7-04 08:00),
 S)ave → objlist bytes day/month/year.
 
 ## Status
-VERIFIED 2026-10-27. MOONGATE.REQ on emulated TT and the stock 4 MB Falcon (identical): '1' with the orb
+VERIFIED 2026-10-27 (the walk added the same day: '1' takes 50 walk steps to the gargoyle world, '2' 28
+steps with all four members dissolving and the three companions shown again at the destination;
+frames of '5' and '6' captured; TT and Falcon identical). MOONGATE.REQ on emulated TT and the stock 4 MB Falcon (identical): '1' with the orb
 and Lord British's flag the pack U)se asks "Where:", the first free neighbour (dx 1, dy −1 → position 9)
 raises a red gate of quality 9, stepping in carries the party to (188,45) on level 5; '2' day 5 at 12:00
 (Trammel phase 2, Felucca 3; visible at 12, not at 16) a gate stands on moonstone 1 (935,262), vanishes at

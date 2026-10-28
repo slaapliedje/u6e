@@ -834,3 +834,37 @@ and walk no worse than the SMOOTH it replaces. Plain SMOOTH ('0') stays the fide
 | STE +Blitter | 8 MHz | 201 ms (5.0 fps) | 88 ms (11.4 fps) |
 | Falcon truecolor | 16 MHz | 221 ms (4.5 fps) | 92 ms (10.9 fps) |
 | TT 256-colour | 32 MHz | 133 ms (7.5 fps) | 75 ms (13.3 fps) |
+
+## 2026-10-28 — world turn at dusk: mover-type memo + cached walker routes, TT 36.5 s → 0.18–0.7 s
+
+A turn at 20:00–21:00 was dominated by `step_npcs`: ~157 schedule walkers each ran the 33x33 BFS
+(`npc_pathstep`), which floods its whole window whenever the goal is outside it. Two changes:
+
+1. **`mover_type()` memo** (behaviour-identical). `mover_can_enter` called
+   `monster_movetype(actor_objn(g_mover))` for every neighbour the BFS tested, and `actor_objn` scans
+   the 1024-entry base-tile table: ~4,000 table scans per search. The type is now kept while the mover,
+   its `g_abase` and `g_basetile` are unchanged. All actor positions after the REST.REQ '4' sequence
+   hash the same as before (52428615) on TT and Falcon.
+2. **Per-walker route cache** (`npc_routestep`, schedule walkers in `step_npcs` only; hostile, coward,
+   ally, hatched and party pathing unchanged). The BFS now also records the direction into each cell,
+   so the route to the cell it picked is kept (first `RT_MAX`=16 steps) and followed on later turns. It
+   is searched again when it runs out, when the walker isn't where the route left it, when the goal,
+   level or `build_blocked` epoch changed, or when the next tile is now impassable or holds the Avatar.
+   A search with no step is not repeated for `RT_RETRY`=8 turns. Deterministic: TT and Falcon positions
+   hash identically (79803404). Routes differ in detail from the per-turn search, but arrival matches:
+   after the sequence plus 200 turns, 38 at goal / 66 within the wander radius vs 37 / 63 before
+   (157 walkers); 66 vs 67 at goal at the first check.
+
+REST.REQ '4', ms per plain turn (Hatari, TT 32 MHz `--ttram 4`; Falcon `--memsize 4 --ttram 0`):
+| case | TT before | TT memo | **TT both** | Falcon before | Falcon memo | **Falcon both** |
+|---|--:|--:|--:|--:|--:|--:|
+| castle 08h | 5718 | 505 | **155** | 12482 | 1392 | **388** |
+| 21h, first 12 turns (all routes new) | 36492 | 2852 | **706** | 79603 | 8003 | **1870** |
+| 21h, next 12 | — | 2444 | **305** | — | 6883 | **776** |
+| 21h, next 12 | — | 2152 | **183** | — | 6066 | **449** |
+
+(The "before" 21h runs were only timed for the first block. These are far above the ~1.7 s TT figure
+measured earlier, so that figure presumably came from a different case. Both use the same hook.)
+
+(Contributed by the u7port session on 2026-10-28, applied and re-verified here: REST.REQ '4' and EGG.REQ '4'
+identical on TT and the 4 MB Falcon with the cached routes; completion-checklist item 17.)

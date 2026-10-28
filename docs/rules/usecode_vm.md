@@ -201,6 +201,54 @@ deterministic RNG seam so golden-transcript tests are reproducible.
   Culham's real bytecode — the gypsy story ends in WORKTYPE 0x99 on NPCs 45/49/50 (44/46 are behind
   the NPCNEARBY query, still stubbed to 0).
 
+## 6c. Party stats, levels and experience in scripts; talking to objects (2026-10-28)
+
+> Provenance: READING ScummVM/Nuvie `conversation/converse_interpret.cpp` (U6OP_NPC 0xdd, U6OP_EXP 0xe0,
+> U6OP_LVL 0xe1, U6OP_STR 0xe2, U6OP_INT 0xe3, U6OP_DEX 0xe4), `actors/actor.h` set_level / set_exp,
+> `actors/u6_actor.h` get_maxhp, `core/events.cpp` talk(Obj) — to understand; CONFIRMED by a scan of
+> the user's own scripts (the shrine entries 192-199). Re-expressed, no code transcribed.
+
+- **0xdd NPC takes TWO args**: `(party_index, ignored)` and yields the ACTOR NUMBER of that party
+  member (index 0 = the Avatar). We used to pop one arg and treat it as an actor number — every
+  script that picked "Who will …?" from a numbered party list was off.
+- **0xe0 EXP, 0xe1 LVL, 0xe2 STR, 0xe3 INT, 0xe4 DEX take TWO args** `(npc, delta)`: the result is
+  the actor's current value PLUS delta, which is also STORED (so delta 0 reads, delta ±n changes).
+  Exp is clamped to 9999, the others to a byte. We used to pop one arg and answer 1 / 10 (stubs).
+- The VM sees every actor's str / dex / int / level / exp (`cvm_game_t` stats, synced in before a
+  conversation) and the party ORDER (`party_actor[]`); after each VM run the host applies what
+  changed (`sync_stats_out`): a new level sets max HP = level × 30 (HP itself untouched, as the
+  reference), stats and exp are copied back, and the status line's "Lv" follows.
+- Found and fixed while driving the shrine script (2026-10-28): **0xf8 ASKC** now PAUSES for one of its
+  listed characters like ASK (it used to be skipped, so a "y/n" prompt fell straight through);
+  **0xd8 SETNAME** sets `$Y` to the named actor's name (a party member's from the roster, the speaker's
+  from its script; it used to be ignored, printing empty names in "Who will meditate?" lists); the
+  system vars **PARTYLIVE (0x17) and PARTYALL (0x18) are the party size MINUS the leader**, as the
+  reference sets them (we counted everyone, so party lists ran one entry long).
+- **Talking to an object**: T)alk at a tile with no actor but a **shrine (393)** or one of the three
+  statues (Mondain 397, Minax 398, Exodus 399) starts the conversation whose number is the object's
+  **quality** (the shrines 192-199, the statues 189-191; the Codex altar's 200 exists too), exactly the
+  reference's talk(Obj). Such a script has no portrait; its name comes from the script.
+- Data: the eight shrines in the user's save carry qualities 192-199 (Honesty 192 at (935,263),
+  Compassion 193 (503,359), Valor 194 (159,943), Justice 195 (295,39), Sacrifice 196 (831,167), Honor
+  197 (327,823), Spirituality 198 (23,23) level 1, Humility 199 (919,935)); the shrine script asks to
+  meditate, lists the party ("Who will meditate?"), asks the mantra, and then levels the chosen member
+  if exp suffices (combat.md §3).
+- Hook: SHRINE.REQ '1' kill awards, '2' the Honesty shrine conversation driven headlessly (meditate →
+  member → mantra: the Avatar at level 3 / exp 400 gains level 4, max HP 120, int +3; a second visit
+  at exp 400 says to return later), '3' resurrection exp loss.
+
+Status: VERIFIED 2026-10-28 — SHRINE.REQ 1-3 identical on emulated TT and the stock 4 MB Falcon. '2': T)alk
+north at the Shrine of Honesty (935,263) opens entry 192 without a portrait; "y" → "1. Avatar 2. Dupre
+3. Shamino 4. Iolo / Who will meditate?"; "1" → "Speak the Mantra of Honesty."; "ahm" → the meditation,
+"Avatar has gained a level... and intelligence!": level 3 → 4, max HP 90 → 120 (HP stays 90), int 20 → 23,
+exp 400 untouched, companions untouched, 4 VM mutations; the same visit again at exp 400: no gain ("Return
+when thy journey has progressed further."); at level 7 / exp 6400 → level 8, max HP 240; at 8 nothing more.
+The script's closing lines ("There is naught else…", "Return when…") follow the level-up too — that is the
+bytecode's fall-through, not a VM fault. The host runner replays the same script with identical results
+(scratchpad vmrun). '1': a gargoyle whose live strength and HP were cut to 1 still pays 26; a deer 0; a
+giant rat 9; a daemon 55; the Avatar's level unchanged. '3': Lord British slain with exp 400, resurrected
+at karma 50 → exp 200.
+
 ## 7. Status
 VERIFIED — the full conversation VM runs the real bytecode (greeting, expression
 eval, IF/ELSE/ENDIF branching, keyword loop, BYE) for NPCs across CONVERSE.A/.B,

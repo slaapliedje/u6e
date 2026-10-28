@@ -58,7 +58,9 @@ static void set_svar(cvm_t*vm,unsigned idx,const char*s){ idx=SVI(idx); int k=0;
 
 void cvm_game_init(cvm_game_t*g,uint32_t seed){
     for(int i=0;i<256;i++){ g->talk_flags[i]=0; g->in_party[i]=0;
-        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->player_obj[i]=0; g->nearby[i]=0; }
+        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->player_obj[i]=0; g->nearby[i]=0;
+        g->str[i]=g->dex[i]=g->intel[i]=0; g->level[i]=1; g->exp[i]=0; }
+    for(int i=0;i<16;i++){ g->party_actor[i]=0; g->party_name[i][0]=0; } g->nparty=0;
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
     g->gold=0; g->karma=0; g->avatar_num=0; g->portrait_npc=-1; g->mutations=0;
@@ -74,8 +76,8 @@ static int sysvar(cvm_t*vm,uint32_t idx,int32_t*out){
       case CVM_VAR_SEX:    *out=g->avatar_sex; return 1;
       case CVM_VAR_KARMA:  *out=g->karma; return 1;
       case CVM_VAR_GARGF:  *out=g->knows_gargish; return 1;
-      case CVM_VAR_PARTYLIVE: n=0; for(int i=0;i<256;i++) if(g->in_party[i]&&!g->dead[i]) n++; *out=n; return 1;
-      case CVM_VAR_PARTYALL:  n=0; for(int i=0;i<256;i++) if(g->in_party[i]) n++; *out=n; return 1;
+      case CVM_VAR_PARTYLIVE: case CVM_VAR_PARTYALL:                /* the reference: party size MINUS the leader (both vars; usecode_vm.md §6c) */
+          n=0; for(int i=0;i<256;i++) if(g->in_party[i]) n++; *out=n>0?n-1:0; return 1;
       case CVM_VAR_HP:     *out=g->avatar_hp; return 1;
       case CVM_VAR_QUESTF: *out=g->on_quest; return 1;
       case CVM_VAR_WORKTYPE: *out=g->worktype[vm->npc & 0xff]; return 1;
@@ -154,7 +156,8 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case OP_INPARTY:{ a=POP(); PUSH(vm->g->in_party[npc_num(vm,a)&0xff]?1:0); } break;
       case OP_JOIN:{ a=POP(); vm->g->in_party[npc_num(vm,a)&0xff]=1; vm->g->mutations++; PUSH(0); } break;
       case OP_LEAVE:{ a=POP(); vm->g->in_party[npc_num(vm,a)&0xff]=0; vm->g->mutations++; PUSH(0); } break;
-      case OP_NPC:{ a=POP(); PUSH(npc_num(vm,a)); } break;
+      case OP_NPC:{ uint32_t ig=POP(), pi=POP(); (void)ig;            /* NPC(party index, ?) -> that member's actor number (§6c) */
+                    PUSH(pi<(uint32_t)vm->g->nparty ? (uint32_t)vm->g->party_actor[pi] : 0u); } break;
       case OP_HASOBJ:{ uint32_t q=POP(),o=POP(); int np=npc_num(vm,POP()); (void)q;  /* (npc,obj,qual) */
                        PUSH((is_player(vm,np)&&vm->g->player_obj[o&0xff]>0)?1:0); } break;
       case OP_DATA:{ uint32_t idx=POP(),loc=POP();                  /* DATA(loc,idx) */
@@ -173,8 +176,17 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case 0xd7: a=POP(); PUSH(vm->g->nearby[npc_num(vm,a)&0xff]); break;   /* NPCNEARBY: within 5 tiles of the speaker (usecode_vm.md §6) */
       case OP_WOUNDED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->dead[np]?1:0); } break;
       case OP_POISONED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->poisoned[np]?1:0); } break;
-      case 0xe1: a=POP(); PUSH(1); break;                           /* LVL  ->1    */
-      case 0xe0: case 0xe2: case 0xe3: case 0xe4: a=POP(); PUSH(10); break; /* EXP/STR/INT/DEX */
+      case 0xe0: case 0xe1: case 0xe2: case 0xe3: case 0xe4:{        /* EXP/LVL/STR/INT/DEX(npc, delta): value+delta, stored (§6c) */
+          int32_t dl=(int32_t)POP(); int np=npc_num(vm,POP())&0xff; int32_t v;
+          cvm_game_t*g=vm->g;
+          switch(op){
+            case 0xe0: v=(int32_t)g->exp[np]+dl; if(v<0) v=0; if(v>9999) v=9999; g->exp[np]=(uint16_t)v; break;
+            case 0xe1: v=(int32_t)g->level[np]+dl; if(v<0) v=0; if(v>255) v=255; g->level[np]=(uint8_t)v; break;
+            case 0xe2: v=(int32_t)g->str[np]+dl; if(v<0) v=0; if(v>255) v=255; g->str[np]=(uint8_t)v; break;
+            case 0xe3: v=(int32_t)g->intel[np]+dl; if(v<0) v=0; if(v>255) v=255; g->intel[np]=(uint8_t)v; break;
+            default:   v=(int32_t)g->dex[np]+dl; if(v<0) v=0; if(v>255) v=255; g->dex[np]=(uint8_t)v; break; }
+          if(dl) g->mutations++;
+          PUSH((uint32_t)v); } break;
       default: PUSH(0); break;                                      /* unknown op  */
     }
     #undef POP
@@ -325,7 +337,10 @@ static void do_ctrl(cvm_t*vm){
       case OP_DECL: vm->decl_v=ARG(); vm->decl_t=(uint8_t)ARG(); break;
       case OP_ASSIGN:{ uint32_t v=ARG();   /* string assign (decl_t 0xb3) already stored in svar[]; */
           if(vm->decl_t!=0xb3 && vm->decl_v<64) vm->g->var[vm->decl_v]=(int32_t)v; } break;  /* don't clobber the int var */
-      case OP_SETNAME: ARG(); break;  /* sets avatar name (a string); not modelled — must NOT touch the decl'd var */
+      case OP_SETNAME:{ int n=npc_num(vm,ARG())&0xff; const char*nm=0;   /* $Y = that actor's name: a party member's from the roster, the speaker's from its script (§6c) */
+          for(int p=0;p<vm->g->nparty;p++) if(vm->g->party_actor[p]==n){ nm=vm->g->party_name[p]; break; }
+          if(!nm && n==vm->npc) nm=vm->npcname; if(!nm) nm="";
+          int o=0; while(nm[o]&&o<39){ vm->svar[CVM_SVAR_YSTR][o]=nm[o]; o++; } vm->svar[CVM_SVAR_YSTR][o]=0; } break;
       case OP_JUMP:{ uint32_t loc=ARG(); if(loc<(uint32_t)vm->len) vm->pc=(int32_t)loc; vm->nfr=0; } break;
       case OP_BYE: vm->done=1; break;
       case OP_SIDENT:{ ARG(); int o=0; while(vm->itext[o]&&o<CVM_ITEXT-1){ vm->npcname[o]=vm->itext[o]; o++; } vm->npcname[o]=0; } break;
@@ -401,7 +416,7 @@ cvm_status cvm_run(cvm_t*vm){
             collect_input(vm);
             do_frame(vm,(uint8_t)vm->in[0].v);
             if(running(vm)){
-                if(vm->in[0].v==OP_ASK){ vm->answer_mode=0; vm->input_mode=1; vm->out[vm->outlen]='\0'; return CVM_ASK; }
+                if(vm->in[0].v==OP_ASK || vm->in[0].v==OP_ASKC){ vm->answer_mode=0; vm->input_mode=1; vm->out[vm->outlen]='\0'; return CVM_ASK; }   /* ASKC: one of the listed characters (§6c) */
                 do_ctrl(vm);
                 if(vm->done){ vm->out[vm->outlen]='\0'; return CVM_DONE; }
                 uint32_t op=vm->in[0].v;     /* INPUT*: pause for a value, stored into the decl'd var */

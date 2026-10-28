@@ -39,7 +39,7 @@ Arrays we use (others exist for inventory/work flags):
 |--------|----------|---------------------------------------------------------|
 | 0x100  | 3 bytes  | **position** (packed x/y/z, see below)                  |
 | 0x400  | 2 bytes  | **appearance**: obj_n (10-bit) + frame (6-bit)          |
-| 0x800  | 1 byte   | **status flags**: bit 0x80 ⇒ **in the party**; bits **0x60 = ALIGNMENT** (see below) |
+| 0x800  | 1 byte   | **status flags**: bit 0x80 ⇒ **in the party**; bits **0x60 = ALIGNMENT** (see below); bit **0x10 = DEAD** (the reference's ACTOR_STATUS_DEAD: a slain NPC, parked at (0,0,0), skipped on load; 2026-10-28) |
 | 0x900  | 1 byte   | **strength**                                            |
 | 0xa00  | 1 byte   | **dexterity**                                           |
 | 0xb00  | 1 byte   | **intelligence**                                        |
@@ -49,6 +49,7 @@ Arrays we use (others exist for inventory/work flags):
 | 0x14f1 | 1 byte   | movement points (per-actor)                             |
 | 0x17f1 | 1 byte   | per-NPC conversation talk-flags                         |
 | 0x19f1 | 1 byte   | movement_flags (bits 0x60 = the "OLD" alignment; the LIVE one is in 0x800) |
+| 0x1c17 | 1 byte   | **alcohol** — drinks consumed (wine / mead / ale); above 3 the Avatar staggers ("Hic!"); −1 per game hour (usecode_use.md Food / drink; 2026-10-28) |
 | 0x1bf1 | 1 byte   | player **quest flag**  ·  0x1bf9 karma  ·  0x1c5f knows-gargish  ·  0x1c69 combat-mode  ·  0x1c6a solo-member  ·  0x1c71 gender |
 | 0x1bf2 | 1 byte   | **rest counter**: hours until R)est may heal the party again (set to 12 by a healing camp, counted down once per game hour; rules/rest.md §4) |
 | 0x1bf3 | 6 bytes  | **game time** (year/month/day/hour/min?)  ·  0x1bfa wind dir  ·  0x1c1b moonstone positions |

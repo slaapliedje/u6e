@@ -132,6 +132,7 @@ figure sits *in* the throne instead of covering it.
 - bit1 of tileflags3 (2026-10-27): the Support / "can place on top" flag — 34 object tiles in U6 (tables,
   end tables, the cutting table, stone tables, book stands, altars, the CLOSED crate frame), no map tile;
   M)ove lets a pushed thing land on such an object (rules/usecode_use.md M)ove).
-- Article bits (tileflags3 6-7) not yet consumed (Look prints the bare name).
+- Article bits (tileflags3 6-7): consumed by L)ook since 2026-10-27 — "Thou dost see " + article + name
+  (rules/usecode_use.md "Clock and sundial"); the data's quirks ("a earth") are printed as they are.
 
 ## Status: VERIFIED (weights + gettable; some flag bits guessed)

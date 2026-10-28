@@ -116,8 +116,9 @@ back on load; the trailer is date-stamped for ScummVM's load menu.
 
 ## 5. Write side: what S)ave reconciles (do_save, engine/save.c)
 
-The template save is patched IN PLACE; no record is ever added or removed, so every chunk
-count and offset is preserved and every status bit we don't model survives untouched. Steps,
+The template save is patched IN PLACE; records are added or removed only by the explicit
+insert / delete paths below (which fix the chunk count, links and the trailer), so every status
+bit we don't model survives untouched. Steps,
 in this order (each later step looks for what an earlier one produced):
 
 1. **Taken items** (world object dead + dirty): the on-map / in-container record becomes
@@ -150,6 +151,21 @@ every level switch, so the template always holds every level's current state.
   chunk's in-container links, the buffer tail and the ScummVM trailer offset are fixed and the
   cached objlist offset re-derived. The centre is retyped 412 → 415 through the moved-object path.
 
+- **New records (2026-10-28, usecode_use.md "Created and destroyed objects persist"):** a world
+  object created during play that the original keeps (`WOBJ_DIRTY_NEW`: a barrier a lever raised,
+  drawbridge pieces, a web, a slain NPC's body, a trap effect) gets a record APPENDED to the chunk of
+  its level and position (step 0b, after the deletions): `sav_insert_onmap` grows the template by 8
+  bytes, bumps the chunk count and shifts the ScummVM trailer offset; a contained new object (the
+  trap under its door / chest) is appended as an in-container record linked to its holder's index
+  (`sav_insert_child`). Afterwards it is an ordinary record (dirty → STATE). A new object destroyed
+  before it was ever written just vanishes (no record to delete).
+  A body also pulls the dead actor's inventory records out of the actor-inventory chunk into itself
+  (`sav_recontain`, one top-level record at a time — the body's record is re-located after each move
+  because the earlier chunk shrank), or, for a blood splat, relocates them onto the tile.
+- **Dead actors (2026-10-28):** every actor's objlist status bit 0x10 (0x800 + actor) is written
+  from the live dead set; a dead NPC is also parked at (0,0,0) with HP 0 (as the reference does).
+  A load skips actors with the bit (`g_adead`), Resurrect clears it. The alcohol count lives at
+  objlist 0x1c17 (usecode_use.md Food / drink).
 - **Worktype byte (usecode_vm.md §6b, 2026-10-26):** S)ave writes every scheduled or forced NPC's
   CURRENT worktype into objlist 0x11f1; a load re-applies a saved combat / flee code that differs
   from the schedule's (a guard sent after the party stays after it).
@@ -185,4 +201,6 @@ records kept + the party's) loads in real ScummVM with the earlier dropped plate
 on the carpet.
 
 ## Status
-VERIFIED (v1 scope above; §5 write-back added 2026-09-29; §6 rebuild 2026-09-30).
+VERIFIED (v1 scope above; §5 write-back added 2026-09-29; §6 rebuild 2026-09-30; new records / the dead
+flag / alcohol 2026-10-28 — PERSIST.REQ 1-5 on TT + 4 MB Falcon, ScummVM cross-loads of a save holding a
+body with contents, an open drawbridge and webs; usecode_use.md "Created and destroyed objects persist").

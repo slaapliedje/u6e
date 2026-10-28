@@ -70,6 +70,9 @@ int  magic_find(const char *name);
 /* Authentic U6 spell number (circle-1)*16 + index_in_circle, for save interop. */
 int  magic_spell_num(int spell);
 
+/* The spell's name ("Heal"), or "Unknown" out of range (Detect Magic names a staff's charge). */
+const char *magic_spell_name(int spell);
+
 /* The full gate check (pure). `known` = 1 if the spell is in the caster's book;
  * `have_reagents` = bitmask of reagents the caster HAS at least one of (bit i =>
  * obj_n 65+i present). Returns CAST_OK or the first failing precondition. */

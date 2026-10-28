@@ -185,10 +185,8 @@ static uint8_t        g_spell_light_turns=0; /* Light/Great Light: remaining lit
 static uint8_t        g_spell_light_rad=0;   /* the boosted avatar-globe radius while lit     */
 static uint8_t        g_xray_turns=0;        /* X-ray (§5e): see-through-walls turns remaining */
 static uint8_t        g_ainvis[U6_MAX_ACTORS]; /* per-actor invisibility turns (Invisibility set, Reveal clears) */
-static uint8_t        g_afood[U6_MAX_ACTORS];  /* per-actor food level (hunger model): ebbs, eating restores */
-#define FOOD_MAX    255
-#define FOOD_START  200
-#define FOOD_HUNGRY 40                        /* "X is hungry." warning threshold */
+static uint8_t        g_adead[U6_MAX_ACTORS];  /* 1 = slain and flagged dead (objlist 0x800 bit 0x10; usecode_use.md "Created and destroyed objects persist") */
+static uint8_t        g_alcohol;               /* drinks consumed (objlist 0x1c17): >3 staggers the Avatar, -1 per hour */
 static int            g_cast_spell=-1;       /* the spell the armed C)ast verb will cast       */
 static int            g_casting=0;           /* 1 = the C)ast spell-selection menu is open      */
 static uint8_t        g_castlist[SPELL_COUNT];/* castable spell indices, in menu (1-based) order */
@@ -460,6 +458,15 @@ static const char* rest_prompt_text(void);  /* fwd: the R)est prompt line (rest.
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
 static int            g_fx_on;             /* one-tile overlay drawn over everything: a cannonball in flight / a burst (cannons.md §1) */
 #define TILE_TARGET_CURSOR 365               /* the A)ttack crosshair (combat.md §6b) */
+/* the moongate walk (moongates.md §2b): phases 0 none, 1 walking in, 2 a member dissolving on the gate,
+ * 3 the change of place, 4 a red gate's view dissolving into the new one, 5 the companions falling in */
+static int            g_gw, g_gw_gate, g_gw_gx, g_gw_gy, g_gw_tx, g_gw_ty, g_gw_tz, g_gw_red, g_gw_ticks, g_gw_hold;
+static uint32_t       g_gw_tick;
+static int            g_gw_ghost_tile, g_gw_ghost_x, g_gw_ghost_y, g_gw_ghost_lvl;   /* the dissolving member's sprite */
+static uint8_t        g_gw_hidden[8]; static uint16_t g_gw_hx[8], g_gw_hy[8];
+static int            g_gw_fade;                                                     /* 0..16: how much of the new view shows */
+static uint8_t        g_gw_old[TMP_T*TMP_T];                                         /* the old view (a red gate's dissolve) */
+#define GW_TICKS 25
 static int            g_tcur_dx, g_tcur_dy;/* the crosshair's offset from the Avatar while 'A' is armed */
 static uint16_t       g_fx_tile; static int g_fx_x, g_fx_y;
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
@@ -1451,7 +1458,8 @@ static void run_intro_body(void)
         }
         if((key&0xFF)==0x1b){ for(int k=8;k>=0;k--){ fe_fade(pal,k); } break; }
         if(panlen>0){                                             /* pan the room away */
-            static uint8_t wf[640*200];
+            plat_mark wfm=plat_chip_mark(); uint8_t *wf=(uint8_t*)plat_alloc_chip(640*200);   /* transient: 128 KB of ST-RAM the stock Falcon needs back for gameplay (memory_streaming.md) */
+            if(!wf){ plat_chip_reset(wfm); break; }
             compose_wide(s, wf);                                  /* bake the whole frame once (1x, no parallax) */
             if(scroll_begin(wf, g_intro[s].w, g_intro[s].h)){     /* HARDWARE fine-scroll pan (Falcon/STe, later) */
                 for(int sx=0; sx<=panlen; sx+=2) scroll_pan(sx);  /* base+$FF8265, VBL-committed */
@@ -1469,6 +1477,7 @@ static void run_intro_body(void)
                 BENCH_PHASE(-1);
             }
             rdr_flip_begin();                                     /* re-enter double-buffer for the next scene */
+            plat_chip_reset(wfm);                                 /* the pan buffer goes back to the pool */
         }
         if(g_intro[s].type==2) avatar_climax(s);                  /* Avatar walks into the moongate + it sinks */
         for(int k=8;k>=0;k--){ fe_fade(pal,k); }      /* fade out */
@@ -2849,8 +2858,9 @@ static void init_npcs(void)
 }
 
 /* ---- a conversation's WORKTYPE on a live NPC (docs/rules/usecode_vm.md §6b) -------------------- */
+#define WT_MOTIONLESS_FORCED 0x7f                  /* a hatchling's embryo code 0 ("nothing"), kept as a force (0 = unforced; eggs.md §3b) */
 static int wt_is_combat(int wt){ return wt==0x99||wt==0x9b||wt==0x08||(wt>=0x03&&wt<=0x06); }
-static int wt_is_flee(int wt){ return wt==0x9a||wt==0x07; }
+static int wt_is_flee(int wt){ return wt==0x9a||wt==0x07||wt==0x09; }   /* mousing, combat-retreat, flee (the script's timid handler) */
 /* force worktype `wt` on NPC i: anchored where it stands, until its schedule entry changes */
 static void wt_apply(int i,int wt)
 {
@@ -2884,7 +2894,7 @@ static int npc_worktype(int i);                              /* (defined below) 
 static int npc_live_worktype(int i)
 {
     if(i<0||i>=U6_MAX_ACTORS) return 0;
-    if(g_wt_force[i]) return g_wt_force[i];
+    if(g_wt_force[i]) return g_wt_force[i]==WT_MOTIONLESS_FORCED ? 0 : g_wt_force[i];
     if(i==1) return 0x02;
     for(int p=0;p<g_nparty;p++) if(g_party[p].actor==i) return 0x01;
     int wt=npc_worktype(i); return wt<0?0:wt;
@@ -2927,6 +2937,71 @@ static int wt_activity(int wt)
     return ACT_WORK;
 }
 
+/* ---- hatched creatures' worktypes (eggs.md §3b) ------------------------------------------------ */
+static int  g_mover;                                                              /* (defined with the movement types below) */
+static int  npc_pathstep(const world_t*w,int sx,int sy,int tx,int ty,int avx,int avy,int*odx,int*ody);
+static int  actor_pos(int i,int*ax,int*ay);
+static int  nearest_party(const world_t*w,int x,int y,int*tx,int*ty,int*tid);   /* (defined below) */
+static void hostile_step(const world_t*w,int i);
+static void enemy_attack(int att,int def);
+static int  npc_occupied(int self,int x,int y);
+static int  mover_can_enter(const world_t*w,int x,int y);
+static const int HDX[4]={0,1,0,-1}, HDY[4]={-1,0,1,0};                           /* N E S W */
+/* one step of actor i in facing d (its movement type, nobody there): 1 if it moved */
+static int hatched_step_dir(const world_t*w,int i,int d)
+{   int nx=(g_actx[i]+HDX[d])&(U6_SURFACE_TILES-1), ny=(g_acty[i]+HDY[d])&(U6_SURFACE_TILES-1);
+    g_mover=i; int ok=mover_can_enter(w,nx,ny) && !npc_occupied(i,nx,ny) && !(nx==(int)w->px && ny==(int)w->py); g_mover=-1;
+    if(!ok) return 0;
+    g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny; g_facing[i]=(uint8_t)d; g_walkf[i]^=1; g_amoved[i]=1; return 1; }
+/* a step toward (gx,gy) around obstacles: 1 if it moved */
+static int hatched_step_toward(const world_t*w,int i,int gx,int gy)
+{   int mx,my; g_mover=i; int ok=npc_pathstep(w,g_actx[i],g_acty[i],gx,gy,(int)w->px,(int)w->py,&mx,&my); g_mover=-1;
+    if(!ok || !(mx||my)) return 0;
+    int nx=(g_actx[i]+mx)&(U6_SURFACE_TILES-1), ny=(g_acty[i]+my)&(U6_SURFACE_TILES-1);
+    if(npc_occupied(i,nx,ny)) return 0;
+    g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny; g_facing[i]=(uint8_t)(my<0?0:my>0?2:mx>0?1:3); g_walkf[i]^=1; g_amoved[i]=1; return 1; }
+/* the script's "like" / "unfriendly" roam: half the turns a step toward a point ten tiles away along a random axis */
+static void hatched_roam(const world_t*w,int i)
+{   if(rng_range(&g_crng,2)==0){ g_amoved[i]=0; return; }
+    int d=(int)rng_range(&g_crng,4); if(!hatched_step_dir(w,i,d)) g_amoved[i]=0; }
+/* the turn of a hatched creature under its embryo's worktype; 1 = handled here, 0 = the combat /
+ * flee paths take it (assault, the stances, attack-party; retreat, flee, mousing) */
+static int hatched_step(const world_t*w,int i)
+{
+    int wt=g_wt_force[i], x=g_actx[i], y=g_acty[i], tx,ty,tid;
+    int near=nearest_party(w,x,y,&tx,&ty,&tid), cx=near?(tx>x?tx-x:x-tx):99, cy=near?(ty>y?ty-y:y-ty):99;
+    switch(wt){
+    case 0x00: case 0x01: case WT_MOTIONLESS_FORCED: g_amoved[i]=0; return 1;   /* motionless (the reference's "nothing": no turn at all) */
+    case 0x0a:                                                                 /* likes the party: keeps close */
+        if(near && cx<3 && cy<3 && rng_range(&g_crng,2)==0){ if(!hatched_step_toward(w,i,tx,ty)) g_amoved[i]=0; return 1; }
+        hatched_roam(w,i); return 1;
+    case 0x0b:                                                                 /* unfriendly: roams, turns on a party that comes within two */
+        if(near && cx<3 && cy<3 && rng_range(&g_crng,8)==0){ g_wt_force[i]=0x08; g_hostile[i]=1; g_alert[i]=1; g_coward[i]=0; hostile_step(w,i); return 1; }
+        hatched_roam(w,i); return 1;
+    case 0x0c: case 0x8f:                                                      /* wanders: a random step one turn in eight */
+        if(rng_range(&g_crng,8)==0){ if(!hatched_step_dir(w,i,(int)rng_range(&g_crng,4))) g_amoved[i]=0; } else g_amoved[i]=0; return 1;
+    case 0x0d: case 0x0e:                                                      /* stationary (and the tangle vine): strikes what comes adjacent, never moves */
+        g_amoved[i]=0;
+        if(!actor_hostile(i)) return 1;
+        for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, ax,ay; if(a==1){ ax=(int)w->px; ay=(int)w->py; } else if(!actor_pos(a,&ax,&ay) || g_ahp[a]==0) continue;
+            int dx=ax>x?ax-x:x-ax, dy=ay>y?ay-y:y-ay; if(dx>1||dy>1) continue;
+            if(rng_range(&g_crng,81)<16 || wt==0x0d){ if(wt==0x0d && rng_range(&g_crng,2)) continue; g_facing[i]=(uint8_t)(ay<y?0:ay>y?2:ax>x?1:3); enemy_attack(i,a); return 1; } }
+        return 1;
+    case 0x0f: case 0x10: case 0x8b: case 0x8c: case 0x8d: case 0x8e: {       /* paces a line: a step along its facing, blocked = turns back */
+        if(rng_range(&g_crng,2)==0){ g_amoved[i]=0; return 1; }
+        int d=g_facing[i]; if(wt==0x0f && (d==0||d==2)) d=1; if(wt==0x10 && (d==1||d==3)) d=0;
+        if(!hatched_step_dir(w,i,d)){ d^=2; g_facing[i]=(uint8_t)d; if(!hatched_step_dir(w,i,d)) g_amoved[i]=0; }
+        return 1; }
+    default: return 0;
+    }
+}
+/* a hatched creature takes its embryo's worktype (eggs.md §3b): the code is forced on it where it stands */
+static void hatched_worktype(int s,int wt)
+{   if(s<0) return; if(wt==0) wt=WT_MOTIONLESS_FORCED;
+    wt_apply(s,wt);
+    if(wt==0x8b||wt==0x0f) g_facing[s]=0; if(wt==0x8c) g_facing[s]=1; if(wt==0x8d) g_facing[s]=2; if(wt==0x8e) g_facing[s]=3;
+    if(wt==0x0f) g_facing[s]=1; if(wt==0x10) g_facing[s]=0; }
+
 /* is some other surface actor already on (x,y)? (keeps NPCs from stacking) */
 static int npc_occupied(int self,int x,int y)
 {
@@ -2945,6 +3020,37 @@ static int is_party_member(int i)
     return 0;
 }
 
+/* ---- movement types (combat.md §7c) --------------------------------------------------------- */
+static int  actor_objn(int i);                              /* (defined below) */
+static int  tile_is_water(const world_t*w,int x,int y);     /* (defined with the vehicles) */
+static int  g_mover=-1;                                     /* the actor a path search serves (-1 = a land walker / the Avatar) */
+/* low air (the balloon, birds, bats, drakes, dragons, wisps, insects): no Wall-flagged map tile, no
+ * object whose tile is Wall-flagged or both double-width and double-height; `self_obj` = our own vehicle */
+static int air_low_can_enter(const world_t*w,int x,int y,int self_obj)
+{   if(g_tflags1[world_tile(w,x,y)]&0x04) return 0;
+    int i=objworld_at(&g_ow, x&(U6_SURFACE_TILES-1), y&(U6_SURFACE_TILES-1));
+    if(i<0 || i==self_obj) return 1;
+    int t=g_wobj[i].tile; return !(g_tflags1[t]&0x04) && (g_tflags[t]&0xC0)!=0xC0; }
+/* the current mover's movement type; actor_objn scans the base-tile table, so the answer is kept
+ * for as long as the mover and its appearance stay the same (a path search asks once per tile) */
+static int mover_type(void)
+{   static int lm=-1, lmt=MT_LAND; static uint16_t lb; static const uint8_t *lt;
+    if(g_mover<0) return MT_LAND;
+    if(g_mover!=lm || g_abase[g_mover]!=lb || g_basetile!=lt){
+        lm=g_mover; lb=g_abase[g_mover]; lt=g_basetile; lmt=monster_movetype(actor_objn(g_mover)); }
+    return lmt; }
+/* may the current mover step onto (x,y)? by its creature type's movement type */
+static int mover_can_enter(const world_t*w,int x,int y)
+{   int mt=mover_type();
+    switch(mt){
+    case MT_AIR_LOW:    return air_low_can_enter(w,x,y,-1);
+    case MT_WATER_HIGH: { if(!tile_is_water(w,x,y)) return 0; int t=world_tile(w,x,y); if(t>=16&&t<=47) return 0;   /* open water only: no shoreline */
+                          return objworld_at(&g_ow,x&(U6_SURFACE_TILES-1),y&(U6_SURFACE_TILES-1))<0; }
+    case MT_WATER_LOW:  return tile_is_water(w,x,y) && objworld_at(&g_ow,x&(U6_SURFACE_TILES-1),y&(U6_SURFACE_TILES-1))<0;
+    case MT_NONE:       return 0;
+    default:            return world_is_passable(w,x,y);
+    } }
+
 /* Bounded BFS pathfinder: the FIRST step from (sx,sy) along a shortest route toward
  * (tx,ty) that goes AROUND impassable tiles, searched within a 33x33 window. Returns
  * 1 + (*odx,*ody) for the step that most reduces distance to the target (the target
@@ -2953,6 +3059,8 @@ static int is_party_member(int i)
 #define PF_W (2*PF_R+1)
 static uint8_t  g_pf[PF_W*PF_W];      /* 0=unvisited, 0xff=start, else 1+firstdir */
 static int16_t  g_pfq[PF_W*PF_W];
+static uint8_t  g_pfk[PF_W*PF_W];     /* the direction that reached each visited cell (for npc_routestep) */
+static int      g_pf_best;            /* the cell the last successful search routed to */
 static int npc_pathstep(const world_t*w,int sx,int sy,int tx,int ty,int avx,int avy,int*odx,int*ody)
 {
     static const int dxs[4]={0,1,0,-1}, dys[4]={-1,0,1,0}; /* N E S W */
@@ -2972,14 +3080,50 @@ static int npc_pathstep(const world_t*w,int sx,int sy,int tx,int ty,int avx,int 
             int ni=ny*PF_W+nx; if(g_pf[ni]) continue;
             int wwx=(sx+(nx-PF_R))&(U6_SURFACE_TILES-1), wwy=(sy+(ny-PF_R))&(U6_SURFACE_TILES-1);
             if(wwx==avx && wwy==avy) continue;            /* don't path through the Avatar */
-            if(!world_is_passable(w,wwx,wwy)) continue;
+            if(!mover_can_enter(w,wwx,wwy)) continue;          /* by the mover's movement type (combat.md §7c) */
             g_pf[ni]=(uint8_t)(1+((ci==c)?k:(g_pf[ci]-1)));  /* remember the FIRST step */
+            g_pfk[ni]=(uint8_t)k;
             g_pfq[tail++]=(int16_t)ni;
         }
     }
     if(best<0 || best==c || g_pf[best]==0xff) return 0;
-    int fd=g_pf[best]-1; *odx=dxs[fd]; *ody=dys[fd]; return 1;
+    int fd=g_pf[best]-1; *odx=dxs[fd]; *ody=dys[fd]; g_pf_best=best; return 1;
 }
+
+/* A schedule walker's route, kept between turns (docs/design/performance.md): the search above
+ * floods its whole window whenever the goal lies outside it, so ~166 NPCs walking home at dusk
+ * cost seconds a turn. The route it finds is followed for up to RT_MAX steps; it is searched
+ * again when it runs out, when the walker is not where the route left it, when the goal, level
+ * or blocking map changed, or when its next tile is now blocked or holds the Avatar. A search
+ * that finds no step is not repeated for RT_RETRY turns. All of it is deterministic. */
+#define RT_MAX   16
+#define RT_RETRY 8
+static uint8_t  g_rt_dir[U6_MAX_ACTORS][RT_MAX], g_rt_n[U6_MAX_ACTORS], g_rt_at[U6_MAX_ACTORS], g_rt_wait[U6_MAX_ACTORS];
+static uint16_t g_rt_x[U6_MAX_ACTORS], g_rt_y[U6_MAX_ACTORS], g_rt_tx[U6_MAX_ACTORS], g_rt_ty[U6_MAX_ACTORS], g_rt_epoch[U6_MAX_ACTORS];
+static uint8_t  g_rt_z[U6_MAX_ACTORS];
+static uint16_t g_blocked_epoch;      /* bumped by build_blocked: cached routes are searched again */
+static int npc_routestep(const world_t*w,int i,int sx,int sy,int tx,int ty,int avx,int avy,int*odx,int*ody)
+{
+    static const int dxs[4]={0,1,0,-1}, dys[4]={-1,0,1,0}; /* N E S W */
+    if(g_rt_x[i]==sx && g_rt_y[i]==sy && g_rt_tx[i]==tx && g_rt_ty[i]==ty && g_rt_z[i]==(uint8_t)g_cur_level && g_rt_epoch[i]==g_blocked_epoch){
+        if(g_rt_n[i]==0 && g_rt_wait[i]){ g_rt_wait[i]--; return 0; }   /* no route last time: stand a while */
+        if(g_rt_at[i]<g_rt_n[i]){
+            int d=g_rt_dir[i][g_rt_at[i]], nx=(sx+dxs[d])&(U6_SURFACE_TILES-1), ny=(sy+dys[d])&(U6_SURFACE_TILES-1);
+            if(!(nx==avx && ny==avy) && mover_can_enter(w,nx,ny)){ *odx=dxs[d]; *ody=dys[d]; return 1; }
+        }
+    }
+    g_rt_x[i]=(uint16_t)sx; g_rt_y[i]=(uint16_t)sy; g_rt_tx[i]=(uint16_t)tx; g_rt_ty[i]=(uint16_t)ty;
+    g_rt_z[i]=(uint8_t)g_cur_level; g_rt_epoch[i]=g_blocked_epoch; g_rt_at[i]=0; g_rt_n[i]=0;
+    if(!npc_pathstep(w,sx,sy,tx,ty,avx,avy,odx,ody)){ g_rt_wait[i]=RT_RETRY; return 0; }
+    int len=0, c=PF_R*PF_W+PF_R;                       /* walk the route back from its end ... */
+    for(int ci=g_pf_best; ci!=c; ci-=dys[g_pfk[ci]]*PF_W+dxs[g_pfk[ci]]) len++;
+    int n=len<RT_MAX?len:RT_MAX;                       /* ... keeping its first RT_MAX steps */
+    for(int ci=g_pf_best, k=len; ci!=c; ci-=dys[g_pfk[ci]]*PF_W+dxs[g_pfk[ci]]) if(--k<n) g_rt_dir[i][k]=g_pfk[ci];
+    g_rt_n[i]=(uint8_t)n; return 1;
+}
+/* the walker took the step npc_routestep gave it */
+static void npc_routetaken(int i,int nx,int ny)
+{   g_rt_at[i]++; g_rt_x[i]=(uint16_t)nx; g_rt_y[i]=(uint16_t)ny; }
 
 static int  actor_pos(int i,int*ax,int*ay);          /* (defined below) */
 static void hostile_step(const world_t*w,int i);     /* combat.md CB2 (defined below) */
@@ -3018,7 +3162,9 @@ static void open_cast_menu(void);                           /* the C)ast menu (d
 static int  objects_reconcile(const world_t *w);           /* level changes -> the save template (defined below) */
 static void trap_fire(int idx);                             /* a trapped door / chest fires on the Avatar (magic_skills.md §5f) */
 static int  trap_child(int idx);                            /* the trap held by a door / chest, or -1 */
-static void drop_body(int id);                              /* a slain NPC leaves a body (§5f) */
+static void actor_die(int id);                              /* a slain creature: its remains, the dead flag (combat.md §3c) */
+static int  persist_obj_new(int obj_n,int frame,int x,int y,int quality);   /* a created object the save keeps (WOBJ_DIRTY_NEW) */
+static void obj_destroy(int idx); static int is_temp_obj(int i); static int rec_locate(int i,int32_t*cpos,int*k,int depth); static int objects_reconcile(const world_t *w);
 static void actor_name(int id,char*out,int cap);            /* an actor's name for a message (defined with the §5f helpers) */
 static int  foe_cast(const world_t*w,int i,int tid,int tx,int ty);   /* a hostile's charge roll + cast (combat.md §7b) */
 static int  temp_obj_new(int obj_n,int frame,int x,int y,int quality);   /* a runtime object (defined with the moongates) */
@@ -3052,14 +3198,12 @@ static void step_npcs(const world_t*w)
       for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<0||a>=U6_MAX_ACTORS) continue;
           if((rc&7)==0 && g_amana[a]<g_amaxmana[a]) g_amana[a]++;
           if((rc%24)==0 && g_ahp[a]>0 && g_ahp[a]<g_amaxhp[a]) g_ahp[a]++;
-          /* HUNGER: food ebbs; at the threshold warn once, at empty starve (lose HP). */
-          if((rc&3)==0 && g_afood[a]>0){ g_afood[a]--;
-              if(g_afood[a]==FOOD_HUNGRY){ int n=msgcat(0,g_party[p].name); msgcat(n," is hungry."); } }
-          if(g_afood[a]==0 && (rc&7)==0 && g_ahp[a]>1){ g_ahp[a]--;
-              int n=msgcat(0,g_party[p].name); msgcat(n," is starving!"); } }
+      }
+      { static int alc_hour=-1; if(g_hour!=alc_hour){ if(alc_hour>=0 && g_alcohol) g_alcohol--; alc_hour=g_hour; } }   /* a drink wears off per hour (usecode_use.md Food) */
       if((rc%24)==0) sync_party_hp(); }
     int avx=(int)w->px, avy=(int)w->py;
     for(int i=2;i<U6_MAX_ACTORS;i++){                  /* 0/1 = Avatar */
+        g_mover=i;                                      /* its path searches use its movement type (combat.md §7c) */
         if(g_atile[i]==0xffff||(int)g_actz[i]!=g_cur_level){ g_amoved[i]=0;
             if(g_summon[i]){ g_summon[i]=0; g_summon_life[i]=0; }   /* a slain/gone summon frees its slot (§5c) */
             if(g_ally[i]||g_charm[i]){ g_ally[i]=0; g_charm[i]=0; }  /* a slain ally / charmed foe */
@@ -3074,12 +3218,13 @@ static void step_npcs(const world_t*w)
             if(g_summon[i]==1){ ally_step(w,i); continue; }       /* allied: hunt hostiles */
             /* g_summon[i]==2 (hostile summon) falls through to the assault path below */
         }
+        if(g_temp[i] && g_wt_force[i] && !is_party_member(i) && !g_ally[i] && hatched_step(w,i)) continue;   /* a hatched creature's own worktype (eggs.md §3b) */
         if(g_ally[i] && !is_party_member(i)){ ally_step(w,i); continue; }   /* a charmed / confused foe fights for the party (magic_skills.md §5b) */
-        if(actor_hostile(i) && !is_party_member(i)){     /* CB2/CB4 assault — aggro-on-sight */
+        if(g_coward[i] && !is_party_member(i) && coward_step(w,i)) continue;         /* coward flees the party on sight (before any assault: a fleeing evil creature runs) */
+        if(actor_hostile(i) && !g_coward[i] && !is_party_member(i)){     /* CB2/CB4 assault — aggro-on-sight */
             if(!g_alert[i] && sees_party(w,i)) g_alert[i]=1;   /* lurk until it PERCEIVES the party */
             if(g_alert[i]) hostile_step(w,i); else g_amoved[i]=0;
             continue; }
-        if(g_coward[i] && !is_party_member(i) && coward_step(w,i)) continue;         /* coward flees the party on sight */
         int x=g_actx[i], y=g_acty[i], dx,dy;
         if(is_party_member(i)){                         /* party follows the Avatar */
             if(g_charm[i]){                             /* charmed by a foe (combat.md §7b): it turns on the party */
@@ -3105,7 +3250,7 @@ static void step_npcs(const world_t*w)
                     static const int DX[4]={0,1,0,-1}, DY[4]={-1,0,1,0};   /* N E S W */
                     int d=(int)((r>>13)&3), nx=(x+DX[d])&(U6_SURFACE_TILES-1), ny=(y+DY[d])&(U6_SURFACE_TILES-1);
                     int qx=nx-dx, qy=ny-dy; if(qx<0)qx=-qx; if(qy<0)qy=-qy;
-                    if(qx<=WANDER_R && qy<=WANDER_R && world_is_passable(w,nx,ny) &&
+                    if(qx<=WANDER_R && qy<=WANDER_R && mover_can_enter(w,nx,ny) &&
                        !npc_occupied(i,nx,ny) && !(nx==avx&&ny==avy)){
                         g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny;
                         g_facing[i]=(uint8_t)d; g_walkf[i]^=1; g_amoved[i]=1; continue;
@@ -3117,9 +3262,10 @@ static void step_npcs(const world_t*w)
         }
         if(x==dx && y==dy){ g_amoved[i]=0; continue; } /* arrived: stand */
         int mx,my;
-        if(npc_pathstep(w,x,y,dx,dy,avx,avy,&mx,&my)){  /* route around walls */
+        if(npc_routestep(w,i,x,y,dx,dy,avx,avy,&mx,&my)){  /* route around walls */
             int nx=(x+mx)&(U6_SURFACE_TILES-1), ny=(y+my)&(U6_SURFACE_TILES-1);
             if(npc_occupied(i,nx,ny)){ g_amoved[i]=0; continue; }  /* tile taken: wait */
+            npc_routetaken(i,nx,ny);
             g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny;
             g_facing[i]= my<0?0 : my>0?2 : mx>0?1 : 3;  /* N E S W */
             g_walkf[i]^=1; g_amoved[i]=1;
@@ -3216,10 +3362,14 @@ static int tile_family_fg(int t){                         /* t OR any of its ANI
 }
 static int anchor_family_fg(int R){                       /* anchor R + its multi-tile decrements (as draw_multi) */
     if(tile_family_fg(R)) return 1;
-    int f=(R>=0&&R<2048)?g_tflags[R]:0;
-    if((f&0x80) && tile_family_fg(R-1)) return 1;         /* dbl-width  -> tile-1 */
-    if((f&0x40) && tile_family_fg(R-2)) return 1;         /* dbl-height -> tile-2 */
-    if((f&0x80)&&(f&0x40) && tile_family_fg(R-3)) return 1; /* corner   -> tile-3 */
+    int f=(R>=0&&R<2048)?g_tflags[R]:0, tn=R;
+    /* the decrements are CUMULATIVE, exactly as draw_multi / the reference's drawTile: width first (R-1 left),
+     * then height (the NEXT number up: R-1 for a height-only object such as the clock 699 -> face 698, R-2
+     * when double-width too), then the corner. Until 2026-10-27 height-only objects were tested at R-2, so a
+     * foreground top above a non-foreground anchor (the clock face) never reached the foreground pass. */
+    if(f&0x80){ tn--; if(tile_family_fg(tn)) return 1; }  /* dbl-width  -> left  */
+    if(f&0x40){ tn--; if(tile_family_fg(tn)) return 1; }  /* dbl-height -> up    */
+    if((f&0x80)&&(f&0x40)){ tn--; if(tile_family_fg(tn)) return 1; } /* corner */
     return 0;
 }
 static int obj_is_fg(const wobj_t*o){
@@ -3262,6 +3412,7 @@ static int obj_is_lightsight(const wobj_t*o){
  * when a door opens/closes (an opened door's tile is no longer a sight-blocker). (Stage 3) */
 static void build_blocked(void)
 {
+    g_blocked_epoch++;                                 /* the map changed: walkers search their routes again */
     for(int32_t i=0;i<(int32_t)sizeof g_blocked;i++){ g_blocked[i]=0; g_sightblk[i]=0; }
     for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
         int t=o->tile; if(t<0||t>=2048) continue;
@@ -3314,6 +3465,11 @@ static int anim_tile(int t)
 /* tile to draw for a world object: fire/flame objects cycle their own frame_n
  * (objanim, U6WE) — offset by position so braziers flicker independently; other
  * objects fall through to anim_tile (ANIMDATA blank-slot fill). (object_anim.md) */
+#define TILE_SUNDIAL 861                               /* the sundial's object tile (U6 object 235) */
+/* the sundial's shadow follows the sun (usecode_use.md "Clock and sundial", animdata.md §3b): tile 861
+ * is drawn as shadow tile 328..335 by the hour (5-6h 328 ... 19-20h 335) and as the plain dial at night. */
+static int sundial_tile(int hour)
+{   return (hour>=5 && hour<=20) ? 328+(hour-5)/2 : TILE_SUNDIAL; }
 static int obj_tile(const wobj_t*o)
 {
     int on=o->obj_n;
@@ -3322,6 +3478,7 @@ static int obj_tile(const wobj_t*o)
         int b=g_basetile[on*2]|(g_basetile[on*2+1]<<8);
         return b + (int)((g_anim_ctr + o->x + o->y) % g_objanim[on]);
     }
+    if(o->tile==TILE_SUNDIAL) return sundial_tile(g_hour);   /* clock-driven, not counter-driven */
     return anim_tile(o->tile);
 }
 
@@ -3420,12 +3577,14 @@ static void draw_cell(uint8_t*tmp,int T,int cvx,int cvy,int tile,int pass)
         for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c];}
 }
 
-/* draw an object/actor whose (anim-resolved) anchor tile is `tile` at view cell
- * (vx,vy), expanding multi-tile objects up/left per tileflags2 bits6-7 — anchor is
- * the bottom-right cell, extras use the PREVIOUS tile numbers (tile-1 left,
- * tile-2 up, tile-3 corner), exactly as Nuvie's drawTile. Each tile is gated by
- * its own Foreground flag via `pass`. (docs/formats/tileflag.md.) */
-static void draw_multi(uint8_t*tmp,int T,int vx,int vy,int tile,int pass)
+/* draw an object/actor at view cell (vx,vy): `tile` is what the anchor cell shows (anim-resolved),
+ * `raw` the thing's OWN tile, whose tileflags2 bits6-7 give the size and whose PREVIOUS tile numbers
+ * are the extra cells (raw-1 left, raw-2 up, raw-3 corner), exactly as the reference's drawTile —
+ * the anchor is the bottom-right cell. The size must come from the raw tile: an ANIMDATA slot's frames
+ * carry no size flags (the clock 699 is double-height, its pendulum frames 298/299 are not — read from
+ * the frames, the clock face 698 was never drawn). Each tile is gated by its own Foreground flag via
+ * `pass`. (docs/formats/tileflag.md, animdata.md §3b.) */
+static void draw_multi(uint8_t*tmp,int T,int vx,int vy,int tile,int raw,int pass)
 {
     /* tileflags2 size bits — VERIFIED against Nuvie tile_manager.cpp:
      *   bit7 (0x80) = double-WIDTH,  bit6 (0x40) = double-HEIGHT.
@@ -3434,10 +3593,10 @@ static void draw_multi(uint8_t*tmp,int T,int vx,int vy,int tile,int pass)
      * "assembly" bug.) Anchor is the bottom-right; width extra is to the LEFT,
      * height extra ABOVE; decrement tile_num for each, width first, then height,
      * then the corner — matching Nuvie's drawTile order. */
-    int f=(tile>=0&&tile<2048)?g_tflags[tile]:0;
+    int f=(raw>=0&&raw<2048)?g_tflags[raw]:0;
     int dblw=f&0x80, dblh=f&0x40;
-    int tn=tile;
-    draw_cell(tmp,T,vx,vy,tn,pass);                                   /* anchor (x,y) */
+    int tn=raw;
+    draw_cell(tmp,T,vx,vy,tile,pass);                                 /* anchor (x,y): the resolved frame */
     if(dblw){ tn--; draw_cell(tmp,T,vx-1,vy  ,anim_tile(tn),pass); }  /* dbl-width:  (x-1,y) */
     if(dblh){ tn--; draw_cell(tmp,T,vx  ,vy-1,anim_tile(tn),pass); }  /* dbl-height: (x,y-1) */
     if(dblw&&dblh){ tn--; draw_cell(tmp,T,vx-1,vy-1,anim_tile(tn),pass); } /* corner (x-1,y-1) */
@@ -3701,7 +3860,9 @@ static void draw_view_objects(uint8_t*tmp,int T,int32_t left,int32_t top,int pas
 #ifdef BENCH
                 if(pass==1) g_fg_draw++;
 #endif
-                draw_multi(tmp,T,(int)vx,(int)vy,obj_tile(o),pass);
+                { int dt=obj_tile(o), ot=(int)o->tile;             /* size + extra cells from the object's own tile when the anchor is a substituted frame */
+                  int raw=(ot==TILE_SUNDIAL || (ot>=0&&ot<2048&&g_anim_idx[ot]>=0))?ot:dt;
+                  draw_multi(tmp,T,(int)vx,(int)vy,dt,raw,pass); }
             }
             if(bx==bx1) break;
         }
@@ -4227,6 +4388,13 @@ static uint32_t chunky_idle_selftest(const world_t*w){
 }
 #endif
 
+static const uint8_t BAYER4[16]={0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5};
+/* a cell's sprite dithered away: `lvl` 16 = whole, 0 = gone (a member vanishing into a moongate) */
+static void draw_cell_dither(uint8_t*tmp,int T,int cvx,int cvy,int tile,int lvl)
+{   if(cvx<0||cvy<0||cvx>=VT||cvy>=VT) return;
+    uint8_t keep[256]; for(int r=0;r<16;r++) for(int c=0;c<16;c++) keep[r*16+c]=tmp[(cvy*16+r)*T+cvx*16+c];
+    draw_cell(tmp,T,cvx,cvy,tile,-1);
+    for(int r=0;r<16;r++) for(int c=0;c<16;c++) if(BAYER4[(r&3)*4+(c&3)]>=lvl) tmp[(cvy*16+r)*T+cvx*16+c]=keep[r*16+c]; }
 static void compose_map(const world_t*w)
 {
     static uint8_t tmp[TMP_T*TMP_T];               /* 176x176 working buffer (static layer + dynamic) */
@@ -4355,7 +4523,7 @@ static void compose_map(const world_t*w)
 #ifdef BENCH
         g_ph1_nact++;
 #endif
-        draw_multi(tmp,T,(int)vx,(int)vy,anim_tile(npc_tile(i)),-1);} /* <=VT: a multi-tile
+        { int nt=npc_tile(i); draw_multi(tmp,T,(int)vx,(int)vy,anim_tile(nt),nt,-1); }} /* <=VT: a multi-tile
                                               NPC anchored 1 cell off the right/bottom edge bleeds in (see
                                               draw_view_objects); draw_multi clips the off-view anchor */
     }
@@ -4363,13 +4531,15 @@ static void compose_map(const world_t*w)
       if(g_avatar_hide) at=0;                              /* aboard a boat: the boat objects draw themselves */
       else if(g_avatar_ovr) at=g_avatar_ovr;               /* mounted: horse-with-rider sprite (vehicles.md §4) */
       else { int aon=g_wko.avatar; at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0; }
-      if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,-1); }
+      if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,at,-1); }
     SUB_ADD(g_ph1_actors);
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     if(g_fx_on){ int32_t fvx=((int32_t)g_fx_x-left)&(U6_SURFACE_TILES-1), fvy=((int32_t)g_fx_y-top)&(U6_SURFACE_TILES-1);
         if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); }   /* a cannonball / burst over everything (cannons.md §1) */
     if(g_pending_verb=='A'){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;                /* the A)ttack crosshair (combat.md §6b) */
         if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); }
+    if(g_gw_ghost_lvl>0){ int32_t gvx=((int32_t)g_gw_ghost_x-left)&(U6_SURFACE_TILES-1), gvy=((int32_t)g_gw_ghost_y-top)&(U6_SURFACE_TILES-1);   /* a member vanishing into a moongate */
+        if(gvx<VT&&gvy<VT) draw_cell_dither(tmp,T,(int)gvx,(int)gvy,g_gw_ghost_tile,g_gw_ghost_lvl); }
     PH_END(1);
     PH_BEGIN();
     /* Blit terrain shifted in by INSET px so the outer ring stays PAPYRUS (from
@@ -4714,7 +4884,7 @@ static int put2(char*s,int k,int v){ if(v>=10) s[k++]=(char)('0'+(v/10)%10); s[k
 static void status_text(const world_t*w,char*s)
 {
     int m=clock_minutes(w), hh=m/60, mm=m%60; int k=0;
-    k=put2(s,k,hh); s[k++]=':'; k=put2(s,k,mm);           /* HH:MM */
+    k=put2(s,k,hh); s[k++]=':'; s[k++]=(char)('0'+mm/10); s[k++]=(char)('0'+mm%10);   /* H:MM — minutes always two digits */
     { const char*t=" Lv"; while(*t) s[k++]=*t++; }
     s[k++]=(char)('0'+(g_alevel[1]<10?g_alevel[1]:9));    /* avatar exp level */
     { const char*t=" MP"; while(*t) s[k++]=*t++; }        /* avatar magic points (§ play) */
@@ -4760,6 +4930,28 @@ static void sync_party_in(void)
     for(int i=0;i<256;i++){ g_cg.dead[i]=(uint8_t)(g_atile[i]!=0xffff && g_ahp[i]==0); g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
         g_cg.healed_full[i]=0; }
     g_cg.avatar_hp=(int16_t)g_ahp[1];
+    /* stats, levels, experience and the party ORDER the scripts read and change (usecode_vm.md §6c) */
+    for(int i=0;i<256;i++){ int ok=(i<U6_MAX_ACTORS); g_cg.str[i]=ok?g_astr[i]:0; g_cg.dex[i]=ok?g_adex[i]:0; g_cg.intel[i]=ok?g_aint[i]:0;
+        g_cg.level[i]=(uint8_t)((ok && g_alevel[i]>0)?g_alevel[i]:1); g_cg.exp[i]=ok?g_aexp[i]:0; }
+    g_cg.nparty=g_nparty<16?g_nparty:16;
+    for(int p=0;p<g_cg.nparty;p++){ g_cg.party_actor[p]=(uint8_t)g_party[p].actor;
+        const char*nm=(g_party[p].actor==1 && g_avatar_name[0])?g_avatar_name:g_party[p].name; int o=0;
+        while(nm[o]&&o<15){ g_cg.party_name[p][o]=nm[o]; o++; } g_cg.party_name[p][o]=0; }
+}
+/* after a VM run: what a script did to stats / level / exp becomes real; a new level sets max HP = level x 30
+ * (HP itself untouched, as the reference); a new intelligence re-derives max mana (usecode_vm.md §6c) */
+static void sync_stats_out(void)
+{
+    for(int i=1;i<U6_MAX_ACTORS;i++){
+        int chg=0;
+        if(g_cg.str[i]!=g_astr[i]){ g_astr[i]=g_cg.str[i]; chg=1; }
+        if(g_cg.dex[i]!=g_adex[i]){ g_adex[i]=g_cg.dex[i]; chg=1; }
+        if(g_cg.intel[i]!=g_aint[i]){ g_aint[i]=g_cg.intel[i]; chg=1; g_amaxmana[i]=(uint8_t)magic_max_mana(g_aint[i], i==1); if(g_amana[i]>g_amaxmana[i]) g_amana[i]=g_amaxmana[i]; }
+        if(g_cg.exp[i]!=g_aexp[i]){ g_aexp[i]=g_cg.exp[i]; chg=1; }
+        { int lv=g_cg.level[i]; if(lv<1) lv=1; if(lv>8) lv=8;
+          if(lv!=g_alevel[i]){ g_alevel[i]=(int8_t)lv; int mh=lv*30; if(mh>255) mh=255; g_amaxhp[i]=(uint8_t)mh; if(g_ahp[i]>g_amaxhp[i]) g_ahp[i]=g_amaxhp[i]; chg=1; } }
+        (void)chg; }
+    sync_party_hp();
 }
 /* WORKTYPE (usecode_vm.md §6b): before a turn the VM sees every NPC's live worktype; after it, every
  * entry the script changed is forced on the live NPC (attack / flee / faint / post / face). */
@@ -4790,7 +4982,7 @@ static void sync_health_out(void)
 {
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
         if(g_poison[a] && !g_cg.poisoned[a]) g_poison[a]=0;
-        if(g_ahp[a]==0 && !g_cg.dead[a]){ g_ahp[a]=1; }
+        if(g_ahp[a]==0 && !g_cg.dead[a]){ g_ahp[a]=1; if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[a]=(uint16_t)(((uint32_t)g_aexp[a]*(uint32_t)k)/100u); } }   /* a healer's RESURRECT: exp x karma/100 */
         if(g_cg.healed_full[a] && g_ahp[a]<g_amaxhp[a]){ g_ahp[a]=g_amaxhp[a]; g_cg.healed_full[a]=0; } }
     sync_party_hp();
 }
@@ -4900,11 +5092,12 @@ static void se_talk(int id)
     g_talking=1; g_have_pc=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0;
 }
 
+static int g_talk_obj;                            /* 1 while a shrine / statue talks (no actor behind the number) */
 static void talk(int id)
 {
     if(g_gamename){ se_talk(id); return; }        /* SE/MD core pack: identity-only talk */
     if(g_armageddon){ msgcat(0,"No response."); return; }   /* after Armageddon nobody talks (§5f) */
-    if(id>=2 && id<U6_MAX_ACTORS && g_wt_force[id] && (wt_is_combat(g_wt_force[id])||wt_is_flee(g_wt_force[id]))){
+    if(!g_talk_obj && id>=2 && id<U6_MAX_ACTORS && g_wt_force[id] && (wt_is_combat(g_wt_force[id])||wt_is_flee(g_wt_force[id]))){
         msgcat(0,"No response."); return; }       /* fighting or fleeing: will not talk (usecode_vm.md §6b) */
     lib_t *L=(id<g_countA)?&g_lib[LIB_CONVA]:&g_lib[LIB_CONVB]; int ci=(id<g_countA)?id:id-g_countA;
     int32_t elen; const uint8_t *e=lib_get(L,ci,&elen);
@@ -4920,11 +5113,11 @@ static void talk(int id)
     { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
       while(*q && *q!='"') q++;
       tappend(0, *q?q:gt); }
-    sync_party_out(); sync_inv_out(); sync_health_out(); sync_worktype_out();   /* greeting may JOIN/LEAVE, give/take items, heal */
+    sync_party_out(); sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out();   /* greeting may JOIN/LEAVE, give/take items, heal */
 
     /* portrait: index id-1, library A for <98 else B (PORTRAIT.A holds 98) */
     g_have_pc=0;
-    int pidx=id-1;
+    int pidx=(g_talk_obj && id>=192 && id<=200)?-1:id-1;   /* shrines and the Codex altar show no face; the statues do (the reference's portrait rule) */
     if(pidx>=0){
         lib_t *P=(pidx<98)?&g_lib[LIB_PORTA]:&g_lib[LIB_PORTB]; int pi=(pidx<98)?pidx:pidx-98;
         int32_t pe; const uint8_t *pp=lib_get(P,pi,&pe);     /* (after the script: shares the bounce) */
@@ -4954,7 +5147,7 @@ static void submit_input(void)
     tappend(tl,cvm_text(&g_cv));
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);
-    sync_party_out(); sync_inv_out(); sync_health_out(); sync_worktype_out();   /* a keyword may change the party, give/take items/gold, heal */
+    sync_party_out(); sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out();   /* a keyword may change the party, give/take items/gold, heal */
 }
 
 /* index of an NPC orthogonally/diagonally adjacent to the avatar at g_hour,
@@ -4974,6 +5167,11 @@ static int find_adjacent_npc(const world_t*w)
 
 /* format the SINGULAR look name for a tile into out[cap] (drops the plural
  * `\`-run; keeps the singular `/`-run — see docs/formats/look.md). */
+/* the look line's article (tileflag.md: tileflags3 bits 6-7 = "", "a ", "an ", "the "): the reference prints
+ * article + name after "Thou dost see " — data-driven, quirks included ("a earth"). */
+static const char*look_article(int tile)
+{   static const char*const art[4]={"","a ","an ","the "};
+    return (g_tflags3 && tile>=0 && tile<2048) ? art[(g_tflags3[tile]>>6)&3] : ""; }
 static void obj_name(int tile,char*out,int cap)
 {
     const char*s=(tile>=0&&tile<2048)?g_looktbl[tile]:0;
@@ -5030,12 +5228,6 @@ static int spill_container(int ci,int*np){
     *np=n;
     return found;
 }
-
-/* Mechanism obj_n (docs/rules/usecode_use.md §Levers). ACTUATORS drive TARGETS: levers/switches
- * link to fields by QUALITY (confirmed 1:1 across the world: quality Q lever ↔ quality Q force
- * field); cranks/pull-chains (quality 0) link to a nearby portcullis by POSITION. */
-static int is_actuator_objn(int o){ return o==174||o==268||o==288||o==419; }  /* switch/lever/crank/pull-chain */
-static int is_field_objn(int o){ return o==51||o==175||o==317||o==318||o==319||o==320; } /* force/electric/fire/poison/protection/sleep */
 
 static int use_object_inner(int idx)
 {
@@ -5104,42 +5296,61 @@ static int use_object_inner(int idx)
         msgcat(n,".");
         return found?1:0;
     }
-    if(is_actuator_objn(o)){                         /* lever/switch/crank/pull-chain: drive linked targets */
-        int q=g_wobj[idx].quality, ax=g_wobj[idx].x, ay=g_wobj[idx].y, toggled=0;
-        int afr=(int)g_wobj[idx].tile - basetile(o); /* flip the actuator itself (lever up<->down); not
-                                                      * persisted, so it reverts in step with its (also
-                                                      * non-persisted) field on reload — stays consistent */
-        if(afr==0) g_wobj[idx].tile++; else if(afr==1) g_wobj[idx].tile--;
-        if(q!=0){                                    /* QUALITY-LINK: toggle every matching-quality field on/off */
-            for(int j=0;j<g_ow.nobjs;j++)
-                if(g_wobj[j].quality==q && is_field_objn(g_wobj[j].obj_n)){ g_wobj[j].alive^=1; toggled++; }
-        } else {                                     /* POSITIONAL: raise/lower the nearest portcullis (<=5 tiles) */
-            int best=-1,bd=99;
-            for(int j=0;j<g_ow.nobjs;j++){ if(!g_wobj[j].alive || g_wobj[j].obj_n!=310) continue;
-                int dx=g_wobj[j].x-ax,dy=g_wobj[j].y-ay; if(dx<0)dx=-dx; if(dy<0)dy=-dy;
-                int d=dx>dy?dx:dy; if(d<bd){ bd=d; best=j; } }
-            if(best>=0 && bd<=5){ int fr=(int)g_wobj[best].tile - basetile(310);
-                g_wobj[best].tile=(uint16_t)(basetile(310)+(fr==0?1:0)); /* open(->0) if closed, else close(->1) */
-                g_wobj[best].dirty=1; toggled++; }
-            /* DRAWBRIDGE (obj 269): a nearby span raises/lowers — frames 6-8 (raised, impassable) <->
-             * 9-11 (down, passable), the +/-3 pair derived from the tiles' tileflag1 passability. */
-            for(int j=0;j<g_ow.nobjs;j++){ if(!g_wobj[j].alive || g_wobj[j].obj_n!=269) continue;
-                int dx=g_wobj[j].x-ax,dy=g_wobj[j].y-ay; if(dx<0)dx=-dx; if(dy<0)dy=-dy;
-                if((dx>dy?dx:dy)>8) continue;             /* the whole contiguous span is within reach */
-                int fr=(int)g_wobj[j].tile - basetile(269);
-                if(fr>=6&&fr<=8){ g_wobj[j].tile+=3; g_wobj[j].dirty=1; toggled++; }        /* lower (walkable) */
-                else if(fr>=9&&fr<=11){ g_wobj[j].tile-=3; g_wobj[j].dirty=1; toggled++; }  /* raise (blocked) */
-            }
+    if(o==419){                                                   /* a bell pull: rings the bell within 8 tiles (usecode_use.md); no mechanism */
+        int bx=g_wobj[idx].x, by=g_wobj[idx].y, bell=-1;
+        for(int j=0;j<g_ow.nobjs && bell<0;j++){ const wobj_t*b=&g_wobj[j]; if(!b->alive || b->obj_n!=236) continue;
+            int ddx=(int)b->x-bx, ddy=(int)b->y-by; if(ddx<0)ddx=-ddx; if(ddy<0)ddy=-ddy; if(ddx<=8 && ddy<=8) bell=j; }
+        (void)bell; g_msg[0]=0; return 1; }
+    if(o==268||o==174){                                           /* lever / switch (usecode_use.md): quality Q names the doorways of quality Q on this level;
+                                                                   * at each, the barrier (portcullis / electric field) is destroyed if there, else created */
+        int q=g_wobj[idx].quality, lever=(o==268), target=lever?310:175, lv=g_wp?g_wp->level:0, hit=0;
+        if(!lever && q==113 && g_wobj[idx].x==139 && g_wobj[idx].y==0 && lv==1){   /* the Covetous switch: its doorway is unmarked in the data */
+            int dj=obj_idx_at(160,3,301); if(dj>=0 && g_wobj[dj].quality!=113){ g_wobj[dj].quality=113; if(g_wobj[dj].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[dj].dirty=WOBJ_DIRTY_STATE; } }
+        if(q) for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*dw=&g_wobj[j]; if(!dw->alive || dw->obj_n!=301 || dw->quality!=q) continue;
+            hit=1; int bj=obj_idx_at(dw->x,dw->y,target);
+            if(bj>=0) obj_destroy(bj);
+            else { int dfr=(int)dw->tile-basetile(301); if(dfr<0||dfr>63) dfr=0; int bfr=lever?(dfr==9?1:dfr):0; (void)persist_obj_new(target,bfr,dw->x,dw->y,0); } }
+        { int afr=(int)g_wobj[idx].tile-basetile(o); if(afr==0) g_wobj[idx].tile++; else if(afr==1) g_wobj[idx].tile--;
+          if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+        build_blocked();
+        msgcat(0, lever ? (hit?"Switch the lever, you hear a noise.":"Switch the lever, strange, nothing happened.")
+                        : (hit?"Operate the switch, you hear a noise.":"Operate the switch, strange, nothing happened."));
+        return 1; }
+    if(o==288){                                                   /* crank: the drawbridge (usecode_use.md) */
+        int cx=g_wobj[idx].x, cy=g_wobj[idx].y, M=U6_SURFACE_TILES-1, sx=-1, sy=-1;
+        for(int i=0;i<6 && sx<0;i++) if(obj_idx_at((cx+1)&M,(cy+i)&M,269)>=0){ sx=(cx+1)&M; sy=(cy+i)&M; }   /* the left crank */
+        for(int i=0;i<6 && sx<0;i++) if(obj_idx_at((cx-1)&M,(cy+i)&M,269)>=0)                                /* the right crank: walk to the left one */
+            for(int j=1;j<cx && sx<0;j++){ int ox=(cx-j)&M; if(obj_idx_at(ox,cy,288)>=0 && obj_idx_at((ox+1)&M,(cy+i)&M,269)>=0){ sx=(ox+1)&M; sy=(cy+i)&M; } }
+        if(sx<0){ int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,"."); return 0; }
+        int si=obj_idx_at(sx,sy,269), open=(si>=0 && (int)g_wobj[si].tile-basetile(269)==3);
+        { int e=obj_idx_at((sx-1)&M,sy,269); if(e>=0) obj_destroy(e); }   /* the closed row's end piece */
+        int W=0;
+        for(int h=0;h<32;h++){ int wd=0; for(;wd<32;wd++){ int pi=obj_idx_at((sx+wd)&M,(sy+h)&M,269); if(pi<0) break; obj_destroy(pi); }
+            if(wd==0) break; if(h==0) W=wd; }
+        if(W<2) W=2;
+        if(open){                                                 /* close: one raised row above the start */
+            (void)persist_obj_new(269,6,(sx-1)&M,(sy-1)&M,0); (void)persist_obj_new(269,8,(sx+W-1)&M,(sy-1)&M,0);
+            for(int i=0;i<W-1;i++) (void)persist_obj_new(269,7,(sx+i)&M,(sy-1)&M,0);
+            g_wobj[idx].tile=(uint16_t)basetile(288); msgcat(0,"Close the drawbridge.");
+        } else {                                                  /* open: chained rows down to passable ground, then the far end */
+            int yy=(sy+1)&M, i;
+            for(i=0;i<16;i++){ (void)persist_obj_new(269,3,sx,(yy+i)&M,0); (void)persist_obj_new(269,5,(sx+W-1)&M,(yy+i)&M,0);
+                for(int j=0;j<W-2;j++) (void)persist_obj_new(269,4,(sx+1+j)&M,(yy+i)&M,0);
+                if(g_wp && world_is_passable(g_wp,sx,(yy+i+1)&M)) break; }
+            i++;
+            for(int j=0;j<W-2;j++) (void)persist_obj_new(269,1,(sx+1+j)&M,(yy+i)&M,0);
+            (void)persist_obj_new(269,0,sx,(yy+i)&M,0); (void)persist_obj_new(269,2,(sx+W-1)&M,(yy+i)&M,0);
+            g_wobj[idx].tile=(uint16_t)(basetile(288)+3); msgcat(0,"Open the drawbridge.");
         }
-        build_blocked();                             /* field/gate passability changed */
-        { int n=msgcat(0,"You pull the "); n=msgcat(n,nm);
-          msgcat(n, toggled?". You hear machinery move.":"."); }
-        return 1;
-    }
-    { int fk=is_food_objn(o);                        /* eat/drink: consume one + restore food (hunger model) */
-      if(fk){ int n=msgcat(0, fk==2?"You drink the ":"You eat the "); n=msgcat(n,nm); msgcat(n,".");
-          if(g_wobj[idx].qty>1) g_wobj[idx].qty--; else g_wobj[idx].alive=0;   /* consumed; not persisted (reverts on reload) */
-          int f=g_afood[1]+(fk==2?15:40); g_afood[1]=(uint8_t)(f>FOOD_MAX?FOOD_MAX:f);  /* feed the Avatar */
+        if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE;
+        build_blocked(); return 1; }
+    { int fk=is_food_objn(o);                                     /* eat / drink (usecode_use.md Food): consume one, no hunger model */
+      if(fk){ msgcat(0, fk==2?"You drink it.":"You eat the food.");
+          if(fk==2 && g_alcohol<255) g_alcohol++;
+          if(g_wobj[idx].qty>1){ g_wobj[idx].qty--;                /* the record's count follows at once */
+              int32_t c; int k; if(!is_temp_obj(idx) && g_wobj[idx].dirty!=WOBJ_DIRTY_NEW && rec_locate(idx,&c,&k,0)){ uint8_t*r=g_savetmpl+c+2+k*8; int q=(int)g_wobj[idx].qty;
+                  if(is_stackable(o)){ r[6]=(uint8_t)(q&0xff); r[7]=(uint8_t)(q>>8); } else r[6]=(uint8_t)q; } }
+          else obj_destroy(idx);
           return 1; } }
     int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");
     return 0;
@@ -5165,7 +5376,6 @@ static int se_use_object(int idx)
     if(se_is_food(o)){                               /* eat: consume one + feed the Avatar (shared hunger model) */
         int n=msgcat(0,"You eat the "); n=msgcat(n,nm); msgcat(n,".");
         if(g_wobj[idx].qty>1) g_wobj[idx].qty--; else g_wobj[idx].alive=0;
-        int f=g_afood[1]+40; g_afood[1]=(uint8_t)(f>FOOD_MAX?FOOD_MAX:f);
         return 1;
     }
     if(strstr(nm,"door")){                           /* SE door: OPEN/CLOSE, data-driven (se_md_objn.md).
@@ -5440,7 +5650,7 @@ static int use_boat(world_t*w,int idx)
         fi=wobj_boat_at(412,c->x+VDX[face],c->y+VDY[face]);
         bi=wobj_boat_at(412,c->x-VDX[face],c->y-VDY[face]);
         if(fi<0||bi<0){ msgcat(0,"Ship not usable."); return 1; } }
-    g_veh_kind=on; g_veh_o[0]=ci; g_veh_o[1]=fi; g_veh_o[2]=bi;
+    g_veh_kind=on; g_veh_o[0]=ci; g_veh_o[1]=fi; g_veh_o[2]=bi; g_combat_mode=0;   /* boarding breaks off combat (music_areas.md §2) */
     moved_register(ci); moved_register(fi); moved_register(bi);   /* their records stay findable after sailing */
     g_veh_face=face; g_veh_phase=0;
     w->px=c->x; w->py=c->y;                        /* the player now IS the vehicle (camera follows) */
@@ -5451,7 +5661,7 @@ static int use_boat(world_t*w,int idx)
 /* the balloon (wind.md §4): U)se the inflated balloon (423) to board — any terrain */
 static int use_balloon(world_t*w,int idx)
 {   wobj_t*c=&g_wobj[idx];
-    g_veh_kind=423; g_veh_o[0]=idx; g_veh_o[1]=g_veh_o[2]=-1; moved_register(idx);
+    g_veh_kind=423; g_veh_o[0]=idx; g_veh_o[1]=g_veh_o[2]=-1; moved_register(idx); g_combat_mode=0;
     g_veh_face=2; g_veh_phase=0;
     w->px=c->x; w->py=c->y;
     veh_hide_party(); (void)g_tmpdm_invalidate();
@@ -5578,11 +5788,7 @@ static int use_pack_item(world_t*w,int on)
 
 /* one vehicle step: all target tiles must pass the §2 water rules; parts move + re-face as a unit */
 /* a balloon flies LOW (wind.md §4): no Wall-flagged map tile, no Wall-flagged object tile */
-static int veh_can_fly(const world_t*w,int x,int y)
-{   if(g_tflags1[world_tile(w,x,y)]&0x04) return 0;
-    int i=objworld_at(&g_ow, x&(U6_SURFACE_TILES-1), y&(U6_SURFACE_TILES-1));
-    if(i<0 || i==g_veh_o[0]) return 1;
-    return !(g_tflags1[g_wobj[i].tile]&0x04); }
+static int veh_can_fly(const world_t*w,int x,int y){ return air_low_can_enter(w,x,y,g_veh_o[0]); }   /* the balloon is a low-air mover (combat.md §7c) */
 /* one vehicle step: the raft and the balloon may override the direction (wind.md §3/§4); all
  * target tiles must pass the water/air rules; parts move + re-face as a unit. Returns the step's
  * MOVEMENT COST (wind.md §2), 0 = no move. */
@@ -5633,7 +5839,8 @@ static int player_step(world_t*w,int dx,int dy)
 {   int stepped;
     if(veh_aboard()){ int cost=vehicle_try_move(w,dx,dy); stepped=cost>0; if(stepped) vehicle_turns(w,cost); }
     else {
-        stepped=world_try_move(w,dx,dy);
+        if(g_alcohol>3 && rng_range(&g_crng,4)!=0){ dx=(int)rng_range(&g_crng,3)-1; dy=(int)rng_range(&g_crng,3)-1; msgcat(0,"Hic!"); }   /* drunk (usecode_use.md Food) */
+        stepped=(dx||dy) ? world_try_move(w,dx,dy) : 0;
         if(stepped){
             if(g_veh_kind==431){ g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;   /* mounted: re-face the horse sprite */
                 g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase); }
@@ -5685,10 +5892,19 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         else       obj_name(world_tile(w,tx,ty),nm,sizeof nm);   /* terrain name */
         if(idx>=0 && g_wobj[idx].obj_n==334){ int fr=(int)g_wobj[idx].tile-basetile(334);   /* looking reveals a secret door (usecode_use.md) */
             if(fr==0||fr==2){ g_wobj[idx].tile++; if(g_wobj[idx].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; build_blocked(); }
-            msgcat(0,"You see a secret door."); return 1; }
+            msgcat(0,"Searching here, you find a secret door."); return 1; }   /* the reference's search line (its name line first is not printed: the hidden frames' run-filled name is unverified) */
         if(idx>=0 && g_wobj[idx].obj_n==206 && (int)g_wobj[idx].tile-basetile(206)==2 && g_wobj[idx].quality>=1 && g_wobj[idx].quality<=3){   /* a holy flame (usecode_use.md) */
             int n2=msgcat(0,"The flame of "); n2=msgcat(n2,g_wobj[idx].quality==1?"truth":g_wobj[idx].quality==2?"love":"courage"); msgcat(n2,"."); return 0; }
-        n=msgcat(0,"You see "); n=msgcat(n,nm[0]?nm:"nothing");
+        int ltile=idx>=0?(int)g_wobj[idx].tile:world_tile(w,tx,ty);   /* the looked-at tile: its article (tileflags3 bits 6-7) */
+        if(idx>=0 && (g_wobj[idx].obj_n==159 || g_wobj[idx].obj_n==235)){   /* a clock or a sundial tells the time (usecode_use.md "Clock and sundial"); no search */
+            n=msgcat(0,"Thou dost see "); n=msgcat(n,look_article(ltile)); n=msgcat(n,nm); n=msgcat(n,".");
+            if(!(g_wobj[idx].obj_n==235 && (g_hour<5 || g_hour>19))){   /* a sundial reads nothing at night */
+                int h12=g_hour>12?g_hour-12:(g_hour==0?12:g_hour), mm=g_minutes%60;
+                n=msgcat(n,"\nThe time is "); n=msgcat_int(n,h12); n=msgcat(n,":");
+                g_msg[n++]=(char)('0'+mm/10); g_msg[n++]=(char)('0'+mm%10); g_msg[n]=0;   /* two-digit minutes */
+                msgcat(n,g_hour<12?" A.M.":" P.M."); }
+            return 0; }
+        n=msgcat(0,"Thou dost see "); if(nm[0]) n=msgcat(n,look_article(ltile)); n=msgcat(n,nm[0]?nm:"nothing");
         if(idx>=0 && container_searchable(idx)){                 /* U6: looking SEARCHES a container
                                                                   * (chest/crate/barrel only when OPEN) */
             n=msgcat(n,". Searching here, you find ");
@@ -5975,8 +6191,6 @@ static void draw_char_view(uint8_t col)
     u_num(b,g_aint[a]); stat_row(ty,"Int",b,col); ty+=10;
     e=u_num(b,g_ahp[a]);   *e++='/'; u_num(e,g_amaxhp[a]);   stat_row(ty,"HP",b,col); ty+=9;
     e=u_num(b,g_amana[a]); *e++='/'; u_num(e,g_amaxmana[a]); stat_row(ty,"MP",b,col); ty+=10;
-    { const char*fs=g_afood[a]==0?"Starving":g_afood[a]<=FOOD_HUNGRY?"Hungry":g_afood[a]>=150?"Full":"Fed";
-      stat_row(ty,"Food",fs,col); ty+=10; }                  /* hunger model */
     e=u_num(b,g_alevel[a]>0?g_alevel[a]:1);                  /* "Lev N  Exp M" share one row */
     *e++=' '; u_num(e,g_aexp[a]); stat_row(ty,"Lv/Ex",b,col); ty+=9;
     if(a==1){ u_num(b,g_cg.karma); stat_row(ty,"Kar",b,col); ty+=9; }  /* Avatar alignment (ADDKARMA/SUBKARMA) */
@@ -6407,13 +6621,6 @@ static int adjacent_hostile(const world_t*w,int x,int y){
         if(cx<=1 && cy<=1 && (cx||cy)) return i; }
     return -1;
 }
-/* total experience to BE a given level (U6: maxHP = level*30; thresholds double from 100).
- * L1=0 L2=100 L3=200 L4=400 L5=800 L6=1600 L7=3200 L8=6400 (cap 8). Verified vs the save:
- * party HP 90 = level 3 with exp ~370 (in [200,400)). (combat.md §3) */
-static uint32_t exp_for_level(int lvl){
-    if(lvl<=1) return 0; if(lvl>8) lvl=8;
-    return (uint32_t)100u << (lvl-2);
-}
 /* award experience to the avatar. Leveling is NOT automatic — authentic U6 gates the HP gain
  * behind TRAINING (see try_train); exp just accumulates here. */
 static void grant_exp(int actor,int gain){
@@ -6422,59 +6629,18 @@ static void grant_exp(int actor,int gain){
     g_aexp[actor]=(uint16_t)e;
 }
 
-/* experience awarded for slaying actor v (combat.md §3): floor((str+dex+int+hp+dmg+exp)/4)
- * from the victim's stats — hp is the creature's max HP (g_amaxhp), dmg the killing blow,
- * exp the victim's own experience value. Replaces the placeholder 2+str/2. Min 1. */
-static int kill_exp(int v,int dmg){
-    int hp = g_amaxhp[v] ? g_amaxhp[v] : 30;
-    int e = ((int)g_astr[v]+(int)g_adex[v]+(int)g_aint[v]+hp+dmg+(int)g_aexp[v])/4;
-    return e>0 ? e : 1;
+/* experience for slaying actor v (combat.md §3, the reference's actor_hit): only an evil or chaotic victim
+ * (its live alignment: g_align_hostile) pays, floor((str+dex+int+hp+dmg+xp)/4) from the CREATURE TABLE's
+ * base values for its type; an unknown type pays nothing */
+static int kill_exp(int v){
+    if(v<0||v>=U6_MAX_ACTORS || !g_align_hostile[v]) return 0;
+    mon_base_t mb; if(!monster_base(actor_objn(v),&mb)) return 0;
+    return ((int)mb.str+(int)mb.dex+(int)mb.intel+(int)mb.hp+(int)mb.dmg+(int)mb.xp)/4;
 }
+/* Lord British's actor (the Help spell's beacon): the first live actor of his type, else 5 */
+static int lord_british_actor(void){ for(int a=2;a<160;a++) if(g_atile[a]!=0xffff && actor_objn(a)==409) return a; return 5; }
 
-/* can any party member advance a level (earned enough exp)? gates the talk-to-trainer path. */
-static int party_can_train(void){
-    for(int p=0;p<g_nparty;p++){ int m=g_party[p].actor;
-        if(m>0 && m<U6_MAX_ACTORS && g_alevel[m]<8 && g_aexp[m]>=exp_for_level(g_alevel[m]+1)) return 1; }
-    return 0;
-}
-/* STAT trainer (combat.md §3): raise actor a's LOWEST of str/dex/int by 1 in exchange for gold
- * (capped at 30). Returns 1=str, 2=dex, 3=int, 0=none (capped or too little gold). MVP
- * simplifications (documented): one gold cost, auto-picks the lowest stat (no per-trainer
- * specialty / stat-choice menu), and gold is a placeholder (not yet loaded from the save). */
-#define STAT_COST 100
-static int can_train_stat(int a){
-    if(a<0||a>=U6_MAX_ACTORS||g_cg.gold<STAT_COST) return 0;
-    int lo=g_astr[a]; if(g_adex[a]<lo)lo=g_adex[a]; if(g_aint[a]<lo)lo=g_aint[a];
-    return lo<30;
-}
-static int train_stat(int a){
-    if(!can_train_stat(a)) return 0;
-    int s=g_astr[a],d=g_adex[a],n=g_aint[a];
-    int lo=(s<=d && s<=n)?1 : (d<=n)?2 : 3;              /* the lowest stat */
-    g_cg.gold-=STAT_COST;
-    if(lo==1) g_astr[a]=(uint8_t)(s+1); else if(lo==2) g_adex[a]=(uint8_t)(d+1); else g_aint[a]=(uint8_t)(n+1);
-    return lo;
-}
 
-/* TRAINING gate (authentic U6: Lord British advances thy experience level when thou hast
- * earned it). Talking to a trainer advances EVERY party member that has earned the next level
- * (the whole party is blessed): +30 max HP each, heal to full. Exp is a THRESHOLD, not spent.
- * If no level is earned, the trainer instead raises a STAT for gold (stat-trainer MVP). */
-static void try_train(int id){
-    if(id<0 || id>=U6_MAX_ACTORS || !g_trainer[id]) return;
-    int trained=0, av=0;
-    for(int p=0;p<g_nparty;p++){ int m=g_party[p].actor; if(m<=0||m>=U6_MAX_ACTORS) continue;
-        while(g_alevel[m]<8 && g_aexp[m]>=exp_for_level(g_alevel[m]+1)){
-            g_alevel[m]++; g_amaxhp[m]=(uint8_t)(g_alevel[m]*30); g_ahp[m]=g_amaxhp[m];
-            trained++; if(m==1) av=g_alevel[1]; }
-    }
-    sync_party_hp();
-    if(av){ int n=msgcat(0,"\"Thou art now level "); n=msgcat_int(n,av); msgcat(n,"!\""); return; }
-    if(trained){ msgcat(0,"\"Thy companions grow stronger!\""); return; }
-    int st=train_stat(1);                                /* no level earned: train the avatar's lowest stat for gold */
-    if(st){ const char*w=st==1?"strength":st==2?"agility":"wit"; int n=msgcat(0,"\"Thy "); n=msgcat(n,w); msgcat(n," grows!\""); }
-    else  { msgcat(0,"\"Earn more experience, then return.\""); }
-}
 /* a party member strikes a foe (CB4 combat mode): like the player's attack — readied weapon
  * vs the foe's armour, removes a slain foe + grants the avatar experience (§3). */
 static void party_attack(int att,int def){
@@ -6486,8 +6652,8 @@ static void party_attack(int att,int def){
     int dmg=status_dmg(def,combat_damage(wmax, g_aac[def], &g_crng));
     if(dmg<=0){ int n=msgcat(0,nm); msgcat(n," grazed."); return; }
     int hp=g_ahp[def]?g_ahp[def]:30;
-    if(dmg>=hp){ g_ahp[def]=0; g_atile[def]=0xffff; drop_body(def);   /* slain + removed; a body is left (§5f) */
-        int gain=kill_exp(def,dmg);                          /* §3 exp-award table */
+    if(dmg>=hp){ g_ahp[def]=0; actor_die(def);   /* slain + removed; a body is left (§5f) */
+        int gain=kill_exp(def);                          /* §3 exp-award table */
         int n=msgcat(0,"Slew "); n=msgcat(n,nm); n=msgcat(n,"! +"); n=msgcat_int(n,gain); msgcat(n,"exp");
         grant_exp(att,gain);   /* the slayer earns the exp (party leveling); gated by training */
     } else { g_ahp[def]=(uint8_t)(hp-dmg); int n=msgcat(0,nm); n=msgcat(n," wounded.");
@@ -6565,7 +6731,7 @@ static void cannon_damage_actor(int id,int dmg,const char*hit_verb,const char*ki
     if(!party){ g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1; }
     if(dmg<=0){ int n=msgcat(0,nm); msgcat(n," grazed."); return; }
     int hp=g_ahp[id]?g_ahp[id]:30;
-    if(dmg>=hp){ g_ahp[id]=0; if(!party){ g_atile[id]=0xffff; drop_body(id); }
+    if(dmg>=hp){ g_ahp[id]=0; if(!party) actor_die(id);
         int n=msgcat(0,kill_verb); n=msgcat(n,nm); msgcat(n,"!"); }
     else { g_ahp[id]=(uint8_t)(hp-dmg); int n=msgcat(0,hit_verb); n=msgcat(n,nm); msgcat(n,"!"); if(!party) check_flee(id); }
     if(party) sync_party_hp();
@@ -6742,7 +6908,7 @@ static int do_attack(world_t*w,int dx,int dy)
         int hp=g_ahp[id]?g_ahp[id]:30;
         if(dmg>=hp){                                          /* killed */
             g_ahp[id]=0; g_atile[id]=0xffff;                 /* remove from world (actor_pos skips) */
-            int gain=kill_exp(id,dmg);                       /* §3 exp-award table */
+            int gain=kill_exp(id);                       /* §3 exp-award table */
             int n=msg_tail(); n=msgcat(n,"Killed "); n=msgcat(n,nm); n=msgcat(n,"! +"); n=msgcat_int(n,gain); msgcat(n,"exp");
             grant_exp(1,gain);   /* the Avatar's kill; gated by training */
         } else {
@@ -6806,7 +6972,7 @@ static void fields_tick(const world_t*w){
             if(f->kind==0||f->kind==1){               /* fire / poison: damage */
                 int dmg=combat_damage(f->kind==0?9:4,0,&g_crng), hp=g_ahp[a]?g_ahp[a]:0;
                 g_ahp[a]=(dmg>=hp)?0:(uint8_t)(hp-dmg);
-                if(g_ahp[a]==0 && a!=1){ g_atile[a]=0xffff; if(!is_party_member(a)) drop_body(a); }   /* slain (not the Avatar) */
+                if(g_ahp[a]==0 && a!=1){ if(!is_party_member(a)) actor_die(a); else g_atile[a]=0xffff; }   /* slain (not the Avatar) */
             } else if(f->kind==2){                    /* sleep */
                 g_asleep[a]=3;
             }
@@ -6846,7 +7012,7 @@ static int spell_target_actor(world_t*w,int dx,int dy,const char*sname){
     for(int r=1;r<=5;r++){ int tx=(int)((w->px+dx*r)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy*r)&(U6_SURFACE_TILES-1));
         int id=npc_at(w,tx,ty); if(id>=0) return id;
         if(sight_blocked_at(w,tx,ty)) break; }
-    { int n=msgcat(0,sname); msgcat(n,": no target."); }
+    { (void)sname; msgcat(0,"nothing"); }
     return -1;
 }
 
@@ -6984,7 +7150,7 @@ static void eggs_update(const world_t *w, int teleport)
             int al=align;
             if((on==362||on==363) && (objworld_count(&g_ow,76)>0 || is_party_member(164))) al=ALIGN_NEUTRAL;   /* treaty */
             for(int c=0;c<qty;c++){
-                if(creature){ if(hatch_creature(w,eg->x,eg->y,on,al)>=0) added++; else g_egg_nofree++; }
+                if(creature){ int s=hatch_creature(w,eg->x,eg->y,on,al); if(s>=0){ added++; hatched_worktype(s,em->quality); } else g_egg_nofree++; }
                 else hatch_object(eg->x,eg->y,on,em->quality); } }
         if(added) build_blocked(); }
 }
@@ -7072,11 +7238,11 @@ static int spell_bolt(world_t*w,int dx,int dy,int wmax,const char*sname){
     if(!dx&&!dy){ int n=msgcat(0,sname); msgcat(n,": aim a direction."); return 0; }
     for(int r=1;r<=range;r++){ tx=(int)((w->px+dx*r)&(U6_SURFACE_TILES-1)); ty=(int)((w->py+dy*r)&(U6_SURFACE_TILES-1));
         id=npc_at(w,tx,ty); if(id>=0) break; if(sight_blocked_at(w,tx,ty)){ id=-1; break; } }
-    if(id<0){ int n=msgcat(0,sname); msgcat(n,": no target."); return 0; }
+    if(id<0){ (void)sname; msgcat(0,"nothing"); return 0; }
     g_hostile[id]=1; g_alert[id]=1; g_coward[id]=0;
     char foe[24]; obj_name(npc_tile(id),foe,sizeof foe); if(!foe[0]){foe[0]='f';foe[1]='o';foe[2]='e';foe[3]=0;}
     int dmg=combat_damage(wmax,g_aac[id],&g_crng), hp=g_ahp[id]?g_ahp[id]:30;
-    if(dmg>=hp){ g_ahp[id]=0; g_atile[id]=0xffff; drop_body(id); int gain=kill_exp(id,dmg);
+    if(dmg>=hp){ g_ahp[id]=0; int gain=kill_exp(id); actor_die(id);
         int n=msgcat(0,sname); n=msgcat(n," slays "); n=msgcat(n,foe); n=msgcat(n,"! +"); n=msgcat_int(n,gain); msgcat(n,"exp");
         grant_exp(1,gain); }
     else { g_ahp[id]=(uint8_t)(hp-dmg); int n=msgcat(0,sname); n=msgcat(n," hits "); n=msgcat(n,foe); msgcat(n,"!"); check_flee(id); }
@@ -7090,15 +7256,15 @@ static int spell_unlock(world_t*w,int dx,int dy){
     if(!dx&&!dy){ msgcat(0,"Unlock Magic: aim a direction."); return 0; }
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
     int idx=objworld_at(&g_ow,tx,ty);
-    if(idx<0){ msgcat(0,"There is no lock to dispel."); return 0; }
+    if(idx<0){ msgcat(0,"No effect"); return 0; }
     int o=g_wobj[idx].obj_n, fr=(int)g_wobj[idx].tile-basetile(o);
     if(o>=297&&o<=301 && (fr>=12&&fr<=15)){          /* magic-locked door -> fully unlocked (closed) */
         g_wobj[idx].tile-=8;                         /* 13->5, 15->7 = closed (openable) */
-        msgcat(0,"The magical lock dissolves!"); build_blocked(); return 1; }
+        msgcat(0,"unlocked!"); build_blocked(); return 1; }
     if(o==98 && fr==3){                              /* magic-locked chest -> closed */
         g_wobj[idx].tile-=2;                         /* 3 -> 1 = closed */
-        msgcat(0,"The magical lock dissolves!"); return 1; }
-    msgcat(0,"There is no magical lock here."); return 0;
+        msgcat(0,"unlocked!"); return 1; }
+    msgcat(0,"No effect"); return 0;
 }
 /* Cast dense spell `spell` by `caster` (actor id), optional target dir (dx,dy).
  * Runs the full gate-check, then (if implemented) applies the effect + spends
@@ -7118,7 +7284,7 @@ static int spell_charm_actor(int caster,int id)
 static int spell_kill_actor(int caster,int id)
 {   if(monster_flags(actor_objn(id))&MF_UNDEAD) return 2; if(!spell_takes(caster,id)) return 1;
     int hp=g_ahp[id]?g_ahp[id]:30; char nm[24]; obj_name(npc_tile(id),nm,sizeof nm);
-    g_ahp[id]=0; g_atile[id]=0xffff; g_charm[id]=0; g_ally[id]=0; grant_exp(caster,kill_exp(id,hp)); drop_body(id);
+    (void)hp; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0; grant_exp(caster,kill_exp(id)); actor_die(id);
     int n=msgcat(0,"Killed "); n=msgcat(n,nm[0]?nm:"it"); msgcat(n,"!"); return 0; }
 static int remove_enchantments(int id)
 {   int ok=0; if(g_asleep[id]){ g_asleep[id]=0; ok=1; } if(g_poison[id]){ g_poison[id]=0; ok=1; }
@@ -7142,7 +7308,7 @@ static int spell_target_obj(world_t*w,int dx,int dy,const char*sname){
     for(int r=1;r<=5;r++){ int tx=(int)((w->px+dx*r)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy*r)&(U6_SURFACE_TILES-1));
         int idx=objworld_at(&g_ow,tx,ty); if(idx>=0) return idx;
         if(sight_blocked_at(w,tx,ty)) break; }
-    { int n=msgcat(0,sname); msgcat(n,": no target."); }
+    { (void)sname; msgcat(0,"nothing"); }
     return -1;
 }
 /* may a new object land on (x,y)? passable, no actor, no blocking object, not under the Avatar */
@@ -7150,11 +7316,12 @@ static int can_put_obj(const world_t*w,int x,int y){
     return world_is_passable(w,x,y) && npc_at(w,x,y)<0 && !obj_blocks_at(x,y) && !(x==(int)w->px && y==(int)w->py); }
 /* remove a world object for good: a runtime object just frees its slot, a saved one is deleted at reconcile */
 static void obj_destroy(int idx){ wobj_t*o=&g_wobj[idx]; o->alive=0;
-    if(is_temp_obj(idx)){ o->dirty=0; o->parent=WOBJ_PARENT_NONE; g_wtemp[idx>>3]&=(uint8_t)~(1u<<(idx&7)); } else o->dirty=WOBJ_DIRTY_DESTROYED; }
+    if(is_temp_obj(idx) || o->dirty==WOBJ_DIRTY_NEW){ o->dirty=0; o->parent=WOBJ_PARENT_NONE; g_wtemp[idx>>3]&=(uint8_t)~(1u<<(idx&7)); }   /* no record (yet): nothing to delete */
+    else o->dirty=WOBJ_DIRTY_DESTROYED; }
 /* the trap (child "effect" 337) held by the door / chest at world index idx, or -1 */
 static int trap_child(int idx){ for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)idx && g_wobj[j].obj_n==337 && g_wobj[j].dirty!=WOBJ_DIRTY_DESTROYED) return j; return -1; }
 static void trap_remove(int j){ wobj_t*o=&g_wobj[j];
-    if(is_temp_obj(j)){ o->parent=WOBJ_PARENT_NONE; o->dirty=0; g_wtemp[j>>3]&=(uint8_t)~(1u<<(j&7)); } else o->dirty=WOBJ_DIRTY_DESTROYED; }
+    if(is_temp_obj(j) || o->dirty==WOBJ_DIRTY_NEW){ o->parent=WOBJ_PARENT_NONE; o->dirty=0; g_wtemp[j>>3]&=(uint8_t)~(1u<<(j&7)); } else o->dirty=WOBJ_DIRTY_DESTROYED; }
 /* an actor's name for a message: the Avatar's, a party member's, else its LOOK name */
 static void actor_name(int id,char*out,int cap){
     const char*s=0;
@@ -7162,11 +7329,59 @@ static void actor_name(int id,char*out,int cap){
     else for(int p=0;p<g_nparty;p++) if(g_party[p].actor==id){ s=g_party[p].name; break; }
     if(s){ int o=0; while(s[o]&&o<cap-1){ out[o]=s[o]; o++; } out[o]=0; return; }
     obj_name(npc_tile(id),out,cap); if(!out[0]){ out[0]='i'; out[1]='t'; out[2]=0; } }
-/* a slain NPC leaves a dead body (339; a dead gargoyle 341) with quality = its actor number (§5f) */
-static void drop_body(int id){
-    if(id<2 || id>=160) return;                                   /* real NPCs only (summons / hatched creatures are temporary) */
-    int on=actor_objn(id), body=(on==362||on==363)?341:(g_atpd[id]==4?339:0); if(!body) return;
-    if(temp_obj_new(body,0,g_actx[id],g_acty[id],id)>=0) build_blocked(); }
+/* live children for the records now contained in the body's record (by link, up to 4 deep) */
+static void body_children_from_template(int bi,int32_t cpos,int k){
+    static int16_t map_[2048];
+    const uint8_t*d=g_savetmpl; int cnt=d[cpos]|(d[cpos+1]<<8); const uint8_t*rec=d+cpos+2; if(cnt>2048) return;
+    for(int j=0;j<cnt;j++) map_[j]=-1; map_[k]=(int16_t)bi;
+    for(int depth=0;depth<4;depth++){ int added=0;
+        for(int j=0;j<cnt;j++){ const uint8_t*b=rec+j*8; if((b[0]&0x18)!=0x08 || map_[j]>=0) continue;
+            int link=((((b[2]>>2)|((b[3]&0xf)<<6))&0x3f)<<10)|(b[1]|((b[2]&3)<<8)); if(link<0||link>=cnt||map_[link]<0) continue;
+            int on=b[4]|((b[5]&3)<<8), fr=(b[5]>>2)&0x3f;
+            int slot=temp_obj_new(on,fr,g_wobj[bi].x,g_wobj[bi].y,0); if(slot<0) return;
+            g_wtemp[slot>>3]&=(uint8_t)~(1u<<(slot&7));            /* its record exists (just moved) */
+            wobj_t*o=&g_wobj[slot]; o->alive=0; o->parent=(uint16_t)map_[link]; o->dirty=0;
+            if(is_stackable(on)){ int q=(b[7]<<8)|b[6]; o->qty=(uint16_t)(q?q:1); o->quality=0; } else { o->qty=b[6]?b[6]:1; o->quality=b[7]; }
+            map_[j]=(int16_t)slot; added++; }
+        if(!added) break; } }
+/* live objects for records just dropped on (x,y) of this level in the actor-inventory chunk */
+static void live_dropped_inv(int x,int y,int z){
+    const uint8_t*d=g_savetmpl; int32_t iv=sav_inv_off(d,g_savetmpl_len); int cnt=d[iv]|(d[iv+1]<<8); const uint8_t*rec=d+iv+2;
+    for(int j=0;j<cnt;j++){ const uint8_t*b=rec+j*8; if(b[0]&0x18) continue;
+        int rx=b[1]|((b[2]&3)<<8), ry=(b[2]>>2)|((b[3]&0xf)<<6), rz=b[3]>>4; if(rx!=x||ry!=y||rz!=z) continue;
+        int on=b[4]|((b[5]&3)<<8), fr=(b[5]>>2)&0x3f; if(obj_idx_at(x,y,on)>=0) continue;
+        int slot=temp_obj_new(on,fr,x,y,0); if(slot<0) return; g_wtemp[slot>>3]&=(uint8_t)~(1u<<(slot&7));
+        wobj_t*o=&g_wobj[slot]; o->dirty=0;
+        if(is_stackable(on)){ int q=(b[7]<<8)|b[6]; o->qty=(uint16_t)(q?q:1); o->quality=0; } else { o->qty=b[6]?b[6]:1; o->quality=b[7]; } } }
+/* a creature dies (combat.md §3c; usecode_use.md "Created and destroyed objects persist"): its remains per the
+ * reference's actor-type table (quality = the actor, so Seance / Resurrect find it); a real NPC's inventory goes
+ * into the body (or onto the tile for blood / nothing) and the actor is flagged dead; temporaries leave
+ * temporary remains */
+static void actor_die(int id){
+    if(id<1 || id>=U6_MAX_ACTORS) return;
+    int on=actor_objn(id), fr=0, body=monster_remains(on,&fr);
+    int temp=(id>=160) || g_temp[id] || g_summon[id];
+    int x=g_actx[id], y=g_acty[id], lv=g_wp?g_wp->level:0;
+    if(fr==255){ int b=basetile(on); fr=(g_atile[id]!=0xffff && b>0 && (int)g_atile[id]>=b && (int)g_atile[id]<b+64) ? (int)g_atile[id]-b : 0; }
+    if(body==338) fr=(int)rng_range(&g_crng,3);
+    g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0;
+    int bi=-1;
+    if(body) bi = temp ? temp_obj_new(body,fr,x,y,id) : persist_obj_new(body,fr,x,y,id);
+    if(!temp && g_wp && g_savetmpl){
+        if(bi>=0 && body!=338){                                    /* the inventory goes into the body */
+            (void)objects_reconcile(g_wp);                          /* the body's record exists now */
+            int32_t bc; int bk, guard=0;
+            while(guard++<64 && rec_locate(bi,&bc,&bk,0)){
+                int sk=sav_inv_owner_first(g_savetmpl,g_savetmpl_len,id); if(sk<0) break;
+                int32_t nn=sav_recontain(g_savetmpl,g_savetmpl_len,g_savetmpl_cap,sav_inv_off(g_savetmpl,g_savetmpl_len),sk,bc,bk);
+                if(nn<=0) break; g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(g_savetmpl,nn); }
+            if(rec_locate(bi,&bc,&bk,0)) body_children_from_template(bi,bc,bk);
+        } else if(sav_drop_actor_inv(g_savetmpl,g_savetmpl_len,id,x,y,lv)>0) live_dropped_inv(x,y,lv);   /* blood / nothing: onto the tile */
+        for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[id][sl]=0;
+        g_adead[id]=1;
+    }
+    build_blocked(); }
+
 static int msg_tail(void){ int n=0; while(g_msg[n]) n++; if(n) n=msgcat(n," "); return n; }
 static void hit_msg(int id){ if(g_ahp[id]==0) return; int mx=g_amaxhp[id]?g_amaxhp[id]:30, di=((int)g_ahp[id]*4)/mx; if(di>=4) return;
     char nm[24]; actor_name(id,nm,sizeof nm); int n=msg_tail();
@@ -7181,7 +7396,7 @@ static void spell_damage(int caster,int id,int dmg){
     int hp=g_ahp[id]?g_ahp[id]:30;
     if(dmg>=hp){ g_ahp[id]=0; char nm[24]; actor_name(id,nm,sizeof nm); int n=msg_tail();
         if(party){ sync_party_hp(); n=msgcat(n,nm); msgcat(n," is slain!"); return; }
-        g_atile[id]=0xffff; g_charm[id]=0; g_ally[id]=0; grant_exp(caster,kill_exp(id,dmg)); drop_body(id);
+        g_charm[id]=0; g_ally[id]=0; grant_exp(caster,kill_exp(id)); actor_die(id);
         n=msgcat(n,"Killed "); n=msgcat(n,nm); msgcat(n,"!"); return; }
     g_ahp[id]=(uint8_t)(hp-dmg);
     if(party) sync_party_hp(); else { if(!g_ally[id]&&!g_charm[id]){ g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1; } check_flee(id); }
@@ -7230,7 +7445,8 @@ static void actor_to_slime(int i){ int base=basetile(375); g_abase[i]=(uint16_t)
 /* Resurrect: the actor stands up on (x,y) at 1 HP, every condition gone */
 static void resurrect_actor(const world_t*w,int id,int x,int y){
     g_atile[id]=g_abase[id]; g_actx[id]=(uint16_t)x; g_acty[id]=(uint16_t)y; g_actz[id]=(uint8_t)w->level;
-    g_ahp[id]=1; g_aflee[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=g_charm[id]=g_ally[id]=0; g_amoved[id]=0;
+    g_ahp[id]=1; g_aflee[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=g_charm[id]=g_ally[id]=0; g_amoved[id]=0; g_adead[id]=0;
+    if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[id]=(uint16_t)(((uint32_t)g_aexp[id]*(uint32_t)k)/100u); }   /* the reference's actor_resurrect: exp x karma/100 */
     if(is_party_member(id)) sync_party_hp(); }
 /* Pickpocket (§5f): the NPC's first carried record (not readied, not a container) moves to the party pack; names it */
 static int pickpocket(int id,char*nm,int cap){
@@ -7337,6 +7553,15 @@ static int foe_cast(const world_t*w,int i,int tid,int tx,int ty){
     for(int k=0;k<n;k++){ if(rng_range(&g_crng,4)!=0) continue; if((int)rng_range(&g_crng,(uint32_t)sp[k]+1)>=16) continue;
         foe_spell(w,i,sp[k],tid,tx,ty); return 1; }
     return 0; }
+/* Detect Magic's "It's magical." set: the tile numbers the reference's script lists (wands, rings, amulets,
+ * moonstones, magic armour and weapons, the Codex, …) — our own table from reading it (§5g) */
+static int tile_is_magical(int t){
+    static const uint16_t mt[]={0x207,0x20F,0x216,0x22F,0x232,0x235,0x238,0x239,0x23D,0x248,0x249,0x24A,0x24B,0x24C,0x24D,0x24E,0x24F,0x251,
+        0x252,0x253,0x255,0x256,0x257,0x25A,0x25B,0x25C,0x25D,0x25F,0x26E,0x2B6,0x31E,0x31F,0x326,0x368,0x369,0x36A,0x36B,0x36C,0x36D,0x36E,
+        0x36F,0x37D,0x37E,0x37F,0x3A8,0x3A9,0x3AA,0x3AB,0x3AC,0x3AD,0x3AE,0x3AF,0x3FD,0x3FE,0x40C,0x40D,0x40E,0x40F,0x41C,0x41D,0x41E,0x41F,
+        0x42C,0x42D,0x42E,0x42F,0x43C,0x43D,0x43E,0x43F,0x484,0x485,0x48E,0x48F,0x6D0,0x6D1,0x6D2,0x6D3};
+    for(unsigned i=0;i<sizeof mt/sizeof mt[0];i++) if(mt[i]==(uint16_t)t) return 1;
+    return 0; }
 static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     int intel = g_aint[caster]?g_aint[caster]:15;
     if(g_storm && !g_free_cast){ msgcat(0,"No magic at this time!"); return 0; }   /* the magical storm (§5f); a staff charge ignores it */
@@ -7344,10 +7569,10 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
                                    intel, reagent_mask(), g_amana[caster]);
     if(g_free_cast && spell>=0 && spell<SPELL_COUNT) rr=CAST_OK;   /* a staff charge: no spellbook, mana or reagent check (usecode_use.md) */
     if(rr!=CAST_OK){
-        msgcat(0, rr==CAST_UNKNOWN  ?"Thou dost not know that spell." :
+        msgcat(0, rr==CAST_UNKNOWN  ?"That spell is not in thy spellbook!" :
                   rr==CAST_LOWLEVEL ?"Thou art not experienced enough." :
-                  rr==CAST_NOREAGENTS?"Thou hast not the reagents!" :
-                  rr==CAST_NOMANA   ?"Not enough magic points!" : "Nothing happens.");
+                  rr==CAST_NOREAGENTS?"No Reagents." :
+                  rr==CAST_NOMANA   ?"Not enough magic points." : "Nothing happens.");
         return 0;
     }
     const char*nm=g_spells[spell].name; int applied=1, recompose=0;
@@ -7357,7 +7582,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
         for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, mx=g_amaxhp[a]?g_amaxhp[a]:30, d=mx-g_ahp[a];
             if(g_ahp[a]>0 && d>worst){ worst=d; tgt=a; } }
         int mx=g_amaxhp[tgt]?g_amaxhp[tgt]:30, old=g_ahp[tgt], nv=old+amt; if(nv>mx)nv=mx; g_ahp[tgt]=(uint8_t)nv;
-        int n=msgcat(0,nm); n=msgcat(n,"! +"); n=msgcat_int(n,nv-old); msgcat(n," HP");
+        (void)old; (void)nv; msgcat(0,"Success");
         sync_party_hp();
     } else if(!strcmp(nm,"Harm")||!strcmp(nm,"Magic Arrow")||!strcmp(nm,"Fireball")){
         int wmax = !strcmp(nm,"Fireball")?18 : !strcmp(nm,"Harm")?6 : 10;
@@ -7366,14 +7591,14 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     } else if(!strcmp(nm,"Light")||!strcmp(nm,"Great Light")){
         int big=!strcmp(nm,"Great Light");
         g_spell_light_turns=(uint8_t)(big?60:30); g_spell_light_rad=(uint8_t)(big?5:3);
-        int n=msgcat(0,nm); msgcat(n,"!"); recompose=1;
-    } else if(!strcmp(nm,"Create Food")){                 /* conjure a portion of food into the pack */
-        int on=129, merged=0;                             /* obj 129 = "portion of meat" (stackable) */
-        for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==on && g_ow.inv[i].qty<65535){ g_ow.inv[i].qty++; merged=1; break; }
+        recompose=1;
+    } else if(!strcmp(nm,"Create Food")){                 /* 1..10 portions of meat into the pack: "Create N food." (§5g) */
+        int on=129, q=1+(int)rng_range(&g_crng,10), merged=0;
+        for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==on && g_ow.inv[i].qty<65535-q){ g_ow.inv[i].qty=(uint16_t)(g_ow.inv[i].qty+q); merged=1; break; }
         if(!merged){ if(g_ow.ninv<OBJ_INV_MAX){ g_ow.inv[g_ow.ninv].obj_n=(uint16_t)on;
-            g_ow.inv[g_ow.ninv].tile=basetile((uint16_t)on); g_ow.inv[g_ow.ninv].qty=1; g_ow.inv[g_ow.ninv].quality=0; g_ow.ninv++; }
+            g_ow.inv[g_ow.ninv].tile=basetile((uint16_t)on); g_ow.inv[g_ow.ninv].qty=(uint16_t)q; g_ow.inv[g_ow.ninv].quality=0; g_ow.ninv++; }
             else applied=0; }
-        if(applied) msgcat(0,"Thou hast conjured food!"); else msgcat(0,"Thy pack is full.");
+        if(applied){ int n=msgcat(0,"Create "); n=msgcat_int(n,q); msgcat(n," food."); } else msgcat(0,"Not possible");
     } else if(!strcmp(nm,"Unlock Magic")){                /* dispel a MAGIC lock on a door/chest (§5) */
         if(!spell_unlock(w,dx,dy)) applied=0;             /* nothing to dispel -> don't spend */
         else recompose=1;
@@ -7384,18 +7609,18 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             if(!strcmp(nm,"Fire Field")){on=317;kind=0;} else if(!strcmp(nm,"Poison Field")){on=318;kind=1;}
             else if(!strcmp(nm,"Sleep Field")){on=320;kind=2;} else {on=51;kind=3;}
             int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-            field_add(tx,ty,on,kind,12);                  /* ~12-turn field (§5a) */
-            int n=msgcat(0,nm); msgcat(n,"!"); recompose=1; }
+            if(world_is_passable(w,tx,ty) && !obj_blocks_at(tx,ty) && !tile_is_water(w,tx,ty)){ field_add(tx,ty,on,kind,12); msgcat(0,"Success"); recompose=1; }   /* ~12-turn field (§5a) */
+            else { msgcat(0,"Not possible"); applied=0; } }
     } else if(!strcmp(nm,"Dispel Field")){                /* remove a field on the target tile (§5a) */
         int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
         int fi=field_at(tx,ty);
-        if(fi>=0){ field_remove(fi); msgcat(0,"The field vanishes."); recompose=1; }
-        else { msgcat(0,"There is no field there."); applied=0; }
+        if(fi>=0){ field_remove(fi); msgcat(0,"Success"); recompose=1; }
+        else { msgcat(0,"No effect"); applied=0; }
     } else if(!strcmp(nm,"Poison")||!strcmp(nm,"Sleep")||!strcmp(nm,"Paralyze")||
               !strcmp(nm,"Curse")||!strcmp(nm,"Charm")){   /* single-target status (§5b) */
         int id=spell_target_actor(w,dx,dy,nm);
         if(id<0) applied=0;
-        else if(!strcmp(nm,"Charm") && !actor_hostile(id) && !g_charm[id]){ msgcat(0,"It is not hostile."); applied=0; }
+        else if(!strcmp(nm,"Charm") && !actor_hostile(id) && !g_charm[id]){ msgcat(0,"Failed"); applied=0; }
         else {
             int r=0;
             if(!strcmp(nm,"Poison"))        r=spell_poison_actor(caster,id);
@@ -7405,80 +7630,88 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             else                            r=spell_charm_actor(caster,id);
             char foe[24]; obj_name(npc_tile(id),foe,sizeof foe);
             if(r==2) msgcat(0,"No effect"); else if(r==1) msgcat(0,"Failed");
-            else { int n=msgcat(0,foe[0]?foe:"The foe");
-                   msgcat(n, !strcmp(nm,"Poison")?" is poisoned.":!strcmp(nm,"Sleep")?" falls asleep.":!strcmp(nm,"Paralyze")?" is paralyzed.":
-                             !strcmp(nm,"Curse")?" is cursed.":(g_charm[id]?" is charmed.":" is freed.")); }
+            else if(!strcmp(nm,"Poison")||!strcmp(nm,"Sleep")) g_msg[0]=0;         /* the reference succeeds silently (§5g) */
+            else if(!strcmp(nm,"Curse")) msgcat(0,"Success");
+            else { int n=msgcat(0,foe[0]?foe:"The foe"); msgcat(n, !strcmp(nm,"Paralyze")?" is paralyzed.":(g_charm[id]?" is charmed.":" is freed.")); }
         }
     } else if(!strcmp(nm,"Protection")||!strcmp(nm,"Mass Protect")){   /* party buff (§5b) */
         int turns = !strcmp(nm,"Mass Protect")?30:20;
         for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=0&&a<U6_MAX_ACTORS) g_protect[a]=(uint8_t)turns; }
-        int n=msgcat(0,nm); msgcat(n," shields the party!");
+        msgcat(0,"Success");
     } else if(!strcmp(nm,"Conjure")||!strcmp(nm,"Summon")||!strcmp(nm,"Insect Swarm")){  /* summon allies (§5c) */
         if(!dx&&!dy){ int n=msgcat(0,nm); msgcat(n,": aim a direction."); applied=0; }
         else { int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), got=0;
             if(!strcmp(nm,"Conjure")) got=(summon_near(w,tx,ty,345,1,30,20)>=0);        /* 1 allied giant bat */
             else if(!strcmp(nm,"Insect Swarm")){ for(int k=0;k<3;k++) if(summon_near(w,tx,ty,344,1,20,8)>=0) got++; }  /* 3 allied insect swarms */
             else got=(summon_near(w,tx,ty,368,1,40,60)>=0);                             /* Summon: 1 allied daemon */
-            if(got){ int n=msgcat(0,nm); msgcat(n,"!"); recompose=1; } else { msgcat(0,"No room to summon."); applied=0; } }
+            if(!strcmp(nm,"Insect Swarm")) msgcat(0,"Success");                     /* the reference says Success whatever landed (§5g) */
+            else if(!strcmp(nm,"Conjure")) msgcat(0, got?"Success":"Failed");
+            else g_msg[0]=0;                                                        /* Summon: silent */
+            if(got) recompose=1; else applied=applied && !strcmp(nm,"Insect Swarm"); }
     } else if(!strcmp(nm,"Clone")){                       /* duplicate the target creature (§5c) */
         int id=spell_target_actor(w,dx,dy,nm);
         if(id<0) applied=0;
-        else if(clone_actor(w,id)<0){ msgcat(0,"No room to clone."); applied=0; }
+        else if(clone_actor(w,id)<0){ msgcat(0,"No effect"); applied=0; }
         else { char foe[24]; obj_name(npc_tile(id),foe,sizeof foe);
-            int n=msgcat(0,"Cloned the "); n=msgcat(n,foe[0]?foe:"creature"); msgcat(n,"!"); recompose=1; }
+            (void)foe; msgcat(0,"Success"); recompose=1; }
     } else if(!strcmp(nm,"Help")){                        /* recall the party to Lord British (§5d) */
-        int lb=-1; for(int a=2;a<U6_MAX_ACTORS;a++) if(g_trainer[a]){ lb=a; break; }
+        int lb=lord_british_actor();
         int lx,ly;
-        if(lb<0 || !actor_pos(lb,&lx,&ly)){ msgcat(0,"Lord British is beyond thy reach."); applied=0; }
+        if(lb<0 || !actor_pos(lb,&lx,&ly)){ g_msg[0]=0; applied=0; }
         else { static const int dd[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{-1,-1},{1,-1},{-1,1}};
             int tx=lx,ty=ly;                              /* a free tile beside Lord British */
             for(int k=0;k<8;k++){ int nx=(int)((lx+dd[k][0])&(U6_SURFACE_TILES-1)), ny=(int)((ly+dd[k][1])&(U6_SURFACE_TILES-1));
                 if(npc_at(w,nx,ny)<0 && world_is_passable(w,nx,ny)){ tx=nx; ty=ny; break; } }
-            teleport_party(w,tx,ty); msgcat(0,"Thou art returned to Lord British!"); recompose=1; }
+            teleport_party(w,tx,ty); g_msg[0]=0; recompose=1; }   /* silent, as the reference */
     } else if(!strcmp(nm,"Gate Travel")){                 /* moongate to a moonstone destination (§5d) */
-        if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No moongate answers thy call."); applied=0; }
+        if(!g_savetmpl || g_objlist_off<0){ g_msg[0]=0; applied=0; }
         else { const uint8_t*ml=g_savetmpl+g_objlist_off+0x1c1b; int mx=-1,my=-1;
             for(int t=0;t<8;t++){ int j=(g_gate_dest+t)&7; const uint8_t*e=ml+j*6;   /* next SURFACE moonstone */
                 int ex=e[0]|(e[1]<<8), ey=e[2]|(e[3]<<8), ez=e[4]|(e[5]<<8);
                 if(ez==0 && (ex||ey) && !(ex==(int)w->px&&ey==(int)w->py)){ mx=ex; my=ey; g_gate_dest=j+1; break; } }
-            if(mx<0){ msgcat(0,"The moongate flickers and fades."); applied=0; }
+            if(mx<0){ g_msg[0]=0; applied=0; }                              /* the reference only plays a failure sound */
             else { teleport_party(w,mx,my);
-                int n=msgcat(0,"The red moongate bears thee to ("); n=msgcat_int(n,mx); n=msgcat(n,","); n=msgcat_int(n,my); msgcat(n,")!"); recompose=1; } }
+                g_msg[0]=0; recompose=1; } }
     } else if(!strcmp(nm,"Locate")){                      /* sextant: report the party's position (§5e) */
-        int n=msgcat(0,"Thou art at ("); n=msgcat_int(n,(int)w->px); n=msgcat(n,","); n=msgcat_int(n,(int)w->py); msgcat(n,").");
-    } else if(!strcmp(nm,"Detect Magic")){                /* sense nearby magic locks (§5e) */
-        int cnt=0;
-        for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
-            int cx=(int)o->x-(int)w->px, cy=(int)o->y-(int)w->py; if(cx<0)cx=-cx; if(cy<0)cy=-cy;
-            if(cx>10||cy>10) continue;                    /* within ~10 tiles */
-            int fr=(int)o->tile-basetile(o->obj_n);
-            if((o->obj_n>=297&&o->obj_n<=301 && (fr>=12&&fr<=15)) || (o->obj_n==98&&fr==3)) cnt++; }
-        int n=msgcat(0,"Thou sensest "); n=msgcat_int(n,cnt); msgcat(n, cnt==1?" magical aura.":" magical auras.");
+        { int lx=(int)w->px/8, ly=(int)w->py/8; const char*lon=lx>38?"E":"W", *lat=ly>45?"S":"N"; lx=lx>38?lx-38:38-lx; ly=ly>45?ly-45:45-ly;   /* the sextant's bearing (§5g); '{' = the degree sign in U6's font */
+          int n=msgcat_int(0,ly); n=msgcat(n,"{"); n=msgcat(n,lat); n=msgcat(n,", "); n=msgcat_int(n,lx); n=msgcat(n,"{"); msgcat(n,lon); }
+    } else if(!strcmp(nm,"Detect Magic")){                /* what the aimed object is (§5g) */
+        int idx=spell_target_obj(w,dx,dy,nm);
+        if(idx<0){ msgcat(0,"No effect"); applied=0; }
+        else { const wobj_t*o=&g_wobj[idx]; int t=o->tile, fr=t-basetile(o->obj_n);
+            if(tile_is_magical(t)){
+                if(o->obj_n==275){ static const char*const pot[9]={"an awaken","a cure","a heal","a poison","a sleep","a protection","an invisibility","an xray vision","an unknown"};
+                    int n=msgcat(0,"It's "); n=msgcat(n,pot[fr>8?8:fr]); msgcat(n," potion."); }
+                else msgcat(0,"It's magical."); }
+            else { int ch=-1; for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)idx && g_wobj[j].obj_n==336){ ch=j; break; }
+                if(ch>=0){ int sp=-1; for(int k=0;k<SPELL_COUNT;k++) if(magic_spell_num(k)==g_wobj[ch].quality){ sp=k; break; }
+                    int n=msgcat(0,"It shows a charge of "); n=msgcat(n,sp>=0?magic_spell_name(sp):"Unknown"); msgcat(n,"."); }
+                else msgcat(0,"It's not magical."); } }
     } else if(!strcmp(nm,"X-ray")){                       /* see through walls for a while (§5e) */
-        g_xray_turns=30; msgcat(0,"Thou canst see through walls!"); recompose=1;
+        g_xray_turns=30; msgcat(0,"Done"); recompose=1;
     } else if(!strcmp(nm,"Telekinesis")){                 /* operate a distant object (§5e) */
         if(!dx&&!dy){ msgcat(0,"Telekinesis: aim a direction."); applied=0; }
         else if(!spell_telekinesis(w,dx,dy)) applied=0;
         else recompose=1;
     } else if(!strcmp(nm,"Peer")){                         /* gem overview of the area (§5) */
-        overview_view(w,(int)w->px,(int)w->py,0); msgcat(0,"Thou peerest at the land."); recompose=1;
+        overview_view(w,(int)w->px,(int)w->py,0); g_msg[0]=0; recompose=1;
     } else if(!strcmp(nm,"Wizard Eye")){                   /* a scouting eye — pan the overview (§5) */
-        overview_view(w,(int)w->px,(int)w->py,1); msgcat(0,"The eye returns to thee."); recompose=1;
+        overview_view(w,(int)w->px,(int)w->py,1); msgcat(0,"Done"); recompose=1;
     } else if(!strcmp(nm,"Invisibility")||!strcmp(nm,"Mass Invisibility")){   /* vanish (§5) */
         if(!strcmp(nm,"Mass Invisibility")){ for(int p=0;p<g_nparty;p++) g_ainvis[g_party[p].actor]=60;
-            msgcat(0,"The party fades from sight."); }
+            msgcat(0,"Success"); }
         else { int tgt=1;                                 /* aim: an actor in the direction, else self */
             if(dx||dy){ int a=npc_at(w,(int)((w->px+dx)&(U6_SURFACE_TILES-1)),(int)((w->py+dy)&(U6_SURFACE_TILES-1)));
                         if(a>=0) tgt=a; }
             g_ainvis[tgt]=60;
-            int n=msgcat(0, tgt==1?"Thou fadest":"It fades"); msgcat(n," from sight."); }
+            (void)tgt; msgcat(0,"Success"); }
         recompose=1;
     } else if(!strcmp(nm,"Reveal")){                       /* dispel invisibility nearby (§5) */
         int cnt=0;
         for(int i=1;i<U6_MAX_ACTORS;i++){ if(!g_ainvis[i]) continue; int ax,ay; if(!actor_pos(i,&ax,&ay)) continue;
             int cx=ax-(int)w->px, cy=ay-(int)w->py; if(cx<0)cx=-cx; if(cy<0)cy=-cy;
             if(cx<=5 && cy<=5){ g_ainvis[i]=0; cnt++; } }
-        int n=msgcat(0,"Reveal! "); n=msgcat_int(n,cnt); msgcat(n, cnt==1?" form seen.":" forms seen."); recompose=1;
+        (void)cnt; msgcat(0,"Success"); recompose=1;
     } else if(!strcmp(nm,"Kill")||!strcmp(nm,"Dispel Magic")){        /* single-target (§5b) */
         int id=spell_target_actor(w,dx,dy,nm);
         if(id<0) applied=0;
@@ -7512,7 +7745,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
         else { int o=g_wobj[idx].obj_n, fr=(int)g_wobj[idx].tile-basetile(o), lockable=((o>=297&&o<=300)||o==98);
             if(!strcmp(nm,"Detect Trap")) msgcat(0, (int_adj(caster)>=d30() && lockable && trap_child(idx)>=0) ? "It's trapped." : "No trap.");
             else if(!strcmp(nm,"Trap")){ if(!lockable || trap_child(idx)>=0){ msgcat(0,"No effect"); applied=0; }
-                else { int t=temp_obj_new(337,0,g_wobj[idx].x,g_wobj[idx].y,0); if(t<0){ msgcat(0,"No effect"); applied=0; }
+                else { int t=persist_obj_new(337,0,g_wobj[idx].x,g_wobj[idx].y,0); if(t<0){ msgcat(0,"No effect"); applied=0; }
                        else { g_wobj[t].alive=0; g_wobj[t].parent=(uint16_t)idx; msgcat(0,"Success"); } } }
             else if(!strcmp(nm,"Untrap")){ int t=lockable?trap_child(idx):-1; if(t<0){ msgcat(0,"No effect"); applied=0; } else { trap_remove(t); msgcat(0,"Success"); } }
             else {                                                /* Magic Lock */
@@ -7528,10 +7761,10 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             if(o==122||o==145||o==164||o==90||(o==206&&fr==(ig?0:1))){ if(ig ? (fr==0||fr==2) : (fr==1||fr==3)){ (void)use_object(idx); ok=1; } }
             else if(ig && o==223 && fr==0 && g_keg_timer==0){ (void)use_object(idx); ok=1; }
             if(ok){ int n=msg_tail(); msgcat(n,"Success"); recompose=1; } else { msgcat(0,"No effect"); applied=0; } }
-    } else if(!strcmp(nm,"Infravision")){ g_infravision=20; msgcat(0,"Thou seest in the dark."); recompose=1;
-    } else if(!strcmp(nm,"Eclipse")){ g_eclipse=20; msgcat(0,"The sun is darkened!"); recompose=1;
-    } else if(!strcmp(nm,"Time Stop")){ g_time_stop=10; msgcat(0,"Time stands still.");
-    } else if(!strcmp(nm,"Negate Magic")){ g_storm=20; msgcat(0,"A magical storm rises!");
+    } else if(!strcmp(nm,"Infravision")){ g_infravision=20; g_msg[0]=0; recompose=1;    /* the timer spells are silent (§5g) */
+    } else if(!strcmp(nm,"Eclipse")){ g_eclipse=20; g_msg[0]=0; recompose=1;
+    } else if(!strcmp(nm,"Time Stop")){ g_time_stop=10; g_msg[0]=0;
+    } else if(!strcmp(nm,"Negate Magic")){ g_storm=20; g_msg[0]=0;
     } else if(!strcmp(nm,"Vanish")||!strcmp(nm,"Replicate")){            /* objects with the Vanish flag (§5f) */
         int idx=spell_target_obj(w,dx,dy,nm);
         if(idx<0) applied=0;
@@ -7558,7 +7791,8 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             else if(wing){ if(actor_hostile(i) && !g_ainvis[i]){ spell_damage(caster,i,1+(int)rng_range(&g_crng,20)); foes++; } }
             else { if(actor_hostile(i) && !(on==346||on==345||on==412||on==414||on==415) && spell_takes(caster,i)) actor_to_slime(i); } }
         if(wing){ if(!foes){ msgcat(0,"No foes."); applied=0; } }
-        else { if(!strcmp(nm,"Slime")) slime_frames(); int n=msg_tail(); msgcat(n,"Success"); }
+        else if(!strcmp(nm,"Slime")) slime_frames();                       /* silent (§5g) */
+        else { int n=msg_tail(); msgcat(n,"Success"); }
         recompose=1;
     } else if(!strcmp(nm,"Animate")){                                   /* a readiable object becomes an ally (§5f) */
         int idx=spell_target_obj(w,dx,dy,nm);
@@ -7569,7 +7803,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     } else if(!strcmp(nm,"Lightning")||!strcmp(nm,"Disable")||!strcmp(nm,"Chain Bolt")){   /* bolts (§5f) */
         int id=spell_target_actor(w,dx,dy,nm);
         if(id<0) applied=0;
-        else if(!strcmp(nm,"Disable")){ if(!spell_takes(caster,id)) msgcat(0,"Failed"); else { g_msg[0]=0; spell_damage(caster,id,(g_ahp[id]?g_ahp[id]:30)-1); if(!g_msg[0]) msgcat(0,"Success"); } recompose=1; }
+        else if(!strcmp(nm,"Disable")){ if(!spell_takes(caster,id)) msgcat(0,"Failed"); else { g_msg[0]=0; spell_damage(caster,id,(g_ahp[id]?g_ahp[id]:30)-1); } recompose=1; }
         else { int ax,ay; if(!actor_pos(id,&ax,&ay)){ ax=g_actx[id]; ay=g_acty[id]; } fx_show(w,ax,ay,392,6); fx_clear(w); g_msg[0]=0;
             spell_damage(caster,id,1+(int)rng_range(&g_crng,30));
             if(!strcmp(nm,"Chain Bolt")){ int cur=id;
@@ -7582,13 +7816,13 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
                     if(best<0) break;
                     { int bx,by; if(best==1){ bx=(int)w->px; by=(int)w->py; } else actor_pos(best,&bx,&by); fx_show(w,bx,by,392,4); fx_clear(w); }
                     spell_damage(caster,best,1+(int)rng_range(&g_crng,30)); cur=best; } }
-            if(!g_msg[0]) msgcat(0,"Success"); recompose=1; }
+            recompose=1; }                                                  /* bolts speak through the hit messages (§5g) */
     } else if(!strcmp(nm,"Pickpocket")){                                /* steal the NPC's first carried item (§5f) */
         int id=spell_target_actor(w,dx,dy,nm);
         if(id<0) applied=0;
         else if(is_party_member(id)){ msgcat(0,"No effect"); applied=0; }
         else { char inm[24]; if(!pickpocket(id,inm,sizeof inm)){ msgcat(0,"No effect"); applied=0; }
-               else { int n=msgcat(0,inm[0]?inm:"something"); msgcat(n,". Success"); g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0); } }
+               else { int n=msgcat(0,inm[0]?inm:"something"); msgcat(n,"\nSuccess"); g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0); } }
     } else if(!strcmp(nm,"Seance")){                                    /* talk to the dead (§5f) */
         if(!dx&&!dy){ msgcat(0,"Seance: aim a direction."); applied=0; }
         else { int done=0;
@@ -7598,7 +7832,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
                 int idx=objworld_at(&g_ow,tx,ty);
                 if(idx>=0){ int o=g_wobj[idx].obj_n, q=g_wobj[idx].quality; if((o==339||o==340||o==341) && q>=2 && q<U6_MAX_ACTORS){ talk(q); done=1; } break; }
                 if(sight_blocked_at(w,tx,ty)) break; }
-            if(!done){ msgcat(0,"No effect"); applied=0; } }
+            if(!done){ g_msg[0]=0; applied=0; } }
     } else if(!strcmp(nm,"Resurrect")){                                 /* a body stands up (§5f) */
         int idx=spell_target_obj(w,dx,dy,nm);
         if(idx<0) applied=0;
@@ -7606,8 +7840,8 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             if(g_armageddon || !(o==339||o==340||o==341||o==354||o==349||o==134)){ msgcat(0,"No effect"); applied=0; }
             else if(q==0 || q>=160) msgcat(0,"The corpse is too old!");
             else if(g_atile[q]!=0xffff && !(is_party_member(q)&&g_ahp[q]==0)){ msgcat(0,"No effect"); applied=0; }
-            else { int x=g_wobj[idx].x, y=g_wobj[idx].y, n=0; (void)spill_container(idx,&n); g_msg[0]=0;
-                obj_destroy(idx); resurrect_actor(w,q,x,y); build_blocked(); msgcat(0,"Success"); recompose=1; } }
+            else { int x=g_wobj[idx].x, y=g_wobj[idx].y; obj_break_persist(w,idx); g_msg[0]=0;   /* contents spilled (records on the map), the body's record deleted */
+                resurrect_actor(w,q,x,y); build_blocked(); msgcat(0,"Success"); recompose=1; } }
     } else if(!strcmp(nm,"Explosion")||!strcmp(nm,"Hail Storm")||!strcmp(nm,"Web")||
               !strcmp(nm,"Flame Wind")||!strcmp(nm,"Poison Wind")||!strcmp(nm,"Energy Wind")||!strcmp(nm,"Death Wind")){   /* location spells (§5f) */
         int cx,cy;
@@ -7616,7 +7850,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             if(!strcmp(nm,"Explosion")){ int ids[24], c=area_actors(w,cx,cy,caster,ids,24);
                 fx_show(w,cx,cy,TILE_EXPLOSION,8); fx_clear(w);
                 for(int k=0;k<c;k++) spell_fire_dmg(caster,ids[k]);
-                blast_objects(w,cx,cy); if(!g_msg[0]) msgcat(0,"Success"); }
+                blast_objects(w,cx,cy); }
             else if(!strcmp(nm,"Hail Storm")){ int stones=10+(int)rng_range(&g_crng,20);
                 for(int st=0;st<stones;st++){ int ox=(int)rng_range(&g_crng,30)+(int)rng_range(&g_crng,30)-23, oy=(int)rng_range(&g_crng,30)+(int)rng_range(&g_crng,30)-23;
                     int tx=(cx+(ox>=0?ox>>4:-((15-ox)>>4)))&(span-1), ty=(cy+(oy>=0?oy>>4:-((15-oy)>>4)))&(span-1);
@@ -7624,17 +7858,17 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
                 { int n=msg_tail(); msgcat(n,"Success"); } }
             else if(!strcmp(nm,"Web")){ int put=0;
                 for(int oy=-1;oy<=1;oy++) for(int ox=-1;ox<=1;ox++){ int tx=(cx+ox)&(span-1), ty=(cy+oy)&(span-1);
-                    if(world_is_passable(w,tx,ty) && !obj_blocks_at(tx,ty) && obj_idx_at(tx,ty,53)<0 && !(tx==(int)w->px&&ty==(int)w->py) && temp_obj_new(53,0,tx,ty,0)>=0) put++; }
+                    if(world_is_passable(w,tx,ty) && !obj_blocks_at(tx,ty) && obj_idx_at(tx,ty,53)<0 && !(tx==(int)w->px&&ty==(int)w->py) && persist_obj_new(53,0,tx,ty,0)>=0) put++; }
                 if(put) build_blocked(); msgcat(0,"Success"); }
             else { int cells[5][2]; wind_cells(cx,cy,dx,dy,span,cells);
                 int tile=!strcmp(nm,"Flame Wind")?397:!strcmp(nm,"Poison Wind")?380:!strcmp(nm,"Energy Wind")?392:396;
                 fx_show(w,cx,cy,tile,6); fx_clear(w);
                 for(int k=0;k<5;k++){ int tx=cells[k][0], ty=cells[k][1]; int id=(tx==(int)w->px&&ty==(int)w->py)?1:npc_at(w,tx,ty); if(id<0||id==caster) continue;
                     if(!strcmp(nm,"Flame Wind")) spell_fire_dmg(caster,id);
-                    else if(!strcmp(nm,"Poison Wind")){ if(spell_poison_actor(caster,id)==0){ char fn[24]; actor_name(id,fn,sizeof fn); int n=msg_tail(); n=msgcat(n,fn); msgcat(n," is poisoned."); } }
+                    else if(!strcmp(nm,"Poison Wind")) (void)spell_poison_actor(caster,id);      /* silent (§5g) */
                     else if(!strcmp(nm,"Energy Wind")) spell_damage(caster,id,1+(int)rng_range(&g_crng,30));
                     else (void)spell_kill_actor(caster,id); }
-                if(!g_msg[0]) msgcat(0,"Success"); }
+                }
             recompose=1; }
     } else if(!strcmp(nm,"Enchant")){                                   /* a charge for the staff (§5f) */
         if(objworld_count(&g_ow,78)<=0){ msgcat(0,"No effect"); applied=0; }
@@ -7646,7 +7880,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     } else if(!strcmp(nm,"Armageddon")){                                /* everyone but the Avatar and Lord British dies (§5f) */
         for(int i=2;i<U6_MAX_ACTORS;i++){ if(i==5 || g_atile[i]==0xffff) continue;
             g_ahp[i]=0; g_charm[i]=0; g_ally[i]=0; g_aflee[i]=0; if(!is_party_member(i)){ g_atile[i]=0xffff; g_summon[i]=0; } }
-        g_armageddon=1; sync_party_hp(); msgcat(0,"Armageddon."); recompose=1;
+        g_armageddon=1; sync_party_hp(); g_msg[0]=0; recompose=1;
     } else { msgcat(0,"Nothing happens."); applied=0; }
     if(applied && !g_free_cast) magic_spend(caster,spell);
     g_free_cast=0;
@@ -7901,7 +8135,11 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='M'){ return push_select(w,dx,dy); }   /* M)ove: pick the thing (usecode_use.md) ... */
     if(verb=='N'){ return push_to(w,dx,dy); }       /* ... then push it one tile */
     if(verb=='T'){ int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-        int id=npc_at(w,tx,ty); if(id>=0) talk(id); else msgcat(0,"No-one to talk to."); return 0; }
+        int id=npc_at(w,tx,ty); if(id>=0) talk(id);
+        else { int oi=objworld_at(&g_ow,tx,ty); int on=oi>=0?g_wobj[oi].obj_n:0;        /* a shrine or a statue talks through its quality (usecode_vm.md §6c) */
+            if(oi>=0 && (on==393||on==397||on==398||on==399)){ g_talk_obj=1; talk(g_wobj[oi].quality); g_talk_obj=0; }
+            else msgcat(0,"No-one to talk to."); }
+        return 0; }
     return 0;
 }
 
@@ -8017,7 +8255,7 @@ static void rest_tick(world_t*w)
         for(int i=0;i<g_ow.ninv;i++) if(is_food_objn(g_ow.inv[i].obj_n)==1){ k=i; break; }
         int n=msgcat(0,g_party[p].name);
         if(k>=0){ objworld_consume(&g_ow,g_ow.inv[k].obj_n,1); msgcat(n," has food."); g_rest_fed++;
-            if(a>=1 && a<U6_MAX_ACTORS){ int f=g_afood[a]+40; g_afood[a]=(uint8_t)(f>FOOD_MAX?FOOD_MAX:f); } }
+            (void)a; }
         else msgcat(n," has no food.");
         g_rest_meal++; return; }
     if(g_rest_meal==g_nparty+1){ g_msg[0]=0;                                                 /* the sleep */
@@ -8090,6 +8328,20 @@ static int objects_reconcile(const world_t *w)
         if(nn>0){ n=nn; g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(d, nn); patched++; }
         if(mk>=0){ g_moved[mk]=g_moved[g_nmoved-1]; g_nmoved--; }   /* its moved entry is gone with it */
         o->dirty=0; }
+    /* 0b) NEW objects (save_load.md §5): a kept creation gets its record appended — on the map in the chunk of
+     *     this level and its tile; a contained one (a spell's trap) under its holder's record */
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(o->dirty!=WOBJ_DIRTY_NEW) continue;
+        if(g_wtemp[i>>3]&(1u<<(i&7))){ o->dirty=0; continue; }
+        int fr=(int)o->tile-basetile(o->obj_n); if(fr<0||fr>63) fr=0;
+        int q=(int)o->qty, ql=o->quality; if(is_stackable(o->obj_n)){ ql=(q>>8)&0xff; q&=0xff; }
+        int32_t nn=-1;
+        if(o->alive && o->parent==WOBJ_PARENT_NONE) nn=sav_insert_onmap(d,n,g_savetmpl_cap,surf,lv,o->x,o->y,o->obj_n,fr,q,ql,0x01);
+        else if(!o->alive && o->parent!=WOBJ_PARENT_NONE && o->parent<g_ow.nobjs){ int32_t hc; int hk;
+            if(rec_locate(o->parent,&hc,&hk,0)) nn=sav_insert_child(d,n,g_savetmpl_cap,hc,hk,o->obj_n,fr,q,ql); }
+        if(nn>0){ n=nn; g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(d,nn); o->dirty=(uint8_t)(o->alive?WOBJ_DIRTY_STATE:0); patched++; }
+        else { o->dirty=0; g_wtemp[i>>3]|=(uint8_t)(1u<<(i&7)); }      /* no room / no holder record: it stays a runtime object */
+    }
     /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
     for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
         if(!o->dirty || o->alive) continue;
@@ -8240,6 +8492,9 @@ static int do_save(const world_t *w)
         sav_set_actor_exp  (d, off, a, g_aexp[a]);
         sav_set_actor_level_mana(d, off, a, g_alevel[a], g_amana[a]);
     }
+    for(int i=1;i<U6_MAX_ACTORS;i++){ sav_set_actor_dead(d, off, i, g_adead[i]);   /* the dead flag; the slain parked at (0,0,0) with 0 HP */
+        if(g_adead[i]){ sav_set_actor_pos(d, off, i, 0, 0, 0); sav_set_actor_stats(d, off, i, 0, g_astr[i], g_adex[i], g_aint[i]); } }
+    sav_set_alcohol(d, off, g_alcohol);
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
     sav_set_talk_state(d, off, g_cg.talk_flags, g_cg.on_quest, g_cg.knows_gargish);   /* conversation state */
     sav_set_wind(d, off, g_wind==WIND_CALM ? 0xff : g_wind);                           /* the wind (wind.md §1) */
@@ -8393,6 +8648,11 @@ static int temp_obj_new(int obj_n,int frame,int x,int y,int quality)
     o->x=(uint16_t)x; o->y=(uint16_t)y; o->qty=1; o->quality=(uint8_t)quality;
     o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; return slot;
 }
+/* a created object the save KEEPS (usecode_use.md "Created and destroyed objects persist"): like a runtime
+ * object until the next reconcile appends its record (save_load.md §5 step 0b) */
+static int persist_obj_new(int obj_n,int frame,int x,int y,int quality)
+{   int i=temp_obj_new(obj_n,frame,x,y,quality); if(i<0) return -1;
+    g_wtemp[i>>3]&=(uint8_t)~(1u<<(i&7)); g_wobj[i].dirty=WOBJ_DIRTY_NEW; return i; }
 /* natural gates (85) stand on this level's buried moonstones while a moon is visible (§2) */
 static void moongates_update(const world_t*w)
 {
@@ -8477,6 +8737,53 @@ static void draw_peer(const world_t*w)
         for(int yy=0;yy<3;yy++) for(int xx=0;xx<3;xx++) ui_px(bx+tx*3+xx,by+ty*3+yy,c); }
 }
 /* stepping onto a gate (§2 blue / §3 red) */
+/* ---- the moongate walk (moongates.md §2b) ---------------------------------------------------- */
+static int avatar_tile(void){ int aon=g_wko.avatar; return (aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0; }
+static void gw_hide(int p)                                   /* member p is on the gate: it dissolves there */
+{   int a=g_party[p].actor; g_gw_hidden[p]=1;
+    g_gw_ghost_tile=(a==1)?avatar_tile():npc_tile(a); g_gw_ghost_x=g_gw_gx; g_gw_ghost_y=g_gw_gy; g_gw_ghost_lvl=16;
+    if(a==1) g_avatar_hide=1; else g_actz[a]=0xff;
+    g_gw=2; }
+static void gw_start(world_t*w,int idx,int tx,int ty,int tz)
+{   (void)w; g_gw_gate=idx; g_gw_gx=g_wobj[idx].x; g_gw_gy=g_wobj[idx].y; g_gw_tx=tx; g_gw_ty=ty; g_gw_tz=tz; g_gw_red=(g_wobj[idx].obj_n==84);
+    for(int p=0;p<8;p++) g_gw_hidden[p]=0; g_gw_ticks=0; g_gw_fade=-1; g_gw_ghost_lvl=0; g_gw_hold=0; g_gw_tick=plat_ticks_200hz();
+    g_gw=1; gw_hide(0); }                                       /* the Avatar already stands on the gate: in first */
+/* blend the old view back in where the dissolve has not reached yet (a red gate's change of place) */
+static void gw_fade_blend(void)
+{   for(int y=0;y<TMP_T;y++){ uint8_t*dr=ROW(MAPY+y)+MAPX; const uint8_t*orow=g_gw_old+y*TMP_T;
+        for(int x=0;x<TMP_T;x++) if(BAYER4[(y&3)*4+(x&3)]>=g_gw_fade) dr[x]=orow[x]; } }
+static void gw_tick(world_t*w)
+{
+    if(!g_gw || g_gw_hold) return;
+    if(g_gw==2){ g_gw_ghost_lvl-=4; if(g_gw_ghost_lvl<=0){ g_gw_ghost_lvl=0; g_gw=1; } return; }
+    if(g_gw==1){ int left=0; g_gw_ticks++;
+        for(int p=1;p<g_nparty && p<8;p++){ if(g_gw_hidden[p]) continue; int a=g_party[p].actor, ax,ay; left++;
+            if(!actor_pos(a,&ax,&ay) || g_gw_ticks>24){ g_gw_hidden[p]=1; g_actz[a]=0xff; left--; continue; }   /* off the level, or out of time: in without the walk */
+            if(ax==g_gw_gx && ay==g_gw_gy){ gw_hide(p); return; }                                   /* on the gate: one dissolves at a time */
+            int mx,my; g_mover=a;
+            if(npc_pathstep(w,ax,ay,g_gw_gx,g_gw_gy,-1,-1,&mx,&my) && (mx||my)){ int nx=(ax+mx)&(U6_SURFACE_TILES-1), ny=(ay+my)&(U6_SURFACE_TILES-1);
+                if(!npc_occupied(a,nx,ny)){ g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; g_facing[a]=(uint8_t)(my<0?0:my>0?2:mx>0?1:3); g_walkf[a]^=1; g_amoved[a]=1; } }
+            g_mover=-1; }
+        if(left==0) g_gw=3;
+        return; }
+    if(g_gw==3){                                                 /* everyone is in: the place changes */
+        int fade=g_gw_red;
+#ifdef HAVE_RDR_ST
+        if(g_native_planar) fade=0;                              /* the planar path keeps no chunky view to dissolve */
+#endif
+        if(fade){ for(int y=0;y<TMP_T;y++) memcpy(g_gw_old+y*TMP_T, ROW(MAPY+y)+MAPX, TMP_T); g_gw_fade=0; }
+        if(g_gw_red){ wobj_t*g=&g_wobj[g_gw_gate]; if(g->alive && g->obj_n==84){ obj_destroy(g_gw_gate); build_blocked(); } }   /* a red gate is spent */
+        g_avatar_hide=0;
+        if(!travel_to(w,g_gw_tx,g_gw_ty,g_gw_tz)){                /* no memory for the other level: everyone comes back out */
+            for(int p=1;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(g_gw_hidden[p]) g_actz[a]=(uint8_t)w->level; }
+            teleport_party(w,(int)w->px,(int)w->py); g_gw=0; g_gw_fade=-1; return; }
+        for(int p=1;p<g_nparty && p<8;p++){ int a=g_party[p].actor; g_gw_hx[p]=g_actx[a]; g_gw_hy[p]=g_acty[a]; g_actz[a]=0xff; }   /* seated by teleport_party; shown one by one */
+        msgcat(0,"You step through the moongate.");
+        g_gw=(g_gw_fade>=0)?4:5; return; }
+    if(g_gw==4){ g_gw_fade+=2; if(g_gw_fade>=16){ g_gw_fade=-1; g_gw=5; } return; }
+    if(g_gw==5){ for(int p=1;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(g_gw_hidden[p]){ g_actz[a]=(uint8_t)w->level; g_actx[a]=g_gw_hx[p]; g_acty[a]=g_gw_hy[p]; g_gw_hidden[p]=0; return; } }
+        g_gw=0; build_blocked(); return; }
+}
 static int enter_moongate(world_t*w,int idx)
 {
     const wobj_t*g=&g_wobj[idx]; int x=-1,y=-1,z=0, day,mo,yr; cur_date(w,&day,&mo,&yr);
@@ -8490,8 +8797,7 @@ static int enter_moongate(world_t*w,int idx)
         if(ph>=1 && moonstone_get(8-ph,&mx,&my,&mz) && (mx||my)){ x=mx; y=my; z=mz; }
     }
     if(x<0){ msgcat(0,"The moongate leads nowhere."); return 1; }
-    if(!travel_to(w,x,y,z)) return 1;
-    msgcat(0,"You step through the moongate."); return 1;
+    gw_start(w,idx,x,y,z); return 1;                              /* the party walks in one by one (§2b) */
 }
 /* the orb's answer to "Where:": a red gate at (dx,dy) whose quality is the orb position (§3) */
 static int orb_gate(world_t*w,int dx,int dy)
@@ -8543,6 +8849,7 @@ static int load_game(world_t *w)
         int on = ab[0] | ((ab[1] & 3) << 8), fr = ab[1] >> 2;
         g_actx[i] = (uint16_t)x; g_acty[i] = (uint16_t)y; g_actz[i] = (uint8_t)z;
         g_atile[i] = on ? (uint16_t)(basetile(on) + fr) : 0xffff;
+        g_adead[i] = (uint8_t)sav_get_actor_dead(d, ol, i); if(g_adead[i]) g_atile[i] = 0xffff;   /* slain: not placed (objlist 0x800 bit 0x10) */
         g_astr[i] = d[ol + 0x900 + i]; g_adex[i] = d[ol + 0xa00 + i]; g_aint[i] = d[ol + 0xb00 + i];
         g_aexp[i] = (uint16_t)(d[ol + 0xc00 + i*2] | (d[ol + 0xc00 + i*2 + 1] << 8));
         g_ahp[i]  = d[ol + 0xe00 + i]; g_amaxhp[i] = g_ahp[i];              /* boot semantics (pack load) */
@@ -8564,6 +8871,7 @@ static int load_game(world_t *w)
     g_storm = (uint8_t)sav_get_timer(d, ol, 13);                                    /* the magical storm (timer 13) */
     g_infravision = (uint8_t)sav_get_timer(d, ol, 1); g_time_stop = (uint8_t)sav_get_timer(d, ol, 14); g_eclipse = (uint8_t)sav_get_timer(d, ol, 15);
     g_rest_counter = (uint8_t)sav_get_rest_counter(d, ol); g_rest_hr = -1;        /* the rest counter (rest.md §4) */
+    g_alcohol = (uint8_t)sav_get_alcohol(d, ol);                                   /* drinks (usecode_use.md Food) */
     { int v = sav_get_vanish(d, ol); g_vanish_obj = (uint16_t)(v & 1023); g_vanish_frame = (uint8_t)(v >> 10); }   /* obj_n | frame<<10 (objlist.md) */
     g_armageddon = 0;
     for(int i = 0; i < U6_MAX_ACTORS; i++) g_torch_fuel[i] = 0;                 /* relit below from the readied records */
@@ -9219,11 +9527,10 @@ static const char *const MUS_WANDER[4] = { "BRIT", "FOREST", "STONES", "ULTIMA" 
 
 /* which music group the current game context calls for */
 static int music_area_group(int level){
+    if(g_veh_kind && g_veh_kind!=431) return MG_BOAT;   /* inside a ship / skiff / raft / balloon — first, as the reference (music_areas.md §2) */
     if(g_combat_mode) return MG_COMBAT;    /* battle (overrides location)             */
-    if(level > 0)     return MG_DUNGEON;   /* underground: dungeon theme (levels 1..5) */
-    /* future context hooks (need the systems first):
-       if(player_on_boat)   return MG_BOAT;
-       if(in_gargoyle_land) return MG_GARGOYLE; */
+    if(level == 5)    return MG_GARGOYLE;  /* the gargoyle world is map level 5        */
+    if(level > 0)     return MG_DUNGEON;   /* underground: dungeon theme (levels 1..4) */
     return MG_RANDOM;                       /* overworld + towns: a wandering theme    */
 }
 /* pick a track base name from a group (random within the wandering pool) */
@@ -9742,7 +10049,7 @@ int main(int argc, char **argv)
         g_demo_npc=0; g_script_len=0; g_script=NULL; g_nsparty=0; g_savestate=0;
         for(int i=0;i<U6_MAX_ACTORS;i++){ g_atile[i]=0xffff; g_actz[i]=0xff;
             g_ahp[i]=g_astr[i]=g_adex[i]=g_aint[i]=0; g_amaxhp[i]=0;
-            g_amana[i]=g_amaxmana[i]=0; g_afood[i]=FOOD_START; }
+            g_amana[i]=g_amaxmana[i]=0; g_adead[i]=0; }
         for(int i=0;i<2048;i++) g_looktbl[i]="";
         gettable=s_stub_1k;
 
@@ -9851,7 +10158,7 @@ int main(int argc, char **argv)
                 g_ahp[i]=s[0]; g_astr[i]=s[1]; g_adex[i]=s[2]; g_aint[i]=s[3]; g_amaxhp[i]=s[0];
                 g_amaxmana[i]=(uint8_t)magic_max_mana(s[3], i==1);      /* 2xInt (Avatar) / Int/2 (companion), §3 */
                 g_amana[i]=(s[4]==0xFF)?g_amaxmana[i]:s[4];  /* current mana from the save (objlist 0x13f1); 0xFF => full */
-                g_afood[i]=FOOD_START;                       /* hunger model: begin well-fed (not save-backed yet) */
+                g_adead[i]=0;
             } else { g_actz[i]=0xff; g_ahp[i]=g_astr[i]=g_adex[i]=g_aint[i]=0; g_amana[i]=g_amaxmana[i]=0; }
         }
         if(g_nsparty>MAXPARTY) g_nsparty=MAXPARTY;
@@ -10632,6 +10939,192 @@ int main(int argc, char **argv)
             }
         }
     }
+    /* headless MUSIC TRIGGER checks (music_areas.md §2): MUSIC.REQ byte = mode ('G' = the group walk). */
+    {   int32_t ml_=0; const uint8_t*mq=(const uint8_t*)plat_load_file("MUSIC.REQ",1,&ml_);
+        if(mq && ml_>0 && mq[0]=='G'){
+            static const char*const mg_name[5]={"RANDOM (a wandering theme)","COMBAT ENGAGE","DUNGEON","BOAT HORNPIPE","GARGOYLE"};
+            #define MU_STATE(T) do{ music_update_area(w.level); Cconws("MU " T ": group="); Cconws(g_music_group>=0&&g_music_group<5?mg_name[g_music_group]:"?"); Cconws("\r\n"); }while(0)
+            g_music_forced=0; g_music_group=-1; MU_STATE("surface");
+            int ci=wobj_boat_at(412,600,119); dbg_num("MU real ship found=", ci>=0);
+            if(ci>=0){ g_wobj[ci].quality=0; g_combat_mode=1; w.px=600; w.py=119; g_tmp_valid=0; (void)use_boat(&w,ci);   /* as if bought (no price tag) */ dbg_num("MU aboard=", g_veh_kind==412); dbg_num("MU combat broken off by boarding=", g_combat_mode==0);
+                MU_STATE("aboard the ship"); g_combat_mode=1; MU_STATE("combat while aboard"); g_combat_mode=0;
+                g_veh_kind=0; g_avatar_hide=0; g_veh_o[0]=g_veh_o[1]=g_veh_o[2]=-1; MU_STATE("ashore"); }
+            g_combat_mode=1; MU_STATE("combat ashore"); g_combat_mode=0;
+            g_veh_kind=431; MU_STATE("on a horse"); g_veh_kind=0;
+            if(travel_to(&w,186,225,1)) MU_STATE("level 1");
+            if(travel_to(&w,127,49,5)) MU_STATE("level 5");
+            if(travel_to(&w,307,352,0)) MU_STATE("surface again");
+            #undef MU_STATE
+        }
+    }
+    /* headless EXPERIENCE / SHRINE checks (combat.md §3, usecode_vm.md §6c): SHRINE.REQ byte = mode. */
+    {   int32_t shl_=0; const uint8_t*shq=(const uint8_t*)plat_load_file("SHRINE.REQ",1,&shl_);
+        if(shq && shl_>0){ int mode=shq[0];
+            #define SH_FEED(S) do{ const char*k_=(S); g_inlen=0; while(k_[g_inlen]){ g_inbuf[g_inlen]=k_[g_inlen]; g_inlen++; } g_inbuf[g_inlen]=0; submit_input(); Cconws("SH > " S ": "); Cconws(cvm_text(&g_cv)); Cconws("\r\n"); }while(0)
+            if(mode=='1'){                                             /* the kill award: creature-table based, evil/chaotic only */
+                teleport_party(&w,307,421); int M=U6_SURFACE_TILES-1;
+                int e0=g_aexp[1]; int g=hatch_creature(&w,(w.px+2)&M,w.py,363,ALIGN_EVIL); dbg_num("SH gargoyle hatched=", g>=0);
+                if(g>=0){ dbg_num("SH gargoyle evil=", g_align_hostile[g]); dbg_num("SH gargoyle award=", kill_exp(g)); g_astr[g]=1; g_ahp[g]=1;   /* live stats changed: the award must not care */
+                    spell_damage(1,g,999); dbg_num("SH exp gained=", (int)g_aexp[1]-e0); }
+                e0=g_aexp[1]; int d=hatch_creature(&w,(w.px+2)&M,w.py,350,ALIGN_NEUTRAL); if(d>=0){ dbg_num("SH deer evil=", g_align_hostile[d]); spell_damage(1,d,999); dbg_num("SH deer exp gained=", (int)g_aexp[1]-e0); }
+                e0=g_aexp[1]; int r=hatch_creature(&w,(w.px+2)&M,w.py,342,ALIGN_DEFAULT); if(r>=0){ dbg_num("SH rat evil=", g_align_hostile[r]); spell_damage(1,r,999); dbg_num("SH rat exp gained=", (int)g_aexp[1]-e0); }
+                e0=g_aexp[1]; int dm=hatch_creature(&w,(w.px+2)&M,w.py,367,ALIGN_DEFAULT); if(dm>=0){ spell_damage(1,dm,999); dbg_num("SH daemon exp gained=", (int)g_aexp[1]-e0); }
+                dbg_num("SH level unchanged=", g_alevel[1]);
+            }
+            if(mode=='2'){                                             /* the Shrine of Honesty levels a member (its script) */
+                int si=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==393 && g_wobj[i].quality==192){ si=i; break; }
+                dbg_num("SH honesty shrine found=", si>=0);
+                if(si>=0){ int sx=g_wobj[si].x, sy=g_wobj[si].y; teleport_party(&w,sx,(sy+1)&(U6_SURFACE_TILES-1));
+                    g_alevel[1]=3; g_amaxhp[1]=90; g_ahp[1]=90; g_aexp[1]=400; g_aint[1]=20; int i0=g_aint[1], l2=g_alevel[2], l3=g_alevel[3];
+                    dbg_num("SH level before=", g_alevel[1]); dbg_num("SH exp before=", g_aexp[1]); dbg_num("SH int before=", g_aint[1]); dbg_num("SH party size=", g_nparty); dbg_num("SH party[0] actor=", g_party[0].actor);
+                    (void)resolve_target(&w,'T',0,-1); dbg_num("SH talking=", g_talking); dbg_num("SH portrait shown=", g_have_pc); Cconws("SH greet: "); Cconws(cvm_text(&g_cv)); Cconws("\r\n");
+                    SH_FEED("y"); SH_FEED("1"); SH_FEED("ahm");
+                    dbg_num("SH level after=", g_alevel[1]); dbg_num("SH maxhp after=", g_amaxhp[1]); dbg_num("SH hp after=", g_ahp[1]); dbg_num("SH int gained=", (int)g_aint[1]-i0); dbg_num("SH exp after=", g_aexp[1]);
+                    dbg_num("SH companions untouched=", g_alevel[2]==l2 && g_alevel[3]==l3); dbg_num("SH vm mutations=", g_cg.mutations);
+                    if(g_talking) end_talk();
+                    (void)resolve_target(&w,'T',0,-1); SH_FEED("y"); SH_FEED("1"); SH_FEED("ahm");
+                    dbg_num("SH second visit level=", g_alevel[1]); dbg_num("SH second visit int=", g_aint[1]); if(g_talking) end_talk();
+                    g_aexp[1]=6400; g_alevel[1]=7; g_amaxhp[1]=210;                /* the top: level 7 -> 8, then nothing more */
+                    (void)resolve_target(&w,'T',0,-1); SH_FEED("y"); SH_FEED("1"); SH_FEED("ahm"); dbg_num("SH level 8 reached=", g_alevel[1]); dbg_num("SH maxhp at 8=", g_amaxhp[1]); if(g_talking) end_talk();
+                    (void)resolve_target(&w,'T',0,-1); SH_FEED("y"); SH_FEED("1"); SH_FEED("ahm"); dbg_num("SH still 8=", g_alevel[1]); if(g_talking) end_talk(); }
+            }
+            if(mode=='3'){                                             /* resurrection costs experience: exp x karma / 100 */
+                int id=lord_british_actor(); dbg_num("SH lb=", id); g_aexp[id]=400; g_cg.karma=50; int vx=g_actx[id], vy=g_acty[id];
+                spell_damage(1,id,999); Cconws("SH "); Cconws(g_msg); Cconws("\r\n"); dbg_num("SH exp kept while dead=", g_aexp[id]);
+                teleport_party(&w,(vx+1)&(U6_SURFACE_TILES-1),vy); g_free_cast=1; (void)cast_spell(&w,1,magic_find("Resurrect"),-1,0); g_free_cast=0; Cconws("SH "); Cconws(g_msg); Cconws("\r\n");
+                dbg_num("SH exp after resurrection at karma 50=", g_aexp[id]); dbg_num("SH alive=", g_atile[id]!=0xffff);
+            }
+            #undef SH_FEED
+        }
+    }
+    /* headless PERSISTENCE checks (usecode_use.md "Created and destroyed objects persist", save_load.md §5): PERSIST.REQ byte = mode. */
+    {   int32_t pl_=0; const uint8_t*pq=(const uint8_t*)plat_load_file("PERSIST.REQ",1,&pl_);
+        if(pq && pl_>0){ int mode=pq[0];
+            #define PS_FR(I) ((int)g_wobj[I].tile-basetile(g_wobj[I].obj_n))
+            #define PS_MSG(T) do{ Cconws("PS " T ": "); Cconws(g_msg); Cconws("\r\n"); }while(0)
+            /* the template's on-map records of ON at (X,Y) on level LV, every chunk; *FRP = the first one's frame */
+            #define PS_TMPL(ON,X,Y,LV,FRP) ({ int c_=0; const uint8_t*d_=g_savetmpl; int32_t p_=4; for(int ch=0;ch<1+1+64+5 && p_+2<=g_savetmpl_len;ch++){ int cn=d_[p_]|(d_[p_+1]<<8); p_+=2; \
+                for(int k=0;k<cn && p_+8<=g_savetmpl_len;k++,p_+=8){ const uint8_t*r=d_+p_; if(r[0]&0x18) continue; int rx=r[1]|((r[2]&3)<<8), ry=(r[2]>>2)|((r[3]&0xf)<<6), rz=r[3]>>4, ron=r[4]|((r[5]&3)<<8); \
+                    if(ron==(ON) && rx==(X) && ry==(Y) && rz==(LV)){ int*fp_=(int*)(FRP); if(c_==0 && fp_) *fp_=(r[5]>>2)&0x3f; c_++; } } } c_; })
+            /* direct children of the record of ON at (X,Y) on level LV, or -1 if no record */
+            #define PS_KIDS(ON,X,Y,LV) ({ int c_=-1; int32_t surf_=sav_surface_off(g_savetmpl,g_savetmpl_len); int k_; int32_t cp_=sav_locate_onmap(g_savetmpl,g_savetmpl_len,surf_,(LV),(X),(Y),(ON),&k_); \
+                if(cp_>=0){ c_=0; int cn=g_savetmpl[cp_]|(g_savetmpl[cp_+1]<<8); for(int j=0;j<cn;j++){ const uint8_t*r=g_savetmpl+cp_+2+j*8; if((r[0]&0x18)!=0x08) continue; \
+                    int lk=((((r[2]>>2)|((r[3]&0xf)<<6))&0x3f)<<10)|(r[1]|((r[2]&3)<<8)); if(lk==k_) c_++; } } c_; })
+            if(mode=='1'){                                             /* lever / switch: doorway-linked barriers */
+                int lv_=obj_idx_at(303,383,268); dbg_num("PS castle lever found=", lv_>=0);
+                if(lv_>=0){ dbg_num("PS lever quality=", g_wobj[lv_].quality); int dw=obj_idx_at(307,384,301); dbg_num("PS doorway found=", dw>=0); dbg_num("PS doorway frame=", dw>=0?PS_FR(dw):-1);
+                    int b0=obj_idx_at(307,384,310); dbg_num("PS portcullis before=", b0>=0);
+                    use_object(lv_); PS_MSG("lever"); int b1=obj_idx_at(307,384,310); dbg_num("PS portcullis after=", b1>=0); dbg_num("PS portcullis frame=", b1>=0?PS_FR(b1):-1); dbg_num("PS lever frame=", PS_FR(lv_));
+                    dbg_num("PS doorway tile blocked=", obj_blocks_at(307,384));
+                    (void)do_save(&w); int fr_=-1; dbg_num("PS saved portcullis records=", PS_TMPL(310,307,384,0,&fr_)); dbg_num("PS saved frame=", fr_); int lf_=-1; (void)PS_TMPL(268,303,383,0,&lf_); dbg_num("PS saved lever frame=", lf_);
+                    use_object(lv_); PS_MSG("lever again"); dbg_num("PS portcullis restored=", (obj_idx_at(307,384,310)>=0)==(b0>=0)); dbg_num("PS lever frame=", PS_FR(lv_));
+                    (void)do_save(&w); dbg_num("PS saved portcullis records=", PS_TMPL(310,307,384,0,(int*)0)); }
+                if(travel_to(&w,116,54,4)){ int l46=obj_idx_at(116,53,268); dbg_num("PS lever 46 found=", l46>=0); if(l46>=0){ use_object(l46); PS_MSG("lever 46"); } }
+                if(travel_to(&w,186,225,1)){ int sw=obj_idx_at(186,224,174); dbg_num("PS switch 101 found=", sw>=0);
+                    if(sw>=0){ int e0=obj_idx_at(195,222,175); dbg_num("PS field before=", e0>=0); use_object(sw); PS_MSG("switch"); int e1=obj_idx_at(195,222,175); dbg_num("PS field toggled=", (e0>=0)!=(e1>=0)); dbg_num("PS field present now=", e1>=0);
+                        (void)do_save(&w); dbg_num("PS saved field records=", PS_TMPL(175,195,222,1,(int*)0)); use_object(sw); PS_MSG("switch again"); dbg_num("PS field restored=", (obj_idx_at(195,222,175)>=0)==(e0>=0)); } }
+            }
+            if(mode=='2'){                                             /* crank: the castle drawbridge */
+                int ck=obj_idx_at(303,384,288); dbg_num("PS crank found=", ck>=0);
+                if(ck>=0){ int row0=0; for(int x=303;x<=310;x++) row0+=obj_idx_at(x,385,269)>=0; dbg_num("PS closed row pieces=", row0); dbg_num("PS span blocked before=", obj_blocks_at(306,385));
+                    use_object(ck); PS_MSG("crank"); int row1=0; for(int x=303;x<=310;x++) row1+=obj_idx_at(x,385,269)>=0; dbg_num("PS closed row after=", row1);
+                    int l3=obj_idx_at(304,386,269), r5=obj_idx_at(310,386,269), m4=obj_idx_at(306,386,269); dbg_num("PS open left frame=", l3>=0?PS_FR(l3):-1); dbg_num("PS open right frame=", r5>=0?PS_FR(r5):-1); dbg_num("PS open middle frame=", m4>=0?PS_FR(m4):-1);
+                    int rows=0; for(int y=386;y<400;y++){ if(obj_idx_at(304,y,269)<0) break; rows++; } dbg_num("PS open rows=", rows); int bl=obj_idx_at(304,386+rows-1,269); dbg_num("PS bottom left frame=", bl>=0?PS_FR(bl):-1);
+                    dbg_num("PS crank frame=", PS_FR(ck)); dbg_num("PS span passable now=", !obj_blocks_at(306,386));
+                    (void)do_save(&w); dbg_num("PS saved closed piece (306,385)=", PS_TMPL(269,306,385,0,(int*)0)); dbg_num("PS saved open piece (306,386)=", PS_TMPL(269,306,386,0,(int*)0)); dbg_num("PS saved end piece (303,385)=", PS_TMPL(269,303,385,0,(int*)0));
+                    if(pl_>1 && pq[1]=='b') goto ps_done;                       /* '2b': stop with the bridge open (ScummVM cross-load) */
+                    use_object(ck); PS_MSG("crank again"); int f6=obj_idx_at(303,385,269), f7=obj_idx_at(306,385,269), f8=obj_idx_at(310,385,269);
+                    dbg_num("PS closed frames 6/7/8 ok=", (f6>=0&&PS_FR(f6)==6) + (f7>=0&&PS_FR(f7)==7)*10 + (f8>=0&&PS_FR(f8)==8)*100); int open_left=0; for(int y=386;y<400;y++) open_left+=obj_idx_at(304,y,269)>=0; dbg_num("PS open pieces left=", open_left); dbg_num("PS crank frame=", PS_FR(ck));
+                    (void)do_save(&w); dbg_num("PS saved closed row (306,385)=", PS_TMPL(269,306,385,0,(int*)0)); dbg_num("PS saved open (306,386)=", PS_TMPL(269,306,386,0,(int*)0)); dbg_num("PS objlist ok=", g_objlist_off==sav_objlist_off(g_savetmpl,g_savetmpl_len)); }
+            }
+            if(mode=='3'){                                             /* a slain NPC's body with its inventory, the dead flag, load-back, Resurrect */
+                int id=-1, bd=1<<30, inv0=0;
+                for(int i=2;i<160;i++){ if(g_atile[i]==0xffff || g_actz[i]!=w.level || is_party_member(i)) continue; if(sav_inv_owner_first(g_savetmpl,g_savetmpl_len,i)<0) continue;
+                    int cx=(int)g_actx[i]-(int)w.px, cy=(int)g_acty[i]-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; id=i; } }
+                dbg_num("PS victim=", id);
+                if(id>=0){ int on=actor_objn(id), fr=0, body=monster_remains(on,&fr); dbg_num("PS victim type=", on); dbg_num("PS remains obj=", body); dbg_num("PS remains frame=", fr);
+                    { const uint8_t*d=g_savetmpl; int32_t iv=sav_inv_off(d,g_savetmpl_len); int cnt=d[iv]|(d[iv+1]<<8); for(int k=0;k<cnt;k++){ const uint8_t*b=d+iv+2+k*8; int loc=b[0]&0x18; if((loc==0x10||loc==0x18) && (b[1]|((b[2]&3)<<8))==id) inv0++; } }
+                    dbg_num("PS victim inventory records=", inv0); int vx=g_actx[id], vy=g_acty[id]; int32_t len0=g_savetmpl_len;
+                    spell_damage(1,id,999); PS_MSG("kill"); dbg_num("PS actor gone=", g_atile[id]==0xffff); dbg_num("PS dead flag=", g_adead[id]);
+                    int bi=-1; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==body && g_wobj[j].x==vx && g_wobj[j].y==vy && g_wobj[j].quality==id){ bi=j; break; }
+                    dbg_num("PS body on the tile=", bi>=0); dbg_num("PS body frame=", bi>=0?PS_FR(bi):-1);
+                    int kids=0; if(bi>=0) for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)bi) kids++; dbg_num("PS live contents=", kids);
+                    dbg_num("PS template grew by records=", (int)((g_savetmpl_len-len0)/8)); dbg_num("PS saved body records=", PS_TMPL(body,vx,vy,w.level,(int*)0)); dbg_num("PS saved body contents=", PS_KIDS(body,vx,vy,w.level)); dbg_num("PS victim records left in inventory chunk=", sav_inv_owner_first(g_savetmpl,g_savetmpl_len,id)>=0);
+                    (void)do_save(&w); dbg_num("PS objlist dead bit=", sav_get_actor_dead(g_savetmpl,g_objlist_off,id)); { const uint8_t*pb=g_savetmpl+g_objlist_off+0x100+id*3; dbg_num("PS saved position zero=", pb[0]==0&&pb[1]==0&&pb[2]==0); } dbg_num("PS saved hp=", g_savetmpl[g_objlist_off+0xe00+id]);
+                    dbg_num("PS load back ok=", load_game(&w)); dbg_num("PS actor still gone=", g_atile[id]==0xffff); dbg_num("PS dead flag loaded=", g_adead[id]);
+                    int bi2=-1; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==body && g_wobj[j].x==vx && g_wobj[j].y==vy && g_wobj[j].quality==id){ bi2=j; break; } dbg_num("PS body loaded=", bi2>=0);
+                    int kids2=0; if(bi2>=0) for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)bi2) kids2++; dbg_num("PS loaded contents=", kids2);
+                    if(bi2>=0 && body!=338 && !(pl_>1 && pq[1]=='b')){ teleport_party(&w,(vx+1)&(U6_SURFACE_TILES-1),vy); g_free_cast=1; (void)cast_spell(&w,1,magic_find("Resurrect"),-1,0); g_free_cast=0; PS_MSG("resurrect");
+                        dbg_num("PS actor back=", g_atile[id]!=0xffff); dbg_num("PS dead flag clear=", g_adead[id]==0); (void)do_save(&w); dbg_num("PS objlist dead bit after=", sav_get_actor_dead(g_savetmpl,g_objlist_off,id)); dbg_num("PS body records after=", PS_TMPL(body,vx,vy,w.level,(int*)0)); } }
+            }
+            if(mode=='4'){                                             /* food eaten from the map persists; drink -> alcohol -> Hic! */
+                int fi=-1, bd=1<<30; for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive || is_temp_obj(i) || is_food_objn(o->obj_n)!=1 || o->parent!=WOBJ_PARENT_NONE) continue;
+                    int cx=(int)o->x-(int)w.px, cy=(int)o->y-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; fi=i; } }
+                dbg_num("PS food found=", fi>=0);
+                if(fi>=0){ int on=g_wobj[fi].obj_n, fx=g_wobj[fi].x, fy=g_wobj[fi].y; dbg_num("PS food obj=", on); dbg_num("PS stackable=", is_stackable(on));
+                    (void)objects_reconcile(&w); { int32_t c; int k; if(rec_locate(fi,&c,&k,0)){ g_wobj[fi].qty=2; uint8_t*r=g_savetmpl+c+2+k*8; if(is_stackable(on)){ r[6]=2; r[7]=0; } else r[6]=2; } }
+                    dbg_num("PS qty before=", g_wobj[fi].qty); use_object(fi); PS_MSG("eat"); dbg_num("PS qty after one=", g_wobj[fi].qty);
+                    { int32_t c2; int k2; int found=rec_locate(fi,&c2,&k2,0); dbg_num("PS record count now=", found?g_savetmpl[c2+2+k2*8+6]:-1); }
+                    use_object(fi); PS_MSG("eat again"); dbg_num("PS gone=", !g_wobj[fi].alive); (void)objects_reconcile(&w); dbg_num("PS saved food records at tile=", PS_TMPL(on,fx,fy,w.level,(int*)0)); }
+                teleport_party(&w,307,421); dbg_num("PS alcohol start=", g_alcohol);          /* open grass south of the castle */
+                for(int t=0;t<4;t++){ int ale=temp_obj_new(117,0,(w.px+1)&(U6_SURFACE_TILES-1),w.py,0); if(ale>=0) use_object(ale); } PS_MSG("drink"); dbg_num("PS alcohol=", g_alcohol);
+                { int a0=g_alcohol; for(int t=0;t<6;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); } dbg_num("PS alcohol before hour=", a0); dbg_num("PS alcohol after an hour=", g_alcohol); }
+                for(int t=0;t<3;t++){ int ale=temp_obj_new(117,0,(w.px+1)&(U6_SURFACE_TILES-1),w.py,0); if(ale>=0) use_object(ale); } dbg_num("PS alcohol after 3 more=", g_alcohol);
+                int hic=0, moved=0; for(int t=0;t<16;t++){ g_msg[0]=0; int d=(t&1)?1:-1; moved+=player_step(&w,d,0); if(!strcmp(g_msg,"Hic!")) hic++; } dbg_num("PS hic in 16 steps=", hic); dbg_num("PS steps taken=", moved);
+                for(int t=0;t<2;t++){ int ale=temp_obj_new(117,0,(w.px+1)&(U6_SURFACE_TILES-1),w.py,0); if(ale>=0) use_object(ale); } dbg_num("PS alcohol at save=", g_alcohol);
+                (void)do_save(&w); dbg_num("PS saved alcohol byte=", sav_get_alcohol(g_savetmpl,g_objlist_off));
+            }
+            if(mode=='5'){                                             /* a spell's trap under a chest + webs: records */
+                int ch=-1, bd=1<<30; for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive || is_temp_obj(i) || o->obj_n!=98 || o->parent!=WOBJ_PARENT_NONE || trap_child(i)>=0) continue;
+                    int cx=(int)o->x-(int)w.px, cy=(int)o->y-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; ch=i; } }
+                dbg_num("PS chest found=", ch>=0);
+                if(ch>=0){ int cx=g_wobj[ch].x, cy=g_wobj[ch].y; teleport_party(&w,(cx+1)&(U6_SURFACE_TILES-1),cy); dbg_num("PS chest trapped before=", trap_child(ch)>=0);
+                    if(trap_child(ch)<0){ g_free_cast=1; (void)cast_spell(&w,1,magic_find("Trap"),-1,0); g_free_cast=0; PS_MSG("trap"); }
+                    int t=trap_child(ch); dbg_num("PS trap child live=", t>=0); dbg_num("PS trap child new=", t>=0 && g_wobj[t].dirty==WOBJ_DIRTY_NEW);
+                    (void)do_save(&w); dbg_num("PS saved trap under chest=", PS_KIDS(98,cx,cy,w.level)); dbg_num("PS trap child dirty after save=", t>=0?g_wobj[t].dirty:-1);
+                    g_free_cast=1; (void)cast_spell(&w,1,magic_find("Untrap"),-1,0); g_free_cast=0; PS_MSG("untrap"); dbg_num("PS trap child gone=", trap_child(ch)<0);
+                    (void)do_save(&w); dbg_num("PS saved trap after untrap=", PS_KIDS(98,cx,cy,w.level)); }
+                g_free_cast=1; (void)cast_spell(&w,1,magic_find("Web"),2,0); g_free_cast=0; PS_MSG("web");
+                int w1=0, wx=-1, wy=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==53 && g_wobj[i].dirty==WOBJ_DIRTY_NEW){ w1++; wx=g_wobj[i].x; wy=g_wobj[i].y; } dbg_num("PS new webs=", w1);
+                (void)do_save(&w); if(wx>=0){ dbg_num("PS saved web record=", PS_TMPL(53,wx,wy,w.level,(int*)0)); int wi=obj_idx_at(wx,wy,53); dbg_num("PS web dirty after save=", wi>=0?g_wobj[wi].dirty:-1); }
+            }
+            ps_done: ;
+            #undef PS_FR
+            #undef PS_MSG
+            #undef PS_TMPL
+            #undef PS_KIDS
+        }
+    }
+    /* headless CLOCK / SUNDIAL checks (usecode_use.md "Clock and sundial"): SUNDIAL.REQ byte = mode. */
+    {   int32_t sdl_=0; const uint8_t*sdq=(const uint8_t*)plat_load_file("SUNDIAL.REQ",1,&sdl_);
+        if(sdq && sdl_>0){ int mode=sdq[0];
+            #define SD_HOUR(H,M) do{ g_start_min=(H)*60+(M); w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); }while(0)
+            #define SD_LOOK(TAG,DX,DY) do{ (void)do_verb(&w,'L',(DX),(DY)); Cconws("SUNDIAL look " TAG ": "); for(char*c_=g_msg;*c_;c_++) if(*c_=='\n') *c_='|'; Cconws(g_msg); Cconws("\r\n"); }while(0)
+            int si=-1, ci=-1;
+            for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
+                if(o->obj_n==235 && o->x==307 && o->y==420) si=i; if(o->obj_n==159 && o->x==300 && o->y==350) ci=i; }
+            dbg_num("SUNDIAL real sundial found=", si>=0); dbg_num("SUNDIAL real clock found=", ci>=0);
+            int cx=300, cy=351; if(ci>=0){ static const int d4[4][2]={{0,1},{0,-1},{1,0},{-1,0}};   /* a free tile beside the clock */
+                for(int k=0;k<4;k++){ int x=300+d4[k][0], y=350+d4[k][1]; if(world_is_passable(&w,x,y) && objworld_at(&g_ow,x,y)<0){ cx=x; cy=y; break; } } }
+            if(mode=='1'){
+                if(si>=0){ teleport_party(&w,307,421); dbg_num("SUNDIAL object tile=", g_wobj[si].tile);
+                    static const int hrs[11]={4,5,7,9,11,13,15,17,19,20,21};
+                    for(int k=0;k<11;k++){ SD_HOUR(hrs[k],0); dbg_num("SUNDIAL h=", hrs[k]); dbg_num("SUNDIAL tile=", obj_tile(&g_wobj[si])); }
+                    SD_HOUR(8,0); SD_LOOK("8:00",0,-1); SD_HOUR(22,0); SD_LOOK("22:00",0,-1); SD_HOUR(4,59); SD_LOOK("4:59",0,-1); SD_HOUR(19,59); SD_LOOK("19:59",0,-1); }
+                if(ci>=0){ teleport_party(&w,cx,cy); dbg_num("SUNDIAL by the clock at x=", cx); dbg_num("SUNDIAL y=", cy);
+                    dbg_num("SUNDIAL clock tile=", g_wobj[ci].tile); dbg_num("SUNDIAL clock double height=", (g_tflags[g_wobj[ci].tile]&0x40)!=0);
+                    dbg_num("SUNDIAL clock face tile fg=", (g_tflags[g_wobj[ci].tile-1]>>4)&1); dbg_num("SUNDIAL pendulum frame=", obj_tile(&g_wobj[ci]));
+                    g_anim_ctr++; dbg_num("SUNDIAL pendulum next frame=", obj_tile(&g_wobj[ci])); g_anim_ctr--;
+                    SD_HOUR(15,0); SD_LOOK("15:00",300-cx,350-cy); SD_HOUR(0,5); SD_LOOK("0:05",300-cx,350-cy);
+                    SD_HOUR(12,30); SD_LOOK("12:30",300-cx,350-cy); SD_HOUR(23,59); SD_LOOK("23:59",300-cx,350-cy); SD_HOUR(8,0); SD_LOOK("8:00",300-cx,350-cy);
+                    SD_LOOK("ground",0,0); dbg_num("SUNDIAL plain look has no time line=", strstr(g_msg,"The time")==NULL); }
+                if(si>=0){ teleport_party(&w,307,421); SD_HOUR(15,0); }        /* hold: the shadow at 15:00 for the frame */
+            } else if(mode=='2'){ if(si>=0){ teleport_party(&w,307,421); SD_HOUR(22,0); } }   /* hold: the plain dial at night */
+            else if(mode=='3'){ if(ci>=0){ teleport_party(&w,cx,cy); SD_HOUR(10,0); } }       /* hold: the clock (pendulum = ANIMDATA 699) */
+            #undef SD_HOUR
+            #undef SD_LOOK
+        }
+    }
     /* headless READY-EFFECT + small-gap checks (equipment.md §8, usecode_use.md): READYFX.REQ byte = mode. */
     {   int32_t rl_=0; const uint8_t*rq=(const uint8_t*)plat_load_file("READYFX.REQ",1,&rl_);
         if(rq && rl_>0){ int mode=rq[0]; int av=g_nparty?g_party[0].actor:1;
@@ -10675,7 +11168,7 @@ int main(int argc, char **argv)
                 dbg_num("FX xray turns=", g_xray_turns);
                 int bi=temp_obj_new(206,2,(int)((w.px+1)&(U6_SURFACE_TILES-1)),(int)w.py,1); dbg_num("FX brazier placed=", bi>=0);
                 (void)do_verb(&w,'L',1,0); dbg_num("FX flame of truth=", !strcmp(g_msg,"The flame of truth."));
-                g_wobj[bi].quality=0; (void)do_verb(&w,'L',1,0); dbg_num("FX plain brazier look=", strncmp(g_msg,"You see ",8)==0);
+                g_wobj[bi].quality=0; (void)do_verb(&w,'L',1,0); dbg_num("FX plain brazier look=", strncmp(g_msg,"Thou dost see ",14)==0);
             }
             if(mode=='4'){
                 int first=-1, cnt=0; for(int i=2;i<U6_MAX_ACTORS;i++){ if(is_party_member(i)||g_atile[i]==0xffff) continue; if(has_readied(i,90)){ cnt++; if(first<0) first=i; } }
@@ -10832,7 +11325,9 @@ int main(int argc, char **argv)
                   dbg_num("RS ms per plain turn (no hatchlings)=", (int)((plat_ticks_200hz()-t0)*5/12));
                   w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); }
                 for(int t=0;t<20;t++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }   /* 20 passes with a static view: does the clock text pile up? */
-                dbg_num("RS passes drawn at hour=", g_hour); }
+                dbg_num("RS passes drawn at hour=", g_hour);
+                  { uint32_t h=2166136261u; for(int i=0;i<U6_MAX_ACTORS;i++){ if(g_atile[i]==0xffff) continue; h=(h^(uint32_t)g_actx[i])*16777619u; h=(h^(uint32_t)g_acty[i])*16777619u; h=(h^(uint32_t)g_actz[i])*16777619u; }
+                    dbg_num("RS actor position hash hi=", (int)(h>>16)); dbg_num("RS actor position hash lo=", (int)(h&0xffff)); } }   /* determinism: TT == Falcon */
             #undef RS_MSG
             #undef RS_FOES
             #undef RS_CLEAR_HATCHED
@@ -10921,7 +11416,8 @@ int main(int argc, char **argv)
             if(mode=='4'){ int oi=SP_OBJ(252,2,1,0,0);   /* a chair: Vanish-able (tileflags3 bit3) */
                 dbg_num("SP tflags3 shipped=", g_tflags3!=0);
                 SP_CAST("Vanish",1,0); SP_MSG(); dbg_num("SP vanished=", SP_HAS("Success") && oi>=0 && !g_wobj[oi].alive && g_vanish_obj==252 && g_vanish_frame==2);
-                (void)do_save(&w); SP_MSG(); g_vanish_obj=0; g_vanish_frame=0; dbg_num("SP load ok=", load_game(&w)); SP_MSG(); dbg_num("SP vanish restored=", g_vanish_obj==252 && g_vanish_frame==2);
+                (void)do_save(&w); SP_MSG(); g_vanish_obj=0; g_vanish_frame=0; { plat_mem_info_t mi; plat_mem_get_info(&mi); long fr=((long)mi.chip_size-(long)mi.chip_used)/1024; dbg_num("SP load headroom (free >= template+80 KB)=", fr>=g_savetmpl_len/1024+80); }
+                dbg_num("SP load ok=", load_game(&w)); SP_MSG(); dbg_num("SP vanish restored=", g_vanish_obj==252 && g_vanish_frame==2);
                 int fx_=0, fy_=0; for(int d=0;d<8 && !fx_ && !fy_;d++) if(can_put_obj(&w,(int)((w.px+D8X[d])&(U6_SURFACE_TILES-1)),(int)((w.py+D8Y[d])&(U6_SURFACE_TILES-1)))){ fx_=D8X[d]; fy_=D8Y[d]; }
                 dbg_num("SP free tile beside=", fx_||fy_);
                 SP_CAST("Reappear",fx_,fy_); SP_MSG(); int ri=obj_idx_at((int)((w.px+fx_)&(U6_SURFACE_TILES-1)),(int)((w.py+fy_)&(U6_SURFACE_TILES-1)),252);
@@ -11047,7 +11543,7 @@ int main(int argc, char **argv)
     /* headless MOONGATE checks (moongates.md §6): MOONGATE.REQ byte = mode. */
     {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("MOONGATE.REQ",1,&gl);
         if(gq && gl>0){ int mode=gq[0];
-            if(mode=='1'){
+            if(mode=='1' || mode=='6'){
                 inv_add_objn(87,1); g_cg.talk_flags[5]|=0x20;
                 int r=use_pack_item(&w,87); dbg_num("MG orb asks where=", r==2); Cconws(g_msg); Cconws("\r\n");
                 static const int tries[6][2]={{1,-1},{0,-1},{-1,-1},{1,1},{0,1},{-1,1}}; int gi=-1, q=-1;
@@ -11056,11 +11552,14 @@ int main(int argc, char **argv)
                     gi=obj_idx_at((w.px+dx)&(U6_SURFACE_TILES-1),(w.py+dy)&(U6_SURFACE_TILES-1),84);
                     if(gi>=0) q=g_wobj[gi].quality; }
                 Cconws(g_msg); Cconws("\r\n"); dbg_num("MG red gate=", gi>=0); dbg_num("MG quality=", q<0?0:q);
-                if(gi>=0){ w.px=g_wobj[gi].x; w.py=g_wobj[gi].y; (void)step_triggers(&w); Cconws(g_msg); Cconws("\r\n");
+                if(gi>=0){ w.px=g_wobj[gi].x; w.py=g_wobj[gi].y; (void)step_triggers(&w);
+                    if(mode=='1'){ int tk=0; while(g_gw){ gw_tick(&w); tk++; } dbg_num("MG walk ticks=", tk); }
+                    if(mode=='6'){ int tk=0; while(g_gw && tk<200 && !(g_gw==4 && g_gw_fade==8)){ gw_tick(&w); if(g_gw==4) { compose_map(&w); draw_border_tiles(); } tk++; } g_gw_hold=1; dbg_num("MG held mid-fade phase=", g_gw); dbg_num("MG held fade lvl=", g_gw_fade); }
+                    Cconws(g_msg); Cconws("\r\n");
                     dbg_num("MG level=", w.level); dbg_num("MG x=", (int)w.px); dbg_num("MG y=", (int)w.py);
                     dbg_num("MG expected x=", RED_GATE[q][0]); dbg_num("MG expected y=", RED_GATE[q][1]); dbg_num("MG expected z=", RED_GATE[q][2]); }
             }
-            if(mode=='2'){
+            if(mode=='2' || mode=='5'){
                 g_day0=5; g_month0=7; g_year0=161; g_start_min=12*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
                 { int day,mo,yr; cur_date(&w,&day,&mo,&yr); int pt,pf; moon_phases(day,&pt,&pf);
                   dbg_num("MG day=", day); dbg_num("MG phaseT=", pt); dbg_num("MG phaseF=", pf); dbg_num("MG visible@12=", moon_visible(day,12)); dbg_num("MG visible@16=", moon_visible(day,16)); }
@@ -11069,7 +11568,11 @@ int main(int argc, char **argv)
                 dbg_num("MG gate present=", obj_idx_at(sx,sy,85)>=0);
                 g_start_min=16*60; g_hour=clock_hour(&w); moongates_update(&w); dbg_num("MG gate gone@16=", obj_idx_at(sx,sy,85)<0);
                 g_start_min=12*60; g_hour=clock_hour(&w); moongates_update(&w); dbg_num("MG gate back@12=", obj_idx_at(sx,sy,85)>=0);
-                w.px=(uint16_t)sx; w.py=(uint16_t)sy; (void)step_triggers(&w); Cconws(g_msg); Cconws("\r\n");
+                w.px=(uint16_t)sx; w.py=(uint16_t)sy; (void)step_triggers(&w);
+                if(mode=='5'){ int tk=0; while(g_gw && tk<200 && !(g_gw==2 && g_gw_hidden[1] && g_gw_ghost_lvl==8)){ gw_tick(&w); tk++; } g_gw_hold=1; dbg_num("MG held mid-walk phase=", g_gw); dbg_num("MG held ghost lvl=", g_gw_ghost_lvl); }
+                if(mode=='2'){ int tk=0, dis=0, maxlvl=0; while(g_gw){ if(g_gw==2 && g_gw_ghost_lvl==16) dis++; gw_tick(&w); tk++; if(g_gw_ghost_lvl>maxlvl) maxlvl=g_gw_ghost_lvl; }
+                    dbg_num("MG walk ticks=", tk); dbg_num("MG members dissolved=", dis); dbg_num("MG companions shown=", ({ int n_=0; for(int p=1;p<g_nparty;p++){ int ax_,ay_; if(actor_pos(g_party[p].actor,&ax_,&ay_)) n_++; } n_; })); }
+                Cconws(g_msg); Cconws("\r\n");
                 dbg_num("MG level=", w.level); dbg_num("MG x=", (int)w.px); dbg_num("MG y=", (int)w.py);
                 { int ex,ey,ez; (void)moonstone_get(6,&ex,&ey,&ez); dbg_num("MG expected x=", ex); dbg_num("MG expected y=", ey); dbg_num("MG expected z=", ez); }
             }
@@ -11437,6 +11940,40 @@ int main(int argc, char **argv)
                     do_save(&w); dbg_num("WIND load ok=", load_game(&w));
                     int cnt420=0, cnt423=0; for(int i=0;i<g_ow.nobjs;i++){ if(!g_wobj[i].alive) continue; if(g_wobj[i].obj_n==420) cnt420++; if(g_wobj[i].obj_n==423) cnt423++; }
                     dbg_num("WIND after load 420 on map=", cnt420); dbg_num("WIND after load 423 on map=", cnt423); }
+            } else if(mode=='4'){                                          /* movement types (combat.md §7c) */
+                int M=U6_SURFACE_TILES-1, lx=-1,ly=-1,wx_=-1,wy_=-1;
+                for(int r=1;r<200 && lx<0;r++) for(int dy=-r;dy<=r && lx<0;dy++) for(int dx=-r;dx<=r;dx++){
+                    if(dx!=-r && dx!=r && dy!=-r && dy!=r) continue;
+                    int x=(307+dx)&M, y=(352+dy)&M, e1=(x+1)&M, e2=(x+2)&M, e3=(x+3)&M;      /* land, then three water tiles east of it */
+                    if(world_is_passable(&w,x,y) && npc_at(&w,x,y)<0 && objworld_at(&g_ow,x,y)<0 && tile_is_water(&w,e1,y) && tile_is_water(&w,e2,y) && tile_is_water(&w,e3,y)
+                       && !world_is_passable(&w,e1,y) && !world_is_passable(&w,e2,y) && !world_is_passable(&w,e3,y)        /* DEEP water: no wading */
+                       && objworld_at(&g_ow,e1,y)<0 && objworld_at(&g_ow,e2,y)<0){ lx=x; ly=y; wx_=e1; wy_=y; break; } }
+                dbg_num("MT shore found=", lx>=0);
+                if(lx>=0){
+                    int bird=hatch_creature(&w,lx,ly,356,ALIGN_EVIL); if(bird>=0){ g_actx[bird]=(uint16_t)lx; g_acty[bird]=(uint16_t)ly; g_actz[bird]=0; }
+                    int rat=hatch_creature(&w,lx,ly,342,ALIGN_EVIL);  if(rat>=0){ g_actx[rat]=(uint16_t)lx; g_acty[rat]=(uint16_t)ly; g_actz[rat]=0; }
+                    dbg_num("MT bird hatched=", bird>=0); dbg_num("MT rat hatched=", rat>=0);
+                    g_mover=bird; dbg_num("MT deep water walkable=", world_is_passable(&w,wx_,wy_)); dbg_num("MT bird may enter the water=", mover_can_enter(&w,wx_,wy_));
+                    { int mx,my; int ok=npc_pathstep(&w,lx,ly,(lx+3)&M,ly,-1,-1,&mx,&my); dbg_num("MT bird steps east onto the water=", ok && mx==1 && my==0); }
+                    g_mover=rat; dbg_num("MT rat may enter the water=", mover_can_enter(&w,wx_,wy_));
+                    { int mx=0,my=0; int ok=npc_pathstep(&w,lx,ly,(lx+3)&M,ly,-1,-1,&mx,&my); dbg_num("MT rat steps onto the water=", ok && mx==1 && my==0); }
+                    int wall_x=-1,wall_y=-1; for(int r=1;r<40 && wall_x<0;r++) for(int dy=-r;dy<=r && wall_x<0;dy++) for(int dx=-r;dx<=r;dx++){ int x=(lx+dx)&M, y=(ly+dy)&M; if(g_tflags1[world_tile(&w,x,y)]&0x04){ wall_x=x; wall_y=y; break; } }
+                    g_mover=bird; dbg_num("MT wall tile found=", wall_x>=0); if(wall_x>=0) dbg_num("MT bird may enter a wall tile=", mover_can_enter(&w,wall_x,wall_y));
+                    int big=-1; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && (g_tflags[g_wobj[j].tile]&0xC0)==0xC0 && g_actz[0]==g_actz[0]){ big=j; break; }
+                    dbg_num("MT double-sized object found=", big>=0); if(big>=0){ dbg_num("MT  its obj=", g_wobj[big].obj_n); dbg_num("MT bird may enter it=", mover_can_enter(&w,g_wobj[big].x,g_wobj[big].y)); }
+                    if(bird>=0) g_atile[bird]=0xffff; if(rat>=0) g_atile[rat]=0xffff;
+                    /* a sea serpent on open water: land and shoreline are out, open water in */
+                    int dx_=-1,dy_=-1; for(int r=1;r<200 && dx_<0;r++) for(int dy=-r;dy<=r && dx_<0;dy++) for(int dx=-r;dx<=r;dx++){
+                        if(dx!=-r && dx!=r && dy!=-r && dy!=r) continue; int x=(lx+dx)&M, y=(ly+dy)&M, t=world_tile(&w,x,y);
+                        if(tile_is_water(&w,x,y) && !(t>=16&&t<=47) && objworld_at(&g_ow,x,y)<0){ dx_=x; dy_=y; break; } }
+                    dbg_num("MT open water found=", dx_>=0);
+                    if(dx_>=0){ int ser=hatch_creature(&w,dx_,dy_,346,ALIGN_EVIL); if(ser>=0){ g_actx[ser]=(uint16_t)dx_; g_acty[ser]=(uint16_t)dy_; g_actz[ser]=0; }
+                        g_mover=ser; dbg_num("MT serpent hatched=", ser>=0);
+                        dbg_num("MT serpent may enter land=", mover_can_enter(&w,lx,ly)); dbg_num("MT serpent may enter open water=", mover_can_enter(&w,dx_,dy_));
+                        int sh_x=-1,sh_y=-1; for(int r=1;r<60 && sh_x<0;r++) for(int dy=-r;dy<=r && sh_x<0;dy++) for(int dx=-r;dx<=r;dx++){ int x=(dx_+dx)&M, y=(dy_+dy)&M, t=world_tile(&w,x,y); if(tile_is_water(&w,x,y) && t>=16 && t<=47){ sh_x=x; sh_y=y; break; } }
+                        dbg_num("MT shoreline found=", sh_x>=0); if(sh_x>=0) dbg_num("MT serpent may enter the shoreline=", mover_can_enter(&w,sh_x,sh_y));
+                        if(ser>=0) g_atile[ser]=0xffff; }
+                    g_mover=-1; }
             } else if(mode=='3'){
                 /* a raft on deep water goes where the wind table says */
                 int ri=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==415 && tile_is_water(&w,g_wobj[i].x,g_wobj[i].y)){ ri=i; break; }
@@ -11598,7 +12135,7 @@ int main(int argc, char **argv)
               dbg_num("HEALSYNC vm sees poisoned=", g_cg.poisoned[a2]); dbg_num("HEALSYNC vm sees dead=", g_cg.dead[a3]);
               g_cg.poisoned[a2]=0; g_cg.healed_full[a2]=1;                /* as HEAL(a2) would */
               g_cg.dead[a3]=0;                                            /* as RESURRECT(a3) would */
-              sync_health_out();
+              sync_health_out(); sync_stats_out();
               dbg_num("HEALSYNC a2 hp full=", g_ahp[a2]==g_amaxhp[a2]); dbg_num("HEALSYNC a2 poison gone=", g_poison[a2]==0);
               dbg_num("HEALSYNC a3 alive=", g_ahp[a3]==1);
               g_ahp[a2]=hp2; g_ahp[a3]=g_amaxhp[a3]; sync_party_hp(); }
@@ -11783,52 +12320,6 @@ int main(int argc, char **argv)
     /* headless validation of LEVER/SWITCH (quality-link) + CRANK (positional). Find a lever with
      * quality>0, note its matching-quality field's alive state, USE the lever -> field toggles off,
      * USE again -> back on. Then find a crank and USE it -> the nearest portcullis frame flips. */
-    {   int32_t ll=0; void*lb=plat_load_file("LEVER.BIN",1,&ll);
-        if(lb){
-            int lev=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==268 && g_wobj[i].quality){ lev=i; break; }
-            if(lev>=0){ int q=g_wobj[lev].quality;
-                int fld=-1; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].quality==q && is_field_objn(g_wobj[j].obj_n)){ fld=j; break; }
-                dbg_num("LEVER quality=", q); dbg_num("LEVER field found=", fld>=0);
-                if(fld>=0){ dbg_num("LEVER field alive0=", g_wobj[fld].alive);
-                    use_object(lev); dbg_num("LEVER field alive1=", g_wobj[fld].alive);   /* expect toggled */
-                    use_object(lev); dbg_num("LEVER field alive2=", g_wobj[fld].alive); } /* expect restored */
-            } else Cconws("LEVER: no quality>0 lever in world\r\n");
-            int crk=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive && g_wobj[i].obj_n==288){ crk=i; break; }
-            if(crk>=0){ int pc=-1,bd=99,ax=g_wobj[crk].x,ay=g_wobj[crk].y;
-                for(int j=0;j<g_ow.nobjs;j++){ if(!g_wobj[j].alive||g_wobj[j].obj_n!=310) continue;
-                    int dx=g_wobj[j].x-ax,dy=g_wobj[j].y-ay; if(dx<0)dx=-dx; if(dy<0)dy=-dy; int d=dx>dy?dx:dy; if(d<bd){bd=d;pc=j;} }
-                dbg_num("CRANK portcullis dist=", bd);
-                if(pc>=0){ dbg_num("CRANK pc frame0=", (int)g_wobj[pc].tile-basetile(310));
-                    use_object(crk); dbg_num("CRANK pc frame1=", (int)g_wobj[pc].tile-basetile(310)); } }
-        }
-    }
-
-    /* headless DRAWBRIDGE test: find a crank, USE it, and check the nearest drawbridge span's frame
-     * toggles between 6-8 (raised) and 9-11 (down). */
-    {   int32_t dl=0; void*db=plat_load_file("DBTEST.BIN",1,&dl);
-        if(db){ int crk=-1; for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive&&g_wobj[i].obj_n==288){ crk=i; break; }
-            if(crk>=0){ int ax=g_wobj[crk].x,ay=g_wobj[crk].y, br=-1,bd=99;
-                for(int j=0;j<g_ow.nobjs;j++){ if(!g_wobj[j].alive||g_wobj[j].obj_n!=269) continue;
-                    int dx=g_wobj[j].x-ax,dy=g_wobj[j].y-ay; if(dx<0)dx=-dx; if(dy<0)dy=-dy; int d=dx>dy?dx:dy; if(d<bd){bd=d;br=j;} }
-                dbg_num("DRAWBRIDGE dist=", bd);
-                if(br>=0){ dbg_num("DRAWBRIDGE frame0=", (int)g_wobj[br].tile-basetile(269));
-                    use_object(crk); dbg_num("DRAWBRIDGE frame1=", (int)g_wobj[br].tile-basetile(269)); } }
-        }
-    }
-
-    /* headless HUNGER test: seed low food, advance turns → food ebbs to 0 and the Avatar starves
-     * (loses HP); then eat a loaf → food restored. */
-    {   int32_t hl=0; void*hb=plat_load_file("HUNGER.BIN",1,&hl);
-        if(hb){ g_afood[1]=5; int hp0=g_ahp[1];
-            for(int s=0;s<40;s++){ w.clock+=10; step_npcs(&w); }
-            dbg_num("HUNGER food after starve=", g_afood[1]); dbg_num("HUNGER hp lost=", hp0-g_ahp[1]);
-            for(int i=0;i<g_ow.nobjs;i++) if(g_wobj[i].alive&&objworld_can_get(&g_ow,g_wobj[i].obj_n)){
-                g_wobj[i].obj_n=128; g_wobj[i].tile=(uint16_t)basetile(128); g_wobj[i].qty=1;
-                int f0=g_afood[1]; use_object(i); dbg_num("HUNGER food before eat=", f0);
-                dbg_num("HUNGER food after eat=", g_afood[1]); break; }
-        }
-    }
-
     /* headless LOW-COLOUR (U6WW) load check: prove the pack's low-colour section parsed to the
      * exact byte (g_have_lowcolor=1 => the whole front-end chain was consumed correctly), and
      * echo the 16-colour ST palette as shifter registers (r<<8|g<<4|b) + a couple of LUT samples. */
@@ -11929,25 +12420,8 @@ int main(int argc, char **argv)
                   for(int s=0;s<2;s++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); }
                   dbg_num("assault moved-toward (y0-y)=", ay0 - g_acty[slot]); }   /* >0 => now approaches the party */
                 #undef MASK
-            } else if(mode==6){                           /* TRAINING GATE: exp accrues but only a trainer levels you */
-                int lb=-1; for(int i=2;i<U6_MAX_ACTORS;i++) if(g_trainer[i]){ lb=i; break; }
-                dbg_num("trainer actor id=", lb);            /* Lord British */
-                dbg_num("level before=", g_alevel[1]);       /* 3 (avatar HP 90) */
-                grant_exp(1,40);                             /* a kill's worth of exp: NO level-up by itself */
-                dbg_num("after kill: level=", g_alevel[1]);  /* still 3 (gated by training) */
-                g_aexp[1] = (uint16_t)(exp_for_level(g_alevel[1]+1) - 1); /* one short of level 4 */
-                try_train(lb);
-                dbg_num("train (short) level=", g_alevel[1]);/* still 3 */
-                g_aexp[1] = (uint16_t)exp_for_level(g_alevel[1]+1);       /* now at the threshold */
-                try_train(lb);
-                dbg_num("train (earned) level=", g_alevel[1]);/* 4 */
-                dbg_num("maxhp after =", g_amaxhp[1]);       /* 120 (= level*30) */
-                /* PARTY LEVELING: a companion (actor 2) advances via the same training visit */
-                dbg_num("comp(2) level before=", g_alevel[2]);
-                g_aexp[2] = (uint16_t)exp_for_level(g_alevel[2]+1);   /* it has earned the next level */
-                try_train(lb);
-                dbg_num("comp(2) level after =", g_alevel[2]);        /* +1 */
-                dbg_num("comp(2) maxhp after =", g_amaxhp[2]);        /* level*30 */
+            } else if(mode==6){                           /* retired 2026-10-28: levels come from the shrines' scripts (SHRINE.REQ 2) */
+                Cconws("mode 6 retired: see SHRINE.REQ\r\n");
             } else if(mode==8){                           /* ALIGNMENT TUNING: only genuine combatants are hostile */
                 int total=0, near=0, party_h=0;
                 for(int i=2;i<U6_MAX_ACTORS;i++){
@@ -11995,12 +12469,12 @@ int main(int argc, char **argv)
                 } else dbg_num("(no sight-block obj)  =", -1);
             } else if(mode==11){                          /* INCREMENTAL SCROLL diff-test: scrolled static buffer == full rebuild? */
                 int PX=(int)w.px, PY=(int)w.py;
-                static uint8_t ref[TMP_T*TMP_T];
+                plat_mark m11=plat_chip_mark(); uint8_t *ref=(uint8_t*)plat_alloc_chip(TMP_T*TMP_T);   /* hook-only buffers: transient, not 62 KB of BSS */
                 int dd[4][2]={{1,0},{-1,0},{0,1},{0,-1}};
                 const char* nm[4]={"diff dx=+1 =","diff dx=-1 =","diff dy=+1 =","diff dy=-1 ="};
                 for(int k=0;k<4;k++){ int ddx=dd[k][0], ddy=dd[k][1];
                     w.px=(uint16_t)((PX+ddx)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)((PY+ddy)&(U6_SURFACE_TILES-1));
-                    build_static(&w); memcpy(ref,g_tmp_map,sizeof ref);            /* reference: full build at P+d */
+                    build_static(&w); memcpy(ref,g_tmp_map,(size_t)(TMP_T*TMP_T));            /* reference: full build at P+d */
                     w.px=(uint16_t)PX; w.py=(uint16_t)PY; build_static(&w);          /* build at P */
                     w.px=(uint16_t)((PX+ddx)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)((PY+ddy)&(U6_SURFACE_TILES-1));
                     scroll_static(&w,ddx,ddy);                                       /* then scroll P->P+d */
@@ -12013,14 +12487,14 @@ int main(int argc, char **argv)
                 /* dimmed-cache diff-test: predim_compose_static (incremental) == full dim rebuild?
                  * both FLAT (style 3) and DITHER (style 4). Proves the incremental re-dim of only the
                  * revealed edge + light-changed cells reproduces a from-scratch dim exactly. */
-                { static uint8_t rdim[TMP_T*TMP_T]; uint8_t pl[VT*VT], pv[VT*VT];
+                { uint8_t *rdim=(uint8_t*)plat_alloc_chip(TMP_T*TMP_T); uint8_t pl[VT*VT], pv[VT*VT];
                   const char* dn[2][4]={{"dimF dx+1 =","dimF dx-1 =","dimF dy+1 =","dimF dy-1 ="},
                                         {"dimD dx+1 =","dimD dx-1 =","dimD dy+1 =","dimD dy-1 ="}};
                   g_predim=0;
                   for(int dith=0;dith<2;dith++) for(int k=0;k<4;k++){ int ddx=dd[k][0], ddy=dd[k][1];
                       w.px=(uint16_t)((PX+ddx)&(U6_SURFACE_TILES-1)); w.py=(uint16_t)((PY+ddy)&(U6_SURFACE_TILES-1));
                       compute_predim_light(&w,pl,pv); g_dm_valid=0; g_tmp_valid=0;
-                      predim_compose_static(&w,pl,dith); memcpy(rdim,g_dimmed_map,sizeof rdim);   /* ref: full at P+d */
+                      predim_compose_static(&w,pl,dith); memcpy(rdim,g_dimmed_map,(size_t)(TMP_T*TMP_T));   /* ref: full at P+d */
                       w.px=(uint16_t)PX; w.py=(uint16_t)PY;
                       compute_predim_light(&w,pl,pv); g_dm_valid=0; g_tmp_valid=0;
                       predim_compose_static(&w,pl,dith);                                          /* prime at P */
@@ -12031,17 +12505,9 @@ int main(int argc, char **argv)
                       dbg_num(dn[dith][k], diff);                                                 /* 0 = byte-identical */
                   }
                 }
-                w.px=(uint16_t)PX; w.py=(uint16_t)PY; g_tmp_valid=0; g_dm_valid=0;
-            } else if(mode==12){                          /* STAT TRAINERS: raise the avatar's lowest stat for gold (cap 30) */
-                dbg_num("gold before =", (int)g_cg.gold);
-                dbg_num("str=", g_astr[1]); dbg_num("dex=", g_adex[1]); dbg_num("int=", g_aint[1]);
-                int s1=train_stat(1);                        /* raises the lowest stat, -100 gold */
-                dbg_num("trained stat(1str2dex3int)=", s1);
-                dbg_num("gold after  =", (int)g_cg.gold);
-                dbg_num("str=", g_astr[1]); dbg_num("dex=", g_adex[1]); dbg_num("int=", g_aint[1]);
-                int n=0; while(train_stat(1)) n++;            /* spend the rest */
-                dbg_num("further raises until broke=", n);    /* 500/100 = 5 total */
-                dbg_num("gold final  =", (int)g_cg.gold);     /* < 100 */
+                w.px=(uint16_t)PX; w.py=(uint16_t)PY; g_tmp_valid=0; g_dm_valid=0; plat_chip_reset(m11);
+            } else if(mode==12){                          /* retired 2026-10-28: stat gifts come from the shrines' scripts (SHRINE.REQ 2) */
+                Cconws("mode 12 retired: see SHRINE.REQ\r\n");
             } else if(mode==13){                          /* AUTHENTIC ALIGNMENT: hostility = per-actor U6 alignment (status 0x800 bit 0x20) */
                 dbg_num("enemy gargoyle 203 hostile=", actor_hostile(203));  /* 1 (EVIL, pre-peace) */
                 dbg_num("citizen gargoyle 164 host.=", actor_hostile(164));  /* 0 (NEUTRAL — peace is per-actor) */
@@ -12254,7 +12720,7 @@ int main(int argc, char **argv)
                 int av=1; g_aint[av]=30; g_amaxmana[av]=40; g_amana[av]=40;   /* circle 7 + mana */
                 dbg_num("avatar x start  =", (int)w.px);
                 dbg_num("avatar y start  =", (int)w.py);
-                int lb=-1; for(int a=2;a<U6_MAX_ACTORS;a++) if(g_trainer[a]){ lb=a; break; }
+                int lb=lord_british_actor();
                 int lx=-1,ly=-1; if(lb>=0) actor_pos(lb,&lx,&ly);
                 dbg_num("Lord British x  =", lx);
                 dbg_num("Lord British y  =", ly);
@@ -12336,7 +12802,7 @@ int main(int argc, char **argv)
                 int steps=0, arrived=0;
                 for(int t=0;t<12;t++){ int sx,sy;
                     if((int)w.px==tx && (int)w.py==ty){ arrived=1; break; }
-                    if(npc_pathstep(&w,(int)w.px,(int)w.py,tx,ty,-1,-1,&sx,&sy) && (sx||sy) && world_try_move(&w,sx,sy)) steps++;
+                    if((g_mover=-1, npc_pathstep(&w,(int)w.px,(int)w.py,tx,ty,-1,-1,&sx,&sy)) && (sx||sy) && world_try_move(&w,sx,sy)) steps++;
                     else break; }
                 if((int)w.px==tx && (int)w.py==ty) arrived=1;
                 dbg_num("travel steps    =", steps);       /* ~3 */
@@ -12490,7 +12956,51 @@ int main(int argc, char **argv)
                 dbg_num("EGG level=", w.level); dbg_num("EGG level eggs=", g_neggs);
                 dbg_num("EGG checked=", g_egg_checked); dbg_num("EGG eggs hatched=", g_egg_hatched); dbg_num("EGG no free slot=", g_egg_nofree);
                 int n=0; for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) n++;
-                dbg_num("EGG hatched below=", n); } } }
+                dbg_num("EGG hatched below=", n); }
+            else if(mode=='4'){                                    /* hatched worktypes (eggs.md §3b) */
+                int M=U6_SURFACE_TILES-1; rng_seed(&g_crng,0x4e55u);
+                { int h8=0,hb=0,h9=0,hc=0,he=0,ha=0,hf=0,h10=0,hs=0,hn=0;   /* the level's creature embryos by worktype */
+                  for(int e=0;e<g_neggs;e++) for(int k=0;k<g_eggs[e].nemb;k++){ const embryo_t*em=&g_emb[g_eggs[e].emb+k]; int on=em->obj_n, q=em->quality;
+                      if(!(on>=342||on==98||q)) continue; hn++; if(q==8)h8++; else if(q==0x0b)hb++; else if(q==9)h9++; else if(q==0x0c)hc++; else if(q==0x0e)he++; else if(q==0x0a)ha++; else if(q==0x0f)hf++; else if(q==0x10)h10++; else if(q>=3&&q<=6)hs++; }
+                  dbg_num("EGG embryos=", hn); dbg_num("EGG wt assault=", h8); dbg_num("EGG wt unfriendly=", hb); dbg_num("EGG wt flee=", h9); dbg_num("EGG wt wander=", hc);
+                  dbg_num("EGG wt stationary=", he); dbg_num("EGG wt like=", ha); dbg_num("EGG wt guard E-W=", hf); dbg_num("EGG wt guard N-S=", h10); dbg_num("EGG wt stances=", hs); }
+                int fx=-1,fy=-1;                                               /* an open 7x7 of free passable ground, no walls */
+                for(int r=1;r<300 && fx<0;r++) for(int e=-r;e<=r && fx<0;e++) for(int side=0;side<4 && fx<0;side++){
+                    int x=(side==0||side==1)? (int)w.px+e : (side==2? (int)w.px-r : (int)w.px+r);
+                    int y=(side==0)? (int)w.py-r : (side==1? (int)w.py+r : (int)w.py+e);
+                    x&=M; y&=M; int ok=1;
+                    for(int oy=-3;oy<=3 && ok;oy++) for(int ox=-3;ox<=3 && ok;ox++){ int tx=(x+ox)&M, ty=(y+oy)&M; int t=world_tile(&w,tx,ty);
+                        if(!world_is_passable(&w,tx,ty) || (g_tflags1[t]&1) || (g_tflags1[t]&4) || objworld_at(&g_ow,tx,ty)>=0 || npc_at(&w,tx,ty)>=0) ok=0; }
+                    if(ok){ fx=x; fy=y; } }
+                dbg_num("EGG field found=", fx>=0);
+                if(fx>=0){ teleport_party(&w,fx,fy); build_blocked(); temp_actors_clear(); g_combat_mode=0; g_ahp[1]=g_amaxhp[1]; sync_party_hp();
+                    #define EG_HATCH(ON,DX,DY,AL,WT) ({ int id_=hatch_creature(&w,(fx+(DX))&M,(fy+(DY))&M,(ON),(AL)); if(id_>=0){ g_actx[id_]=(uint16_t)((fx+(DX))&M); g_acty[id_]=(uint16_t)((fy+(DY))&M); g_actz[id_]=(uint8_t)w.level; g_ahp[id_]=200; g_amaxhp[id_]=200; hatched_worktype(id_,(WT)); } id_; })
+                    #define EG_PHP() ({ int s_=0; for(int p_=0;p_<g_nparty;p_++) s_+=g_ahp[g_party[p_].actor]; s_; })
+                    int st=EG_HATCH(347,1,0,ALIGN_EVIL,0x0e); int sx0=g_actx[st], sy0=g_acty[st], hits=0, hp0=EG_PHP();   /* stationary: a reaper beside the party */
+                    for(int t=0;t<12;t++){ step_npcs(&w); if(strstr(g_msg,"hits")) hits++; }
+                    dbg_num("EGG stationary stayed=", g_actx[st]==sx0 && g_acty[st]==sy0); dbg_num("EGG stationary struck turns=", hits); dbg_num("EGG party hp lost=", hp0-EG_PHP()); g_atile[st]=0xffff;
+                    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; g_ahp[a]=g_amaxhp[a]; } sync_party_hp();
+                    int gd=EG_HATCH(382,0,-3,ALIGN_NEUTRAL,0x0f); int gy0=g_acty[gd], minx=g_actx[gd], maxx=minx, rowok=1;         /* guard walk E-W: paces its row */
+                    for(int t=0;t<16;t++){ step_npcs(&w); int gx=g_actx[gd]; if(gx<minx)minx=gx; if(gx>maxx)maxx=gx; if(g_acty[gd]!=gy0) rowok=0; }
+                    dbg_num("EGG guard kept its row=", rowok); dbg_num("EGG guard span=", maxx-minx); g_atile[gd]=0xffff;
+                    int fl=EG_HATCH(356,2,0,ALIGN_EVIL,0x09); dbg_num("EGG flee is a coward=", g_coward[fl]);                     /* flee: a bird two tiles off runs */
+                    for(int t=0;t<6;t++) step_npcs(&w);
+                    { int dx=wrap_dist(g_actx[fl],w.px,U6_SURFACE_TILES), dy=wrap_dist(g_acty[fl],w.py,U6_SURFACE_TILES); dbg_num("EGG flee distance after 6=", dx>dy?dx:dy); dbg_num("EGG flee ran=", (dx>dy?dx:dy)>2); } g_atile[fl]=0xffff;
+                    int lk=EG_HATCH(349,-2,0,ALIGN_NEUTRAL,0x0a); int came=0;                                                     /* like: a dog comes to the party */
+                    for(int t=0;t<20 && !came;t++){ step_npcs(&w); int dx=wrap_dist(g_actx[lk],w.px,U6_SURFACE_TILES), dy=wrap_dist(g_acty[lk],w.py,U6_SURFACE_TILES); if(dx<=1&&dy<=1) came=1; }
+                    dbg_num("EGG like came adjacent=", came); g_atile[lk]=0xffff;
+                    int un=EG_HATCH(342,0,1,ALIGN_EVIL,0x0b); dbg_num("EGG unfriendly calm at first=", !g_hostile[un]); int conv=-1;   /* unfriendly: a rat beside the party turns on it */
+                    for(int t=0;t<40 && conv<0;t++){ step_npcs(&w); if(g_wt_force[un]==0x08) conv=t+1; }
+                    dbg_num("EGG unfriendly turned assault at turn=", conv<0?0:conv); dbg_num("EGG unfriendly hostile now=", g_hostile[un]); g_atile[un]=0xffff;
+                    int wd=EG_HATCH(428,0,3,ALIGN_NEUTRAL,0x0c); int wx0=g_actx[wd], wy0=g_acty[wd], moved=0, hp1=g_ahp[1];             /* wander: a rabbit wanders, harms nobody */
+                    for(int t=0;t<24;t++){ step_npcs(&w); if(g_actx[wd]!=wx0||g_acty[wd]!=wy0) moved=1; }
+                    dbg_num("EGG wander moved=", moved); dbg_num("EGG wander harmed nobody=", g_ahp[1]==hp1); g_atile[wd]=0xffff;
+                    int mo=EG_HATCH(342,-3,0,ALIGN_EVIL,0x00); int mx0=g_actx[mo], my0=g_acty[mo];                                  /* motionless */
+                    for(int t=0;t<10;t++) step_npcs(&w); dbg_num("EGG motionless stayed=", g_actx[mo]==mx0 && g_acty[mo]==my0); g_atile[mo]=0xffff;
+                    int as=EG_HATCH(342,3,3,ALIGN_EVIL,0x08); dbg_num("EGG assault hostile=", actor_hostile(as) && g_alert[as]); g_atile[as]=0xffff;
+                    #undef EG_HATCH
+                    #undef EG_PHP
+                } } } }
     blit_paper();
     compose_map(&w); draw_border_tiles();
     /* DEBUG: TALKTEST.REQ (holding an actor number, or empty = nearest NPC) opens
@@ -12801,7 +13311,7 @@ int main(int argc, char **argv)
         }
         int redraw=0;
         if (key && g_peer_on){ g_peer_on=0; compose_map(&w); draw_border_tiles(); redraw=1; key=0; }   /* any key closes the gem's view */
-        if (key && g_resting) key=0;                 /* the camp takes no input (rest.md §3) */
+        if (key && (g_resting || g_gw)) key=0;       /* the camp and the moongate walk take no input */
         if (key) {
             int a = key & 0xFF;
             g_travel_active=0;                       /* any key press cancels click-to-travel */
@@ -12896,10 +13406,7 @@ int main(int argc, char **argv)
                 else if (in==IN_QUIT) break;
                 else if (in==IN_TALK) {              /* talk to an adjacent NPC (a trainer advances thy level) */
                     if (!g_talking) { int id=find_adjacent_npc(&w);
-                        if(id>=0){   /* a trainer advances thy level only when thou hast earned it; else talk normally */
-                            if(g_trainer[id] && (party_can_train() || can_train_stat(1))) try_train(id);
-                            else talk(id);
-                            redraw=1; } }
+                        if(id>=0){ talk(id); redraw=1; } }
                 }
                 else if (dx||dy) {                   /* walk (or steer the vehicle) */
                     if (g_talking||g_show_inv||g_msg[0]) {   /* closing a panel needs a full present */
@@ -12949,12 +13456,14 @@ int main(int argc, char **argv)
         }
         /* click-to-travel: while a destination is set and the player is idle, step ONE tile
          * toward it each loop (pathfinding around walls). Any key press cancels it (above). */
+        if (g_gw && !g_gw_hold) { uint32_t t=plat_ticks_200hz();                       /* the moongate walk, a step per 1/8 s (moongates.md §2b) */
+            if (t-g_gw_tick>=GW_TICKS) { g_gw_tick=t; gw_tick(&w); compose_map(&w); draw_border_tiles(); if(g_gw==4) gw_fade_blend(); redraw=1; } }
         if (g_resting) { uint32_t t=plat_ticks_200hz();                               /* the camp: a rest turn per 1/8 s (rest.md §3) */
             if (t-g_rest_tick>=REST_TURN_TICKS) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
         if (g_travel_active && !key && !g_talking && !g_show_inv && !g_casting && !g_pending_verb) {
             if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;   /* arrived */
             else { int sx,sy;
-                if (npc_pathstep(&w,(int)w.px,(int)w.py,g_travel_tx,g_travel_ty,-1,-1,&sx,&sy)
+                if ((g_mover=-1, npc_pathstep(&w,(int)w.px,(int)w.py,g_travel_tx,g_travel_ty,-1,-1,&sx,&sy))
                     && (sx||sy) && player_step(&w,sx,sy)) {
                     if(w.level!=g_travel_level) g_travel_active=0;
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1;

@@ -777,3 +777,58 @@ int32_t sav_recontain(uint8_t *d, int32_t n, int32_t cap, int32_t src_cpos, int 
     d[dst_cpos] = (uint8_t)((dcnt + m) & 0xff); d[dst_cpos + 1] = (uint8_t)(((dcnt + m) >> 8) & 0xff);
     return n;
 }
+
+/* ---- New records + the dead flag + alcohol (save_load.md §5 step 0b; usecode_use.md "Created and
+ * destroyed objects persist", 2026-10-28) ---------------------------------------------------------- */
+int32_t sav_insert_onmap(uint8_t *d, int32_t n, int32_t cap, int32_t surf_off, int level, int x, int y,
+                         int obj_n, int frame, int qty, int quality, int status)
+{
+    int32_t cpos = chunk_of(d, n, surf_off, level, x, y);
+    if (cpos < 0 || cpos + 2 > n) return -1;
+    int cnt = le16(d + cpos); if (cnt >= 8191) return -1;
+    int32_t at = cpos + 2 + (int32_t)cnt * 8; if (at > n) return -1;
+    int32_t nn = grow_at(d, n, cap, at, 8); if (nn < 0) return -1;
+    sav_encode_record(d + at, status & ~0x18, x, y, level, obj_n, frame, qty, quality);
+    d[cpos] = (uint8_t)((cnt + 1) & 0xff); d[cpos+1] = (uint8_t)(((cnt + 1) >> 8) & 0xff);
+    return nn;
+}
+int32_t sav_insert_child(uint8_t *d, int32_t n, int32_t cap, int32_t cpos, int parent_k, int obj_n, int frame, int qty, int quality)
+{
+    if (cpos < 0 || cpos + 2 > n) return -1;
+    int cnt = le16(d + cpos); if (parent_k < 0 || parent_k >= cnt || cnt >= 8191) return -1;
+    int32_t at = cpos + 2 + (int32_t)cnt * 8; if (at > n) return -1;
+    int32_t nn = grow_at(d, n, cap, at, 8); if (nn < 0) return -1;
+    sav_encode_record(d + at, 0x08, 0, 0, 0, obj_n, frame, qty, quality);
+    rec_set_link(d + at, parent_k);
+    d[cpos] = (uint8_t)((cnt + 1) & 0xff); d[cpos+1] = (uint8_t)(((cnt + 1) >> 8) & 0xff);
+    return nn;
+}
+int sav_inv_owner_first(const uint8_t *d, int32_t n, int actor)
+{
+    int32_t iv = 4; if (iv + 2 > n) return -1;
+    int cnt = le16(d + iv); const uint8_t *rec = d + iv + 2; if (iv + 2 + (int32_t)cnt * 8 > n) return -1;
+    for (int k = 0; k < cnt; k++){ const uint8_t *b = rec + k * 8; int loc = b[0] & 0x18;
+        if (loc != 0x10 && loc != 0x18) continue;
+        if ((b[1] | ((b[2] & 3) << 8)) == actor) return k; }
+    return -1;
+}
+int sav_drop_actor_inv(uint8_t *d, int32_t n, int actor, int x, int y, int z)
+{
+    int32_t iv = 4; if (iv + 2 > n) return 0;
+    int cnt = le16(d + iv); uint8_t *rec = d + iv + 2; if (iv + 2 + (int32_t)cnt * 8 > n) return 0;
+    int moved = 0;
+    for (int k = 0; k < cnt; k++){ uint8_t *r = rec + k * 8; int loc = r[0] & 0x18;
+        if (loc != 0x10 && loc != 0x18) continue;
+        if ((r[1] | ((r[2] & 3) << 8)) != actor) continue;
+        r[0] = (uint8_t)((r[0] & ~0x18) | 0x01);
+        r[1] = (uint8_t)(x & 0xff);
+        r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
+        r[3] = (uint8_t)(((y >> 6) & 0x0f) | ((z & 0x0f) << 4));
+        moved++; }
+    return moved;
+}
+void sav_set_actor_dead(uint8_t *d, int32_t off, int actor, int dead)
+{   if (dead) d[off + 0x800 + actor] |= 0x10; else d[off + 0x800 + actor] &= (uint8_t)~0x10; }
+int  sav_get_actor_dead(const uint8_t *d, int32_t off, int actor){ return (d[off + 0x800 + actor] & 0x10) != 0; }
+void sav_set_alcohol(uint8_t *d, int32_t off, int v){ d[off + 0x1c17] = (uint8_t)v; }
+int  sav_get_alcohol(const uint8_t *d, int32_t off){ return d[off + 0x1c17]; }

@@ -63,6 +63,25 @@ For each embryo of a hatching egg:
 Temporary actors are discarded when the party leaves the level; their bodies/loot are the
 combat system's concern.
 
+## 3b. The embryo's worktype (2026-10-27; the reference's EggManager::get_worktype + the
+actor script's worktype handlers, read to understand)
+The embryo's quality IS the hatchling's worktype (gargoyles under the treaty get "wander near
+player" instead). The user's data: of 961 creature embryos, 500 assault (0x08), 224 unfriendly
+(0x0b), 63 flee (0x09), 43 wander (0x0c), 89 combat stances (0x03-0x06), 25 stationary (0x0e),
+10 like (0x0a), 9 guard walks (0x0f/0x10), 2 motionless, 1 in-party (0x01), 1 retreat. The code
+is forced on the hatchling where it stands (usecode_vm.md §6b's mechanism; no schedule, so it
+holds until slain) and decides its turns:
+| code | name | each turn |
+|---|---|---|
+| 0x08, 0x9b, 0x03-0x06 | assault, attack-party, the stances | the assault AI (combat.md §7) |
+| 0x07, 0x09, 0x9a | retreat, flee, mousing | the coward AI: runs from a party it sees, cowers cornered |
+| 0x0b | unfriendly | roams (half the turns a step toward a point ten tiles off along a random axis); a party member within two tiles turns it to **assault** with a 1-in-8 chance per turn |
+| 0x0a | like | the same roam, but a party member within two draws it toward the party half the turns |
+| 0x0c, 0x8f | wander near player / wander around | one turn in eight a step in a random direction |
+| 0x0e, 0x0d | stationary, tangle | never moves; a hostile one strikes a party member standing beside it (the reference tries 16 random tiles of the 9×9 around it: ≈16/81 per neighbour per turn; the tangle vine strikes a neighbour every other turn) |
+| 0x0f, 0x10, 0x8b-0x8e | guard walk east-west / north-south, walk N/E/S/W | half the turns a step along its facing (0x0f starts east, 0x10 north, 0x8b-0x8e as named); blocked, it turns back |
+| 0x00, 0x01 | motionless | nothing: a creature embryo whose quality is 0 never takes a turn (the reference's "nothing" worktype), hostile or not |
+
 ## 4. Creature table (str, dex, int, hp, base damage, alignment)
 
 | obj_n | creature | str | dex | int | hp | dmg | align |
@@ -142,8 +161,10 @@ sea serpent 34/83/51, giant spider 89, giant squid 17/68, wisp 20/69/129, tangle
 - Hatched creatures never persist: the save carries eggs, not what hatched (as the original).
   A temporary actor is discarded on level change; on the surface it lives until slain or the
   party goes 20+ tiles away and the egg re-arms (it is then simply replaced next time).
-- Worktypes: hostile alignment (evil/chaotic) → the combat AI; neutral/good → wander. The
-  finer schedule worktypes (guard posts, etc.) are not modelled for hatched creatures.
+- Worktypes (§3b): the coward's sight range is 5 for every flee code (the reference flees
+  within 3 for flee/mousing and 8 for retreat, and a cornered retreater fights back); the
+  stationary strike is a per-neighbour 16/81 chance, not 16 random picks; a step "toward a point
+  ten tiles off" is one step in that direction; the tangle vine never crawls.
 - Plain-object embryos hatch as ordinary map objects (dirty, not persisted): the reagent
   patches regrow every visit, like the original's temporaries.
 - Toss-to-free-tile searches the 5×5 around the egg (the original tries 3×2 / 2×3 / 4×4
@@ -155,7 +176,11 @@ sea serpent 34/83/51, giant spider 89, giant squid 17/68, wisp 20/69/129, tangle
 chance ≥ 50, place the party 12 tiles from it, force a block change → print
 `EGG kind= n=` (hatched creature count) and the nearest hatched creature's obj_n and distance;
 `'2'` = the same with the party placed ON the egg then stepped once (must NOT hatch: within
-8 tiles); `'3'` = enter level 1 (as DUNGEON.REQ 0) and report how many creatures hatched
+8 tiles); `'4'` = hatched worktypes (§3b): the level's embryo worktype counts, then on an open 7×7:
+a stationary reaper beside the party stays put and strikes, a guard walk paces its row, a
+fleeing bird runs, a liking dog comes adjacent, an unfriendly rat beside the party turns to
+assault within 60 turns, a wandering rabbit moves and harms nobody, a motionless rat stays,
+an assault rat is hostile and alert; `'3'` = enter level 1 (as DUNGEON.REQ 0) and report how many creatures hatched
 from the level's eggs within 20 tiles.
 
 ## 7. Persistence
@@ -165,7 +190,12 @@ is reconciled (before a level switch / S)ave) and read on load, so a save made n
 egg does not hatch it again on reload — exactly what the original's saved egg status does.
 
 ## Status
-VERIFIED 2026-09-30. EGG.REQ on emulated TT and the stock 4 MB Falcon: '1' the nearest
+VERIFIED 2026-09-30; §3b added 2026-10-27 — EGG.REQ '4' on emulated TT and the stock 4 MB Falcon (identical): the
+surface's 316 creature embryos count 96 assault / 64 unfriendly / 47 flee / 39 wander / 13 stationary / 8 like
+/ 6 + 3 guard walks / 38 stances; on an open 7×7 a stationary reaper beside the party stays and strikes (17 HP
+lost in 12 turns), a guard paces its row over a span of 7, a fleeing bird is 6 tiles off after 6 turns, a
+liking dog comes adjacent, an unfriendly rat beside the party turns to assault on turn 11, a wandering rabbit
+moves and harms nobody, a motionless rat stays, an assault rat is hostile and alert. EGG.REQ on emulated TT and the stock 4 MB Falcon: '1' the nearest
 surface egg (3 gargoyles, chance 100, evil) hatches when the party is 12 tiles away — three
 hostile gargoyles (hp ≈ 30 rolled) at distance 12; '2' standing on it hatches nothing; '3' level
 1 holds 155 eggs, the 2 within 20 tiles of the cave entry are checked and hatch per their chance.

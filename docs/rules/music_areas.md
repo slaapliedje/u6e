@@ -18,7 +18,8 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M10 (audio: music)
 >   boat/gargoyle triggers are not yet wired (those game systems don't exist here yet).
 > - Confidence   : group model + song-group table = confirmed (from Nuvie). Trigger wiring = partial
 >   (combat + dungeon done; boat/gargoyle pending the underlying systems).
-> - Last updated : 2026-08-02
+> - Last updated : 2026-10-28 (boat + gargoyle wired; READ Nuvie `core/party.cpp` update_music /
+>   set_in_vehicle for the trigger order — re-expressed)
 
 ## 1. System (GROUP-based, faithful to the original)
 U6 does NOT map screen position to a specific song. It sorts its songs into GROUPS and, when the game
@@ -39,8 +40,8 @@ music and suppresses auto-switching.
 | `random`   | BRIT, FOREST, STONES, ULTIMA (random pick)| overworld AND towns — the default/wandering| yes    |
 | `combat`   | ENGAGE                                     | combat mode active                        | yes    |
 | `dungeon`  | DUNGEON                                    | underground / in a dungeon (map level > 0)| yes¹   |
-| `boat`     | HORNPIPE                                   | aboard a ship                             | no²    |
-| `gargoyle` | GARGOYLE                                   | the gargoyle lands                        | no³    |
+| `boat`     | HORNPIPE                                   | the party is INSIDE a vehicle: ship, skiff, raft or balloon (a ridden horse is not a vehicle) | yes² |
+| `gargoyle` | GARGOYLE                                   | map level 5 — the gargoyle world          | yes³   |
 | (front-end)| INTRO, CREATE, BOOTUP, END                | intro / chargen / boot / endgame          | n/a⁴   |
 
 Song titles (MIDI.DAT): BRIT="Rule Britannia", FOREST="Wanderer/Forest", STONES="Stones",
@@ -51,8 +52,12 @@ Priority: combat overrides the location groups. Only a group CHANGE re-cues; ste
 integer compare each turn. Leaving a group (e.g. combat ends) re-requests the location group, which for
 `random` re-picks a wandering track (Nuvie behaves the same).
 
-¹ wired: `music_area_group(level)` returns `dungeon` when the map level > 0 (the level-transition
-work made dungeons navigable).  ² needs ship/boarding state.  ³ needs gargoyle-region detection.
+¹ wired: `music_area_group(level)` returns `dungeon` when the map level is 1-4.  ² wired 2026-10-28:
+`g_veh_kind` set and not the horse (431).  ³ wired 2026-10-28: the gargoyle world IS map level 5 — the
+reference's `Party::update_music` switches on the leader's z: 0 random, 5 gargoyle, else dungeon.
+Order, as the reference: vehicle first, then combat, then the level. Boarding a vehicle also BREAKS
+OFF combat mode (the reference's set_in_vehicle). Since the group is re-derived from the live state
+every turn, boarding, leaving, combat toggles, ladders, moongates and teleports all re-cue by themselves.
 ⁴ driven by the front-end sequences, not this hook.
 
 ## 3. Per-game deltas -> RuleSet hooks
@@ -76,21 +81,22 @@ pick never destabilises a test.
 ## 6. Open questions
 - [x] Dungeon trigger WIRED (2026-08-02): `music_area_group(level)` returns `dungeon` when the map
       level > 0 (the level-transition work made dungeons navigable). Validated on Falcon.
-- [ ] Wire the boat/gargoyle triggers once ship/region state exists (the group table is already
-      correct; only `music_area_group()` gains the checks).
+- [x] Boat / gargoyle triggers WIRED (2026-10-28) — see §2 notes ² ³; MUSIC.REQ 'G' walks the states
+      (overworld → the real ship at Buccaneer's Den → combat aboard stays HORNPIPE → ashore in combat
+      ENGAGE → level 1 DUNGEON → level 5 GARGOYLE → surface RANDOM) on TT + 4 MB Falcon.
 - [x] Pool ROTATION — DECIDED (2026-07-18): keep the SEAMLESS single-track loop (the M10 loop_start
       work) rather than re-picking a wandering track on song-end. This is the "better than the original"
       call (same spirit as M7's palette): no audible gap/restart. Song-end rotation remains an optional
       enhancement if closer fidelity is later wanted (it would override the DMA hardware loop from the
       music manager on end-of-song).
-- [ ] Confirm the exact original trigger for the `gargoyle` group (region vs event) and any `boat`
-      nuance (skiff vs ship) against observation of the original.
+- [x] Confirmed from the reference (2026-10-28): the gargoyle group is MAP LEVEL 5, not a surface
+      region; every vehicle the party sits inside (ship, skiff, raft, balloon) is `boat`; the horse is
+      not. The reference leaves "Stones while camping" as its own FIXME (not implemented there either).
 - [ ] Scripted/usecode music cues (events, specific NPCs) — route through the "forced song" path.
 
 ## 7. Status
 VERIFIED (U6) — group model + song-group table confirmed from Nuvie's native-U6 loader; the
 overworld/town assignment is verified (no per-town song; both draw the `random` wandering pool, per
 U6's design). Auto-start + combat switch + dungeon switch wired and mechanism-verified; `make musictest`
-sequences all 12 `.M` clean. Pool-rotation decided (seamless loop, §6). Remaining (non-blocking, future
-systems): wire boat/gargoyle triggers when ship/region state exists — the group→song table is
-already correct, only `music_area_group()` gains the checks.
+sequences all 12 `.M` clean. Pool-rotation decided (seamless loop, §6). Boat + gargoyle triggers wired
+2026-10-28 (MUSIC.REQ 'G' identical on TT + 4 MB Falcon): every trigger of the original is in place.

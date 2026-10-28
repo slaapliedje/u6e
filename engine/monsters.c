@@ -5,72 +5,72 @@
 typedef struct { uint16_t obj_n; mon_base_t b; } mon_row_t;
 
 static const mon_row_t MON[] = {
-    { 98,  { 22,  9,  8,  30,  15, ALIGN_CHAOTIC } },   /* mimic (chest) */
-    { 342, {  5, 13,  4,   8,   6, ALIGN_CHAOTIC } },   /* giant rat */
-    { 343, {  1, 40,  1,   1,   1, ALIGN_CHAOTIC } },   /* insects */
-    { 344, {  5, 25,  4,   5,   6, ALIGN_CHAOTIC } },   /* giant bat */
-    { 345, { 24, 20,  8,  50,  20, ALIGN_EVIL    } },   /* giant squid */
-    { 346, { 17, 17,  9,  70,  30, ALIGN_EVIL    } },   /* sea serpent */
-    { 347, { 21, 20, 16,  30,  20, ALIGN_CHAOTIC } },   /* reaper */
-    { 348, {  5, 10,  4,   6,   2, ALIGN_NEUTRAL } },   /* sheep */
-    { 349, {  5, 16,  8,   6,   3, ALIGN_NEUTRAL } },   /* dog */
-    { 350, { 11, 18,  5,   8,   2, ALIGN_NEUTRAL } },   /* deer */
-    { 351, {  8, 16,  8,   8,   4, ALIGN_CHAOTIC } },   /* wolf */
-    { 352, {  1, 10,  9,  20,  12, ALIGN_EVIL    } },   /* ghost */
-    { 353, {  2, 26,  7,   5,   1, ALIGN_CHAOTIC } },   /* gremlin */
-    { 354, {  2, 25,  3,   5,   2, ALIGN_NEUTRAL } },   /* mouse */
-    { 355, {  2, 10, 21,  20,   1, ALIGN_EVIL    } },   /* gazer */
-    { 356, {  1, 28,  4,   3,   1, ALIGN_NEUTRAL } },   /* bird */
-    { 357, { 17,  6,  3,  40,  15, ALIGN_CHAOTIC } },   /* corpser */
-    { 358, {  3,  7,  6,   5,   2, ALIGN_CHAOTIC } },   /* snake */
-    { 359, {  3,  9,  3,   5,   2, ALIGN_NEUTRAL } },   /* rabbit */
-    { 360, {  3, 17,  2,   5,   2, ALIGN_CHAOTIC } },   /* rot worm */
-    { 361, {  9, 11,  4,  10,   8, ALIGN_CHAOTIC } },   /* giant spider */
-    { 362, { 15, 32, 33,  50,   6, ALIGN_EVIL    } },   /* winged gargoyle */
-    { 363, { 25, 19,  8,  30,  15, ALIGN_EVIL    } },   /* gargoyle */
-    { 364, {  5,  5,  2,  10,   1, ALIGN_CHAOTIC } },   /* acid slug */
-    { 365, { 20,  5,  1,  30,   1, ALIGN_CHAOTIC } },   /* tangle-vine flower */
-    { 366, { 20, 25,  1,  30,   1, ALIGN_CHAOTIC } },   /* tangle vine */
-    { 367, { 35, 26, 31, 100,  20, ALIGN_EVIL    } },   /* daemon */
-    { 368, { 10, 14,  7,  20,   6, ALIGN_EVIL    } },   /* skeleton */
-    { 369, { 22, 22, 13,  50,  10, ALIGN_EVIL    } },   /* drake */
-    { 370, { 19, 13,  8,  20,  12, ALIGN_EVIL    } },   /* headless */
-    { 371, { 18, 14,  9,  15,   6, ALIGN_EVIL    } },   /* troll */
-    { 372, { 20, 27, 13,  30,  20, ALIGN_EVIL    } },   /* mongbat */
-    { 373, {  1, 40, 20,  40,   1, ALIGN_CHAOTIC } },   /* wisp */
-    { 374, { 26, 11,  2,  50,  15, ALIGN_CHAOTIC } },   /* hydra */
-    { 375, {  6,  6,  2,  15,   4, ALIGN_CHAOTIC } },   /* slime */
-    { 376, { 20, 17, 11,  20,   6, ALIGN_CHAOTIC } },   /* fighter */
-    { 377, { 15, 18, 12,  15,   4, ALIGN_CHAOTIC } },   /* swashbuckler */
-    { 378, { 10, 14, 22,  30,   4, ALIGN_EVIL    } },   /* mage */
-    { 379, { 11, 12, 12,   8,   4, ALIGN_CHAOTIC } },   /* villager */
-    { 380, { 12, 12, 18,   8,   4, ALIGN_EVIL    } },   /* merchant */
-    { 381, {  8,  8,  9,   6,   2, ALIGN_CHAOTIC } },   /* child */
-    { 382, {  9, 30,  9, 100,   8, ALIGN_EVIL    } },   /* guard */
-    { 383, { 14, 16, 12,   8,   4, ALIGN_CHAOTIC } },   /* jester */
-    { 384, {  8,  8,  9,   6,   3, ALIGN_CHAOTIC } },   /* peasant */
-    { 385, { 15, 15, 10,   8,   4, ALIGN_NEUTRAL } },   /* farmer */
-    { 386, { 12, 16, 14,   8,   4, ALIGN_CHAOTIC } },   /* musician */
-    { 387, { 10, 14, 15,   8,   4, ALIGN_NEUTRAL } },   /* woman */
-    { 388, {  4, 18,  8,   6,   2, ALIGN_NEUTRAL } },   /* cat */
-    { 409, { 30, 30, 30, 255, 255, ALIGN_GOOD    } },   /* Lord British */
-    { 410, { 25, 25, 25,  30,   4, ALIGN_GOOD    } },   /* Avatar */
-    { 411, { 40, 35, 27, 150,  30, ALIGN_EVIL    } },   /* dragon */
-    { 413, { 60, 21,  8, 200,  60, ALIGN_CHAOTIC } },   /* silver serpent */
-    { 424, { 27,  8,  7,  40,  20, ALIGN_EVIL    } },   /* cyclops */
-    { 426, { 13, 13,  3,  20,   8, ALIGN_CHAOTIC } },   /* giant scorpion */
-    { 427, { 16, 15,  2,  10,   8, ALIGN_CHAOTIC } },   /* giant ant */
-    { 428, { 14,  7,  5,  10,   3, ALIGN_NEUTRAL } },   /* cow */
-    { 429, { 20, 10,  3,  30,  10, ALIGN_CHAOTIC } },   /* alligator */
-    { 430, { 22, 27,  7,  15,   3, ALIGN_NEUTRAL } },   /* horse */
-    { 431, { 22, 27,  7,  15,   3, ALIGN_NEUTRAL } },   /* horse with rider */
+    { 98, { 22,  9,  8,  30,  15, ALIGN_CHAOTIC, 5 } },   /* mimic (chest) */
+    { 342, { 5, 13,  4,   8,   6, ALIGN_CHAOTIC, 0 } },   /* giant rat */
+    { 343, { 1, 40,  1,   1,   1, ALIGN_CHAOTIC, 0 } },   /* insects */
+    { 344, { 5, 25,  4,   5,   6, ALIGN_CHAOTIC, 0 } },   /* giant bat */
+    { 345, { 24, 20,  8,  50,  20, ALIGN_EVIL, 0 } },   /* giant squid */
+    { 346, { 17, 17,  9,  70,  30, ALIGN_EVIL, 2 } },   /* sea serpent */
+    { 347, { 21, 20, 16,  30,  20, ALIGN_CHAOTIC, 4 } },   /* reaper */
+    { 348, { 5, 10,  4,   6,   2, ALIGN_NEUTRAL, 0 } },   /* sheep */
+    { 349, { 5, 16,  8,   6,   3, ALIGN_NEUTRAL, 0 } },   /* dog */
+    { 350, { 11, 18,  5,   8,   2, ALIGN_NEUTRAL, 0 } },   /* deer */
+    { 351, { 8, 16,  8,   8,   4, ALIGN_CHAOTIC, 0 } },   /* wolf */
+    { 352, { 1, 10,  9,  20,  12, ALIGN_EVIL, 0 } },   /* ghost */
+    { 353, { 2, 26,  7,   5,   1, ALIGN_CHAOTIC, 0 } },   /* gremlin */
+    { 354, { 2, 25,  3,   5,   2, ALIGN_NEUTRAL, 0 } },   /* mouse */
+    { 355, { 2, 10, 21,  20,   1, ALIGN_EVIL, 0 } },   /* gazer */
+    { 356, { 1, 28,  4,   3,   1, ALIGN_NEUTRAL, 0 } },   /* bird */
+    { 357, { 17,  6,  3,  40,  15, ALIGN_CHAOTIC, 0 } },   /* corpser */
+    { 358, { 3,  7,  6,   5,   2, ALIGN_CHAOTIC, 1 } },   /* snake */
+    { 359, { 3,  9,  3,   5,   2, ALIGN_NEUTRAL, 0 } },   /* rabbit */
+    { 360, { 3, 17,  2,   5,   2, ALIGN_CHAOTIC, 0 } },   /* rot worm */
+    { 361, { 9, 11,  4,  10,   8, ALIGN_CHAOTIC, 0 } },   /* giant spider */
+    { 362, { 15, 32, 33,  50,   6, ALIGN_EVIL, 5 } },   /* winged gargoyle */
+    { 363, { 25, 19,  8,  30,  15, ALIGN_EVIL, 10 } },   /* gargoyle */
+    { 364, { 5,  5,  2,  10,   1, ALIGN_CHAOTIC, 0 } },   /* acid slug */
+    { 365, { 20,  5,  1,  30,   1, ALIGN_CHAOTIC, 4 } },   /* tangle-vine flower */
+    { 366, { 20, 25,  1,  30,   1, ALIGN_CHAOTIC, 4 } },   /* tangle vine */
+    { 367, { 35, 26, 31, 100,  20, ALIGN_EVIL, 10 } },   /* daemon */
+    { 368, { 10, 14,  7,  20,   6, ALIGN_EVIL, 0 } },   /* skeleton */
+    { 369, { 22, 22, 13,  50,  10, ALIGN_EVIL, 4 } },   /* drake */
+    { 370, { 19, 13,  8,  20,  12, ALIGN_EVIL, 2 } },   /* headless */
+    { 371, { 18, 14,  9,  15,   6, ALIGN_EVIL, 4 } },   /* troll */
+    { 372, { 20, 27, 13,  30,  20, ALIGN_EVIL, 4 } },   /* mongbat */
+    { 373, { 1, 40, 20,  40,   1, ALIGN_CHAOTIC, 0 } },   /* wisp */
+    { 374, { 26, 11,  2,  50,  15, ALIGN_CHAOTIC, 0 } },   /* hydra */
+    { 375, { 6,  6,  2,  15,   4, ALIGN_CHAOTIC, 0 } },   /* slime */
+    { 376, { 20, 17, 11,  20,   6, ALIGN_CHAOTIC, 0 } },   /* fighter */
+    { 377, { 15, 18, 12,  15,   4, ALIGN_CHAOTIC, 0 } },   /* swashbuckler */
+    { 378, { 10, 14, 22,  30,   4, ALIGN_EVIL, 0 } },   /* mage */
+    { 379, { 11, 12, 12,   8,   4, ALIGN_CHAOTIC, 0 } },   /* villager */
+    { 380, { 12, 12, 18,   8,   4, ALIGN_EVIL, 0 } },   /* merchant */
+    { 381, { 8,  8,  9,   6,   2, ALIGN_CHAOTIC, 0 } },   /* child */
+    { 382, { 9, 30,  9, 100,   8, ALIGN_EVIL, 0 } },   /* guard */
+    { 383, { 14, 16, 12,   8,   4, ALIGN_CHAOTIC, 0 } },   /* jester */
+    { 384, { 8,  8,  9,   6,   3, ALIGN_CHAOTIC, 0 } },   /* peasant */
+    { 385, { 15, 15, 10,   8,   4, ALIGN_NEUTRAL, 0 } },   /* farmer */
+    { 386, { 12, 16, 14,   8,   4, ALIGN_CHAOTIC, 0 } },   /* musician */
+    { 387, { 10, 14, 15,   8,   4, ALIGN_NEUTRAL, 0 } },   /* woman */
+    { 388, { 4, 18,  8,   6,   2, ALIGN_NEUTRAL, 0 } },   /* cat */
+    { 409, { 30, 30, 30, 255, 255, ALIGN_GOOD, 30 } },   /* Lord British */
+    { 410, { 25, 25, 25,  30,   4, ALIGN_GOOD, 0 } },   /* Avatar */
+    { 411, { 40, 35, 27, 150,  30, ALIGN_EVIL, 12 } },   /* dragon */
+    { 413, { 60, 21,  8, 200,  60, ALIGN_CHAOTIC, 15 } },   /* silver serpent */
+    { 424, { 27,  8,  7,  40,  20, ALIGN_EVIL, 4 } },   /* cyclops */
+    { 426, { 13, 13,  3,  20,   8, ALIGN_CHAOTIC, 3 } },   /* giant scorpion */
+    { 427, { 16, 15,  2,  10,   8, ALIGN_CHAOTIC, 3 } },   /* giant ant */
+    { 428, { 14,  7,  5,  10,   3, ALIGN_NEUTRAL, 0 } },   /* cow */
+    { 429, { 20, 10,  3,  30,  10, ALIGN_CHAOTIC, 6 } },   /* alligator */
+    { 430, { 22, 27,  7,  15,   3, ALIGN_NEUTRAL, 0 } },   /* horse */
+    { 431, { 22, 27,  7,  15,   3, ALIGN_NEUTRAL, 0 } },   /* horse with rider */
 };
 
 int monster_base(int obj_n, mon_base_t *out)
 {
     for (unsigned i = 0; i < sizeof MON / sizeof MON[0]; i++)
         if (MON[i].obj_n == obj_n){ *out = MON[i].b; return 1; }
-    out->str = 10; out->dex = 10; out->intel = 10; out->hp = 30; out->dmg = 4; out->align = ALIGN_DEFAULT;
+    out->str = 10; out->dex = 10; out->intel = 10; out->hp = 30; out->dmg = 4; out->align = ALIGN_DEFAULT; out->xp = 0;
     return 0;
 }
 
@@ -79,6 +79,49 @@ int monster_roll_stat(int base, rng_t *r)
     int t = base / 2;
     if (t == 0) return base;
     return base - t + rng_range(r, t + 1) + rng_range(r, t + 1);
+}
+
+/* Movement types (combat.md §7c; the reference's actor type table): low air = insects, giant bat, bird,
+ * drake, wisp, dragon, the inflated balloon; high water = giant squid, sea serpent, a ship; low water =
+ * skiff, raft; a tangle vine pod never moves; everything else walks. */
+int monster_movetype(int obj_n)
+{
+    switch (obj_n){
+    case 343: case 344: case 356: case 369: case 373: case 411: case 423: return MT_AIR_LOW;
+    case 345: case 346: case 412: return MT_WATER_HIGH;
+    case 414: case 415: return MT_WATER_LOW;
+    case 365: return MT_NONE;
+    default: return MT_LAND;
+    }
+}
+
+int monster_remains(int obj_n, int *frame)
+{
+    int fr = 0, body = 0;
+    switch (obj_n){
+    /* blood (338), a random frame rolled by the caller */
+    case 344: case 353: case 355: case 356: case 357: case 359: case 360: case 374: case 342: case 348:
+    case 358: case 361: case 426: case 427: case 428: case 429: case 431: body = 338; break;
+    /* the creature's own object in the frame it died */
+    case 347: case 354: case 388: case 366: case 349: case 350: case 351: case 369: case 372: body = obj_n; fr = 255; break;
+    /* dead body (339) by type */
+    case 367: case 371: case 363: body = 339; fr = 0; break;          /* daemon, troll, gargoyle */
+    case 368: body = 339; fr = 9; break;                                /* skeleton */
+    case 370: body = 339; fr = 1; break;                                /* headless */
+    case 376: body = 339; fr = 6; break;                                /* fighter */
+    case 377: case 384: body = 339; fr = 5; break;                      /* swashbuckler, peasant */
+    case 378: case 387: body = 339; fr = 3; break;                      /* mage, woman */
+    case 379: case 380: case 409: body = 339; fr = 2; break;            /* villager, merchant, Lord British */
+    case 381: case 383: case 385: body = 339; fr = 8; break;            /* child, jester, farmer */
+    case 382: body = 339; fr = 4; break;                                /* guard */
+    case 386: case 410: body = 339; fr = 7; break;                      /* musician, the Avatar */
+    case 424: body = 340; fr = 3; break;                                /* cyclops */
+    case 362: body = 341; fr = 3; break;                                /* winged gargoyle */
+    case 430: body = 134; fr = 1; break;                                /* horse -> carcass */
+    default: body = 0; break;                                           /* insects, squid, ghost, slug, wisp, serpents, dragon, vehicles ... */
+    }
+    if (frame) *frame = fr;
+    return body;
 }
 
 /* Immunities by creature type (magic_skills.md §5b): poison-immune, undead (death spells), sleep-immune,

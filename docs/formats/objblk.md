@@ -48,7 +48,7 @@ stores its 64 surface super-chunks **row-major** instead (slot `c` ↔ superchun
 ## 2. Object record (8 bytes, little-endian fields)
 | Field    | Bits / bytes                         | Notes                         |
 |----------|--------------------------------------|-------------------------------|
-| status   | b0 (8 bits)                          | flags; bit 0x08 = contained/inventory (not on map) |
+| status   | b0 (8 bits)                          | flags; bits 0x18 = location (0 on map, 0x08 contained, 0x10 carried, 0x18 readied); bit 0x01 = OK to take (not theft; the reference sets it on dropped items and bodies); bit 0x20 = TEMPORARY (never written back; the reference's Reappear / Replicate copies use 0x21) |
 | x        | b1 | ((b2 & 0x03) << 8)              | world tile X (0..1023)        |
 | y        | (b2 >> 2) | ((b3 & 0x0F) << 6)       | world tile Y (0..1023)        |
 | z        | b3 >> 4                              | level (0 = surface)           |

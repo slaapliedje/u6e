@@ -54,31 +54,28 @@ else        : apply max to defender
 Apply (actor_hit): if `max >= hp` the defender DIES (hp→0, removed; killer gains exp if the
 victim was evil); else `hp -= max`. 255 = instant kill (glass sword, god-mode). Lord British
 (obj_n 409) is immortal (hp clamped to 255).
-- **Exp-award table (DONE)**: exp gained on a kill = `floor((str+dex+int+hp+dmg+exp)/4)` from the
-  victim's stats (`kill_exp`: hp = the creature's max HP, dmg = the killing blow, exp = the
-  victim's own experience value), min 1. Replaced the placeholder `2 + str/2`. (Confidence:
-  per our spec — there is no on-screen ground-truth to verify the exact divisor/terms against
-  without Nuvie source; the values it produces are sensible — slug ~10–20, gargoyle ~50.)
-- **Leveling + party leveling (DONE)**: an actor's max HP = **level × 30**; experience thresholds
-  **double** (L2=100 … L8=6400; cap 8). Experience is **per-actor** — each member runs its own
-  exp (loaded from objlist +0xc00, pack **U6WO**, + kills, capped) and its own level
-  (`g_alevel[]`, init = maxHP/30). On a kill the **slayer** earns the exp (the Avatar via
-  `do_attack`, the attacking companion via `party_attack`); kills do NOT auto-level.
-- **Training gate (DONE)**: authentic U6 gates the HP gain behind **training** — Lord British
-  (obj_n 409; trainer flag, pack **U6WP**) advances levels. T)alking to a trainer advances EVERY
-  party member that has earned the next level (the whole party is blessed: +30 max HP each, heal
-  to full) via `try_train`; otherwise his normal conversation runs. The status line shows the
-  Avatar's "Lv N". Verified vs the save (avatar level 3/exp 370 → +exp doesn't level → at
-  threshold → level 4/HP 120) and a companion advancing 3→4 on the same visit.
-- **Stat trainers (DONE — MVP)**: when no level is earned, a trainer instead raises a STAT for
-  **gold** — `train_stat` spends `STAT_COST` (100) gold to raise the Avatar's lowest of
-  STR/DEX/INT by 1, capped at 30. Gold is the **conversation VM's pool** (`g_cg.gold`) — the same
-  gold merchant/trainer dialogs read/mutate, so there is ONE gold source. **Gold is now REAL**:
-  mkworld sums the party's coins (obj_n 88, `OBJ_U6_GOLD`, incl. coins in bags) and ships it as
-  pack U6WR → `g_cg.gold`. On the sample save = **110 gold** (Shamino 95 + Iolo 15); one raise
-  (110→10) is then affordable. MVP simplifications remaining: auto-picks the lowest stat (U6's
-  per-trainer specialty needs the trainer→stat NPC list), and Lord British doubles as the
-  stat-trainer.
+- **Experience for a kill (REFERENCE-FAITHFUL 2026-10-28)**: only an **evil or chaotic** victim (its
+  LIVE alignment) is worth anything; the award is `floor((str + dex + int + hp + dmg + xp) / 4)` from
+  the CREATURE TABLE's base values for the victim's type (monsters.c `monster_base`: the table now
+  carries the reference's per-type **xp** column — gargoyle 10, winged gargoyle 5, daemon 10, dragon
+  12, silver serpent 15, cyclops 4, troll 4, mongbat 4, drake 4, headless 2, sea serpent 2, snake 1,
+  scorpion / ant 3, alligator 6, reaper / tangle 4, Lord British 30, vehicles 10-30, everything else
+  0). The live stats and the killing blow play no part. Examples: a gargoyle (363) is worth
+  (25+19+8+30+15+10)/4 = 26, a giant rat (342) (5+13+4+8+6+0)/4 = 9, a deer or a townsperson 0.
+  Previously we used the victim's live stats, the blow and its own exp value, for any alignment.
+- **Levels (REFERENCE-FAITHFUL 2026-10-28)**: an actor's max HP = **level × 30** (capped 255). Experience
+  accrues per actor (objlist +0xc00); kills never level anyone. Levels are gained ONLY at the
+  **eight shrines** — their conversation scripts (entries 192-199, reached by T)alking to the shrine
+  object, usecode_vm.md §6c) raise a meditating member one level when exp ≥ the script's own table
+  `0, 100, 200, 400, 800, 1600, 3200, 6400` indexed by the current level (cap 8), and add that shrine's
+  stat gift: Honesty int +3, Compassion dex +3, Valor str +3, Justice int +1 dex +1, Sacrifice str +1
+  dex +1, Honor str +1 int +1, Spirituality +1 to all three, Humility level only. Lord British does NOT
+  train or level anyone (our earlier "training gate" and gold-for-stat trainer were inventions and are
+  removed); his script heals, as before. Our old doubling thresholds matched the scripts' table.
+- **Resurrection costs experience** (the reference's actor_resurrect): a resurrected actor keeps
+  `exp × karma / 100` when karma < 98 (Resurrect spell and a healer's RESURRECT alike).
+- A few NPC scripts read a member's level or stats (Xiao, Nicodemus, Horance, Andrea's arm-wrestling
+  reads the Avatar's strength) and one grants dex +1; they work through the same VM ops.
 
 ## 3b. Attacks on OBJECTS (actor_hit's object branch; 2026-10-27)
 When the blow lands on a tile with no actor, the TOP object there is the defender (what the
@@ -92,6 +89,13 @@ mirror (123) cracks (frame 2) and costs 10 karma instead of vanishing, anything 
 u6e persists a break at once: the contents' records go on the map (sav_spill_k), a fired
 trap's record and then the holder's own record are deleted (objblk.md order holds: the holder
 is childless by then).
+
+## 3c. Remains (2026-10-28)
+
+A slain creature leaves what the reference's actor-type table says — a dead body, a blood splat, its
+own object lying there, a carcass, or nothing — with the dead NPC's inventory inside (or on the tile
+for blood / nothing); the table, the dead flag and what is saved are in usecode_use.md "Created
+and destroyed objects persist". Hatched and summoned creatures leave the same remains, temporary.
 
 ## 4. Weapon damage table (weapon_dmg_tbl, obj_n → max dmg)
 sling 33=6, club 34=8, main gauche 35=8, spear 36=10, throwing axe 37=10, dagger 38=6,
@@ -168,6 +172,22 @@ normal schedule; when STRUCK a coward turns hostile and switches to ASSAULT ("FL
 that get hit switch to ASSAULT"). DONE — validated headlessly (COMBAT.BIN byte 5): a coward
 fled the avatar (y 355→357), then after a hit became hostile and closed back in (moved 2
 tiles toward the party).
+
+## 7c. Movement types (2026-10-27)
+Every creature type moves by one of the reference's movement types (its actor table; engine
+monsters.c monster_movetype), applied to each path step and wander step:
+- **land** (everyone not listed): the walker's passability (terrain + blocking objects).
+- **low air** — insects 343, giant bat 344, bird 356, drake 369, wisp 373, dragon 411, the
+  inflated balloon 423: any tile except a Wall-flagged map tile, or one holding an object whose
+  tile is Wall-flagged or both double-width and double-height (tileflags2 bits 6-7); water and
+  deep water pass beneath.
+- **high water** — giant squid 345, sea serpent 346, a ship 412: open water only (a Wet tile
+  that is not a shoreline tile 16..47) with no object on it.
+- **low water** — skiff 414, raft 415: any Wet tile with no object on it.
+- **none** — the tangle vine pod 365 never moves.
+No U6 type uses the reference's "high air" (map boundaries only). Not modelled: passing over
+or under other actors (mice, dragons), the mouse's mouseholes. Shallow water is wadeable by
+walkers (the terrain passability says so); only deep water tells a bird from a rat.
 
 ## 7b. Foes casting spells (2026-10-27)
 
@@ -261,7 +281,7 @@ shows its casting flash).
   its turn it retreats DIRECTLY AWAY from the nearest party member instead of attacking
   (check_flee sets g_aflee; hostile_step heads to a goal away from the party; best-effort
   — a cornered actor stays). Message "<foe> wounded. Flees!" / "Hit <foe>! It flees!".
-  (5) **Exp**: a kill grants the avatar `2 + str/2` experience (g_exp), shown as "+Nexp".
+  (5) **Exp**: a kill of an evil/chaotic creature grants the slayer the creature table's award (§3).
   Validated on-target (Falcon, COMBAT.BIN byte 4, build/cb4.png): a wounded acid slug
   fled south (y 354→357, away from the avatar) while an alignment-hostile gargoyle
   assaulted the party (Avatar 90→70).

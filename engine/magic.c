@@ -131,6 +131,10 @@ int magic_find(const char *name)
     return -1;
 }
 
+const char *magic_spell_name(int spell)
+{
+    return (spell >= 0 && spell < SPELL_COUNT) ? g_spells[spell].name : "Unknown";
+}
 int magic_spell_num(int spell)
 {
     if (spell < 0 || spell >= SPELL_COUNT) return -1;

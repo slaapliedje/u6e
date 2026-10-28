@@ -32,11 +32,11 @@ int main(void)
     /* system numeric vars: read game state through the VAR index space */
     printf("\nsystem numeric vars (VAR/sysvar):\n");
     g.karma=42; g.avatar_sex=1; g.on_quest=1; g.knows_gargish=1; g.avatar_hp=27;
-    g.in_party[62]=1; g.in_party[3]=1; g.dead[3]=1;   /* 2 total, 1 living */
+    g.in_party[62]=1; g.in_party[3]=1; g.dead[3]=1;   /* 2 members: the reference sets PARTYLIVE and PARTYALL to the size MINUS the leader (usecode_vm.md §6c) */
     vm.npc=5; g.worktype[5]=7;
     struct { uint32_t idx; int32_t exp; const char*nm; } s[] = {
         {0x14,42,"karma"}, {0x10,1,"sex"}, {0x15,1,"gargish"}, {0x19,27,"hp"},
-        {0x1A,1,"quest"}, {0x18,2,"party-all"}, {0x17,1,"party-live"},
+        {0x1A,1,"quest"}, {0x18,1,"party-all"}, {0x17,1,"party-live"},
         {0x20,7,"worktype"}, {0x03,-1,"local(not sysvar)"},
     };
     int sf=0;

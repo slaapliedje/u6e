@@ -44,6 +44,12 @@ typedef struct {
     uint8_t  nearby[256];      /* 1 = NPC n stands within 5 tiles of the speaker (NPCNEARBY) */
     int16_t  player_obj[256];  /* player's count per object number             */
     uint8_t  hour;             /* game-clock hour 0..23, for the $T greeting    */
+    /* party stats the scripts read and change (usecode_vm.md §6c): EXP/LVL/STR/INT/DEX ops */
+    uint8_t  str[256], dex[256], intel[256], level[256];
+    uint16_t exp[256];
+    uint8_t  party_actor[16];  /* the party in order (index 0 = the Avatar), for NPC(index) */
+    char     party_name[16][16]; /* their names, for SETNAME ($Y) */
+    int      nparty;
 } cvm_game_t;
 
 /* well-known object numbers used in conversations (U6) */

@@ -74,9 +74,10 @@ Boards and exits like a skiff (any water). Steering:
 - U)se the inflated balloon to board (any terrain). Aboard, the balloon cannot be steered:
   every move attempt (or a passed turn) carries it one tile in the direction the wind blows
   TO; in calm: "Thou canst not move without wind!" and nothing moves.
-- It flies LOW: it cannot enter a map tile that has the Wall flag, nor a tile holding an
-  object whose tile has the Wall flag (buildings, mountains); everything else — water, land,
-  trees — passes beneath.
+- It flies LOW (the reference's low-air movement type, combat.md §7c): it cannot enter a map
+  tile that has the Wall flag, nor a tile holding an object whose tile has the Wall flag
+  (buildings, mountains) or is both double-width and double-height (the big pieces of scenery);
+  everything else — water, land, trees — passes beneath.
 - U)se while aboard: the party lands on adjacent passable land (N/E/S/W, like a boat) and
   the balloon deflates into the item (420) lying at the landing tile.
 
@@ -92,7 +93,9 @@ inflated balloon is the carried balloon record relocated onto the map and retype
 - A ship in calm still sails, at the base cost (the reference implementation deducts no
   points at all in calm, which would freeze the world).
 - Diagonal vehicle moves use the 8-direction heading for the cost but the four sprite facings.
-- The balloon's altitude/"high air" variant: not modelled (ship cannons: docs/rules/cannons.md).
+- There is no "high air" balloon: the reference's balloon is a LOW-air mover and nothing in U6's
+  actor table moves as high air (the type exists for dragons in name only — dragons are low air
+  too). The balloon's aloft look is the inflated balloon's frame 3, as on the ground.
 - The wind timer counts turns, not real time; the change rhythm is the original's range.
 
 ## 7. Test hooks
@@ -102,7 +105,10 @@ report the ship step cost per heading (10/5/3/4/5/4/3/5 pattern), use the fan (r
 save → load (byte round-trip); `'2'` = balloon: give the party a balloon, inflate it, board,
 force wind NW, move (drifts SE), set calm (refused), land → balloon item lies at the landing
 tile; `'3'` = raft: board a real raft (415) of the save on deep water, force wind, step and
-report the forced direction vs the table.
+report the forced direction vs the table; `'4'` = movement types (combat.md §7c): on a shore
+with deep water east, a hatched bird may enter the water and its path step goes onto it, a rat
+may not and does not; the bird is refused a Wall map tile and a double-sized object; a sea
+serpent hatched on open water is refused land and a shoreline tile and allowed open water.
 
 ## Status
 VERIFIED 2026-10-07. WIND.REQ on emulated TT and the stock 4 MB Falcon: '1' a ship under a
@@ -112,4 +118,5 @@ world three turns, the fan turns calm → N and NW → N, the wind byte survives
 ignored), refuses to move in calm, drifts on a passed turn, lands with the balloon item lying
 at the landing tile — one balloon item and no inflated balloon after a save → load;
 '3' a real raft on shallow water steers; a raft on deep flowing water (tile 9, current NE)
-under a west wind is carried NE as the table says, whatever the player asks.
+under a west wind is carried NE as the table says, whatever the player asks. 2026-10-27: '4' the
+movement types as §7c says (the double-sized object met was 323; TT and Falcon identical).

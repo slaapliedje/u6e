@@ -208,3 +208,12 @@ not only the TT; the margin is tens of KB.
 - PCM quality/size knobs already exist and are header-driven (`make m2pcm PCM_RATE=25033`
   renders 25 kHz; the backend programs the STE mode bits / Falcon prescaler from the header) —
   the shipped default stays 12517 Hz 8-bit mono (21 MB set).
+
+## Reclaimed statics (2026-10-28)
+The stock 4 MB Falcon lost the in-game LOAD again once the binary grew past ~508 KB of code: 209 KB of
+chip pool were free against a 139 KB save plus the decode batch. Three buffers that only live for a moment
+were static BSS and are now chip-pool transients inside a mark / reset scope: the intro's 640×200 pan frame
+(128 KB, allocated for the pan of one scene and released after it) and the two 31 KB reference buffers of
+the incremental-scroll / dim self-test hook (mode 11). BSS fell from 1,536,100 to 1,346,148 bytes, and the
+load has 190 KB more headroom. Rule of thumb kept from item 2b: every save / load hook also runs on the
+4 MB Falcon, because the margin is what the binary's growth leaves.

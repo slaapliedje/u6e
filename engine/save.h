@@ -180,4 +180,21 @@ void sav_set_rec_qty(uint8_t *d, int32_t n, int32_t cpos, int k, int qty);
  * with nothing changed. */
 int32_t sav_recontain(uint8_t *d, int32_t n, int32_t cap, int32_t src_cpos, int src_k, int32_t dst_cpos, int dst_k);
 
+/* ---- New records + the dead flag + alcohol (save_load.md §5, 2026-10-28) ------------------------ */
+/* Append an ON-MAP record (status's location bits cleared; z = level) to the chunk of (level,x,y). Returns the
+ * new length or -1 with nothing changed. */
+int32_t sav_insert_onmap(uint8_t *d, int32_t n, int32_t cap, int32_t surf_off, int level, int x, int y,
+                         int obj_n, int frame, int qty, int quality, int status);
+/* Append a CONTAINED record (0x08, link = parent_k) at the end of chunk cpos. Returns the new length or -1. */
+int32_t sav_insert_child(uint8_t *d, int32_t n, int32_t cap, int32_t cpos, int parent_k, int obj_n, int frame, int qty, int quality);
+/* Index of the first top-level actor-inventory record owned by `actor` (carried or readied), or -1. */
+int  sav_inv_owner_first(const uint8_t *d, int32_t n, int actor);
+/* Every top-level record owned by `actor` goes ON THE MAP at (x,y,z), OK to take. Returns how many. */
+int  sav_drop_actor_inv(uint8_t *d, int32_t n, int actor, int x, int y, int z);
+/* objlist 0x800 bit 0x10 (the reference's ACTOR_STATUS_DEAD) and the alcohol byte 0x1c17. */
+void sav_set_actor_dead(uint8_t *d, int32_t off, int actor, int dead);
+int  sav_get_actor_dead(const uint8_t *d, int32_t off, int actor);
+void sav_set_alcohol(uint8_t *d, int32_t off, int v);
+int  sav_get_alcohol(const uint8_t *d, int32_t off);
+
 #endif /* U6E_SAVE_H */

@@ -32,6 +32,7 @@ typedef struct {
 #define WOBJ_DIRTY_STATE   1      /* frame/quality/position changed (its save record exists: patch it) */
 #define WOBJ_DIRTY_DROPPED 2      /* placed on the map from the pack: its record is a CARRIED one (relocate it) */
 #define WOBJ_DIRTY_DESTROYED 3   /* gone for good: its record is deleted at reconcile (cannons.md §4) */
+#define WOBJ_DIRTY_NEW     4      /* created during play and KEPT: no record yet, one is appended at reconcile (save_load.md §5 step 0b) */
 typedef struct { uint16_t obj_n, tile, qty; uint8_t quality; } invitem_t;
 
 typedef struct {

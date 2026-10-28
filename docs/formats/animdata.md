@@ -63,6 +63,27 @@ phase; we currently advance all entries uniformly and treat it as a refinement.
 So a multi-tile object animates as several adjacent slots, each with its own
 2-frame (etc.) source run — not one shared cycle.
 
+## 3b. Time-of-day tile: the sundial (U6)
+
+One substitution is driven by the game CLOCK, not the frame counter: the sundial's object tile
+**861** is drawn as one of eight shadow tiles by the hour — 5-6 → 328, 7-8 → 329, 9-10 → 330,
+11-12 → 331, 13-14 → 332, 15-16 → 333, 17-18 → 334, 19-20 → 335 — and as 861 itself (the dial
+without a shadow) from 21:00 to 4:59. The reference re-points its tile index entry 861 whenever
+the hour changes; we substitute at draw time in `obj_tile` (the object keeps tile 861 for its
+flags and in the save). Tiles 328..335 carry no tile flags, 861 is Impassable only — so the
+substitution never changes passability, foreground order or light. Rule in
+docs/rules/usecode_use.md (Clock and sundial).
+
+**Multi-tile objects whose anchor is an animated slot** (the clock: object 159 frame 1 = tile 699,
+double-height, pendulum frames 298/299; slot 903, double-width): the SIZE flags and the extra cells'
+tile numbers come from the object's own tile (699 → face 698 above), never from the resolved frame —
+the frames carry no size flags. Until 2026-10-27 the engine read the size from the resolved frame and
+drew the clock as a lone pendulum with no face (fixed in draw_multi). The foreground bucket index
+(`anchor_family_fg`) had the same shape of bug: it tested a height-only object's top at anchor−2 instead of
+anchor−1 (the decrements are cumulative: width first, then height, then the corner), so the foreground
+face never joined the foreground pass either — fixed the same day. Verified against the ScummVM throne-room
+screenshot: the clock is a gold face above a white-and-blue swinging pendulum.
+
 ## 4. Per-game deltas
 Verify SE/MD (own ANIMDATA; different animated tiles).
 

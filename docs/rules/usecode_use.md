@@ -9,7 +9,7 @@ RuleSet "use" overrides.
 > - References   : Nuvie U6UseCode::use_door / use_switch / object-type table.
 > - Test hooks   : on-target `make m5` (use a door → it opens, tile changes).
 > - Confidence   : confirmed (doors); others scoped below as TODO.
-> - Last updated : 2026-06-24
+> - Last updated : 2026-10-28
 
 ## Dispatch model (IMPORTANT — not a bytecode file)
 Unlike NPC conversations (CONVERSE.A/.B bytecode → our converse_vm), U6 OBJECT
@@ -86,58 +86,77 @@ the pick in U6, so nothing is consumed (and no save concern). Magically-locked
 (door 13/15, chest 3) still refuse. Validated headless (USEFX.BIN): a forced-locked
 door + a lockpick → frame 9→5 (picked).
 
-## Food / drink (IMPLEMENTED — consume + hunger; see the Food/hunger section above)
-USE on a food/drink object **consumes one** (`qty−1`, or the object is removed at
-qty 0) with a "You eat/drink the X." message. U6's hunger/nutrition model is not yet
-implemented, so there is no HP/hunger change — this is the authentic consume behaviour
-(eaten food is not persisted to the save yet, so it reverts on reload — acceptable).
-The food/drink obj_n set is **derived from the shipped LOOK name table** (clean-room),
-NOT cross-checked against Nuvie's `use_food` registration (no source on hand) — so it is
-*probable*, not exhaustive:
+## Food / drink (REFERENCE-FAITHFUL 2026-10-28 — no hunger model)
+
+> Provenance: READING ScummVM/Nuvie `usecode/u6_usecode.cpp` use_food, `core/player.cpp` (alcohol,
+> moveRelative), the U6 `actor.lua` hourly block, `core/obj_list.h` — to understand; re-expressed.
+
+- U)se on a food or drink object **consumes one** (a stack loses one, a single object is gone) and
+  prints **`You eat the food.`** for food or **`You drink it.`** for wine, mead and ale. Nothing else:
+  **U6 has no hunger, nutrition or healing from food** — the engine's earlier "Food" stat (ebbing
+  food, "X is hungry.", starvation, the ztats Food row) was an invention and is REMOVED.
+- **Drink**: each drink adds one to the party's **alcohol** count (objlist byte **0x1c17**, saved and
+  loaded). Above **3**, three Avatar steps in four go astray: the step is replaced by a random
+  direction (which may be no move at all) and **`Hic!`** is printed. The count drops by one **every
+  game hour** (the reference's hourly actor tick).
+- A world food object eaten from the map is persisted at once: its record's count drops, or the
+  record is deleted when the last one is eaten (save_load.md §5 step 0). Pack food is already
+  covered by the inventory rebuild (§6).
+- The food/drink obj_n set is derived from the shipped LOOK name table (clean-room), not
+  cross-checked against the reference's use_food registration — *probable*, not exhaustive:
 
 | Kind  | obj_n                                              |
 |-------|----------------------------------------------------|
 | eat   | 95 grapes, 96 butter, 128 bread, 129 meat-portion, 130 rolls, 131 cake, 132 cheese, 133 ham, 209 meat, 210 ribs, 265 fish, 335 egg |
 | drink | 115 wine, 116 mead, 117 ale                        |
 
-Deliberately excluded: reagents (67 garlic, 70 nightshade), potions (275 blue potion —
-own effect), and containers (jars/buckets/vases/casks). Validated headless (USEFX.BIN):
-a loaf (obj 128, qty 2) → qty 2→1 on first eat, removed on the second.
+Deliberately excluded: reagents (67 garlic, 70 nightshade), potions (275 — own effect), and
+containers (jars/buckets/vases/casks). Hook: PERSIST.REQ '4' (below).
 
-## Levers / switches / cranks (IMPLEMENTED)
-Actuators: **lever 268, switch 174, crank 288, pull-chain 419**. USE toggles the
-actuator's own frame and drives its linked target. The LINK was derived clean-room
-from the world objects (a MECHDUMP dump grouped every mechanism by quality):
+## Levers, switches, cranks, pull-chains (REFERENCE-FAITHFUL 2026-10-28)
 
-- **Quality link (CONFIRMED, 1:1).** Every quality Q≥1 in the world is exactly one
-  **lever** + one **force field** (51/175/… — force/electric/fire/poison/protection/
-  sleep). USE a lever/switch of quality Q toggles ON/OFF every field of that quality
-  (they may be far apart — a lever here drops a field across the map). Validated
-  (LEVER.BIN): quality-1 lever @(303,383) toggles the quality-1 force field @(503,359)
-  alive 1→0→1 (reversible).
-- **Positional link (portcullis).** Cranks/pull-chains are all quality 0, clustered
-  beside the portcullis (310) they raise; a quality-0 actuator raises/lowers the
-  NEAREST portcullis within 5 tiles (frame 0↔1). Validated (LEVER.BIN): a crank raises
-  the portcullis 4 tiles away (frame 1→0). Heuristic (position, not an explicit link) —
-  refine if a counter-example turns up.
+> Provenance: READING ScummVM/Nuvie `usecode/u6_usecode.cpp` use_switch, use_crank,
+> drawbridge_find / _remove / _open / _close, use_bell + bell_find — to understand; re-expressed and
+> CONFIRMED against the user's own data (the scan below). The earlier "quality lever ↔ quality force
+> field" and "nearest portcullis / ±3 frame drawbridge" rules were our heuristics and are gone.
 
-- **Drawbridges (269).** A crank/pull-chain also raises/lowers a nearby drawbridge span
-  (all obj-269 tiles within 8 tiles): each tile toggles between frames **6-8 (raised,
-  impassable)** and **9-11 (down, passable)** — the ±3 pair derived from the tiles'
-  tileflags1 passability (basetile 914: frames 6-8 Impassable, 9-11 clear). build_blocked
-  updates crossing. Validated (DBTEST.BIN): a crank lowers an adjacent bridge frame 6→9.
-
-Persistence: portcullis + drawbridge frames persist (sav_patch_obj_frame, like a door);
-the field on/off and the actuator's own frame are NOT yet saved, so they revert together
-on reload (consistent).
-
-## Food / hunger (IMPLEMENTED)
-USE on a food object consumes one and restores the Avatar's food level (`g_afood[]`,
-eat +40 / drink +15, cap 255). The hunger model: each party member's food ebbs by 1
-every 4 turns; at the `Hungry` threshold (40) a "X is hungry." warning fires; at 0 the
-member starves, losing 1 HP every 8 turns ("X is starving!"). The ztats screen shows a
-Food row (Full/Fed/Hungry/Starving). Not yet save-backed (begins Full each load).
-Validated (HUNGER.BIN): food 5 → 0 over turns → Avatar loses 3 HP → eat a loaf → food 40.
+- **Lever (268) and switch (174)**: the actuator's **quality Q names DOORWAYS (301) of quality Q on
+  the same level**. U)se toggles the actuator's own frame (0↔1, persisted as a state patch) and, at
+  EVERY such doorway's tile: if the **barrier** object stands there it is **destroyed**, else one is
+  **created** on the doorway's tile — a lever's barrier is a **portcullis (310)** with the doorway's
+  frame (a frame-9 doorway gets a frame-1 portcullis — the reference's "cream buildings" fix-up),
+  a switch's barrier is an **electric field (175)** frame 0; both quality 0. Messages: lever
+  `Switch the lever, you hear a noise.` / `Switch the lever, strange, nothing happened.` (no doorway
+  of that quality), switch `Operate the switch, you hear a noise.` / `Operate the switch, strange,
+  nothing happened.`
+- The Covetous switch (quality 113 at (139,0) level 1) first gives the doorway at (160,3) level 1
+  quality 113 (the reference's hack: the data has it at quality 0), then works as any switch.
+- Data (the user's save): 71 levers, qualities 1-73, each with a doorway of its quality except
+  lever 46 at (116,53) level 4; 18 switches 101-113, each matched except 113 (the hack above). All
+  73 portcullises and all 13 electric fields in the world stand on doorway tiles (frames: a frame-1
+  doorway carries a frame-1 portcullis 47×, frame-3 → 3 24×, frame-9 → 1 2×). The force fields (51,
+  qualities 0-7) are NOT lever targets (they are the shrine mechanism).
+- **Crank (288)**: drives a **drawbridge (269)**. Find the bridge: the first 269 at (crank.x+1,
+  crank.y+i), i = 0..5 (the left crank), else one at (crank.x−1, crank.y+i) means the right crank —
+  walk left along the crank's row to the other crank and take (its x+1, its y+i). The bridge is OPEN
+  if that start piece has frame 3. Remove every piece: the end piece at (x−1,y), then rows from y
+  downward, each row from x rightward until a tile without a piece (the first row's length = the
+  width W). Then **open** (`Open the drawbridge.`): rows from y+1 down — frame 3 at x, frame 5 at
+  x+W−1, frame 4 between — until the tile below the row is passable map, then a last row of frame 1
+  between frame 0 (x) and frame 2 (x+W−1); or **close** (`Close the drawbridge.`): one row at y−1:
+  frame 6 at x−1, frame 7 at x..x+W−2, frame 8 at x+W−1. The crank's frame goes 0→3 on opening and
+  back on closing (the reference animates it 3 frames); the chain (293) beside the crank only
+  animates. Every piece created or removed is persisted (a new or deleted record).
+- Data: the castle bridge — cranks (303,384) and (311,384), chains (304,384)/(310,384), the closed
+  row at y=385: frame 6 at 303, 7 at 304..309, 8 at 310 (W = 7); a second bridge at (785..788,959)
+  with cranks at 785 and 789. Exactly the shape the close rule produces.
+- **Pull-chain (419) = a bell pull**: U)se rings the **bell (236)** within 8 tiles (the reference
+  animates the bell and plays a bell sound; we have neither a bell sample nor a message — the turn
+  passes silently). It is NOT a mechanism. Data: 6 pull-chains, bells at (126,12)/(128,12) level 4
+  and (360,397).
+- Passability follows the objects: a portcullis / electric field / raised bridge piece blocks by
+  its tile flags; `build_blocked` runs after each change.
+- Hook: PERSIST.REQ '1' (lever/switch), '2' (crank), below.
 
 ## Secret doors, passthroughs, fire devices, torches, powder kegs (IMPLEMENTED 2026-10-26)
 
@@ -152,7 +171,7 @@ Validated (HUNGER.BIN): food 5 → 0 over turns → Avatar loses 3 HP → eat a 
 > 17 torches on the map, 79 powder kegs (26 in dungeon levels 2-4).
 
 - **Secret door (334).** Two orientations: frames 0 / 2 are HIDDEN (they look like wall, and
-  pass as their tile says), 1 / 3 are open. L)ook at a hidden one reveals it: "You see a secret
+  pass as their tile says), 1 / 3 are open. L)ook at a hidden one reveals it: "Searching here, you find a secret
   door." and the frame goes 0→1 / 2→3 (the original's Search). U)se toggles it: an open one
   closes (frame −1), a hidden or closed one opens (frame +1). Passability follows the frame's
   tile; the frame persists like a door's.
@@ -196,7 +215,7 @@ the gargoyle hurt, the message printed.
 
 Status: VERIFIED 2026-10-26 — DUNGUSE.REQ 1-5 on emulated TT and the stock 4 MB Falcon (identical):
 '1' the nearest hidden secret door (on passable floor tile 210) blocks while hidden, L)ook reveals
-it ("You see a secret door.", frame 1, now passable), U)se closes (frame 0) and opens again;
+it ("Searching here, you find a secret door.", frame 1, now passable), U)se closes (frame 0) and opens again;
 '2' the vertical passthrough at (325,399) opens to (325,398) frame 2 and closes back to (325,399)
 frame 0 — found by type, since a floor object shares its tile; '3' a brazier: "brazier is doused."
 (frame 0, emitter 0) then "flaming brazier is lit." (frame 1, emitter 3); '4' a pack torch: "Torch is
@@ -396,13 +415,148 @@ ScummVM's hatches it again.
   "No Effect!", with them and the 8 stones at the Codex (923,851) it vanishes; the silenced egg's
   chance byte (75 → 0) and the carried keg (fuse 2) come back from the save.
 
+## Clock and sundial — L)ook tells the time (IMPLEMENTED 2026-10-27)
+
+> Provenance: READING ScummVM/Nuvie `usecode/u6_usecode.cpp` look_clock + is_readable,
+> `core/tile_manager.cpp` update_timed_tiles, `core/game_clock.cpp` get_time_string and the U6
+> `init.lua` look_obj — to understand; re-expressed, no code transcribed.
+
+- A **clock** (object 159) and a **sundial** (235) are "readable" things: L)ooking at one is
+  the whole act — no search, no weight / weapon / armour lines — and prints, after the name line,
+  **`The time is h:mm A.M.`** on its own line. The hour is 1..12 (0 → 12 A.M., 12 → 12 P.M.,
+  13..23 → 1..11 P.M.), the minutes two digits, the period `A.M.` before noon else `P.M.`
+  (the reference's `%u:%02u %c.M.`): `8:00 A.M.`, `12:05 A.M.`, `12:30 P.M.`, `11:59 P.M.`.
+- The **sundial says nothing at night**: from 20:00 to 4:59 the look is just the name line
+  ("Thou dost see sundial." — the data gives the sundial no article).
+- The **sundial's shadow** moves with the sun: its object tile (861) is drawn as one of the eight
+  shadow tiles 328..335 by the hour — 5-6h → 328, 7-8h → 329, 9-10h → 330, 11-12h → 331,
+  13-14h → 332, 15-16h → 333, 17-18h → 334, 19-20h → 335 — and as the plain dial (861 itself)
+  from 21:00 to 4:59. The substitution is draw-time only (`obj_tile`); the object keeps tile 861
+  for passability (tileflags1 bit1) and in the save. The shadow tiles carry no flags
+  (tileflags1/2/3 all 0), so the foreground / light indexes built from the object's tile family
+  are unaffected (animdata.md §3b).
+- The **look line itself** (every L)ook, not only these): `Thou dost see ` + the tile's **article** +
+  name — the article is tileflags3 bits 6-7 (tileflag.md: "", "a ", "an ", "the "), printed as the data
+  has it, quirks included ("a earth", "the water"); the reference does the same. Before 2026-10-27 the
+  engine printed "You see " + the bare name.
+- Secret doors (above) keep their reveal line in the reference's search wording ("Searching here, you
+  find a secret door."); the reference prints a name line before it ("Thou dost see a …" from the hidden
+  frame's look entry, which the data run-fills from an earlier "sign" entry) — not reproduced until the
+  real game's wording is verified.
+- The **clock** is two tiles tall: the face (tile 698, foreground, drawn over whoever stands before it)
+  above the pendulum slot 699, an ANIMDATA slot swinging between tiles 298 and 299 — nothing
+  clock-specific in the engine. Fixed on the way: the face was never drawn, because the multi-tile
+  size was read from the resolved pendulum frame instead of the object's own tile, and the foreground
+  index tested the wrong tile for a height-only object's top (animdata.md §3b). SUNDIAL.REQ '3' frame:
+  the face stands above the pendulum, over the wall, as in the ScummVM throne-room screenshot.
+- U)se on either: the generic "Nothing happens with the …" (the reference has no USE event for
+  them either).
+- Data: the user's world holds 33 clocks (all frame 1, tile 699) and 4 sundials — (129,219),
+  (235,167), (307,420) and (595,99) — all on the surface.
+- Deviations: none of substance. The reference's generic look prints the object's weight
+  ("It weighs 0.0 stones" is skipped for weightless things such as these); our L)ook prints no
+  weights anywhere (an existing engine-wide difference, not a clock one).
+- Hook: `SUNDIAL.REQ` byte mode — `'1'` stand south of the real sundial at (307,420): for hours
+  4, 5, 7, 9, 11, 13, 15, 17, 19, 20, 21 print the drawn tile (`SUNDIAL h= tile=`), L)ook north at
+  8:00 → `Thou dost see sundial.` + `The time is 8:00 A.M.`, at 22:00 the name line only; then the
+  real clock at (300,350): L)ook at 15:00 → `3:00 P.M.`, 0:05 → `12:05 A.M.`, 12:30 →
+  `12:30 P.M.`, 23:59 → `11:59 P.M.`; the time line is absent from a plain object's look; leave
+  the party by the sundial at 15:00 for the frame (shadow tile 333). `'2'` the same spot at
+  22:00 (plain dial 861) for the frame. `'3'` by the clock at 10:00 for the frame.
+
+## Created and destroyed objects persist (2026-10-28)
+
+> Provenance: READING ScummVM/Nuvie `actors/u6_actor.cpp` die + `u6_actor_types.h` (dead_obj_n /
+> dead_frame_n), `actors/actor.cpp` all_items_to_container / inventory_drop_all / set_dead_flag,
+> `actors/actor_manager.cpp` (objlist 0x800 status, position save), and the U6 spell scripts
+> `web.lua`, `trap.lua`, `fire_field.lua`, `reappear.lua`, `replicate.lua`, `create_food.lua` — to
+> understand what the original keeps; re-expressed. Mechanics in save_load.md §5.
+
+What the game creates during play and KEEPS (a new save record, save_load.md §5 step 0b):
+- **Barriers and bridge pieces** (levers / switches / cranks above).
+- **Webs** laid by the Web spell (53, frame 0) and the **trap effect** (337) the Trap spell puts
+  inside a door or chest (a contained record under the holder's record). Untrap deletes it.
+- **A slain NPC's remains**: a real NPC (one with an objlist slot that is not a hatched or summoned
+  temporary) dies into a body object at its tile, **quality = its actor number** (Seance / Resurrect
+  find it by that), status OK-to-take (0x01). Which object, by the slain creature's type (the
+  reference's actor-type table):
+
+| creature | remains |
+|---|---|
+| townsfolk, guards, fighters, mages, jesters, children, Lord British, the Avatar, daemon, troll, gargoyle (363), skeleton, headless | **dead body 339**, frame by type: villager/merchant/LB 2, mage/woman 3, guard 4, swashbuckler/peasant 5, fighter 6, musician/Avatar 7, child/jester/farmer 8, skeleton 9, daemon/troll/gargoyle/headless 0 (headless 1) |
+| winged gargoyle (362) | **dead gargoyle 341** frame 3 |
+| cyclops (424) | **dead cyclops 340** frame 3 |
+| horse (430) | **horse carcass 134** frame 1 |
+| reaper, mouse, cat, tangle vine, dog, deer, wolf, drake, mongbat | **the creature's own object**, in the frame it died |
+| giant bat, gremlin, gazer, bird, corpser, rabbit, rot worms, hydra, giant rat, sheep, snake, giant spider, giant scorpion, giant ant, cow, alligator, horse with rider | **blood 338**, a random frame 0..2 |
+| insects, giant squid, ghost, acid slug, wisp, sea serpent, dragon, silver serpent, the playing musician, vehicles | nothing |
+
+  The dead NPC's **inventory goes into the body** (its readied and carried records become the body's
+  contents; a blood splat or "nothing" drops them on the tile instead). The actor itself is flagged
+  **dead** (objlist 0x800 bit 0x10), HP 0, and parked at (0,0) level 0 like the reference; a load
+  skips dead actors. Resurrect clears the flag (magic_skills.md §5f).
+- A temporary actor (hatched / summoned) leaves the SAME remains, but temporary — gone at the next
+  save, as the reference's TEMPORARY status does.
+
+What stays TEMPORARY, as in the reference: spell fields (fire / poison / sleep / energy — the
+reference flags them temporary), Reappear / Replicate copies (status 0x21), summoned and hatched
+creatures, moongates, the campfire.
+
+Hooks: PERSIST.REQ '3' (a body with contents, the dead flag, load-back, Resurrect), '5' (web +
+trap records), below; ScummVM cross-load of the written save (tools/savecheck.sh).
+
+### PERSIST.REQ (byte mode)
+- `'1'` the castle lever (quality 1 at (303,383)) and its doorway (307,384): U)se → the portcullis
+  at the doorway toggles (created with the doorway's frame, or destroyed), the lever's frame flips,
+  the message; U)se again → back; the lever of quality 46 (level 4, moved to) → "strange, nothing
+  happened"; a switch (quality 101, level 1) → an electric field appears on its doorway; S)ave →
+  the written file holds the new barrier record at the doorway tile and the lever's frame.
+- `'2'` the castle crank (303,384): U)se → the 8 closed pieces are gone and an open bridge of
+  width 7 hangs from y=386 (frames 3/4/5 rows + 0/1/2 bottom), "Open the drawbridge.", the span is
+  passable; U)se again → "Close the drawbridge.", the closed row is back (6 at 303, 7×6, 8 at 310);
+  S)ave after opening → the file holds the open pieces and none of the closed row.
+- `'3'` a real NPC near the start is slain by a spell: a body of the right type at its tile with
+  quality = the actor, holding its former inventory (count); the actor gone; S)ave → the file: the
+  body record with the inventory records as its contents, the actor's 0x800 bit 0x10 set, position
+  (0,0,0); load the written save → the actor absent, the body present with its contents; Resurrect
+  on the body → the actor stands, flag clear.
+- `'4'` food: a loaf (qty 2) on the map: U)se twice → "You eat the food." / gone, the record's count
+  then the record itself; ale ×4 → alcohol 4, 40 steps → at least one "Hic!"; an hour → 3; S)ave →
+  byte 0x1c17 = 3.
+- `'5'` Trap on a chest + Web beside the party → S)ave → the file holds a 337 child under the chest
+  and 53 records at the web tiles; Untrap → the child record gone.
+
+Status: VERIFIED 2026-10-28 — PERSIST.REQ 1-5 identical on emulated TT and the stock 4 MB Falcon:
+'1' the castle lever (quality 1) removes the portcullis the data has on doorway (307,384) ("Switch the
+lever, you hear a noise.", the tile unblocked, lever frame 1, the saved file holds 0 portcullis records
+there and the lever's frame), the second pull recreates it with the doorway's frame (1 record saved);
+lever 46 on level 4: "strange, nothing happened"; switch 101 on level 1 removes and restores the electric
+field on doorway (195,222). '2' the castle crank: the 8 closed pieces go, 5 open rows (3/4/5) plus the
+0/1/2 end hang from y=386, the span is passable, crank frame 3, "Open the drawbridge."; the saved file
+holds the open pieces and none of the closed row; the second turn restores 6/7×6/8 at y=385 and the crank.
+'3' the nearest NPC with inventory from the start is Lord British (4 records): "Killed Lord British!",
+a dead body frame 2 at his tile with quality 5 holding the 4 records (live and in the template, which grew
+by one record; his inventory chunk records gone), objlist bit 0x10 set, position (0,0,0), HP 0; the written
+save loads back with him absent and the body present with its 4 contents; Resurrect: "Success", he stands,
+the flag clears and the body's record is gone. '4' a loaf (128, stackable) set to 2: eaten twice ("You eat
+the food.") — count 1 in the record, then no record; four ales → alcohol 4 ("You drink it."), an hour → 3,
+three more → 6, 16 steps → 14 "Hic!" (12 real moves), saved byte 0x1c17 = 6. '5' the nearest untrapped
+chest: Trap → a new 337 child (11 children saved under the chest, was 10), Untrap deletes it (10 again);
+Web → 6 webs, each a saved record. Real ScummVM loads the written saves with the body (persist 3b), the
+open bridge (2b) and the webs (5): "Game Loaded" (tools/savecheck.sh); savelinks.py: 0 bad links in all
+three. Host suites + `make check` pass.
+Notes: mode 4 walks ~7 game hours (turns are slow at dusk, item 17), so it needs VBLS 30000 on the TT and
+60000 on the Falcon; the alcohol count fell to 0 during a 40-step walk before the hook was retuned — the
+hourly decrement, not a bug.
+
 ## Other use handlers (TODO — same dispatcher, future slices)
-- Magic lock/unlock spells; persisting field/consumed-item/hunger state to the save.
+- Magic lock/unlock spells. (Field / lever / crank / body / web / trap / food persistence: DONE 2026-10-28, above.)
 - Readables (signs/books/tombstones) → show text — DONE (docs/formats/strings.md;
-  L)ook / U)se on a readable pages its text). Clock/sundial time-display TODO.
+  L)ook / U)se on a readable pages its text). Clock/sundial time display — DONE (section above).
 - Ladders/holes/stairs → change level. Needs the multi-level world model.
 
 ## Status: IN PROGRESS (doors + containers/stacks + keys/locks + LOCKPICKS + FOOD/HUNGER +
 ## readables + LEVERS/SWITCHES/CRANKS + DRAWBRIDGES + ladders/holes/caves (map_levels.md) +
 ## SECRET DOORS / PASSTHROUGHS / FIRE DEVICES / TORCHES / POWDER KEGS + small handlers +
-## M)OVE pushing + STAFF / VORTEX CUBE / WHITE POTION / HOLY FLAMES / NPC TORCHES done)
+## M)OVE pushing + STAFF / VORTEX CUBE / WHITE POTION / HOLY FLAMES / NPC TORCHES + CLOCK / SUNDIAL +
+## REFERENCE LEVERS / CRANKS / FOOD + PERSISTENT CREATED OBJECTS done)
