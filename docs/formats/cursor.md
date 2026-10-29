@@ -59,3 +59,7 @@ Pixel value 255 = transparent (left as the background fill).
   blits it as the mouse cursor (transparent index 255). render/gamedemo.
 
 ## Status: VERIFIED (arrow cursor; same frame format serves the .SHP images)
+
+Shipped twice since 2026-10-28: as the core pack's U6W9 block and as U6FE.PAK section FES_CURSOR
+(fepack.h), so the main menu can draw it before the core pack loads. The pointer's POSITION comes from
+the engine's own IKBD mousevec hook (platinput.c; design/milestone.md "Mouse support"), not line-A.

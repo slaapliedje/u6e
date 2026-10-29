@@ -2328,6 +2328,10 @@ int main(int argc, char **argv)
         fputc(nl,fe); for(int q=0;q<nl;q++){ int L=(int)strlen(el[q]); be16(fe,(unsigned)L); fwrite(el[q],1,(size_t)L,fe); }
         fputc(nnum,fe); for(int q=0;q<nnum;q++){ int L=(int)strlen(en[q]); be16(fe,(unsigned)L); fwrite(en[q],1,(size_t)L,fe); }
         printf("ending: endpal + %d/%d END.SHP shapes + %d text lines + %d number words (%ld bytes)\n", nshipped, EN_NSH, nl, nnum, ftell(fe)-epre); }
+      /* the mouse pointer for the front-end (fepack.h FES_CURSOR): the core pack's U6W9 bytes again, so the
+       * main menu (which runs before the core loads) can draw it */
+      FE_SEC(FES_CURSOR);
+      fputc(cw,fe); fputc(ch,fe); fputc(chx,fe); fputc(chy,fe); fwrite(cpix,1,(size_t)cw*ch,fe);
     }   /* end front-end/intro art block */
     if(fe!=f){                                    /* close the section directory + the file */
         { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; }

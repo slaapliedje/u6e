@@ -992,6 +992,18 @@ Tasks
         - [x] Read the mouse via line-A (GCURX/GCURY + MOUSE_BT, plat_mouse) and
               un-double screen→logical coords; the cursor follows the pointer.
               (Needs interactive/hardware verification — headless can't move it.)
+        - [x] 2026-10-28 REAL-HW "no mouse on the main menu": line-A's GCURX/GCURY are
+              kept by TOS's own mouse handler only — a replacement VDI (NVDI 5 on the
+              user's Falcon) keeps its position elsewhere, so the pointer never moved.
+              platinput.c now hooks the IKBD mousevec itself (XBIOS 34 Kbdvbase; the
+              stub saves d0-d2/a0-a2, the C routine sums the relative packet's signed
+              dx/dy into a position clamped to the physical mode the renderer declared
+              via plat_mouse_hook_init, buttons mapped IKBD bit1=left → line-A bit0;
+              XBIOS 38 Supexec writes the vector; restored in rdr_shutdown and atexit).
+              The pointer starts at the screen's centre. Line-A stays the fallback when
+              no hook is installed (vcard). read_mouse_logical now uses the renderer's
+              present transform (rdr_ui_yoff/yscale) like the front-end, so the in-game
+              pointer maps correctly on the Falcon letterbox too.
         - [x] Click routing: command-bar click arms that verb (Talk/Look/Get/Move/
               Use; others say "not yet"); map click applies the armed verb to that
               tile (or steps toward it by default); ROSTER click opens that member's

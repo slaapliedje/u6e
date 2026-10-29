@@ -31,6 +31,7 @@
 #include "platmem.h"
 
 #include <mint/osbind.h>
+#include "platinput.h"
 #include <mint/falcon.h>   /* VsetMode/VsetScreen/VsetRGB + mode bits (BPS8/VGA/VERTFLAG) */
 #include <mint/linea.h>    /* line-A: hide the AES mouse sprite */
 #include <string.h>
@@ -182,11 +183,13 @@ bool rdr_init(const platform_caps_t *caps)
     lineaa();
     V_X_MAX = FW - 1;   /* 319 */
     V_Y_MAX = FH - 1;   /* 239 */
+    plat_mouse_hook_init(FW, FH);   /* the IKBD mouse hook ranges the physical screen (platinput.h) */
     return true;
 }
 
 void rdr_shutdown(void)
 {
+    plat_mouse_hook_shutdown();
     linea9();                                              /* show mouse for desktop */
     VsetScreen(g_old_log, g_old_phys, 3, g_old_mode);     /* restore mode + base */
     Vsync();

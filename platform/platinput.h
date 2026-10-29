@@ -32,5 +32,12 @@ plat_input_t plat_input_map(int key);   /* classify a raw key as a movement even
  * with the sprite hidden). *x,*y are in physical screen pixels; *buttons bit0 =
  * left, bit1 = right. Requires line-A init (done by the renderer). */
 void         plat_mouse(int *x, int *y, int *buttons);
+/* IKBD mouse hook: take the relative-mouse packets ourselves (XBIOS 34 Kbdvbase mousevec) so the
+ * pointer works on every TOS and replacement VDI (NVDI keeps its own position, not line-A's). The
+ * renderer calls init with the PHYSICAL mode size right after it set the mode; shutdown restores the
+ * vector (also registered with atexit). plat_mouse then reports the hook's position; line-A stays
+ * the fallback when no hook is installed. */
+void         plat_mouse_hook_init(int phys_w, int phys_h);
+void         plat_mouse_hook_shutdown(void);
 
 #endif

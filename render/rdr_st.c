@@ -28,6 +28,7 @@
 #endif
 
 #include <osbind.h>
+#include "platinput.h"
 #include <mint/linea.h>     /* line-A: hide the AES mouse sprite */
 #include <string.h>
 
@@ -149,6 +150,7 @@ bool rdr_init(const platform_caps_t *caps)
     lineaa();
     V_X_MAX = STW - 1;   /* 319: let the pointer range the full ST-low screen */
     V_Y_MAX = STH - 1;   /* 199 */
+    plat_mouse_hook_init(STW, STH);   /* the IKBD mouse hook ranges the physical screen (platinput.h) */
 
     for (int32_t i = 0; i < ST_SCREEN_BYTES; i++) g_screen[i] = 0;
     for (int32_t i = 0; i < ST_BACK_BYTES;  i++) g_back[i]   = 0;
@@ -158,6 +160,7 @@ bool rdr_init(const platform_caps_t *caps)
 void rdr_shutdown(void)
 {
     if (g_raster_on) { (void)Supexec(raster_remove); g_raster_on = 0; }   /* stop the raster first */
+    plat_mouse_hook_shutdown();
     linea9();                             /* line-A $A009: show mouse for the desktop */
     Setscreen(g_old_log, g_old_phys, g_old_rez);
     Vsync();

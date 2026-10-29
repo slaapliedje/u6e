@@ -217,3 +217,11 @@ were static BSS and are now chip-pool transients inside a mark / reset scope: th
 the incremental-scroll / dim self-test hook (mode 11). BSS fell from 1,536,100 to 1,346,148 bytes, and the
 load has 190 KB more headroom. Rule of thumb kept from item 2b: every save / load hook also runs on the
 4 MB Falcon, because the margin is what the binary's growth leaves.
+
+## U6FE.PAK: the pointer section (2026-10-28)
+The main menu runs BEFORE the core pack loads (on the 4 MB machines the front-end is freed first),
+so the pointer sprite — which lived only in the core pack's U6W9 block — was never there for the menu:
+the menu's pointer blit found no sprite and drew nothing (in Hatari too; nobody had looked at that
+screen with a mouse). The front-end pack now carries `FES_CURSOR` (the same 4 + w×h bytes as U6W9) in
+the COMMON group; `fe_bind` sets the cursor globals from it, and the core's U6W9 later sets the same
+bytes again. Old packs without the section still load (a missing directory entry binds nothing).

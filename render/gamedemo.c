@@ -8151,7 +8151,7 @@ static void read_mouse_logical(int *lx,int *ly,int *btn)
     int sx,sy; plat_mouse(&sx,&sy,btn);
     if(sx<0)sx=0;
     if(sx>=LW)sx=LW-1;
-    int y=(sy-40)/2;
+    int y=sy-rdr_ui_yoff; if(rdr_ui_yscale>1) y/=rdr_ui_yscale;   /* the renderer's present transform (TT doubling / Falcon letterbox), as the front-end */
     if(y<0)y=0;
     if(y>=LH)y=LH-1;
     *lx=sx; *ly=y;
@@ -9172,6 +9172,9 @@ static void fe_bind(int id, const uint8_t *ap)
     case FES_FSET:   if(ap) fe_bind_fset(ap);   else { g_fset=0; } break;
     case FES_LOGOS:  if(ap) fe_bind_logos(ap);  else { g_logo_rle[0]=g_logo_rle[1]=0; g_logo_pal=0; } break;
     case FES_END:    if(ap) fe_bind_end(ap);    else { g_nend=g_nendl=g_nendnum=0; g_end_pal=g_end_lc=0; for(int i=0;i<END_NSH;i++) g_end[i]=0; } break;
+    case FES_CURSOR: if(ap){ int cw=ap[0], ch=ap[1];                 /* the pointer, before the core pack (fepack.h) */
+                         if(cw>0&&ch>0&&cw<=CURMAX&&ch<=CURMAX){ g_cw=cw; g_ch=ch; g_chx=ap[2]; g_chy=ap[3]; memcpy(g_curpix,ap+4,(size_t)cw*ch); } }
+                     break;                                            /* unbind: keep it (the core sets the same bytes) */
     default: break;
     }
 }

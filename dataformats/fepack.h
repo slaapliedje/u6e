@@ -46,12 +46,14 @@ enum {
     FES_LOGOS,      /* ORIGIN / Lord British boot logos                                     */
     FES_SCROLL,     /* shared narration parchment (BLOCKS.SHP 2) — intro captions + gargoyle */
     FES_END,        /* the ending cutscene: ENDPAL + END.SHP shapes + END.EXE text (docs/design/ending.md) */
+    FES_CURSOR,     /* the mouse pointer (U6MCGA.PTR arrow): [u8 w][u8 h][u8 hotx][u8 hoty][w*h] — the same bytes as
+                       the core pack's U6W9, shipped here too so the MAIN MENU can show it before the core loads */
     FES_N
 };
 
 /* Load groups (bitmasks) the engine streams as units. COMMON stays for the whole front-end;
  * INTRO / CHARGEN come and go with their runners. */
-#define FEG_COMMON  ((1u<<FES_MENU)|(1u<<FES_TEXT)|(1u<<FES_FSET)|(1u<<FES_SCROLL))
+#define FEG_COMMON  ((1u<<FES_MENU)|(1u<<FES_TEXT)|(1u<<FES_FSET)|(1u<<FES_SCROLL)|(1u<<FES_CURSOR))
 #define FEG_INTRO   ((1u<<FES_INTRO)|(1u<<FES_TV)|(1u<<FES_GATE)|(1u<<FES_STORM)|(1u<<FES_STONES)|(1u<<FES_AVATAR)|(1u<<FES_LOGOS))
 #define FEG_CHARGEN ((1u<<FES_CCPORT)|(1u<<FES_GYPSY)|(1u<<FES_WOODS)|(1u<<FES_GARG)|(1u<<FES_VELLUM))
 

@@ -16,6 +16,7 @@
 #include "platmem.h"
 
 #include <osbind.h>
+#include "platinput.h"
 #include <mint/ostruct.h>   /* TT_LOW, ES_MODE */
 #include <mint/linea.h>     /* line-A: hide the AES mouse sprite */
 #include <string.h>         /* memcpy — row-double the planar output */
@@ -99,6 +100,7 @@ bool rdr_init(const platform_caps_t *caps)
      * pointer ranges the FULL screen. (read_mouse_logical un-doubles GCURY.) */
     V_X_MAX = TTW - 1;   /* 319 */
     V_Y_MAX = TTH - 1;   /* 479 */
+    plat_mouse_hook_init(TTW, TTH);   /* the IKBD mouse hook ranges the physical screen (platinput.h) */
 
     for (int32_t i = 0; i < TT_SCREEN_BYTES; i++) g_screen[i] = 0;
     for (int32_t i = 0; i < TT_SCREEN_BYTES; i++) g_back[i] = 0;
@@ -107,6 +109,7 @@ bool rdr_init(const platform_caps_t *caps)
 
 void rdr_shutdown(void)
 {
+    plat_mouse_hook_shutdown();
     linea9();                             /* line-A $A009: show mouse for the desktop */
     Setscreen(g_old_log, g_old_phys, -1);
     EsetShift(g_old_shift);
