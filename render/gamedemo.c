@@ -333,7 +333,7 @@ static const uint8_t *g_tvi[TV_NIMG]; static int g_tvi_w[TV_NIMG], g_tvi_h[TV_NI
 static int g_tv_bx, g_tv_by;
 static const uint8_t *g_finger; static int g_fing_w, g_fing_h, g_fing_x, g_fing_y;
 static const uint8_t *g_digit[11]; static int g_dig_w[11], g_dig_h[11], g_clk_x, g_clk_y, g_ndigit;  /* LED clock */
-static const uint8_t *g_gate, *g_cover; static int g_gw,g_gh,g_gx, g_cvw,g_cvh,g_cvx,g_cvy, g_gate_y, g_gate_jx;  /* moongate rise (+x jitter for the shake) */
+static const uint8_t *g_gate, *g_cover; static int g_gate_w,g_gh,g_gx, g_cvw,g_cvh,g_cvx,g_cvy, g_gate_y, g_gate_jx;  /* moongate rise (+x jitter for the shake) */
 #define GATE_CLIP_Y 0x66   /* nuvie stones_sequence: the moon_gate sprite is clipped to rows 0..0x65 — it is only ever
                             * seen ABOVE the ground line, which is what makes it "ascend from the earth"; the ground
                             * cover strip (shape 4 @ 0x5e,0x66) then redraws the band the gate's foot would cross. */
@@ -846,7 +846,7 @@ static void draw_intro_frame(int s,int scroll,int show_cap)
     } else if(g_intro[s].pix){
         blit_opaque(g_intro[s].pix,g_intro[s].w,g_intro[s].h,(LW-g_intro[s].w)/2,(LH-g_intro[s].h)/2);
         if(g_intro[s].type==2 && g_gate){                                  /* moongate rises from the stones */
-            blit_indexed_clip(g_gate,g_gw,g_gh,g_gx+g_gate_jx,g_gate_y,0,0,LW,GATE_CLIP_Y);   /* only ABOVE the ground line */
+            blit_indexed_clip(g_gate,g_gate_w,g_gh,g_gx+g_gate_jx,g_gate_y,0,0,LW,GATE_CLIP_Y);   /* only ABOVE the ground line */
             if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy); }    /* ground cover drawn OVER it */
     } else clear_bb(254);
     if(show_cap && bg && s<INTRO_NCAP){
@@ -1226,7 +1226,7 @@ static void avatar_climax(int s)
         for(int c=0;c<16;c++){ int v=p16[c*3]+p16[c*3+1]+p16[c*3+2]; if(v<dv){ dv=v; dk=c; } }
         memcpy(lutb,g_intro[s].lc+48,256); lutb[25]=(uint8_t)dk; rdr_set_lowcolor(g_intro[s].lc,lutb); }
     #define STAGE_SCENE(gyv) do{ blit_opaque(bg,g_intro[s].w,g_intro[s].h,0,0); \
-        blit_indexed_clip(g_gate,g_gw,g_gh,g_gx+(int)rng_range(&r,2),(gyv)+(int)rng_range(&r,3),0,0,LW,GATE_CLIP_Y); \
+        blit_indexed_clip(g_gate,g_gate_w,g_gh,g_gx+(int)rng_range(&r,2),(gyv)+(int)rng_range(&r,3),0,0,LW,GATE_CLIP_Y); \
         if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy); }while(0)
     for(int i=0;i<g_av_n;i++){                         /* the Avatar walks up into the gate */
         STAGE_SCENE(gy);
@@ -1308,7 +1308,7 @@ static void clutch_frame(int s,int sy,int hy,int cap)
     for(int y=LH-sy;y<LH;y++) if(y>=0) memset(ROW(y),0,LW);                     /* rows scrolled in: black */
     if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy-sy);
     blit_indexed(g_stn_clutch,g_stn_cw,g_stn_ch,0x9b,hy);
-    if(g_gate) blit_indexed_clip(g_gate,g_gw,g_gh,g_gx,5-sy,0,0,LW,GATE_CLIP_Y);
+    if(g_gate) blit_indexed_clip(g_gate,g_gate_w,g_gh,g_gx,5-sy,0,0,LW,GATE_CLIP_Y);
     if(cap) intro_caption_page(g_intro_base[s]+1);
 }
 static int clutch_beat(int s,const uint8_t *pal)
@@ -1449,7 +1449,7 @@ static void run_intro_body(void)
                         if(shake){ g_gate_jx=(int)rng_range(&sr,2); g_gate_y=5+(int)rng_range(&sr,4); } }
                     if(nst>0 && (shake || (paldirty && rdr_palette_deferred() && g_gate))){   /* gate rect: shake and/or LUT re-present */
                         if(shake) intro_compose(s,0,1);                                        /* bg + jittered gate + cover (+caption) */
-                        rdr_present_rect_doubled(g_gx&~15, 5, ((g_gw+(g_gx&15)+1+15)&~15), g_gh+3, LH); }
+                        rdr_present_rect_doubled(g_gx&~15, 5, ((g_gate_w+(g_gx&15)+1+15)&~15), g_gh+3, LH); }
                     int a=intro_advance(); if(a){ key=(a==2)?0x1b:0; break; }
                     if((uint32_t)(now-t0) >= PAGE_MAXTICKS) break; }
             }
@@ -4877,18 +4877,16 @@ static void wind_tick(int level)                       /* one world turn: the ch
     g_wind=(level>0)?WIND_CALM:rng_range(&g_wind_rng,9); g_wind_timer=1+rng_range(&g_wind_rng,30); }
 static void wind_from_save(const uint8_t *d, int32_t ol)
 {   int b=sav_get_wind(d,ol); g_wind=(b>7)?WIND_CALM:b; g_wind_timer=1+rng_range(&g_wind_rng,30); }
-/* time + wind on the map window's BOTTOM frayed border (left-aligned), where U6
+/* date + wind on the map window's BOTTOM frayed border (left-aligned), where U6
  * shows its date/wind line — verified against ScummVM (refshots/u6_gameplay.png).
  * Drawn after compose_map + draw_border_tiles so it sits on top of the border. */
 static int put2(char*s,int k,int v){ if(v>=10) s[k++]=(char)('0'+(v/10)%10); s[k++]=(char)('0'+v%10); return k; }
 static void status_text(const world_t*w,char*s)
-{
-    int m=clock_minutes(w), hh=m/60, mm=m%60; int k=0;
-    k=put2(s,k,hh); s[k++]=':'; s[k++]=(char)('0'+mm/10); s[k++]=(char)('0'+mm%10);   /* H:MM — minutes always two digits */
-    { const char*t=" Lv"; while(*t) s[k++]=*t++; }
-    s[k++]=(char)('0'+(g_alevel[1]<10?g_alevel[1]:9));    /* avatar exp level */
-    { const char*t=" MP"; while(*t) s[k++]=*t++; }        /* avatar magic points (§ play) */
-    k=put2(s,k,g_amana[1]); s[k++]='/'; k=put2(s,k,g_amaxmana[1]);
+{   /* the reference's line: "M-DD-YYYY Wind:X" (refshots/u6_gameplay.png). At most 18 chars x 8 px
+     * = 148 px from x=4, inside the 176 px map window (the papyrus restore covers only that width) */
+    int day,month,year,k=0; cur_date(w,&day,&month,&year);
+    k=put2(s,k,month); s[k++]='-'; s[k++]=(char)('0'+day/10); s[k++]=(char)('0'+day%10); s[k++]='-';
+    s[k++]=(char)('0'+(year/1000)%10); s[k++]=(char)('0'+(year/100)%10); s[k++]=(char)('0'+(year/10)%10); s[k++]=(char)('0'+year%10);
     { const char*t=" Wind:"; while(*t) s[k++]=*t++; t=WIND_NAME[g_wind<=WIND_CALM?g_wind:WIND_CALM]; while(*t) s[k++]=*t++; }
     s[k]=0;
 }
@@ -8990,8 +8988,8 @@ static void fe_bind_tv(const uint8_t *ap)
 static void fe_bind_gate(const uint8_t *ap)
 {
         /* moongate rise assets (type-2 scene): gate (rises) + ground cover */
-        g_gw=(ap[0]<<8)|ap[1]; ap+=2; g_gh=(ap[0]<<8)|ap[1]; ap+=2; g_gx=(ap[0]<<8)|ap[1]; ap+=2;
-        g_gate=ap; ap+=(int32_t)g_gw*g_gh;
+        g_gate_w=(ap[0]<<8)|ap[1]; ap+=2; g_gh=(ap[0]<<8)|ap[1]; ap+=2; g_gx=(ap[0]<<8)|ap[1]; ap+=2;
+        g_gate=ap; ap+=(int32_t)g_gate_w*g_gh;
         g_cvw=(ap[0]<<8)|ap[1]; ap+=2; g_cvh=(ap[0]<<8)|ap[1]; ap+=2;
         g_cvx=(ap[0]<<8)|ap[1]; ap+=2; g_cvy=(ap[0]<<8)|ap[1]; ap+=2;
         g_cover=ap;
