@@ -42,7 +42,8 @@ typedef struct {
     uint8_t  healed_full[256]; /* 1 = HEAL ran on this NPC this conversation (host restores HP) */
     uint8_t  worktype[256];    /* per-NPC schedule worktype (WORKTYPE)          */
     uint8_t  nearby[256];      /* 1 = NPC n stands within 5 tiles of the speaker (NPCNEARBY) */
-    int16_t  player_obj[256];  /* player's count per object number             */
+    int16_t  player_obj[1024]; /* player's count per object number (gold: see `gold`) */
+    uint8_t  player_objq[1024]; /* quality of the last one GIVE/NEW put in the pack (a key's lock) */
     uint8_t  hour;             /* game-clock hour 0..23, for the $T greeting    */
     /* party stats the scripts read and change (usecode_vm.md §6c): EXP/LVL/STR/INT/DEX ops */
     uint8_t  str[256], dex[256], intel[256], level[256];
@@ -50,10 +51,12 @@ typedef struct {
     uint8_t  party_actor[16];  /* the party in order (index 0 = the Avatar), for NPC(index) */
     char     party_name[16][16]; /* their names, for SETNAME ($Y) */
     int      nparty;
+    const uint8_t *obj_weight; /* [1024] raw weights by obj_n (TILEFLAG; 0.1 stone), or NULL */
+    int32_t  party_room;       /* CANCARRY for a party member: the whole party's room, 0.1 stone */
 } cvm_game_t;
 
 /* well-known object numbers used in conversations (U6) */
-#define CVM_OBJ_GOLD 0x68      /* gold coin (GIVE/NEW of this == gold)         */
+#define CVM_OBJ_GOLD 88        /* gold coin: counted in `gold`, not player_obj  */
 
 typedef enum { CVM_RUN, CVM_ASK, CVM_DONE, CVM_ERROR } cvm_status;
 

@@ -4912,6 +4912,25 @@ static void sync_party_in(void)
         const char*nm=(g_party[p].actor==1 && g_avatar_name[0])?g_avatar_name:g_party[p].name; int o=0;
         while(nm[o]&&o<15){ g_cg.party_name[p][o]=nm[o]; o++; } g_cg.party_name[p][o]=0; }
 }
+/* CANCARRY's room for a party member (usecode_vm.md §6c): the whole party's strength x 2 stones less
+ * the pooled pack, the gold and everything readied, in 0.1 stone; refreshed after every VM turn */
+static int obj_weight10(int on, int qty)
+{
+    if(!g_weights || on<0 || on>=1024) return 0;
+    int32_t w=(int32_t)g_weights[on]*(qty?qty:1); if(on==88||(on>=65&&on<=72)) w/=10;
+    return w>32767?32767:(int)w; }
+static void sync_carry_in(void)
+{
+    int32_t room=0;
+    g_cg.obj_weight=g_weights;
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        room+=(int32_t)g_astr[a]*20;
+        for(int k=0;k<EQ_NSLOTS;k++) if(g_aready[a][k]) room-=obj_weight10(g_aready[a][k],1); }
+    for(int i=0;i<g_ow.ninv;i++) room-=obj_weight10(g_ow.inv[i].obj_n,g_ow.inv[i].qty);
+    room-=obj_weight10(88,g_cg.gold>0?(int)(g_cg.gold>30000?30000:g_cg.gold):0);
+    if(!g_weights) room=1000;
+    g_cg.party_room=room<0?0:room;
+}
 /* after a VM run: what a script did to stats / level / exp becomes real; a new level sets max HP = level x 30
  * (HP itself untouched, as the reference); a new intelligence re-derives max mana (usecode_vm.md §6c) */
 static void sync_stats_out(void)
@@ -4993,14 +5012,15 @@ static int is_food_objn(int on);                      /* fwd (food/drink table, 
 /* add / remove `qty` of obj_n to the Avatar's engine inventory (merge by obj_n, new stack else). */
 static void inv_add_objn(int on, int qty)
 {
-    for(int i=0;i<g_ow.ninv;i++) if((g_ow.inv[i].obj_n&0xff)==(on&0xff)){
+    int ql=g_cg.player_objq[on&0x3ff];                 /* the quality the script gave (a key's lock) */
+    for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==on && g_ow.inv[i].quality==ql){
         int t=g_ow.inv[i].qty+qty; g_ow.inv[i].qty=(uint16_t)(t>65535?65535:t); return; }
     if(g_ow.ninv<OBJ_INV_MAX){ g_ow.inv[g_ow.ninv].obj_n=(uint16_t)on; g_ow.inv[g_ow.ninv].tile=basetile(on);
-        g_ow.inv[g_ow.ninv].qty=(uint16_t)qty; g_ow.inv[g_ow.ninv].quality=0; g_ow.ninv++; }
+        g_ow.inv[g_ow.ninv].qty=(uint16_t)qty; g_ow.inv[g_ow.ninv].quality=(uint8_t)ql; g_ow.ninv++; }
 }
 static void inv_remove_objn(int on, int qty)
 {
-    for(int i=0;i<g_ow.ninv && qty>0;i++) if((g_ow.inv[i].obj_n&0xff)==(on&0xff)){
+    for(int i=0;i<g_ow.ninv && qty>0;i++) if(g_ow.inv[i].obj_n==on){
         int take=g_ow.inv[i].qty<qty?g_ow.inv[i].qty:qty; g_ow.inv[i].qty-=(uint16_t)take; qty-=take;
         if(g_ow.inv[i].qty==0){ for(int k=i;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; i--; } }
 }
@@ -5009,8 +5029,8 @@ static void inv_remove_objn(int on, int qty)
  * see what the player carries (has-object checks, merchant "dost thou have..."). */
 static void sync_inv_in(void)
 {
-    for(int i=0;i<256;i++) g_cg.player_obj[i]=0;
-    for(int i=0;i<g_ow.ninv;i++){ int on=g_ow.inv[i].obj_n&0xff, q=g_ow.inv[i].qty?g_ow.inv[i].qty:1;
+    for(int i=0;i<1024;i++) g_cg.player_obj[i]=0;
+    for(int i=0;i<g_ow.ninv;i++){ int on=g_ow.inv[i].obj_n&0x3ff, q=g_ow.inv[i].qty?g_ow.inv[i].qty:1;
         int t=(int)g_cg.player_obj[on]+q; g_cg.player_obj[on]=(int16_t)(t>32767?32767:t); }
 }
 
@@ -5018,9 +5038,9 @@ static void sync_inv_in(void)
  * engine inventory. delta = the VM count - the engine's current count; add or remove that many. */
 static void sync_inv_out(void)
 {
-    for(int on=1;on<256;on++){
-        if(on==(CVM_OBJ_GOLD&0xff)) continue;         /* gold is the shared g_cg.gold */
-        int have=0; for(int i=0;i<g_ow.ninv;i++) if((g_ow.inv[i].obj_n&0xff)==on) have+=g_ow.inv[i].qty?g_ow.inv[i].qty:1;
+    for(int on=1;on<1024;on++){
+        if(on==CVM_OBJ_GOLD) continue;                /* gold is the shared g_cg.gold */
+        int have=0; for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==on) have+=g_ow.inv[i].qty?g_ow.inv[i].qty:1;
         int delta=(int)g_cg.player_obj[on]-have;
         if(delta>0) inv_add_objn(on,delta);           /* the NPC gave the player items */
         else if(delta<0) inv_remove_objn(on,-delta);  /* the NPC took items */
@@ -5080,7 +5100,7 @@ static void talk(int id)
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf);
     if(got<=0) return;
 
-    sync_party_in(); sync_inv_in(); sync_worktype_in(); sync_nearby_in(id);   /* persistent g_cg + real party + inventory + live worktypes + who is near */
+    sync_party_in(); sync_inv_in(); sync_carry_in(); sync_worktype_in(); sync_nearby_in(id);   /* persistent g_cg + real party + inventory + live worktypes + who is near */
     g_cg.hour=(uint8_t)g_hour;                   /* $T greeting word tracks the game clock */
     cvm_init(&g_cv,g_script_buf,got,&g_cg,id,g_avatar_name,g_avatar_title);
     cvm_status st=cvm_run(&g_cv);
@@ -5088,7 +5108,7 @@ static void talk(int id)
     { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
       while(*q && *q!='"') q++;
       tappend(0, *q?q:gt); }
-    sync_party_out(); sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out();   /* greeting may JOIN/LEAVE, give/take items, heal */
+    sync_party_out(); sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* greeting may JOIN/LEAVE, give/take items, heal */
 
     /* portrait: index id-1, library A for <98 else B (PORTRAIT.A holds 98) */
     g_have_pc=0;
@@ -5122,7 +5142,7 @@ static void submit_input(void)
     tappend(tl,cvm_text(&g_cv));
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);
-    sync_party_out(); sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out();   /* a keyword may change the party, give/take items/gold, heal */
+    sync_party_out(); sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* a keyword may change the party, give/take items/gold, heal */
 }
 
 /* index of an NPC orthogonally/diagonally adjacent to the avatar at g_hour,

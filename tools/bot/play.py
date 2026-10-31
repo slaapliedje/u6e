@@ -110,8 +110,9 @@ class Player:
             if len(qq) > 12 and qq[-30:] in tail and kws: return kws[0]
         return None
 
-    def talk_to(self, aid, words=None, name=''):
-        """talk to actor aid and say each word; returns [(word, reply)] or None if not reached"""
+    def talk_to(self, aid, words=None, name='', yes=False):
+        """talk to actor aid and say each word; returns [(word, reply)] or None if not reached.
+        A y/n prompt pending before a word is answered n (yes=True: y)"""
         d = self.approach(aid)
         if not d: self.log('  could not reach %d %s' % (aid, name)); return None
         a = self.actor(aid); x, y = self.nav.pos()                 # T)alk-: walk the crosshair onto them, Enter
@@ -131,9 +132,10 @@ class Player:
             st = self.say(ans); self.check('answer %r to %d' % (ans, aid)); out.append((ans, st['conv']))
         for w in (words or []):
             if not self.g.state['ask']: break
-            for _ in range(8):                                     # a y/n or number prompt is pending
+            for _ in range(16):                                    # a y/n or number prompt is pending (a shop: each member, then 0)
                 if not (self.g.state['ask'] and (self.g.state.get('askc') or self.g.state.get('num'))): break
-                st = self.say('n'); out.append(('n/#', st['conv']))
+                a = 'y' if yes and self.g.state.get('askc') else 'n'
+                st = self.say(a); out.append((a + '/#', st['conv']))
             if not self.g.state['ask']: break
             st = self.g.type(w); self.check('say %r to %d' % (w, aid))
             reply = st['conv']

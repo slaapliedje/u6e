@@ -67,7 +67,18 @@ loops back to ASK; `BYE` (0xB6) ends. Text prints with $P/$G/$N/#var substitutio
   party membership (JOIN/LEAVE/INPARTY), deterministic xorshift RNG (RAND);
 - karma (ADDKARMA/SUBKARMA, clamped 0..99);
 - player inventory + gold (GIVE/NEW/DELETE move objects to/from the player,
-  HASOBJ/OBJCOUNT read it; the gold object updates `gold`);
+  HASOBJ/OBJCOUNT read it; the gold object updates `gold`). "The player" is any actor whose
+  things live in the party's pooled pack: the Avatar (actor 1), any current party member, and actor 0 (as
+  before). Until 2026-10-31 only actor 0 counted, so a script that gave to actor 1 by
+  number (Ariana's rune: GIVE(rune, 0, self, 1)) printed the hand-over and gave nothing (found by
+  the bot harness). The QUALITY argument of GIVE / NEW goes onto the
+  item put in the pack (Lord British's castle key is NEW(Avatar, key, quality 1, 1): the key's
+  quality is the lock it opens); a stack only merges with one of the same quality. Objects are
+  counted by their full number 0-1023 (until 2026-10-31 by the low byte, so the quest items
+  394-417 that seven scripts give arrived as other objects). **Gold is object 88**, counted in the
+  party's gold total: OBJCOUNT / HASOBJ of 88 read it and GIVE / NEW / DELETE of 88 change it (the
+  gold object number was wrong before 2026-10-31, so every merchant answered "you don't have
+  enough gold" whatever the party carried);
 - per-NPC poison/dead status (HEAL/CURE/RESURRECT clear; WOUNDED/POISONED read);
 - NPC schedule worktype (WORKTYPE); the active PORTRAIT (host re-renders).
 A `mutations` counter records state-changing ops (used by tests). Defaults make
@@ -231,6 +242,21 @@ deterministic RNG seam so golden-transcript tests are reproducible.
   key; that key closes them and then still acts (U)se, a command letter, a pass...). Until
   2026-10-31 only a walking step closed them, so the pack, the "Where:" prompt and messages after
   a talk stayed hidden behind the portrait (found by the bot harness).
+- **0x9a CANCARRY and 0x9b WEIGHT** (2026-10-31; READING Nuvie `core/converse_interpret.cpp`
+  U6OP_CANCARRY / U6OP_WEIGHT, `core/obj_manager.cpp` get_obj_weight / has_reduced_weight,
+  `actors/actor.h` inventory_get_max_weight — to understand; re-expressed). Weights are in the
+  TILEFLAG weight table's raw unit (a tenth of a stone):
+  - `WEIGHT(obj, qty)` takes TWO args: the type's raw weight × qty; for gold (88) and the eight
+    reagents (65-72) divided by 10 (they weigh a hundredth of a stone each), whole-number result.
+  - `CANCARRY(actor)` (the actor number as given, no party-index mapping): the room left, in the
+    same unit = (strength × 2 stones − the weight carried) × 10.
+  - The scripts compare them (`CANCARRY(npc) < WEIGHT(obj, n)` → "carrying too much"). Ariana's
+    rune hand-over is one (found by the bot harness: WEIGHT popped one arg, so the comparison
+    read the wrong stack slots and she always refused).
+  - u6e pools the party's pack, so for a party member CANCARRY counts the WHOLE party: the sum of
+    every member's strength × 2 stones, minus the pooled pack (each stack's weight as WEIGHT
+    computes it) and everything readied by any member, never below 0 (deviations.md). For an NPC
+    outside the party: strength × 2 stones (their own possessions are not weighed).
 - **Talking to an object**: T)alk at a tile with no actor but a **shrine (393)** or one of the three
   statues (Mondain 397, Minax 398, Exodus 399) starts the conversation whose number is the object's
   **quality** (the shrines 192-199, the statues 189-191; the Codex altar's 200 exists too), exactly the

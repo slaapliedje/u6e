@@ -58,15 +58,17 @@ static void set_svar(cvm_t*vm,unsigned idx,const char*s){ idx=SVI(idx); int k=0;
 
 void cvm_game_init(cvm_game_t*g,uint32_t seed){
     for(int i=0;i<256;i++){ g->talk_flags[i]=0; g->in_party[i]=0;
-        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->player_obj[i]=0; g->nearby[i]=0;
+        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->nearby[i]=0;
         g->str[i]=g->dex[i]=g->intel[i]=0; g->level[i]=1; g->exp[i]=0; }
+    for(int i=0;i<1024;i++){ g->player_obj[i]=0; g->player_objq[i]=0; }
     for(int i=0;i<16;i++){ g->party_actor[i]=0; g->party_name[i][0]=0; } g->nparty=0;
+    g->obj_weight=0; g->party_room=1000;
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
     g->gold=0; g->karma=0; g->avatar_num=0; g->portrait_npc=-1; g->mutations=0;
     g->avatar_sex=0; g->knows_gargish=0; g->on_quest=0; g->avatar_hp=30;
 }
-static int is_player(cvm_t*vm,int n){ return n==vm->g->avatar_num || n==0; }
+static int is_player(cvm_t*vm,int n){ return n==vm->g->avatar_num || n==0 || n==1 || (n>0 && n<256 && vm->g->in_party[n]); }   /* the pooled pack (§ game state) */
 
 /* resolve a numeric "system" var (read-only, from game state). Returns 1 and
  * sets *out if `idx` is a system var; 0 if it's an ordinary local var. */
@@ -123,6 +125,13 @@ static uint32_t read_value(cvm_t*vm,uint8_t*d){
 
 static int npc_num(cvm_t*vm,uint32_t n){ return (n!=OP_NPCSELF)?(int)n:vm->npc; }
 
+/* the pooled pack: how many of obj o the player has / add n (n<0 removes, floor 0); gold is `gold` */
+static int32_t cnt(cvm_t*vm,uint32_t o){ o&=0x3ff; return o==CVM_OBJ_GOLD?vm->g->gold:vm->g->player_obj[o]; }
+static void add(cvm_t*vm,uint32_t o,uint32_t ql,int32_t n){
+    o&=0x3ff; cvm_game_t*g=vm->g;
+    if(o==CVM_OBJ_GOLD){ int32_t v=g->gold+n; g->gold=v<0?0:v; return; }
+    int32_t v=g->player_obj[o]+n; g->player_obj[o]=(int16_t)(v<0?0:v>32767?32767:v);
+    if(n>0) g->player_objq[o]=(uint8_t)ql; }
 /* data-block accessors (defined below; used by evop's DATA/INDEXOF ops) */
 static int      db_string(cvm_t*vm, uint32_t loc, uint32_t idx, char*out, int cap);
 static uint32_t db_integer(cvm_t*vm, uint32_t loc, uint32_t idx);
@@ -159,7 +168,7 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case OP_NPC:{ uint32_t ig=POP(), pi=POP(); (void)ig;            /* NPC(party index, ?) -> that member's actor number (§6c) */
                     PUSH(pi<(uint32_t)vm->g->nparty ? (uint32_t)vm->g->party_actor[pi] : 0u); } break;
       case OP_HASOBJ:{ uint32_t q=POP(),o=POP(); int np=npc_num(vm,POP()); (void)q;  /* (npc,obj,qual) */
-                       PUSH((is_player(vm,np)&&vm->g->player_obj[o&0xff]>0)?1:0); } break;
+                       PUSH((is_player(vm,np)&&cnt(vm,o)>0)?1:0); } break;
       case OP_DATA:{ uint32_t idx=POP(),loc=POP();                  /* DATA(loc,idx) */
                      if(vm->decl_t==0xb3){ unsigned sv=SVI(vm->decl_v); /* string -> $n var */
                          db_string(vm,loc,idx,vm->svar[sv],40); PUSH(vm->decl_v); }
@@ -167,11 +176,16 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case 0xb7:{ uint32_t sv=POP(),loc=POP();                      /* INDEXOF(loc,svar) */
                   PUSH(db_find(vm,loc,vm->svar[SVI(sv)])); } break;
       case 0xbb:{ uint32_t o=POP(); int np=npc_num(vm,POP());       /* OBJCOUNT(npc,obj) */
-                  PUSH(is_player(vm,np)?(uint32_t)vm->g->player_obj[o&0xff]:0); } break;
+                  PUSH(is_player(vm,np)?(uint32_t)cnt(vm,o):0); } break;
       case 0xc7: POP();POP(); PUSH(0); break;                       /* OBJINPARTY  */
-      case OP_CANCARRY: a=POP(); PUSH(1000); break;                 /* CANCARRY(npc)->room */
+      case OP_CANCARRY:{ a=POP()&0xff;                                /* CANCARRY(actor) -> room, 0.1 stone (§6c) */
+                         int32_t r=(is_player(vm,(int)a)||vm->g->in_party[a])?vm->g->party_room:(int32_t)vm->g->str[a]*20;
+                         PUSH((uint32_t)(r<0?0:r)); } break;
       case OP_SVAR: a=POP(); PUSH(a); break;                        /* SVAR -> svar handle */
-      case 0x9b: a=POP(); PUSH(0); break;                           /* WEIGHT      */
+      case 0x9b:{ uint32_t q=POP(), o=POP()&0x3ff;                   /* WEIGHT(obj,qty): raw x qty, /10 for gold + reagents */
+                  uint32_t wt=(vm->g->obj_weight?vm->g->obj_weight[o]:0)*q;
+                  if(o==88||(o>=65&&o<=72)) wt/=10;
+                  PUSH(wt); } break;
       case 0x9d: a=POP(); PUSH(0); break;                           /* HORSED      */
       case 0xd7: a=POP(); PUSH(vm->g->nearby[npc_num(vm,a)&0xff]); break;   /* NPCNEARBY: within 5 tiles of the speaker (usecode_vm.md §6) */
       case OP_WOUNDED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->dead[np]?1:0); } break;
@@ -356,16 +370,15 @@ static void do_ctrl(cvm_t*vm){
       /* ---- game-mutation opcodes (act on cvm_game_t) ---- */
       case OP_ADDKARMA:{ int k=vm->g->karma+(int)ARG(); vm->g->karma=(int16_t)(k>99?99:k); vm->g->mutations++; } break;
       case OP_SUBKARMA:{ int k=vm->g->karma-(int)ARG(); vm->g->karma=(int16_t)(k<0?0:k); vm->g->mutations++; } break;
-      case OP_GIVE:{ uint32_t o=ARG(); ARG(); int fr=npc_num(vm,ARG()),to=npc_num(vm,ARG());  /* obj,qual,from,to */
-                     if(is_player(vm,to)){ vm->g->player_obj[o&0xff]++; if((o&0xff)==CVM_OBJ_GOLD) vm->g->gold++; }
-                     if(is_player(vm,fr)&&vm->g->player_obj[o&0xff]>0){ vm->g->player_obj[o&0xff]--; if((o&0xff)==CVM_OBJ_GOLD&&vm->g->gold>0) vm->g->gold--; }
+      case OP_GIVE:{ uint32_t o=ARG(), ql=ARG(); int fr=npc_num(vm,ARG()),to=npc_num(vm,ARG());  /* obj,qual,from,to */
+                     if(is_player(vm,to)) add(vm,o,ql,1);
+                     if(is_player(vm,fr)&&cnt(vm,o)>0) add(vm,o,0,-1);
                      vm->g->mutations++; } break;
-      case OP_NEW:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(); ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
-                    if(is_player(vm,np)){ vm->g->player_obj[o&0xff]+=(int16_t)q; if((o&0xff)==CVM_OBJ_GOLD) vm->g->gold+=(int32_t)q; }
+      case OP_NEW:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(), ql=ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
+                    if(is_player(vm,np)) add(vm,o,ql,(int32_t)q);
                     vm->g->mutations++; } break;
       case OP_DELETE:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(); ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
-                       if(is_player(vm,np)){ int v=vm->g->player_obj[o&0xff]-(int)q; vm->g->player_obj[o&0xff]=(int16_t)(v<0?0:v);
-                                             if((o&0xff)==CVM_OBJ_GOLD){ int gv=vm->g->gold-(int)q; vm->g->gold=gv<0?0:gv; } }
+                       if(is_player(vm,np)) add(vm,o,0,-(int32_t)q);
                        vm->g->mutations++; } break;
       case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
-collect what looked wrong. Segments: castle, bridge, britain (default: all, in order)."""
+collect what looked wrong. Segments: castle, bridge, britain, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
@@ -140,7 +140,62 @@ def seg_orb(p, kw):
     for pos in (3, 19, 8):
         if not orb_trip(p, pos, shot=(pos == 3)): break
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, cave=seg_cave, orb=seg_orb)
+SHRINE = dict(pos=4, field=(503, 359), rune=243, mantra='mu', wrong='om')   # Compassion (usecode_use.md runes, moongates.md §3)
+
+def use_rune(p, rune, word):
+    """U)se the rune from the pack and type a mantra; the message after Enter"""
+    st = p.use_pack(rune)
+    if st is None: p.issue('shrine', 'rune %d not in the pack' % rune); return None
+    if not st['mantra']: p.issue('shrine', 'U)se rune %d: no Mantra: prompt (msg %r)' % (rune, st['msg'])); p.idle(); return None
+    return p.g.type(word)['msg']
+
+def talk_object(p, x, y):
+    """T)alk with the crosshair on (x,y) (a shrine or statue: its quality is the conversation)"""
+    px, py = p.nav.pos(); dx, dy = x - px, y - py
+    p.key('t')
+    for _ in range(abs(dx)): p.key('right' if dx > 0 else 'left')
+    for _ in range(abs(dy)): p.key('down' if dy > 0 else 'up')
+    return p.key('ret', 'talk to (%d,%d)' % (x, y))
+
+def seg_shrine(p, kw):
+    """the Compassion quest: Anya's permission, Ariana's rune; the orb to the shrine, its guardians,
+    a wrong and the right mantra on the rune at the force field, then meditate at the shrine"""
+    sh = SHRINE; fx, fy = sh['field']
+    p.talk_to(13, ['rune'], 'Ariana')                                # "Do you need it?" y, y: ask my parents
+    p.talk_to(15, ['rune'], 'Anya')                                  # her permission to borrow it
+    p.talk_to(13, ['rune'], 'Ariana', yes=True)                      # "Did you get permission?" y
+    if not any(r['obj'] == sh['rune'] for r in p.g.objects()[1]):
+        p.issue('shrine', 'Ariana did not give the rune of Compassion'); return
+    m = use_rune(p, sh['rune'], sh['mantra'])                        # away from the field: nothing
+    if m is not None and 'no effect' not in m.lower(): p.issue('shrine', 'the right mantra away from the shrine: %r' % m)
+    ORB[sh['pos']] = (fx, fy - 1)
+    if not orb_trip(p, sh['pos']): return
+    if p.foes(): p.fight()                                          # the guardians hatch at the shrine
+    def field(): return [o for o in p.g.objects()[0] if o['obj'] == 51 and (o['x'], o['y']) == (fx, fy)]
+    if not field(): p.issue('shrine', 'no force field at the shrine before the mantra')
+    p.walk(fx, fy, near=1)
+    m = use_rune(p, sh['rune'], sh['wrong'])
+    if m is not None and 'wrong' not in m.lower(): p.issue('shrine', 'a wrong mantra said %r' % m)
+    if not field(): p.issue('shrine', 'a wrong mantra removed the force field')
+    m = use_rune(p, sh['rune'], sh['mantra'])
+    if m is not None and 'done' not in m.lower(): p.issue('shrine', 'the right mantra said %r' % m)
+    if field(): p.issue('shrine', 'the right mantra left the force field'); return
+    lv0 = {m_['id']: m_['lvl'] for m_ in p.g.state['party']}
+    st = talk_object(p, fx, fy); out = [('', st['conv'])]
+    if not st['talk']: p.issue('shrine', 'T)alk to the shrine: talk=%s msg=%r' % (st['talk'], st['msg'])); return
+    for _ in range(8):                                               # meditate? y / who? 1 (the Avatar) / the mantra
+        st = p.g.state
+        if not st['ask']: break
+        a = 'y' if st.get('askc') else ('1' if st.get('num') else sh['mantra'])
+        st = p.say(a); p.check('shrine %r' % a); out.append((a, st['conv']))
+    p.idle(); p.transcripts.setdefault('shrine%d' % sh['pos'], []).append(out)
+    text = ' '.join(r for _, r in out).lower()
+    if (sh['mantra'] + '...') not in text: p.issue('shrine', 'the shrine did not take the mantra: %r' % text[-300:])
+    lv1 = {m_['id']: m_['lvl'] for m_ in p.g.state['party']}
+    p.log('  shrine: levels %s -> %s' % (lv0, lv1))
+    if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
+
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

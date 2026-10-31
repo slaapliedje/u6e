@@ -122,7 +122,31 @@ Bot-side mistakes found on the way: answering "y" forever to Chuckles's riddle, 
 moongate jump as a failed step, chasing foes it could not reach, and resuming a surface walk on a
 dungeon level. A full run (castle, bridge, Britain, cave, orb) now takes about 200 s with no issues.
 
+## 6c. Segment added 2026-10-31: a shrine
+
+- **shrine** (Compassion): Ariana (13) shows the rune and sends the party to her mother; Anya (15)
+  grants permission; Ariana hands it over. U)se the rune with the right mantra away from the
+  shrine ("No effect!"), the orb to position 4 (beside the shrine), fight the guardians, a wrong
+  mantra at the force field ("Wrong mantra!", the field stays), the right one ("Done!", the field
+  goes), then T)alk to the shrine: meditate, who (the Avatar), the mantra; the level shown in
+  the party report must follow a "gained a level".
+
+Found and fixed (game, all in the conversation VM; usecode_vm.md game state and §6c):
+
+| finding | effect |
+|---|---|
+| GIVE / NEW / DELETE / HASOBJ treated only actor 0 as the player | Ariana said "here you are" and gave nothing; Lord British's castle key never arrived |
+| WEIGHT took one argument instead of (object, quantity); CANCARRY was a constant | "you're carrying too much right now" at Ariana with a near-empty pack |
+| The gold object was 104 (the shovel), not 88 | every merchant said "you don't have enough gold" whatever the party carried |
+| Pack counts were indexed by the low byte of the object number | the quest items 394-417 seven scripts give would have arrived as other objects |
+| GIVE / NEW dropped the quality argument | a given key opened no lock |
+
+Bot-side: the order of the rune talks (Anya only grants permission once Ariana has sent you), and
+the y/n / number answers per word raised from 8 to 16 (Wilbur's horse sale asks each member now
+that gold works). A full run (castle, bridge, Britain, cave, orb, shrine) takes about 230 s with
+no issues; the guardians leave the Avatar near death, so keeping the party alive is next.
+
 ## 7. Next
 
-Segments still to write: the shrines with their runes and mantras, ships, the gargoyle lands and
+Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
 the ending; shopping with gold, resting, spells, and keeping the party alive (healing, fleeing).

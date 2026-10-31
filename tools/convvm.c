@@ -67,7 +67,7 @@ int main(int argc,char**argv)
     if(g.portrait_npc>=0) printf("  portrait->%d", g.portrait_npc);
     printf("\n  party:"); for(int i=0;i<256;i++) if(g.in_party[i]) printf(" %d",i);
     printf("\n  flags:"); for(int i=0;i<256;i++) if(g.talk_flags[i]) printf(" npc%d=0x%02x",i,g.talk_flags[i]);
-    printf("\n  inv:");   for(int i=0;i<256;i++) if(g.player_obj[i]) printf(" obj%d x%d",i,g.player_obj[i]);
+    printf("\n  inv:");   for(int i=0;i<1024;i++) if(g.player_obj[i]) printf(" obj%d x%d",i,g.player_obj[i]);
     printf("\n");
     free(d); free(f);
     return 0;

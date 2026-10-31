@@ -67,5 +67,25 @@ int main(void)
     }
     printf(tf ? "$T token: %d FAILURE(S)\n" : "$T token: ALL PASS\n", tf);
 
+    /* the pooled pack (usecode_vm.md game state, §6c): gold = obj 88 in `gold`, full obj numbers,
+     * actor 1 / party members are the player, GIVE/NEW quality, WEIGHT(obj,qty), CANCARRY */
+    printf("\npack, gold, weight:\n");
+    static uint8_t wt[1024]; wt[243]=1; wt[56]=1; wt[65]=1;
+    cvm_game_init(&g, 1); g.gold=500; g.in_party[1]=1; g.in_party[2]=1; g.obj_weight=wt; g.party_room=7; g.str[9]=15;
+    vm.npc=13; int pf=0;
+    #define PK(nm,cond) do{ int ok_=(cond); printf("  %-38s %s\n",nm,ok_?"OK":"FAIL"); if(!ok_){ pf++; fail++; } }while(0)
+    add(&vm,88,0,-3); PK("DELETE 3 gold -> 497", g.gold==497 && g.player_obj[88]==0);
+    PK("OBJCOUNT gold reads the gold total", cnt(&vm,88)==497);
+    PK("actor 1 is the player", is_player(&vm,1));
+    PK("a party member is the player", is_player(&vm,2) && !is_player(&vm,13));
+    add(&vm,396,0,1); PK("obj 396 counted as 396, not 140", g.player_obj[396]==1 && g.player_obj[140]==0);
+    add(&vm,64,1,1); PK("NEW key quality 1 kept", g.player_objq[64]==1);
+    { uint32_t st[8]; int sp=0; st[sp++]=243; st[sp++]=1; st[sp++]=0x9b; sp=evop(&vm,st,sp); PK("WEIGHT(rune,1) = 1", sp==1 && st[0]==1); }
+    { uint32_t st[8]; int sp=0; st[sp++]=65; st[sp++]=30; st[sp++]=0x9b; sp=evop(&vm,st,sp); PK("WEIGHT(black pearl,30) = 3", sp==1 && st[0]==3); }
+    { uint32_t st[8]; int sp=0; st[sp++]=1; st[sp++]=0x9a; sp=evop(&vm,st,sp); PK("CANCARRY(Avatar) = party room", sp==1 && st[0]==7); }
+    { uint32_t st[8]; int sp=0; st[sp++]=9; st[sp++]=0x9a; sp=evop(&vm,st,sp); PK("CANCARRY(outsider str 15) = 300", sp==1 && st[0]==300); }
+    #undef PK
+    printf(pf ? "pack/gold/weight: %d FAILURE(S)\n" : "pack/gold/weight: ALL PASS\n", pf);
+
     return fail ? 1 : 0;
 }

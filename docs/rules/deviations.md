@@ -26,6 +26,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | Deviation | Where | Status |
 |---|---|---|
 | The caster is never struck by its own area spell (explosion / winds / hail / chain bolt). (The missing Avatar-death sequence was added 2026-10-31, combat.md §3d.) | magic_skills.md §5f | open |
+| CANCARRY in conversations weighs the pooled pack against the whole party's combined capacity (the original weighs one member's own inventory against that member's strength) | usecode_vm.md §6c | accepted |
 | Party death: no screen fade or death / KAL LOR sounds; a dead companion's inventory is not moved into its body (the pack is pooled) and its body is not saved | combat.md §3d | accepted |
 | Party members in a mass area take Sleep / Curse / Awaken / Dispel but not Mass Kill | magic_skills.md §5f | accepted |
 | Time Stop freezes everything but the clock display; Tremor has no screen shake; Enchant's second menu is the C)ast menu in "Enchant with:" mode | magic_skills.md §5f | accepted |
