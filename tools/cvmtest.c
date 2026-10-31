@@ -87,5 +87,14 @@ int main(void)
     #undef PK
     printf(pf ? "pack/gold/weight: %d FAILURE(S)\n" : "pack/gold/weight: ALL PASS\n", pf);
 
+    /* plural / singular markers (usecode_vm.md §6e) */
+    printf("\nplural markers:\n");
+    { struct { int v; const char*exp; } pl[] = { {4,"4 Torchs, many"}, {1,"1 Torch, one"}, {0,"0 Torchs, many"} };
+      int qf=0;
+      for(unsigned i=0;i<3;i++){ g.var[3]=pl[i].v; vm.outlen=0; vm.out[0]=0;
+          const char*src="#3 Torch\\s, /one\\many"; print_text(&vm,(const uint8_t*)src,(int)strlen(src)); vm.out[vm.outlen]=0;
+          int ok=strcmp(vm.out,pl[i].exp)==0; printf("  #3=%d -> \"%s\" %s\n",pl[i].v,vm.out,ok?"OK":"FAIL"); if(!ok){ qf++; fail++; } }
+      printf(qf ? "plural markers: %d FAILURE(S)\n" : "plural markers: ALL PASS\n", qf); }
+
     return fail ? 1 : 0;
 }

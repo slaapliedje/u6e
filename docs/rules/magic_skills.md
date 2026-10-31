@@ -614,6 +614,25 @@ mechanics; Enchant's menu is the C)ast menu. The magical-tile set for Detect Mag
 Status: VERIFIED 2026-10-28 — SPELLS.REQ 1-c and MAGICFX.REQ 1-7 rerun identical on TT + 4 MB Falcon
 with the new words; host suites + make check pass.
 
+## 5h. Heal-type spells and their targets (2026-10-31)
+
+> Provenance: READING the reference's `magic/circle_01/heal.lua`, `circle_04/great_heal.lua`,
+> `circle_03/protection.lua`, `circle_05/invisibility.lua`, `circle_06/mass_protect.lua`,
+> `circle_07/mass_invisibility.lua`, `circle_01/detect_magic.lua` and `magic.lua`
+> (select_actor_with_projectile: the "On Whom: " cursor, range 7) — to understand; re-expressed.
+
+- **Heal** adds 1-30 HP (uniform) to a living target, never past its maximum; **Great Heal**
+  sets it to the maximum. A dead target: "No effect". (Until 2026-10-31 u6e used placeholder
+  amounts, +20 and +40.)
+- The reference picks every one of these targets with its cursor. u6e keeps its direction
+  targeting (deviations.md), and for the spells that would need the cursor on a FRIEND:
+  Heal / Great Heal land on the most-wounded living party member (the caster when nobody is
+  hurt); Protection and Mass Protect shield the whole party; Invisibility hides the caster or
+  the first actor in an aimed direction; Mass Invisibility hides the party.
+- **Detect Magic** aims a direction (the first object along it, 5 tiles), like Magic Lock. It
+  was missing from the aimed spells, so from the C)ast menu it could never reach an object
+  (found 2026-10-31 while reviewing the targets against the reference).
+
 ## 8. Open questions / to validate
 
 - **Max mana** (§3): RESOLVED — 2×int (Avatar) / int/2 (companion), from the

@@ -7582,12 +7582,12 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     }
     const char*nm=g_spells[spell].name; int applied=1, recompose=0;
     if(!strcmp(nm,"Heal")||!strcmp(nm,"Great Heal")){
-        int amt = !strcmp(nm,"Great Heal")?40:20;         /* magnitudes: magic_skills.md §8 (conservative) */
-        int tgt=caster, worst=0;                          /* heal the most-wounded party member */
+        int tgt=caster, worst=0;                          /* heal the most-wounded party member (§5h) */
         for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, mx=g_amaxhp[a]?g_amaxhp[a]:30, d=mx-g_ahp[a];
             if(g_ahp[a]>0 && d>worst){ worst=d; tgt=a; } }
-        int mx=g_amaxhp[tgt]?g_amaxhp[tgt]:30, old=g_ahp[tgt], nv=old+amt; if(nv>mx)nv=mx; g_ahp[tgt]=(uint8_t)nv;
-        (void)old; (void)nv; msgcat(0,"Success");
+        int mx=g_amaxhp[tgt]?g_amaxhp[tgt]:30, nv=!strcmp(nm,"Great Heal")?mx:g_ahp[tgt]+1+(int)rng_range(&g_crng,30);   /* Heal 1-30, Great Heal to full */
+        if(nv>mx) nv=mx;
+        if(g_ahp[tgt]==0) msgcat(0,"No effect"); else { g_ahp[tgt]=(uint8_t)nv; msgcat(0,"Success"); }
         sync_party_hp();
     } else if(!strcmp(nm,"Harm")||!strcmp(nm,"Magic Arrow")||!strcmp(nm,"Fireball")){
         int wmax = !strcmp(nm,"Fireball")?18 : !strcmp(nm,"Harm")?6 : 10;
@@ -7927,7 +7927,7 @@ static int spell_needs_target(int spell){
     if(spell<0||spell>=SPELL_COUNT) return 0;
     const char*n=g_spells[spell].name;
     return !strcmp(n,"Harm")||!strcmp(n,"Magic Arrow")||!strcmp(n,"Fireball")||
-           !strcmp(n,"Unlock Magic")||
+           !strcmp(n,"Unlock Magic")||!strcmp(n,"Detect Magic")||
            !strcmp(n,"Fire Field")||!strcmp(n,"Poison Field")||!strcmp(n,"Sleep Field")||
            !strcmp(n,"Energy Field")||!strcmp(n,"Dispel Field")||
            !strcmp(n,"Poison")||!strcmp(n,"Sleep")||!strcmp(n,"Paralyze")||
@@ -9955,7 +9955,7 @@ static void bot_report(const world_t*w)
     n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
-    n=bot_kv(n,"over",g_game_over);
+    n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",g_cg.gold); n=bot_kv(n,"rest",g_rest_stage);
     n=bot_put(n," askc="); n=bot_put(n,(g_await_input&&g_cv.askc[0])?g_cv.askc:"-"); n=bot_kv(n,"num",g_await_input&&g_cv.input_num);
     { int foes=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay)||!g_ahp[i]||!actor_hostile(i)) continue;
           int dx=ax-(int)w->px, dy=ay-(int)w->py; if(dx<0)dx=-dx; if(dy<0)dy=-dy; if(dx<=8&&dy<=8) foes++; }
@@ -11587,9 +11587,9 @@ int main(int argc, char **argv)
                 SP_CAST("Ignite",1,0); dbg_num("SP ignite lit no effect=", SP_HAS("No effect"));
                 int ki=SP_OBJ(223,0,-1,0,0); SP_CAST("Ignite",-1,0); SP_MSG(); dbg_num("SP keg lit=", ki>=0 && SP_FR(ki)==1 && g_keg_timer==3 && SP_HAS("Powder lit")); g_keg_timer=0; }
             if(mode=='2'){ int di=SP_OBJ(297,5,1,0,0), ci=SP_OBJ(98,1,-1,0,0);
-                SP_CAST("Detect Magic",0,0); SP_MSG();
+                SP_CAST("Detect Magic",1,0); SP_MSG();
                 SP_CAST("Magic Lock",1,0); SP_MSG(); dbg_num("SP door magic locked=", di>=0 && SP_FR(di)==13 && SP_HAS("magically locked"));
-                SP_CAST("Detect Magic",0,0); SP_MSG();
+                SP_CAST("Detect Magic",1,0); SP_MSG();
                 (void)use_object(di); dbg_num("SP door use refused=", SP_HAS("Magically locked"));
                 SP_CAST("Unlock Magic",1,0); SP_MSG(); dbg_num("SP door unlocked=", di>=0 && SP_FR(di)==5);
                 SP_CAST("Magic Lock",-1,0); SP_MSG(); dbg_num("SP chest magic locked=", ci>=0 && SP_FR(ci)==3);

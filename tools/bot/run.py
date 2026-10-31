@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
-collect what looked wrong. Segments: castle, bridge, britain, cave, orb, shrine (default: all, in order)."""
+collect what looked wrong. Segments: castle, bridge, britain, shop, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
-from play import Player, keywords
+from play import Player, keywords, Danger
 from nav import VDIR
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,9 +16,9 @@ def seg_castle(p, kw):
     """the opening gargoyles; Lord British (the Compendium questions, every topic), the party, everyone in the castle"""
     if p.g.state['foes'] and p.foes(): p.fight()
     name, words = kw[5]
-    p.talk_to(5, [w for w in words if w not in ('join', 'leav', 'bye')], name)
+    p.talk_to(5, [w for w in words if w not in ('join', 'leav', 'bye') and len(w) > 1], name)
     for m in PARTY[1:]:
-        name, words = kw[m]; p.talk_to(m, [w for w in words if w not in ('join', 'leav', 'bye')], name)
+        name, words = kw[m]; p.talk_to(m, [w for w in words if w not in ('join', 'leav', 'bye') and len(w) > 1], name)
     p.sweep((286, 336, 330, 386), kw, done={5}, party=PARTY)
 
 def seg_bridge(p, kw):
@@ -30,6 +30,25 @@ def seg_bridge(p, kw):
 
 def seg_britain(p, kw):
     p.sweep((270, 388, 360, 470), kw, done=set(p.transcripts), party=PARTY)
+
+def pack_qty(p, obj_n):
+    return sum(r['qty'] or 1 for r in p.g.objects()[1] if r['obj'] == obj_n)
+
+def seg_shop(p, kw):
+    """buy 4 torches from Efram (22) at 3 gold each: the gold and the pack must follow; then ask
+    for more than the gold covers: he sells what it buys"""
+    g0, t0 = p.g.state['gold'], pack_qty(p, 90)
+    out = p.talk_to(22, ['buy', 'torc', '1', '4'], 'Efram')          # which of you: 1, how many: 4
+    if out is None: p.issue('shop', 'could not reach Efram'); return
+    g1, t1 = p.g.state['gold'], pack_qty(p, 90)
+    p.log('  Efram: gold %d -> %d, torches %d -> %d' % (g0, g1, t0, t1))
+    if (g0 - g1, t1 - t0) != (12, 4): p.issue('shop', '4 torches at 3: gold %d -> %d, torches %d -> %d (%r)' % (g0, g1, t0, t1, out[-2:]))
+    if 'Torch\\' in ' '.join(r for _, r in out): p.issue('shop', 'plural marker printed: %r' % out[-2:])
+    many = g1 // 3 + 5                                                 # more than the purse covers
+    out = p.talk_to(22, ['buy', 'torc', '1', str(many)], 'Efram')
+    g2, t2 = p.g.state['gold'], pack_qty(p, 90)
+    p.log('  Efram, %d asked: gold %d -> %d, torches %d -> %d' % (many, g1, g2, t1, t2))
+    if g2 < 0 or g1 - g2 != 3 * (t2 - t1) or g2 >= 3: p.issue('shop', 'asking %d torches with %d gold: gold %d, torches +%d' % (many, g1, g2, t2 - t1))
 
 CAVE = (185, 436)                                     # the nearest cave west of Britain that can be walked to (obj 326)
 
@@ -47,6 +66,7 @@ def explore(p, n=6, seed=1):
     for t in rnd.sample(far, min(n, len(far))):
         if p.g.state['L'] != p.nav.level: break
         try: p.walk(*t, max_steps=400); p.log('  explore -> %s: at (%d,%d)' % (t, p.g.state['X'], p.g.state['Y']))
+        except Danger as e: p.log('  explore stopped: %s' % e); break
         except Exception as e: p.log('  explore -> %s: %s' % (t, e))
     return seen
 
@@ -161,7 +181,7 @@ def seg_shrine(p, kw):
     """the Compassion quest: Anya's permission, Ariana's rune; the orb to the shrine, its guardians,
     a wrong and the right mantra on the rune at the force field, then meditate at the shrine"""
     sh = SHRINE; fx, fy = sh['field']
-    p.talk_to(13, ['rune'], 'Ariana')                                # "Do you need it?" y, y: ask my parents
+    p.talk_to(13, ['rune'], 'Ariana', yes=True)                      # "Do you need it?" y, y: ask my parents
     p.talk_to(15, ['rune'], 'Anya')                                  # her permission to borrow it
     p.talk_to(13, ['rune'], 'Ariana', yes=True)                      # "Did you get permission?" y
     if not any(r['obj'] == sh['rune'] for r in p.g.objects()[1]):
@@ -170,7 +190,7 @@ def seg_shrine(p, kw):
     if m is not None and 'no effect' not in m.lower(): p.issue('shrine', 'the right mantra away from the shrine: %r' % m)
     ORB[sh['pos']] = (fx, fy - 1)
     if not orb_trip(p, sh['pos']): return
-    if p.foes(): p.fight()                                          # the guardians hatch at the shrine
+    if p.foes(): p.fight(); p.heal_up()                             # the guardians hatch at the shrine
     def field(): return [o for o in p.g.objects()[0] if o['obj'] == 51 and (o['x'], o['y']) == (fx, fy)]
     if not field(): p.issue('shrine', 'no force field at the shrine before the mantra')
     p.walk(fx, fy, near=1)
@@ -195,7 +215,7 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)
@@ -209,7 +229,9 @@ def main():
     try:
         for s in segs:
             log('== segment %s' % s); ts = time.time()
+            p.heal_up()
             try: SEGS[s](p, kw)
+            except Danger as e: p.issue('danger', '%s: %s' % (s, e))
             except Exception as e: p.issue('crash', '%s: %s: %s' % (s, type(e).__name__, e)); raise
             st = g.state
             log('== %s done in %.0fs: L%d (%d,%d) %02d:%02d day %d keys %d issues %d' % (s, time.time() - ts, st['L'], st['X'],

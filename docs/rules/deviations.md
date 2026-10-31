@@ -37,7 +37,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | Detect Magic senses magic locks only (no magic-item flag); Wizard Eye is the overview, not a flying-eye camera | magic_skills.md §5e | open |
 | The magic-condition int contest's direction is our reading | magic_skills.md §5b | accepted |
 | Companions' mana: every companion gets int/2 (a non-caster should get 0) | magic_skills.md §1 | open |
-| Spell messages now follow the reference's words (§5g, 2026-10-28). Still ours: the direction prompts "<Spell>: aim a direction." stand in for the reference's "On whom: / On what: / Location: " targeting, Gate Travel's choice of gate (so it is silent like the reference but picks differently), Telekinesis's mechanics | magic_skills.md §5g | accepted |
+| Spell messages now follow the reference's words (§5g, 2026-10-28). Still ours: the direction prompts "<Spell>: aim a direction." stand in for the reference's "On whom: / On what: / Location: " targeting, the friendly targets of Heal / Great Heal (the most-wounded member), Protection (the party) and Invisibility (§5h), Gate Travel's choice of gate (so it is silent like the reference but picks differently), Telekinesis's mechanics | magic_skills.md §5g | accepted |
 | The eclipsed sun is drawn only while the sun is up (5-19); our night / eclipse outdoor ambient is moonlight, the reference's is 0 | lighting.md §2b | accepted |
 
 ## Objects, use, movement

@@ -268,6 +268,7 @@ static bool check_keywords(const char*keys,const char*input){
 /* format + print a text run [s,s+n) honouring $P/$G/$N/#var; 0x0a -> space */
 static void print_text(cvm_t*vm,const uint8_t*s,int n){
     int cap=-1;                                   /* '`': capitalise what comes next (usecode_vm.md §6d) */
+    int32_t last=0;                               /* the last #n printed, for the '\\' / '/' markers (§6e) */
     for(int i=0;i<n;){
         char c=(char)s[i];
         if(cap>=0 && cap<vm->outlen){ char*f=&vm->out[cap]; if(*f>='a'&&*f<='z') *f=(char)(*f-32); cap=-1; }
@@ -286,11 +287,13 @@ static void print_text(cvm_t*vm,const uint8_t*s,int n){
             i+=2; continue; }
         if(c=='#'&&i+1<n&&s[i+1]>='0'&&s[i+1]<='9'){ int vi=0; i++;
             while(i<n&&s[i]>='0'&&s[i]<='9'){ vi=vi*10+(s[i]-'0'); i++; }
-            int32_t vv=(vi<64)?vm->g->var[vi]:0; char num[12]; int p=0,neg=0;
+            int32_t vv=(vi<64)?vm->g->var[vi]:0; char num[12]; int p=0,neg=0; last=vv;
             uint32_t u=(uint32_t)vv; if(vv<0){neg=1;u=(uint32_t)(-vv);}
             char tmp[12]; int t=0; do{ tmp[t++]=(char)('0'+u%10); u/=10; }while(u); if(neg)tmp[t++]='-';
             while(t) num[p++]=tmp[--t];
             num[p]=0; outs(vm,num); continue; }
+        if(c=='\\'||c=='/'){ int show=(c=='/')?(last==1):(last!=1); i++;   /* plural / singular letters (§6e) */
+            while(i<n&&s[i]>='a'&&s[i]<='z'){ if(show) outc(vm,(char)s[i]); i++; } continue; }
         if(c=='@'){ i++; continue; }
         if(c==0x0a){ outc(vm,' '); i++; continue; }
         outc(vm,c); i++;

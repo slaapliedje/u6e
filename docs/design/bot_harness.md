@@ -36,7 +36,7 @@ run.py (segments of the walkthrough)
   (no camp, moongate walk or click-travel in progress). Fields: `k` keys received (the lock-step
   counter), `busy`, `L X Y`, the clock and date, the armed verb, `talk` (actor id) and `ask`
   (text entry open), `askc` (the keys a y/n prompt accepts) and `num` (a number prompt), the
-  cast / mantra / inventory / status / peer panels, combat mode, vehicle, `over` (the ending),
+  cast / mantra / inventory / status / peer panels, combat mode, vehicle, `over` (the ending), `gold`, `rest` (the camp prompt: 1 hours, 2 guard),
   `foes` (hostile actors within 8 tiles), the party `id:hp/max:mp:level`, then the free text:
   `msg` (the message box), `conv` (the conversation transcript), `typed`.
 - **Dumps** on function keys (no game effect): F2 actors on this level, F3 objects within 24
@@ -146,7 +146,31 @@ the y/n / number answers per word raised from 8 to 16 (Wilbur's horse sale asks 
 that gold works). A full run (castle, bridge, Britain, cave, orb, shrine) takes about 230 s with
 no issues; the guardians leave the Avatar near death, so keeping the party alive is next.
 
+## 6d. Shopping and staying alive (2026-10-31)
+
+- **shop**: buy 4 torches from Efram (22) — which of you: 1, how many: 4 — and check the gold
+  (−12) and the pack (+4); then ask for more than the purse covers: he sells what it pays for
+  ("That's all you can afford").
+- **Staying alive**: after every fight and at each segment start the bot C)asts Heal while a
+  member is below 60% (it lands on the most wounded); a walk under fire from foes it cannot reach
+  (cyclopes throwing boulders) heals and goes on, and gives up only when no heal works (`Danger`,
+  which ends exploring so the cave segment climbs out). R)est is tried after a fight when a
+  member is below half (wilderness only; it walks to a spot with the 3×3 open when "Not enough
+  room!"). Walking up to someone to talk fights on the way.
+- The Avatar's death and a companion's death are noticed on every report (dumps included) and
+  recorded as issues.
+- Report fields added: `gold`, `rest` (the camp prompt).
+
+Found and fixed (game): plural/singular markers printed literally ("4 Torch\s"; usecode_vm.md
+§6e); Detect Magic could not be aimed from the C)ast menu and Heal / Great Heal used placeholder
+amounts (magic_skills.md §5h).
+
+Bot-side: the sweep answered "y" after bye and bought Wilbur's horse and a night at the inn (now
+"n" unless asked); scancode 8 sent as "08" (Hatari reads octal: now hex); the death checks missed
+walking keys and dumps; `use_pack` counted rows and missed after a long message (now steps until
+the prompt names the item).
+
 ## 7. Next
 
 Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
-the ending; shopping with gold, resting, spells, and keeping the party alive (healing, fleeing).
+the ending; selling, healers and resurrection, more spells.

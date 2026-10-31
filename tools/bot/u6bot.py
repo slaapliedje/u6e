@@ -67,6 +67,7 @@ class Game:
         self.log = open(log or os.path.join(self.out, 'console.log'), 'w')
         self.p = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
         self.buf = b''; self.keys = 0; self.state = None
+        self.watch = None                                  # called with every report (dumps included)
         t0 = time.time()
         while not os.path.exists(self.fifo):
             if time.time() - t0 > 20: raise RuntimeError('no hatari fifo')
@@ -102,14 +103,16 @@ class Game:
         """press one key and wait for the report that covers it; the console lines printed in
         between (dumps) are kept in self.got"""
         if isinstance(code, str): code = K[code] if code in K else SC[code]
-        if shift: self.cmd('hatari-event keydown %02d' % K['shift']); time.sleep(0.02)
-        self.cmd('hatari-event keypress %02d' % code)   # 2 digits: a lone digit is taken as that character
-        if shift: time.sleep(0.02); self.cmd('hatari-event keyup %02d' % K['shift'])
+        if shift: self.cmd('hatari-event keydown 0x%02x' % K['shift']); time.sleep(0.02)
+        self.cmd('hatari-event keypress 0x%02x' % code)   # hex: a lone digit is taken as that character, and '08' is not octal
+        if shift: time.sleep(0.02); self.cmd('hatari-event keyup 0x%02x' % K['shift'])
         self.keys += 1
         want, self.got = self.keys, []
         for s in self.lines(timeout):
             if s.startswith('@S') and int(re.search(r' k=(\d+)', s).group(1)) >= want:
-                self.state = parse_state(s); self.keys = self.state['k']; return self.state
+                self.state = parse_state(s); self.keys = self.state['k']
+                if self.watch: self.watch(self.state)
+                return self.state
             self.got.append(s)
         raise TimeoutError('no report for key %d within %ss' % (code, timeout))
 

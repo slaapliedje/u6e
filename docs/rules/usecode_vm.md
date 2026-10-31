@@ -291,6 +291,20 @@ for a typed "jim"; a sentence opening with the title reads "Milord, ..."). Confi
 — inferred from where it occurs; not yet compared with the original's screen. Found by the bot
 harness (docs/design/bot_harness.md): the backtick was printed literally.
 
+## 6e. Plural and singular markers (2026-10-31)
+
+> Provenance: READING Nuvie `core/converse_interpret.cpp` get_formatted_text (the `/` and `\`
+> cases) — to understand; re-expressed. Found by the bot harness's shop checks: "4 Torch\s".
+
+In a printed text (script text, a data-block string printed by DPRINT, and what `$` tokens
+bring in), a backslash `\` followed by a run of lowercase letters shows those letters only when
+the number most recently printed by a `#n` variable in the same text is NOT 1; a slash `/`
+followed by lowercase letters shows them only when that number IS 1. The marker itself is never
+printed. Before any `#n` in the text the number counts as 0 (plural). So "#3 Torch\s" reads
+"4 Torchs" for 4 and "1 Torch" for 1 (the original's own wording). (The reference repeats the
+first letter of the run instead of copying it, which only matters for runs longer than one
+letter; we copy the run as written.)
+
 ## 7. Status
 VERIFIED — the full conversation VM runs the real bytecode (greeting, expression
 eval, IF/ELSE/ENDIF branching, keyword loop, BYE) for NPCs across CONVERSE.A/.B,

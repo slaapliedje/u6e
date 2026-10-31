@@ -13,6 +13,7 @@ class Nav:
     def __init__(self, game, log=print):
         self.g, self.log = game, log
         self.level = None; self.temp = {}
+        self.keyfn = game.key                                  # Player routes it through its checks
 
     def refresh(self):
         self.span, self.pm, doors = self.g.passmap()
@@ -62,7 +63,7 @@ class Nav:
     def pos(self): return self.g.state['X'], self.g.state['Y']
 
     def open_door(self, x, y, d):
-        st = self.g.key('u'); st = self.g.key(d)
+        st = self.keyfn('u'); st = self.keyfn(d)
         self.log('  door (%d,%d): %s' % (x, y, st['msg']))
         fr = self.doors.get((x, y))
         m = st['msg'].lower()
@@ -102,7 +103,7 @@ class Nav:
                           (ny - y + self.span // 2) % self.span - self.span // 2)]
                 fr = self.doors.get((nx, ny))
                 if fr is not None and fr >= 4: self.open_door(nx, ny, d)
-                st = self.g.key(d); steps += 1
+                st = self.keyfn(d); steps += 1
                 if self.g.state['L'] != self.level: return st          # a level change ends the walk
                 jx = (st['X'] - x + self.span // 2) % self.span - self.span // 2
                 jy = (st['Y'] - y + self.span // 2) % self.span - self.span // 2
@@ -116,6 +117,6 @@ class Nav:
                          self.pm[ny * self.span + nx], self.doors.get((nx, ny)), st['msg'][:60]))
                 if not refreshed:                                       # the map may have changed under us
                     refreshed = True; keep = self.temp; self.refresh(); self.temp = keep; break
-                if fails <= 2: self.g.key('space'); break
+                if fails <= 2: self.keyfn('space'); break
                 self.temp[(nx, ny)] = 1; fails = 0; break
         return self.g.state
