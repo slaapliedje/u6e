@@ -39,7 +39,7 @@ run.py (segments of the walkthrough)
   cast / mantra / inventory / status / peer panels, combat mode, vehicle, `over` (the ending), `gold`, `rest` (the camp prompt: 1 hours, 2 guard),
   `foes` (hostile actors within 8 tiles), the party `id:hp/max:mp:level`, then the free text:
   `msg` (the message box), `conv` (the conversation transcript), `typed`.
-- **Dumps** on function keys (no game effect): F2 actors on this level, F3 objects within 24
+- **Dumps** on function keys (no game effect): F2 actors on this level (with each NPC's live worktype `wt`), F3 objects within 24
   tiles plus the pack, F4 the passability file `BOTPASS.BIN` (one byte per tile: bit0 walkable as
   the player's step decides, bit3 water) and `BOTDOOR.TXT` (every door: x y frame).
 - **Output channel**: `BOT.REQ` holding `n` sends the lines through Hatari's NatFeats `NF_STDERR`
@@ -170,7 +170,20 @@ Bot-side: the sweep answered "y" after bye and bought Wilbur's horse and a night
 walking keys and dumps; `use_pack` counted rows and missed after a long message (now steps until
 the prompt names the item).
 
+## 6e. A healer (2026-10-31)
+
+`healer` (after `shop`, at 13:30 while Tiberius, 26, is in his shop: the F2 dump's `wt` is 0x90)
+asks him to resurrect with nobody dead and to heal: a wounded member must come back to full for 30
+gold, or free when the purse is short, and with nobody hurt he must say all are well.
+
+Found: every healer opened with "I see that carries a parted friend" and asked 400 gold, because
+OBJINPARTY was a stub that answered "actor 0 has it"; RESURRECT raised the carrier instead of the
+body it carries; and per-member gold counts saw the pooled purse once for each member ("392 short"
+with 2 gold in a party of four). All three in usecode_vm.md §6f; the HEALSYNC lines of the
+INVSYNC.BIN hook check a carried body and a lost one rising.
+
 ## 7. Next
 
 Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
-the ending; selling, healers and resurrection, more spells.
+the ending; selling; a paid heal and a real resurrection (a companion has to die and its body be
+carried to a healer), more spells.

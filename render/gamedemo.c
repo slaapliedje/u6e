@@ -3122,6 +3122,7 @@ static void actor_name(int id,char*out,int cap);            /* an actor's name f
 static int  foe_cast(const world_t*w,int i,int tid,int tx,int ty);   /* a hostile's charge roll + cast (combat.md §7b) */
 static int  temp_obj_new(int obj_n,int frame,int x,int y,int quality);   /* a runtime object (defined with the moongates) */
 static void companion_revive(world_t*w,int id);              /* a dead companion stands up (combat.md §3d; defined with travel_to) */
+static void resurrect_actor(const world_t*w,int id,int x,int y);  /* fwd: Resurrect / a healer (magic_skills.md §5f, usecode_vm.md §6f) */
 static void web_tick(const world_t*w);                      /* actors on webs may get stuck (§5f) */
 static void slime_frames(void);                             /* adjoining slimes share frames (§5f) */
 static const world_t *g_wp;                                 /* the live world, for handlers without a world argument */
@@ -4892,6 +4893,21 @@ static void resolve_name(int id, char *out, int cap)
     int o=0; while(g_cv.npcname[o]&&o<cap-1){ out[o]=g_cv.npcname[o]; o++; } out[o]=0;
 }
 
+/* a dead companion's remains: on the map (338-341, quality = the actor) or in the pack (339 / 354) */
+static int body_of(int id)
+{
+    for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+        if(o->alive && o->quality==(uint8_t)id && o->obj_n>=338 && o->obj_n<=341) return 1; }
+    for(int i=0;i<g_ow.ninv;i++) if((g_ow.inv[i].obj_n==339||g_ow.inv[i].obj_n==354) && g_ow.inv[i].quality==(uint8_t)id) return 1;
+    return 0;
+}
+/* the first dead companion with no body anywhere in reach (not saved, or on another level), else 0 (usecode_vm.md §6f) */
+static int lost_body_member(void)
+{
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor;
+        if(a>1 && a<U6_MAX_ACTORS && g_ahp[a]==0 && g_atile[a]==0xffff && !body_of(a)) return a; }
+    return 0;
+}
 /* push the real party into the VM's in_party[] before a conversation (so INPARTY
  * / party-count checks branch correctly). */
 static void sync_party_in(void)
@@ -4904,6 +4920,7 @@ static void sync_party_in(void)
         g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
         g_cg.healed_full[i]=0; }
     g_cg.avatar_hp=(int16_t)g_ahp[1];
+    g_cg.resurrect_req=0; g_cg.lost_body=(uint8_t)(lost_body_member()>0);   /* §6f: a companion whose body is gone counts as carried */
     /* stats, levels, experience and the party ORDER the scripts read and change (usecode_vm.md §6c) */
     for(int i=0;i<256;i++){ int ok=(i<U6_MAX_ACTORS); g_cg.str[i]=ok?g_astr[i]:0; g_cg.dex[i]=ok?g_adex[i]:0; g_cg.intel[i]=ok?g_aint[i]:0;
         g_cg.level[i]=(uint8_t)((ok && g_alevel[i]>0)?g_alevel[i]:1); g_cg.exp[i]=ok?g_aexp[i]:0; }
@@ -4978,6 +4995,16 @@ static void sync_health_out(void)
         if(g_ahp[a]==0 && !g_cg.dead[a] && g_atile[a]==0xffff && g_wp){ companion_revive((world_t*)g_wp,a); continue; }   /* a dead companion stands up beside the Avatar (§3d); exp x karma/100 inside */
         if(g_ahp[a]==0 && !g_cg.dead[a]){ g_ahp[a]=1; if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[a]=(uint16_t)(((uint32_t)g_aexp[a]*(uint32_t)k)/100u); } }   /* a healer's RESURRECT: exp x karma/100 */
         if(g_cg.healed_full[a] && g_ahp[a]<g_amaxhp[a]){ g_ahp[a]=g_amaxhp[a]; g_cg.healed_full[a]=0; } }
+    for(;g_cg.resurrect_req;g_cg.resurrect_req--){                   /* RESURRECT: the carried body rises on the Avatar's tile (§6f) */
+        int row=-1, id=0;
+        for(int i=0;i<g_ow.ninv && row<0;i++) if(g_ow.inv[i].obj_n==339) row=i;
+        for(int i=0;i<g_ow.ninv && row<0;i++) if(g_ow.inv[i].obj_n==354) row=i;
+        if(row>=0){ id=g_ow.inv[row].quality;
+            if(id<2 || id>=U6_MAX_ACTORS || g_atile[id]!=0xffff || g_armageddon) continue;   /* names nobody dead: the body stays */
+            if(--g_ow.inv[row].qty==0){ for(int k=row;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; } }
+        else id=lost_body_member();
+        if(id && !g_armageddon && g_wp){ resurrect_actor((const world_t*)g_wp,id,(int)((world_t*)g_wp)->px,(int)((world_t*)g_wp)->py); build_blocked(); }
+    }
     sync_party_hp();
 }
 
@@ -9969,13 +9996,13 @@ static void bot_report(const world_t*w)
     if(g_await_input||g_casting||g_mantra){ n=bot_put(n," typed="); n=bot_put(n,g_inbuf); }
     bot_flush(n);
 }
-/* F2: every actor on this level  "@A id x y hp maxhp tile hostile ally name-known" */
+/* F2: every actor on this level  "@A id x y hp max tile hostile wt" (wt = the live worktype) */
 static void bot_dump_actors(const world_t*w)
 {
     for(int i=1;i<U6_MAX_ACTORS;i++){ int ax,ay; if(i==1){ ax=(int)w->px; ay=(int)w->py; } else if(!actor_pos(i,&ax,&ay)) continue;
         int n=bot_put(0,"@A"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",ax); n=bot_kv(n,"y",ay);
         n=bot_kv(n,"hp",g_ahp[i]); n=bot_kv(n,"max",g_amaxhp[i]); n=bot_kv(n,"tile",g_atile[i]);
-        n=bot_kv(n,"hostile",actor_hostile(i)); bot_flush(n); }
+        n=bot_kv(n,"hostile",actor_hostile(i)); n=bot_kv(n,"wt",i>1?npc_live_worktype(i):0); bot_flush(n); }
     bot_flush(bot_put(0,"@A end"));
 }
 /* F3: on-map objects within 24 tiles + the party's pack  "@O idx obj frame x y qty q name" / "@I ..." */
@@ -12327,16 +12354,23 @@ int main(int argc, char **argv)
     {   int32_t ivl=0; void*ivb=plat_load_file("INVSYNC.BIN",1,&ivl);
         if(ivb){
             /* HEAL/CURE/RESURRECT wiring (usecode_vm.md §6): a poisoned, wounded member and a dead one */
-            { int a2=g_party[1].actor, a3=g_party[2].actor; uint8_t hp2=g_ahp[a2];
-              g_ahp[a2]=5; g_poison[a2]=3; g_ahp[a3]=0;
+            { int a2=g_party[1].actor, a3=g_party[2].actor; uint8_t hp2=g_ahp[a2]; uint16_t t3=g_atile[a3];
+              g_ahp[a2]=5; g_poison[a2]=3; g_ahp[a3]=0; g_atile[a3]=0xffff;   /* a3 died; its body is gone (not saved) */
               sync_party_in();
               dbg_num("HEALSYNC vm sees poisoned=", g_cg.poisoned[a2]); dbg_num("HEALSYNC vm sees dead=", g_cg.dead[a3]);
+              dbg_num("HEALSYNC lost body counts=", g_cg.lost_body);
               g_cg.poisoned[a2]=0; g_cg.healed_full[a2]=1;                /* as HEAL(a2) would */
-              g_cg.dead[a3]=0;                                            /* as RESURRECT(a3) would */
+              g_cg.resurrect_req=1;                                       /* as RESURRECT(carrier) would (usecode_vm.md §6f) */
               sync_health_out(); sync_stats_out();
               dbg_num("HEALSYNC a2 hp full=", g_ahp[a2]==g_amaxhp[a2]); dbg_num("HEALSYNC a2 poison gone=", g_poison[a2]==0);
-              dbg_num("HEALSYNC a3 alive=", g_ahp[a3]==1);
-              g_ahp[a2]=hp2; g_ahp[a3]=g_amaxhp[a3]; sync_party_hp(); }
+              dbg_num("HEALSYNC a3 alive=", g_ahp[a3]==1 && g_atile[a3]!=0xffff);
+              /* a body carried in the pack: it rises, the body leaves the pack */
+              g_ahp[a3]=0; g_atile[a3]=0xffff; int n0=g_ow.ninv;
+              if(g_ow.ninv<OBJ_INV_MAX){ invitem_t*b=&g_ow.inv[g_ow.ninv++]; b->obj_n=339; b->tile=(uint16_t)basetile(339); b->qty=1; b->quality=(uint8_t)a3; }
+              sync_party_in(); dbg_num("HEALSYNC carried body, lost=", g_cg.lost_body);
+              g_cg.resurrect_req=1; sync_health_out();
+              dbg_num("HEALSYNC body rose=", g_ahp[a3]==1 && g_atile[a3]!=0xffff); dbg_num("HEALSYNC body used up=", g_ow.ninv==n0);
+              g_ahp[a2]=hp2; g_ahp[a3]=g_amaxhp[a3]; g_atile[a3]=t3; sync_party_hp(); }
             /* JOIN/LEAVE inventory (save_load.md §6): Jaana (62) joins -> her gear is absorbed; leaves -> her readied gear is written back to her */
             { int n0=g_ow.ninv; g_cg.in_party[62]=1; sync_party_out();
               dbg_num("JOINSYNC in party=", is_party_member(62)); dbg_num("JOINSYNC pooled=", g_pooled[62]);

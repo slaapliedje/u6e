@@ -37,6 +37,8 @@ typedef struct {
     uint8_t  knows_gargish;    /* var 0x15: 1 = player understands Gargish      */
     uint8_t  on_quest;         /* var 0x1A: 1 = on a sacred quest               */
     int16_t  avatar_hp;        /* var 0x19: avatar health                       */
+    uint8_t  lost_body;        /* a dead companion's body is gone: counts as carried (usecode_vm.md §6f) */
+    uint8_t  resurrect_req;    /* RESURRECTs to apply: raise what a carried body names (§6f)    */
     uint8_t  poisoned[256];    /* per-NPC poison status (CURE clears)           */
     uint8_t  dead[256];        /* 1 = dead until RESURRECT                      */
     uint8_t  healed_full[256]; /* 1 = HEAL ran on this NPC this conversation (host restores HP) */

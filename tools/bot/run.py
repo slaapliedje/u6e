@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
-collect what looked wrong. Segments: castle, bridge, britain, shop, cave, orb, shrine (default: all, in order)."""
+collect what looked wrong. Segments: castle, bridge, britain, shop, healer, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
@@ -49,6 +49,25 @@ def seg_shop(p, kw):
     g2, t2 = p.g.state['gold'], pack_qty(p, 90)
     p.log('  Efram, %d asked: gold %d -> %d, torches %d -> %d' % (many, g1, g2, t1, t2))
     if g2 < 0 or g1 - g2 != 3 * (t2 - t1) or g2 >= 3: p.issue('shop', 'asking %d torches with %d gold: gold %d, torches +%d' % (many, g1, g2, t2 - t1))
+
+def seg_healer(p, kw):
+    """Tiberius (26) heals in his shop 9-18 (worktype 0x90): Resurrect with nobody dead says so;
+    Heal mends the chosen wounded member to full for 30 gold, free when the purse is short,
+    and says all are well when nobody is hurt"""
+    a = p.actor(26)
+    if a and a.get('wt') != 0x90: p.log('  Tiberius not at work (wt=%s): skipped' % a.get('wt')); return
+    hurt = [m['id'] for m in p.g.state['party'] if 0 < m['hp'] < m['max']]
+    g0 = p.g.state['gold']
+    out = p.talk_to(26, ['resu', 'heal', '1', 'y'], 'Tiberius', yes=True)
+    if out is None: p.issue('healer', 'could not reach Tiberius'); return
+    text = ' '.join(r for _, r in out)
+    if 'none of thy party is dead' not in text.lower(): p.issue('healer', 'resurrect with nobody dead: %r' % out[1:2])
+    g1 = p.g.state['gold']; still = [m['id'] for m in p.g.state['party'] if 0 < m['hp'] < m['max']]
+    p.log('  Tiberius: hurt %s -> %s, gold %d -> %d' % (hurt, still, g0, g1))
+    if not hurt:
+        if 'art well' not in text and 'are well' not in text: p.issue('healer', 'nobody hurt, no "well": %r' % out[-3:])
+    elif len(still) != len(hurt) - 1: p.issue('healer', 'heal mended %d of %s (still %s)' % (len(hurt) - len(still), hurt, still))
+    elif g0 - g1 != (30 if g0 >= 30 else 0): p.issue('healer', 'heal cost %d with %d gold' % (g0 - g1, g0))
 
 CAVE = (185, 436)                                     # the nearest cave west of Britain that can be walked to (obj 326)
 
@@ -215,7 +234,7 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, healer=seg_healer, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

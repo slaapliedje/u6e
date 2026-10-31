@@ -62,13 +62,15 @@ void cvm_game_init(cvm_game_t*g,uint32_t seed){
         g->str[i]=g->dex[i]=g->intel[i]=0; g->level[i]=1; g->exp[i]=0; }
     for(int i=0;i<1024;i++){ g->player_obj[i]=0; g->player_objq[i]=0; }
     for(int i=0;i<16;i++){ g->party_actor[i]=0; g->party_name[i][0]=0; } g->nparty=0;
-    g->obj_weight=0; g->party_room=1000;
+    g->obj_weight=0; g->party_room=1000; g->lost_body=0; g->resurrect_req=0;
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
     g->gold=0; g->karma=0; g->avatar_num=0; g->portrait_npc=-1; g->mutations=0;
     g->avatar_sex=0; g->knows_gargish=0; g->on_quest=0; g->avatar_hp=30;
 }
 static int is_player(cvm_t*vm,int n){ return n==vm->g->avatar_num || n==0 || n==1 || (n>0 && n<256 && vm->g->in_party[n]); }   /* the pooled pack (§ game state) */
+/* reads of one member's things: the pooled pack is the leader's, a companion holds nothing (§6f) */
+static int holds(cvm_t*vm,int n){ int lead=vm->g->nparty>0?vm->g->party_actor[0]:1; return n==0 || n==lead || n==vm->g->avatar_num || (n==1 && lead==1); }
 
 /* resolve a numeric "system" var (read-only, from game state). Returns 1 and
  * sets *out if `idx` is a system var; 0 if it's an ordinary local var. */
@@ -168,7 +170,7 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case OP_NPC:{ uint32_t ig=POP(), pi=POP(); (void)ig;            /* NPC(party index, ?) -> that member's actor number (§6c) */
                     PUSH(pi<(uint32_t)vm->g->nparty ? (uint32_t)vm->g->party_actor[pi] : 0u); } break;
       case OP_HASOBJ:{ uint32_t q=POP(),o=POP(); int np=npc_num(vm,POP()); (void)q;  /* (npc,obj,qual) */
-                       PUSH((is_player(vm,np)&&cnt(vm,o)>0)?1:0); } break;
+                       PUSH((holds(vm,np)&&cnt(vm,o)>0)?1:0); } break;
       case OP_DATA:{ uint32_t idx=POP(),loc=POP();                  /* DATA(loc,idx) */
                      if(vm->decl_t==0xb3){ unsigned sv=SVI(vm->decl_v); /* string -> $n var */
                          db_string(vm,loc,idx,vm->svar[sv],40); PUSH(vm->decl_v); }
@@ -176,8 +178,10 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case 0xb7:{ uint32_t sv=POP(),loc=POP();                      /* INDEXOF(loc,svar) */
                   PUSH(db_find(vm,loc,vm->svar[SVI(sv)])); } break;
       case 0xbb:{ uint32_t o=POP(); int np=npc_num(vm,POP());       /* OBJCOUNT(npc,obj) */
-                  PUSH(is_player(vm,np)?(uint32_t)cnt(vm,o):0); } break;
-      case 0xc7: POP();POP(); PUSH(0); break;                       /* OBJINPARTY  */
+                  PUSH(holds(vm,np)?(uint32_t)cnt(vm,o):0); } break;
+      case 0xc7:{ POP(); uint32_t o=POP()&0x3ff;                   /* OBJINPARTY(obj,qual): the carrier or 0x8001 (§6f) */
+                  int has=cnt(vm,o)>0 || (o==339 && (cnt(vm,354)>0 || vm->g->lost_body));
+                  PUSH(has?(uint32_t)(vm->g->nparty>0?vm->g->party_actor[0]:1):0x8001u); } break;
       case OP_CANCARRY:{ a=POP()&0xff;                                /* CANCARRY(actor) -> room, 0.1 stone (§6c) */
                          int32_t r=(is_player(vm,(int)a)||vm->g->in_party[a])?vm->g->party_room:(int32_t)vm->g->str[a]*20;
                          PUSH((uint32_t)(r<0?0:r)); } break;
@@ -385,7 +389,7 @@ static void do_ctrl(cvm_t*vm){
                        vm->g->mutations++; } break;
       case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
-      case OP_RESURRECT:{ int np=npc_num(vm,ARG())&0xff; vm->g->dead[np]=0; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
+      case OP_RESURRECT:{ (void)ARG(); if(vm->g->resurrect_req<255) vm->g->resurrect_req++; vm->g->mutations++; } break;   /* the carrier's body rises (§6f) */
       case OP_PORTRAIT: vm->g->portrait_npc=npc_num(vm,ARG()); break;
       case OP_WORKTYPE:{ int np=npc_num(vm,ARG())&0xff; vm->g->worktype[np]=(uint8_t)ARG(); vm->g->mutations++; } break;
       case OP_WAIT: outc(vm,'*'); break;            /* page-break marker */

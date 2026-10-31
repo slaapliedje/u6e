@@ -109,9 +109,10 @@ and destroyed objects persist". Hatched and summoned creatures leave the same re
   but it stays in the party, shown in the roster with 0 HP. It neither follows nor fights.
   Its readied equipment stays with it (u6e pools the party's pack, so nothing is moved into the
   body; the reference drops the companion's inventory into the body — deviation).
-  It comes back with the Resurrect spell cast on the body, a healer's RESURRECT (no body needed),
-  or the Avatar's death below. A dead companion's body is temporary: after a save and a load the
-  companion is still dead (0 HP) and a healer or the Avatar's death revives it.
+  It comes back with the Resurrect spell cast on the body, a healer paid to raise the body the party
+  carries (usecode_vm.md §6f), or the Avatar's death below. A dead companion's body is temporary:
+  after a save and a load the companion is still dead (0 HP) with no body, and a healer raises it as
+  if the party carried one (§6f), or the Avatar's death revives it.
 - **The Avatar at 0 HP**: at the end of that turn —
   1. "An unending darkness engulfs thee..." then "A voice in the darkness intones, "KAL LOR!"".
   2. A horse is dismounted, a vessel left where it is.

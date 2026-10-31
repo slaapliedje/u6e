@@ -79,7 +79,7 @@ loops back to ASK; `BYE` (0xB6) ends. Text prints with $P/$G/$N/#var substitutio
   party's gold total: OBJCOUNT / HASOBJ of 88 read it and GIVE / NEW / DELETE of 88 change it (the
   gold object number was wrong before 2026-10-31, so every merchant answered "you don't have
   enough gold" whatever the party carried);
-- per-NPC poison/dead status (HEAL/CURE/RESURRECT clear; WOUNDED/POISONED read);
+- per-NPC poison/dead status (HEAL/CURE clear; RESURRECT raises the actor a carried body names, §6f; WOUNDED/POISONED read);
 - NPC schedule worktype (WORKTYPE); the active PORTRAIT (host re-renders).
 A `mutations` counter records state-changing ops (used by tests). Defaults make
 every conditional take its "flag clear / not in party" branch; the host presets
@@ -304,6 +304,41 @@ printed. Before any `#n` in the text the number counts as 0 (plural). So "#3 Tor
 "4 Torchs" for 4 and "1 Torch" for 1 (the original's own wording). (The reference repeats the
 first letter of the run instead of copying it, which only matters for runs longer than one
 letter; we copy the run as written.)
+
+## 6f. Corpses in the pack, RESURRECT, and per-member counts (2026-10-31)
+
+> Provenance: READING Nuvie `core/converse_interpret.cpp` (the OBJINPARTY and RESURRECT cases) to
+> understand; the healers' bytecode inspected with our own host dump (Tiberius, 26). Re-expressed.
+> Found by the bot harness's healer segment: Tiberius greeted a party with nobody dead with "I see
+> that carries a parted friend" and asked 400 gold, and a party of four with 2 gold was "392 short".
+
+- **OBJINPARTY(obj, quality)** (0xc7) answers WHICH party member carries an object of type obj: that
+  member's actor number, or **0x8001** when nobody does. The quality is ignored (any quality
+  matches). For the dead body (339) a carried mouse (354, Sherry's remains) also counts. With the
+  pooled pack the carrier is always the party leader (the Avatar). Before 2026-10-31 it always
+  answered 0 ("actor 0 has it"), so every healer found a corpse.
+- **RESURRECT(npc)** (0xd6) does not name the dead: it names the member CARRYING the remains (the
+  healers pass OBJINPARTY's answer; 0 means the party). The first dead body (339) in that member's
+  inventory, else the first mouse (354), is taken out of the pack; the actor its quality names stands
+  up on the Avatar's tile at 1 HP with every condition gone (experience × karma / 100 below karma
+  98, as the Resurrect spell, magic_skills.md §5f). A body whose quality names nobody, or an actor
+  who is not dead, is still used up (the reference deletes the body only when the actor rose; u6e
+  keeps it in that case). After Armageddon nothing rises. A healer resurrects only a companion whose
+  body the party carries; without one the script says nobody is dead.
+- **A companion whose body is gone** (u6e does not save a companion's body, combat.md §3d, so after
+  a load, or with the body left on another level, there is none to carry) counts as carried:
+  OBJINPARTY(339) answers the leader, and RESURRECT with no body in the pack raises the first such
+  companion beside the Avatar. Without this a companion who died before a save could only come
+  back through the Avatar's own death (deviations.md).
+- **Per-member counts read the pooled pack once.** HASOBJ / OBJCOUNT asked about the party leader
+  (or actor 0) see the whole pooled pack and the gold; asked about another party member they see
+  nothing. The healers total the party's gold member by member ("Your party takes up a
+  collection"), and the merchants check the gold of the member chosen at "Which of you?"; counting
+  the shared pack for each member made a party of four look four times as rich. GIVE / NEW / DELETE
+  for any member still change the pooled pack. Consequence (deviations.md): at "Which of you?" the
+  member who pays or sells is the Avatar (1); a companion has nothing of its own.
+- Test hooks: cvmtest (OBJINPARTY with and without a body; RESURRECT asks for the pack; a second
+  member counts 0 gold); the bot's healer segment (resurrect with nobody dead, heal for 30 or free).
 
 ## 7. Status
 VERIFIED — the full conversation VM runs the real bytecode (greeting, expression

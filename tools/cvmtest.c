@@ -84,6 +84,16 @@ int main(void)
     { uint32_t st[8]; int sp=0; st[sp++]=65; st[sp++]=30; st[sp++]=0x9b; sp=evop(&vm,st,sp); PK("WEIGHT(black pearl,30) = 3", sp==1 && st[0]==3); }
     { uint32_t st[8]; int sp=0; st[sp++]=1; st[sp++]=0x9a; sp=evop(&vm,st,sp); PK("CANCARRY(Avatar) = party room", sp==1 && st[0]==7); }
     { uint32_t st[8]; int sp=0; st[sp++]=9; st[sp++]=0x9a; sp=evop(&vm,st,sp); PK("CANCARRY(outsider str 15) = 300", sp==1 && st[0]==300); }
+    /* corpses and per-member counts (usecode_vm.md §6f) */
+    g.nparty=2; g.party_actor[0]=1; g.party_actor[1]=2;
+    #define OP2(a,b,op,res) do{ uint32_t st_[8]; int sp_=0; st_[sp_++]=(a); st_[sp_++]=(b); st_[sp_++]=(op); sp_=evop(&vm,st_,sp_); res=(sp_==1)?st_[0]:0xdead; }while(0)
+    { uint32_t r; OP2(339,0,0xc7,r); PK("OBJINPARTY(body) none -> 0x8001", r==0x8001);
+      g.lost_body=1; OP2(339,0,0xc7,r); PK("OBJINPARTY(body) lost body -> leader", r==1); g.lost_body=0;
+      g.player_obj[354]=1; OP2(339,5,0xc7,r); PK("OBJINPARTY(body) a mouse counts", r==1); g.player_obj[354]=0;
+      g.player_obj[339]=1; OP2(339,9,0xc7,r); PK("OBJINPARTY(body, any quality) -> leader", r==1);
+      OP2(1,88,0xbb,r); PK("OBJCOUNT(leader, gold) = all", r==497);
+      OP2(2,88,0xbb,r); PK("OBJCOUNT(companion, gold) = 0", r==0); }
+    #undef OP2
     #undef PK
     printf(pf ? "pack/gold/weight: %d FAILURE(S)\n" : "pack/gold/weight: ALL PASS\n", pf);
 
