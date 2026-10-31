@@ -104,9 +104,12 @@ class Nav:
                 if fr is not None and fr >= 4: self.open_door(nx, ny, d)
                 st = self.g.key(d); steps += 1
                 if self.g.state['L'] != self.level: return st          # a level change ends the walk
+                jx = (st['X'] - x + self.span // 2) % self.span - self.span // 2
+                jy = (st['Y'] - y + self.span // 2) % self.span - self.span // 2
+                if abs(jx) > 2 or abs(jy) > 2: return st                 # so does a jump (a moongate, a trap door)
                 if (st['X'], st['Y']) == (nx, ny):
                     x, y = nx, ny; fails = 0
-                    if on_step and on_step(st): break                  # caller wants to re-plan (foes)
+                    if on_step and on_step(st): return st              # the caller takes over (foes near)
                     continue
                 fails += 1                                              # someone stood there, or it is shut
                 self.log('  step %s (%d,%d)->(%d,%d) failed: at (%d,%d) pm=%d door=%s msg=%r' % (d, x, y, nx, ny, st['X'], st['Y'],

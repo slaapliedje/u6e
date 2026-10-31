@@ -25,7 +25,8 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 ## Magic
 | Deviation | Where | Status |
 |---|---|---|
-| No Avatar-death sequence: the Avatar never drops below 1 HP; the caster is never struck by its own area spell (explosion / winds / hail / chain bolt) | magic_skills.md §5f | open |
+| The caster is never struck by its own area spell (explosion / winds / hail / chain bolt). (The missing Avatar-death sequence was added 2026-10-31, combat.md §3d.) | magic_skills.md §5f | open |
+| Party death: no screen fade or death / KAL LOR sounds; a dead companion's inventory is not moved into its body (the pack is pooled) and its body is not saved | combat.md §3d | accepted |
 | Party members in a mass area take Sleep / Curse / Awaken / Dispel but not Mass Kill | magic_skills.md §5f | accepted |
 | Time Stop freezes everything but the clock display; Tremor has no screen shake; Enchant's second menu is the C)ast menu in "Enchant with:" mode | magic_skills.md §5f | accepted |
 | Hail / wind geometry derived from the reference's offset table for the 8 aims (no table shipped) | magic_skills.md §5f | accepted |

@@ -19,7 +19,7 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
 > - Validated by  : MOONGATE.REQ headless hook (§6) on emulated TT + stock 4 MB Falcon.
 > - Confidence   : confirmed for §1-§4 against the reference; the moon formulas are the
 >   reference's own (it marks them "may be wrong") — probable for the original.
-> - Last updated : 2026-10-27
+> - Last updated : 2026-10-31
 
 ## 1. The two moons and the game date
 
@@ -66,7 +66,8 @@ Stepping onto a gate (blue or red, the checks of §2 / §3 passed) does not tele
 - U)se the orb from the pack. Requirements: the orb is carried; Lord British (NPC 5) has
   explained it — his talk-flag bit 0x20 — else "You can't figure out how to use it.".
   The game asks **Where:** — a tile within a 6×5 box around the Avatar (dx −3..+2, dy −2..+2;
-  with the keyboard the eight neighbours, with the mouse any tile). The tile must be passable
+  with the keyboard a crosshair that starts on the Avatar, walks the box with the arrow keys
+  and opens the gate on Enter, as the A)ttack and T)alk crosshairs do; with the mouse any tile). The tile must be passable
   and empty of actors, else "Failed.".
 - `position = (3 + dx) + 5·(2 + dy)` picks the destination (positions 0 and 12..14 lead
   nowhere; the gate still appears). "a red moon gate appears." — a temporary red gate
@@ -85,9 +86,9 @@ Stepping onto a gate (blue or red, the checks of §2 / §3 passed) does not tele
 | 7 | (68,45) level 5 | | | 24 | (831,166) |
 | 8 | (307,352) Lord British's throne room | | | 25 | (667,67) |
 
-  (surface unless a level is given; 0, 12, 13, 14 = nowhere). The keyboard's eight
-  neighbours reach positions 7, 8, 9 (north row), 17, 18, 19 (south row); the middle row
-  (12..14) is the "nowhere" row.
+  (surface unless a level is given; 0, 12, 13, 14 = nowhere). The middle row (12..14) is the
+  "nowhere" row. Until 2026-10-31 the keyboard took only the eight neighbours (positions 7-9 and
+  17-19), so most destinations needed the mouse; found by the bot harness.
 
 ## 4. Moonstones (object 73, frame = phase − 1)
 

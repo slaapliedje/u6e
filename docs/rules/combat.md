@@ -16,7 +16,7 @@ Tracked in: docs/INDEX.md · Milestone: M6 (combat).
 > - Tools        : curl of the public Nuvie scripts; our OBJLIST stat decode (statprobe).
 > - Validated by  : NOT YET (engine attack vs an NPC; later vs ScummVM behaviour).
 > - Confidence   : formulas confirmed (transcribed-as-spec from Nuvie's data scripts).
-> - Last updated : 2026-06-27
+> - Last updated : 2026-10-31
 
 ## 1. Model
 U6 combat is TURN-BASED and happens ON THE MAP (no separate combat screen). Each turn every
@@ -96,6 +96,41 @@ A slain creature leaves what the reference's actor-type table says — a dead bo
 own object lying there, a carcass, or nothing — with the dead NPC's inventory inside (or on the tile
 for blood / nothing); the table, the dead flag and what is saved are in usecode_use.md "Created
 and destroyed objects persist". Hatched and summoned creatures leave the same remains, temporary.
+
+## 3d. Death of a party member and of the Avatar (2026-10-31)
+
+> Derived from READING the reference's `actor.lua` (actor_dead, actor_avatar_death, actor_resurrect,
+> get_LB_to_throne), `init.lua` (party_heal) and `party.cpp` (resurrect_dead_members), re-expressed.
+> Found missing by the bot harness: melee and foe spells took the Avatar and companions to 0 HP and
+> play went on.
+
+- **A companion at 0 HP dies** (any cause: a blow, a foe's spell, a field, poison). Its remains
+  (§3c; a person leaves a dead body, quality = the actor) lie where it stood and it leaves the map,
+  but it stays in the party, shown in the roster with 0 HP. It neither follows nor fights.
+  Its readied equipment stays with it (u6e pools the party's pack, so nothing is moved into the
+  body; the reference drops the companion's inventory into the body — deviation).
+  It comes back with the Resurrect spell cast on the body, a healer's RESURRECT (no body needed),
+  or the Avatar's death below. A dead companion's body is temporary: after a save and a load the
+  companion is still dead (0 HP) and a healer or the Avatar's death revives it.
+- **The Avatar at 0 HP**: at the end of that turn —
+  1. "An unending darkness engulfs thee..." then "A voice in the darkness intones, "KAL LOR!"".
+  2. A horse is dismounted, a vessel left where it is.
+  3. Every dead companion stands up again (not after Armageddon).
+  4. The Avatar's readied items go back into the pack, except the amulet of submission (76).
+  5. The whole party is healed: full HP, no poison, sleep, paralysis or charm.
+  6. The party is moved to Lord British's throne room, (307,352) on the surface.
+  7. The clock runs on in whole hours until Lord British sits on his throne: an hour in 8..11 or
+     14..17.
+  8. Foes that were hunting the party forget it (they stop assaulting until they see it again).
+  9. The Avatar's experience becomes exp × karma / 100 when karma is below 98 (actor_resurrect).
+  10. Combat mode ends.
+  The reference also fades the screen and plays the death and KAL LOR sounds; u6e prints the two
+  lines only (deviation).
+- The key pressed in the frame the death is noticed is dropped: the death ends the turn.
+- Test hook: `DEATH.REQ '1'` (Dupre falls, then the Avatar, on dungeon level 1 at 20:00): body, off
+  the map, still in the party; then (307,352) on the surface at 08:00, everyone at full HP and cured,
+  Dupre back, exp 1000 → 500 at karma 50, combat mode off, the readied item in the pack, Lord British
+  at (307,348). Identical on the emulated TT and the stock 4 MB Falcon.
 
 ## 4. Weapon damage table (weapon_dmg_tbl, obj_n → max dmg)
 sling 33=6, club 34=8, main gauche 35=8, spear 36=10, throwing axe 37=10, dagger 38=6,

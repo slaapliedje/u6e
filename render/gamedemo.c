@@ -3121,6 +3121,7 @@ static void obj_destroy(int idx); static int is_temp_obj(int i); static int rec_
 static void actor_name(int id,char*out,int cap);            /* an actor's name for a message (defined with the §5f helpers) */
 static int  foe_cast(const world_t*w,int i,int tid,int tx,int ty);   /* a hostile's charge roll + cast (combat.md §7b) */
 static int  temp_obj_new(int obj_n,int frame,int x,int y,int quality);   /* a runtime object (defined with the moongates) */
+static void companion_revive(world_t*w,int id);              /* a dead companion stands up (combat.md §3d; defined with travel_to) */
 static void web_tick(const world_t*w);                      /* actors on webs may get stuck (§5f) */
 static void slime_frames(void);                             /* adjoining slimes share frames (§5f) */
 static const world_t *g_wp;                                 /* the live world, for handlers without a world argument */
@@ -4509,7 +4510,7 @@ static void compose_map(const world_t*w)
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     if(g_fx_on){ int32_t fvx=((int32_t)g_fx_x-left)&(U6_SURFACE_TILES-1), fvy=((int32_t)g_fx_y-top)&(U6_SURFACE_TILES-1);
         if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); }   /* a cannonball / burst over everything (cannons.md §1) */
-    if(g_pending_verb=='A'||g_pending_verb=='T'){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;   /* the A)ttack / T)alk crosshair (combat.md §6b) */
+    if(g_pending_verb=='A'||g_pending_verb=='T'||g_pending_verb=='O'){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;   /* the A)ttack / T)alk / orb crosshair (combat.md §6b) */
         if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); }
     if(g_gw_ghost_lvl>0){ int32_t gvx=((int32_t)g_gw_ghost_x-left)&(U6_SURFACE_TILES-1), gvy=((int32_t)g_gw_ghost_y-top)&(U6_SURFACE_TILES-1);   /* a member vanishing into a moongate */
         if(gvx<VT&&gvy<VT) draw_cell_dither(tmp,T,(int)gvx,(int)gvy,g_gw_ghost_tile,g_gw_ghost_lvl); }
@@ -4809,6 +4810,7 @@ static void draw_conversation(uint8_t col)
     } else if(g_show_inv){
         draw_sky();
         draw_inventory(col);
+        if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* the scroll box: the D/E/U prompt names the armed item */
     } else {
         draw_sky();                                /* day/night bar + party roster */
         draw_party_roster(col);
@@ -4898,7 +4900,8 @@ static void sync_party_in(void)
     for(int i=0;i<g_nparty;i++){ int a=g_party[i].actor; if(a>=0&&a<256) g_cg.in_party[a]=1; }
     /* health the script can ask about (WOUNDED/POISONED) and mend (HEAL/CURE/RESURRECT): the
      * party's real state goes in; sync_health_out applies what a healer did (usecode_vm.md §6) */
-    for(int i=0;i<256;i++){ g_cg.dead[i]=(uint8_t)(g_atile[i]!=0xffff && g_ahp[i]==0); g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
+    for(int i=0;i<256;i++){ g_cg.dead[i]=(uint8_t)((g_atile[i]!=0xffff || (i<U6_MAX_ACTORS && is_party_member(i))) && g_ahp[i]==0);   /* a dead companion is off the map (combat.md §3d) */
+        g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
         g_cg.healed_full[i]=0; }
     g_cg.avatar_hp=(int16_t)g_ahp[1];
     /* stats, levels, experience and the party ORDER the scripts read and change (usecode_vm.md §6c) */
@@ -4953,6 +4956,7 @@ static void sync_health_out(void)
 {
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
         if(g_poison[a] && !g_cg.poisoned[a]) g_poison[a]=0;
+        if(g_ahp[a]==0 && !g_cg.dead[a] && g_atile[a]==0xffff && g_wp){ companion_revive((world_t*)g_wp,a); continue; }   /* a dead companion stands up beside the Avatar (§3d); exp x karma/100 inside */
         if(g_ahp[a]==0 && !g_cg.dead[a]){ g_ahp[a]=1; if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[a]=(uint16_t)(((uint32_t)g_aexp[a]*(uint32_t)k)/100u); } }   /* a healer's RESURRECT: exp x karma/100 */
         if(g_cg.healed_full[a] && g_ahp[a]<g_amaxhp[a]){ g_ahp[a]=g_amaxhp[a]; g_cg.healed_full[a]=0; } }
     sync_party_hp();
@@ -6053,21 +6057,28 @@ static int equip_take_off(int a, int slot)
     return 1;
 }
 
-/* inventory list into the panel scroll */
+/* inventory list in the panel above the scroll box: INV_ROWS rows, scrolled so the armed row stays in
+ * view (^ / v mark rows above / below); a line is cut to the panel width (the prompt names the item) */
+#define INV_ROWS 8
 static void draw_inventory(uint8_t col)
 {
     ui_text(PANX+(PANW-ui_textw("Inventory"))/2, 16, "Inventory", col);
-    if(g_ow.ninv==0) ui_text(PANX+8, 32, "(nothing)", col);
-    else for(int i=0;i<g_ow.ninv && i<15;i++){
+    int armed=(g_pending_verb=='D' || g_pending_verb=='E' || (g_pending_verb=='U' && g_use_pack));
+    int first=0;
+    if(armed && g_ow.ninv>INV_ROWS){ first=g_inv_sel-INV_ROWS/2; if(first>g_ow.ninv-INV_ROWS) first=g_ow.ninv-INV_ROWS; if(first<0) first=0; }
+    if(g_ow.ninv==0) ui_text(PANX+8, 28, "(nothing)", col);
+    else for(int i=first;i<g_ow.ninv && i<first+INV_ROWS;i++){
         char line[24]; int t=0; char nm[20]; obj_name(g_ow.inv[i].tile,nm,sizeof nm);
-        int sel = ((g_pending_verb=='D' || g_pending_verb=='E' || (g_pending_verb=='U' && g_use_pack)) && i==g_inv_sel);   /* the armed row */
+        int sel = armed && i==g_inv_sel;                    /* the armed row */
         if(sel){ line[t++]='>'; line[t++]=' '; }            /* selection marker */
         if(g_ow.inv[i].qty>1){ int q=g_ow.inv[i].qty; if(q>99)q=99;
             line[t++]=(char)('0'+q/10); line[t++]=(char)('0'+q%10); line[t++]=' '; }
-        for(int k=0;nm[k]&&t<23;k++) line[t++]=nm[k];
+        for(int k=0;nm[k]&&t<14;k++) line[t++]=nm[k];      /* 14 chars x 8 px leave room for the ^ / v column */
         line[t]=0;
-        ui_text(PANX+6, 32+i*10, line, sel?14:col);         /* 14 = yellow highlight on the armed row */
+        ui_text(PANX+6, 28+(i-first)*10, line, sel?14:col);  /* 14 = yellow highlight on the armed row */
     }
+    if(first>0) ui_text(PANX+PANW-14, 28, "^", col);
+    if(first+INV_ROWS<g_ow.ninv) ui_text(PANX+PANW-14, 28+(INV_ROWS-1)*10, "v", col);
     /* GOLD — the shared conversation-VM pool (merchants / trainers add + subtract it) */
     { char g[24]; int t=0; const char*lb="Gold: "; for(;*lb;lb++) g[t++]=*lb;
       int v=g_cg.gold; char tmp[8]; int nt=0; if(v<0)v=0;
@@ -7365,7 +7376,7 @@ static void hit_msg(int id){ if(g_ahp[id]==0) return; int mx=g_amaxhp[id]?g_amax
 static void spell_damage(int caster,int id,int dmg){
     if(dmg<=0 || id<1 || id>=U6_MAX_ACTORS || g_atile[id]==0xffff) return;
     int party=is_party_member(id);
-    if(id==1){ int hp=g_ahp[1]?g_ahp[1]:1; g_ahp[1]=(uint8_t)(dmg>=hp?1:hp-dmg); sync_party_hp(); hit_msg(1); return; }
+    if(id==1){ int hp=g_ahp[1]; if(hp==0) return; g_ahp[1]=(uint8_t)(dmg>=hp?0:hp-dmg); sync_party_hp(); hit_msg(1); return; }   /* 0 = the Avatar dies at the turn's end (§3d) */
     if(party && g_ahp[id]==0) return;                             /* already dead */
     int hp=g_ahp[id]?g_ahp[id]:30;
     if(dmg>=hp){ g_ahp[id]=0; char nm[24]; actor_name(id,nm,sizeof nm); int n=msg_tail();
@@ -8654,6 +8665,47 @@ static int travel_to(world_t*w,int x,int y,int z)
     g_cur_level=z; build_blocked(); teleport_party(w,x,y); g_show_inv=0; (void)g_tmpdm_invalidate();
     moongates_update(w); return 1;
 }
+/* ---- death of a party member and of the Avatar (combat.md §3d) --------------------------- */
+/* a companion at 0 HP: its remains (a temporary body, quality = the actor) where it stood, off the map,
+ * still in the party with 0 HP and its readied equipment */
+static void companion_die(const world_t*w,int id){
+    int on=actor_objn(id), fr=0, body=monster_remains(on,&fr);
+    if(fr==255) fr=0;
+    if(body==338) fr=(int)rng_range(&g_crng,3);
+    if(body && !veh_aboard()) (void)temp_obj_new(body,fr,g_actx[id],g_acty[id],id);
+    g_atile[id]=0xffff; g_ahp[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=0; g_charm[id]=g_ally[id]=0; g_amoved[id]=0;
+    (void)w; sync_party_hp(); build_blocked(); }
+/* a dead companion stands up beside the Avatar (its body, if one lies on this level, is removed) */
+static void companion_revive(world_t*w,int id){
+    for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+        if(o->alive && o->quality==(uint8_t)id && (o->obj_n==339||o->obj_n==340||o->obj_n==341||o->obj_n==338)){ obj_destroy(j); break; } }
+    resurrect_actor(w,id,(int)w->px,(int)w->py); }
+/* the Avatar at 0 HP (combat.md §3d): Lord British's resurrection in the throne room */
+static void avatar_death(world_t*w){
+    if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
+    else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
+    for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl] && g_aready[1][sl]!=76) (void)equip_take_off(1,sl);   /* readied items back to the pack */
+    (void)travel_to(w,307,352,0);                                 /* the throne room, on the surface */
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        if(a>1 && g_ahp[a]==0){ if(g_armageddon) continue; companion_revive(w,a); }
+        g_ahp[a]=g_amaxhp[a]?g_amaxhp[a]:30; g_asleep[a]=g_paralyze[a]=g_poison[a]=0; g_charm[a]=g_ally[a]=0; }
+    teleport_party(w,307,352);                                    /* the revived stand beside the Avatar */
+    while(!((g_hour>=8&&g_hour<12)||(g_hour>=14&&g_hour<18))){ w->clock+=60; g_hour=clock_hour(w); g_minutes=clock_minutes(w); }
+    for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y;                    /* time passed: townsfolk are where the hour puts them */
+        if(is_party_member(i) || g_atile[i]==0xffff || (int)g_actz[i]!=g_cur_level) continue;
+        g_alert[i]=0; if(!g_temp[i] && i<160) g_hostile[i]=0;     /* the hunters forget the party */
+        if(!actor_hostile(i) && npc_dest(i,&x,&y) && npc_at(w,x,y)<0){ g_actx[i]=(uint16_t)x; g_acty[i]=(uint16_t)y; } }
+    if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[1]=(uint16_t)(((uint32_t)g_aexp[1]*(uint32_t)k)/100u); }
+    g_combat_mode=0; g_pending_verb=0; g_show_inv=0; if(g_talking) end_talk();
+    sync_party_hp(); build_blocked(); moongates_update(w);
+    msgcat(0,"An unending darkness engulfs thee...  A voice in the darkness intones, \"KAL LOR!\""); }
+/* once a turn: companions at 0 HP die, the Avatar at 0 HP is resurrected; 1 = the view changed */
+static int party_deaths(world_t*w){
+    int changed=0;
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor;
+        if(a>1 && a<U6_MAX_ACTORS && g_ahp[a]==0 && g_atile[a]!=0xffff){ companion_die(w,a); changed=1; } }
+    if(g_ahp[1]==0 && !g_game_over){ avatar_death(w); changed=1; }
+    return changed; }
 /* ---- runes, potions, the gem (docs/rules/usecode_use.md) --------------------------------- */
 static const char *const MANTRA[8]={"AHM","MU","RA","BEH","CAH","SUMM","OM","LUM"};
 /* the typed mantra: right word beside the shrine's field (51, quality = rune) removes it for good
@@ -11340,6 +11392,24 @@ int main(int argc, char **argv)
             #undef FX_SLOT
         }
     }
+    /* headless PARTY-DEATH checks (combat.md §3d): DEATH.REQ byte = mode ('1' = a companion, then the Avatar, in a dungeon) */
+    {   int32_t dl_=0; const uint8_t*dq=(const uint8_t*)plat_load_file("DEATH.REQ",1,&dl_);
+        if(dq && dl_>0 && dq[0]=='1'){
+            #define DE_READY() do { int n_=0; for(int sl_=0;sl_<EQ_NSLOTS;sl_++) if(g_aready[1][sl_]) n_++; dbg_num("DE avatar readied=", n_); } while(0)
+            #define DE_BODIES(q_) ({ int n_=0; for(int j_=0;j_<g_ow.nobjs;j_++) if(g_wobj[j_].alive && g_wobj[j_].quality==(q_) && g_wobj[j_].obj_n>=338 && g_wobj[j_].obj_n<=341) n_++; n_; })
+            dbg_num("DE to level 1=", travel_to(&w,41,108,1)); dbg_num("DE level=", w.level);
+            int pre=0; for(int it=0;it<g_ow.ninv;it++) if(g_ow.inv[it].obj_n==33){ pre=1; break; }
+            DE_READY(); g_aexp[1]=1000; g_cg.karma=50; g_poison[1]=9; g_poison[3]=9; g_combat_mode=1; w.clock+=(uint32_t)((20*60-clock_minutes(&w)+24*60)%(24*60)); g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+            dbg_num("DE hour before=", g_hour); (void)pre;
+            g_ahp[2]=0; (void)party_deaths(&w);
+            dbg_num("DE dupre off the map=", g_atile[2]==0xffff); dbg_num("DE dupre body=", DE_BODIES(2)); dbg_num("DE dupre roster hp=", g_party[1].hp);
+            dbg_num("DE still in party=", is_party_member(2)); dbg_num("DE avatar unchanged L=", w.level);
+            g_ahp[1]=0; (void)party_deaths(&w); Cconws("DE msg: "); Cconws(g_msg); Cconws("\r\n");
+            dbg_num("DE L=", w.level); dbg_num("DE x=", w.px); dbg_num("DE y=", w.py); dbg_num("DE hour=", g_hour);
+            for(int p_=0;p_<g_nparty;p_++){ int a_=g_party[p_].actor; dbg_num("DE member=", a_); dbg_num("DE  hp=", g_ahp[a_]); dbg_num("DE  max=", g_amaxhp[a_]); dbg_num("DE  on map=", g_atile[a_]!=0xffff); dbg_num("DE  poison=", g_poison[a_]); }
+            dbg_num("DE avatar exp (1000 at karma 50)=", g_aexp[1]); dbg_num("DE combat mode=", g_combat_mode); DE_READY();
+            dbg_num("DE lord british x=", g_actx[5]); dbg_num("DE lord british y=", g_acty[5]);
+        } }
     /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
     {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)plat_load_file("REST.REQ",1,&rl2_);
         if(rr && rl2_>0){ int mode=rr[0], M=U6_SURFACE_TILES-1; rng_seed(&g_crng,0x7e57u);
@@ -13421,6 +13491,7 @@ int main(int argc, char **argv)
             int k2, guard=0; while ((k2=plat_input_raw()) && ++guard<64){ key=k2; g_bot_keys++; }
         }
         int redraw=0;
+        if (party_deaths(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; key=0; }   /* combat.md §3d: a death ends the turn; the key pressed meanwhile is dropped */
         if (key && g_bot){ int sc=(key>>8)&0xFF;                 /* bot dumps (F2..F5): no game effect */
             if(sc==0x3C){ bot_dump_actors(&w); key=0; } else if(sc==0x3D){ bot_dump_objects(&w); key=0; }
             else if(sc==0x3E){ bot_dump_pass(&w); key=0; } else if(sc==0x3F) key=0; }
@@ -13465,12 +13536,18 @@ int main(int argc, char **argv)
                 if (g_show_status && a>='1' && a<='8' && status_unready_digit(a-'0')) {
                     redraw=1; a=0; in=IN_NONE; dx=dy=0;            /* digit unreadied an item: stay in the view */
                 } else if (g_show_status) { g_show_status=0; redraw=1; }  /* any other key returns (then still acts) */
+                if (g_talking && !g_await_input) { end_talk(); redraw=1; }   /* a finished conversation stays up until the next key, which then still acts */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
                     if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the T)alk crosshair walks the map window */
                         if(nx>=-VT/2 && nx<=VT/2 && ny>=-VT/2 && ny<=VT/2){ g_tcur_dx=nx; g_tcur_dy=ny; }
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='O' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the orb's Where: crosshair walks its 6x5 box (moongates.md §3) */
+                        if(nx>=-3 && nx<=2 && ny>=-2 && ny<=2){ g_tcur_dx=nx; g_tcur_dy=ny; }
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='O' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: the red gate opens there */
+                        (void)resolve_target(&w,'O',cx,cy); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: talk to whoever stands there */
                         compose_map(&w); draw_border_tiles(); (void)resolve_target(&w,'T',cx,cy); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='A' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: the attack lands there */
@@ -13498,7 +13575,7 @@ int main(int argc, char **argv)
                         redraw=1; }
                     else if (g_pending_verb=='U' && g_use_pack && a==0x0d && !(dx||dy)){
                         { int pr=0; if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) pr=use_pack_item(&w, g_ow.inv[g_inv_sel].obj_n);
-                          g_pending_verb=(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; }          /* 2 = the orb asks "Where:", 3 = a potion asks "On whom:", 4 = the staff's targeted charge */
+                          g_pending_verb=(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_tcur_dx=g_tcur_dy=0; }   /* 2 = the orb asks "Where:" (its crosshair starts on the Avatar), 3 = a potion asks "On whom:", 4 = the staff's targeted charge */
                         g_show_inv=0; g_use_pack=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }

@@ -13,7 +13,8 @@ REF = os.environ.get('U6REF', os.path.join(ROOT, 'refdata', 'dos', 'u6'))
 PARTY = (1, 2, 3, 4)
 
 def seg_castle(p, kw):
-    """Lord British (the Compendium questions, every topic), the party, everyone in the castle"""
+    """the opening gargoyles; Lord British (the Compendium questions, every topic), the party, everyone in the castle"""
+    if p.g.state['foes'] and p.foes(): p.fight()
     name, words = kw[5]
     p.talk_to(5, [w for w in words if w not in ('join', 'leav', 'bye')], name)
     for m in PARTY[1:]:
@@ -30,7 +31,116 @@ def seg_bridge(p, kw):
 def seg_britain(p, kw):
     p.sweep((270, 388, 360, 470), kw, done=set(p.transcripts), party=PARTY)
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain)
+CAVE = (185, 436)                                     # the nearest cave west of Britain that can be walked to (obj 326)
+
+def explore(p, n=6, seed=1):
+    """walk to n far-apart reachable tiles of this level, fighting on the way"""
+    import random; rnd = random.Random(seed)
+    p.nav.refresh(); x, y = p.nav.pos(); S = p.nav.span
+    seen, q = {(x, y)}, [(x, y)]
+    for cx, cy in q:                                   # the tiles reachable from here (doors closed count)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            t = ((cx + dx) % S, (cy + dy) % S)
+            if t not in seen and p.nav.cost(*t) is not None: seen.add(t); q.append(t)
+    p.log('  L%d: %d tiles reachable from (%d,%d)' % (p.g.state['L'], len(seen), x, y))
+    far = [t for t in seen if abs(t[0] - x) + abs(t[1] - y) > 12] or list(seen)
+    for t in rnd.sample(far, min(n, len(far))):
+        if p.g.state['L'] != p.nav.level: break
+        try: p.walk(*t, max_steps=400); p.log('  explore -> %s: at (%d,%d)' % (t, p.g.state['X'], p.g.state['Y']))
+        except Exception as e: p.log('  explore -> %s: %s' % (t, e))
+    return seen
+
+def use_way(p, o):
+    """step onto a cave / hole, or U)se a ladder from beside it; True if the level changed"""
+    lv = p.g.state['L']
+    try:
+        if o['obj'] in (326, 308): p.walk(o['x'], o['y'])
+        if p.g.state['L'] == lv and o['obj'] != 326:
+            p.walk(o['x'], o['y'], adj=True); x, y = p.nav.pos()
+            p.key('u'); p.key(VDIR[(o['x'] - x, o['y'] - y)], 'use %d' % o['obj'])
+    except Exception as e: p.log('  way %d at (%d,%d): %s' % (o['obj'], o['x'], o['y'], e))
+    return p.g.state['L'] != lv
+
+def ways(p, up, reach=None):
+    """the ladders / holes / caves within 24 tiles leading up (or down), nearest first"""
+    objs, _ = p.g.objects(); x, y = p.nav.pos()
+    if up: ws = [o for o in objs if (o['obj'] in (305, 106) and o['fr'] != 0) or o['obj'] == 326]
+    else: ws = [o for o in objs if (o['obj'] in (305, 106) and o['fr'] == 0) or o['obj'] == 308]
+    if reach is not None:
+        ws = [o for o in ws if any(((o['x'] + dx) % p.nav.span, (o['y'] + dy) % p.nav.span) in reach
+                                   for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)))]
+    return sorted(ws, key=lambda o: abs(o['x'] - x) + abs(o['y'] - y))
+
+def seg_cave(p, kw):
+    """walk from Britain to the cave, step in (level 1), explore and fight, take a way down to level 2
+    and explore it, then climb back to the surface"""
+    p.nav.refresh(); p.walk(*CAVE)
+    st = p.g.state
+    if st['L'] != 1: p.issue('cave', 'stepping onto the cave at %s left us on L%d (%d,%d)' % (CAVE, st['L'], st['X'], st['Y'])); return
+    p.log('  entered L1 at (%d,%d)' % (st['X'], st['Y'])); arrived = {1: (st['X'], st['Y'])}
+    st = p.use_pack(90)                                 # light a torch: the dungeon is dark
+    if st is None or 'lit' not in st['msg'].lower(): p.issue('cave', 'lighting a torch: %r' % (st and st['msg']))
+    reach = explore(p)
+    for o in ways(p, up=False, reach=reach):
+        if use_way(p, o):
+            st = p.g.state; p.log('  L%d at (%d,%d) by %d at (%d,%d)' % (st['L'], st['X'], st['Y'], o['obj'], o['x'], o['y']))
+            arrived[st['L']] = (st['X'], st['Y'])
+            if st['L'] != 2: p.issue('cave', 'a way down from L1 led to L%d' % st['L'])
+            explore(p, seed=2); break
+    for _ in range(4):                                  # climb: each level's nearest way up
+        if p.g.state['L'] == 0: break
+        p.nav.refresh(); lv = p.g.state['L']
+        if lv in arrived:                               # back to where we came in: the way up is there
+            try: p.walk(*arrived[lv], near=2)
+            except Exception as e: p.log('  back to the L%d arrival %s: %s' % (lv, arrived[lv], e))
+        for o in ways(p, up=True):
+            if use_way(p, o):
+                if p.g.state['L'] != lv - 1: p.issue('cave', 'a way up from L%d led to L%d' % (lv, p.g.state['L']))
+                break
+        else: break
+    st = p.g.state
+    if st['L'] != 0: p.issue('cave', 'could not get back to the surface from L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
+    else: p.log('  back on the surface at (%d,%d)' % (st['X'], st['Y']))
+
+ORB = {3: (435, 395), 8: (307, 352), 19: (923, 876)}     # moongates.md §3: position -> destination (surface)
+
+def orb_trip(p, pos, shot=False):
+    """U)se the orb, walk its crosshair to the box tile of position pos, Enter, step into the red gate;
+    True if the party arrived at that position's destination"""
+    dx, dy = pos % 5 - 3, pos // 5 - 2
+    x, y = p.nav.pos(); p.nav.refresh()
+    if p.nav.cost((x + dx) % p.nav.span, (y + dy) % p.nav.span) is None:     # the gate's tile must be open:
+        for cx, cy in [(x + a, y + b) for a in range(-6, 7) for b in range(-6, 7)]:   # find a spot where it is
+            if p.nav.cost(cx % p.nav.span, cy % p.nav.span) is not None and p.nav.cost((cx + dx) % p.nav.span, (cy + dy) % p.nav.span) is not None:
+                try: p.walk(cx, cy); break
+                except Exception: continue
+        x, y = p.nav.pos()
+    st = p.use_pack(87)
+    if st is None or st['verb'] != 'O': p.issue('orb', 'U)se the orb: verb=%r msg=%r' % (st and st['verb'], st and st['msg'])); return False
+    for _ in range(abs(dx)): p.key('right' if dx > 0 else 'left')
+    for _ in range(abs(dy)): p.key('down' if dy > 0 else 'up')
+    if shot: p.g.shot('orb_crosshair.png')
+    st = p.key('ret', 'orb gate %d' % pos)
+    if 'gate' not in st['msg'].lower(): p.issue('orb', 'position %d (%+d,%+d): %r' % (pos, dx, dy, st['msg'])); return False
+    tx, ty = ORB[pos]
+    for _ in range(3):                                  # walk into the gate (the party follows over a few turns)
+        try: p.nav.goto(x + dx, y + dy, on_step=lambda s: (s['X'], s['Y']) == (tx, ty))
+        except Exception as e: p.log('  into the gate: %s' % e)
+        for _ in range(8):
+            if (p.g.state['X'], p.g.state['Y']) == (tx, ty) or p.g.state['busy'] == 0: break
+            p.key('space')
+        if (p.g.state['X'], p.g.state['Y']) == (tx, ty): break
+    st = p.g.state
+    if (st['L'], st['X'], st['Y']) != (0, tx, ty):
+        p.issue('orb', 'position %d: arrived at L%d (%d,%d), expected (%d,%d)' % (pos, st['L'], st['X'], st['Y'], tx, ty)); return False
+    p.log('  orb position %d -> (%d,%d)' % (pos, tx, ty)); return True
+
+def seg_orb(p, kw):
+    """the Orb of the Moons: to position 3, then 19, then home to the throne room (8)"""
+    for pos in (3, 19, 8):
+        if not orb_trip(p, pos, shot=(pos == 3)): break
+
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, cave=seg_cave, orb=seg_orb)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

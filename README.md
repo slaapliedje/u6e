@@ -103,8 +103,6 @@ cancels. The mouse works on the command bar, the party roster and the map.
 
 ## Known issues
 
-- Some conversations misbehave at the end of a talk: Chuckles keeps asking his riddles after
-  "bye"; Wilbur gives no reply to "y".
 - The Savage Empire and Martian Dreams boot and can be walked, but are not playable yet.
 - Only the GOG/DOS release's `U.EXE` has been tested for the intro data. With another version,
   the TV and the gypsy's pour animation are left out rather than drawn wrong (`make world` says

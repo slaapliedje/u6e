@@ -478,8 +478,8 @@ loses the roll; a slain foe earns the caster its experience ("Killed <name>!"); 
 its state by hp×4/max — 0 "critical!", 1 "heavily wounded.", 2 "lightly wounded.", 3 "barely
 wounded." — and a struck townsperson turns hostile (yells for help). Party members in an area ARE
 hit (the reference's explosion, winds, hail and chain bolt spare nobody), but the CASTER is never
-struck by its own spell and the Avatar is never reduced below 1 HP (u6e has no Avatar-death
-sequence — deviation).
+struck by its own spell. A party member reduced to 0 HP dies as combat.md §3d says (until
+2026-10-31 the Avatar was never reduced below 1 HP: there was no Avatar-death sequence).
 
 | spell (circle) | effect |
 |---|---|

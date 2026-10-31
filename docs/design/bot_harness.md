@@ -91,8 +91,38 @@ Britain) takes about 110 s of wall time for ~3,600 keys.
 | A y/n prompt accepted a typed word, which ended the conversation; the reference takes one listed key | usecode_vm.md §6c |
 | A backtick before a substitution was printed literally ("\`Jim") | usecode_vm.md §6d |
 
+Two reports were the bot's own mistakes, not the game's: Chuckles's goose riddle repeats until it
+is answered "n" (the bot always said "y"; it now switches keys when a question repeats), and
+Wilbur's "Which of you?" ends on 0 with no reply (the script jumps back to the keyword prompt).
+The castle, bridge and Britain segments now run with no issues (3,632 keys, 111 s).
+
+## 6b. Segments added 2026-10-31: combat, a cave, the orb
+
+- **Combat** (`Player.fight`): combat mode on, A)ttack the nearest reachable foe through the
+  crosshair when adjacent, else step toward it; until no reachable foe is within 8 tiles. A foe
+  behind rock or water is not a fight (`foes()` keeps only foes with a walking route). `walk()`
+  stops to fight whenever a new foe appears. The castle segment fights the opening gargoyles first.
+- **cave**: walk from Britain to the cave at (185,436) (the one at (234,409) is walled in by
+  mountains on the Britain side), light a torch from the pack, explore level 1, take the nearest
+  way down to level 2, explore it, then climb back by the remembered arrival points.
+- **orb**: U)se the Orb of the Moons, walk its crosshair to positions 3, 19 and 8, step into each
+  red gate and check the destination against moongates.md §3.
+- A walk ends on a level change or a jump of more than 2 tiles (a moongate, a resurrection).
+
+Found and fixed (game):
+
+| finding | where |
+|---|---|
+| No party death: melee and foe spells took the Avatar and companions to 0 HP and play went on | combat.md §3d |
+| A finished conversation's portrait stayed up until a walking step; U)se, the pack and messages after a talk were hidden behind it | usecode_vm.md |
+| The pack list ran through the message box and showed only 15 rows: the torches (row 17) could be selected but not seen | gamedemo draw_inventory |
+| The orb's "Where:" took only the eight neighbours from the keyboard, so 18 of its 26 destinations needed the mouse | moongates.md §3 |
+
+Bot-side mistakes found on the way: answering "y" forever to Chuckles's riddle, reading a
+moongate jump as a failed step, chasing foes it could not reach, and resuming a surface walk on a
+dungeon level. A full run (castle, bridge, Britain, cave, orb) now takes about 200 s with no issues.
+
 ## 7. Next
 
-Segments beyond Britain: the shrines with their runes and mantras, dungeons (ladders, darkness,
-combat), ships and moongates, the gargoyle lands and the ending. Combat handling (A)ttack with
-the crosshair while `foes` > 0), shopping with gold, resting, and spells come with them.
+Segments still to write: the shrines with their runes and mantras, ships, the gargoyle lands and
+the ending; shopping with gold, resting, spells, and keeping the party alive (healing, fleeing).

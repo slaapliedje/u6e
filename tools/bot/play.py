@@ -57,6 +57,8 @@ class Player:
         for pat in ('not yet implemented', 'not implemented', 'vm error', 'todo'):
             if pat in text.lower(): self.issue('text', '%s: %r' % (what, text[:200]))
         if st.get('over'): self.issue('game-over', what)
+        if 'unending darkness' in st.get('msg', '').lower():   # the Avatar died: Lord British's resurrection (combat.md §3d)
+            self.issue('death', 'the Avatar died (%s); now L%d (%d,%d)' % (what, st['L'], st['X'], st['Y']))
 
     def key(self, k, what=''):
         st = self.g.key(k); self.check(what or str(k)); return st
@@ -138,9 +140,13 @@ class Player:
             if '> ' + w not in reply: self.issue('talk', '%d %s: no reply to %r' % (aid, name, w), shot=False)
             elif not reply.split('> ' + w, 1)[1].strip(): self.issue('talk', '%d %s: empty reply to %r' % (aid, name, w), shot=False)
             out.append((w, reply))
-        for _ in range(4):
+        yn, prev = 'y', None                                  # a y/n after bye: 'y', the other key if it asks again
+        for _ in range(6):
             if not self.g.state['ask']: break
-            st = self.say('y' if self.g.state.get('askc') else 'bye'); out.append(('bye/y', st['conv']))
+            tail = self.g.state['conv'].rstrip()[-60:]
+            if self.g.state.get('askc') and tail == prev: yn = 'n' if yn == 'y' else 'y'
+            prev = tail if self.g.state.get('askc') else None
+            st = self.say(yn if self.g.state.get('askc') else 'bye'); out.append(('bye/' + yn, st['conv']))
         if self.g.state['ask']:
             self.issue('talk', '%d %s: still asking after bye' % (aid, name)); self.key('esc')
         self.idle()
@@ -163,3 +169,82 @@ class Player:
                 out = self.talk_to(a['id'], [w for w in words if w not in SKIP_WORDS], name)
                 if out is not None: done.add(a['id'])
         return done
+
+    # ---- combat ------------------------------------------------------------------------------
+    def foes(self):
+        """hostile actors alive within 8 tiles that the party can walk up to, nearest first (a foe
+        behind rock, or across water, is not a fight)"""
+        x, y = self.nav.pos(); self.nav.ensure()
+        fs = [a for a in self.g.actors() if a['id'] != 1 and a.get('hostile') and a['hp'] > 0
+              and max(abs(a['x'] - x), abs(a['y'] - y)) <= 8]
+        fs = [a for a in fs if max(abs(a['x'] - x), abs(a['y'] - y)) <= 1 or self.approach_path(a) is not None]
+        return sorted(fs, key=lambda a: max(abs(a['x'] - x), abs(a['y'] - y)))
+
+    def approach_path(self, f):
+        x, y = self.nav.pos()
+        goal = {(f['x'] + ddx, f['y'] + ddy) for ddx in (-1, 0, 1) for ddy in (-1, 0, 1) if ddx or ddy}
+        goal = {t for t in goal if self.nav.cost(t[0], t[1]) is not None or t == (x, y)}
+        if (x, y) in goal: return []
+        return self.nav.route(x, y, goal, limit=20000) if goal else None
+
+    def fight(self, max_turns=150):
+        """combat mode on; A)ttack the nearest foe when adjacent, else step toward it; until no foes are
+        near. Issues: a fight where no foe loses hp for 40 turns, a party member dying, game over."""
+        if not self.g.state['combat']: self.key('b', 'combat on')
+        stale = turns = 0; seen = {}; msgs = []; hp0 = {p['id']: p['hp'] for p in self.g.state['party']}
+        self.log('  fight at (%d,%d) L%d: %s' % (self.g.state['X'], self.g.state['Y'], self.g.state['L'],
+                 ', '.join('#%d tile %d hp %d/%d' % (a['id'], a['tile'], a['hp'], a['max']) for a in self.foes())))
+        while turns < max_turns:
+            st = self.g.state
+            if st['over']: self.issue('combat', 'game over in a fight'); return False
+            fs = self.foes()
+            if not fs: break
+            total = sum(a['hp'] for a in fs)                    # hp of the foes in reach
+            prev = sum(seen.get(a['id'], a['hp']) for a in fs)
+            stale = stale + 1 if total >= prev else 0
+            for a in fs: seen[a['id']] = a['hp']
+            if stale >= 40: self.issue('combat', 'no foe hurt in 40 turns (%s)' % ', '.join('%d@%d,%d hp%d' % (a['id'], a['x'], a['y'], a['hp']) for a in fs[:4])); break
+            f = fs[0]; x, y = self.nav.pos(); dx, dy = f['x'] - x, f['y'] - y
+            if max(abs(dx), abs(dy)) <= 1:
+                self.key('a', 'attack')
+                if self.g.state['verb'] != 'A': self.issue('combat', 'A did not arm Attack- (verb=%r)' % self.g.state['verb']); break
+                if dx: self.key('right' if dx > 0 else 'left')
+                if dy: self.key('down' if dy > 0 else 'up')
+                st = self.key('ret', 'attack %d' % f['id'])
+                if 'not' in st['msg'].lower() and 'implemented' in st['msg'].lower(): self.issue('combat', 'attack: %r' % st['msg'])
+            else:
+                path = self.approach_path(f)
+                if path: self.key(VDIR[(path[0][0] - x, path[0][1] - y)], 'close in')
+                else: self.key('space', 'pass')
+            turns += 1
+            m = self.g.state['msg'].strip()
+            if m and (not msgs or msgs[-1] != m): msgs.append(m)
+        if msgs: self.log('  combat log: ' + ' | '.join(msgs)[:1500])
+        for p in self.g.state['party']:
+            if p['hp'] <= 0 and hp0.get(p['id'], 0) > 0: self.issue('combat', 'party member %d died' % p['id'], shot=False)
+        if self.g.state['combat']: self.key('b', 'combat off')
+        self.log('  fight over after %d turns: party %s' % (turns, ' '.join('%d:%d/%d' % (p['id'], p['hp'], p['max']) for p in self.g.state['party'])))
+        return True
+
+    def walk(self, tx, ty, **kw):
+        """nav.goto, stopping to fight whenever foes come near; returns the final state"""
+        ignore = 0; lv = self.g.state['L']                     # foes in view that cannot be reached
+        for _ in range(30):
+            st = self.nav.goto(tx, ty, on_step=lambda s: s['foes'] > ignore, **kw)
+            if self.g.state['foes'] > ignore:
+                if self.foes(): self.fight(); ignore = 0
+                else: ignore = self.g.state['foes']
+                if self.g.state['L'] != lv: return self.g.state     # the walk took us to another level
+                continue
+            if self.g.state['foes'] < ignore: ignore = self.g.state['foes']
+            return st
+        return self.g.state
+
+    def use_pack(self, obj_n):
+        """U)se a carried item: U, U (the pack, first row), U per further row, Enter; the state after"""
+        _, inv = self.g.objects()
+        rows = [r['row'] for r in inv if r['obj'] == obj_n]
+        if not rows: return None
+        self.key('u'); self.key('u')
+        for _ in range(rows[0]): self.key('u')
+        return self.key('ret', 'use pack obj %d' % obj_n)

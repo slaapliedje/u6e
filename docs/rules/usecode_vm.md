@@ -227,6 +227,10 @@ deterministic RNG seam so golden-transcript tests are reproducible.
   from its script; it used to be ignored, printing empty names in "Who will meditate?" lists); the
   system vars **PARTYLIVE (0x17) and PARTYALL (0x18) are the party size MINUS the leader**, as the
   reference sets them (we counted everyone, so party lists ran one entry long).
+- **After the conversation ends** the portrait and the last reply stay in the panel until the next
+  key; that key closes them and then still acts (U)se, a command letter, a pass...). Until
+  2026-10-31 only a walking step closed them, so the pack, the "Where:" prompt and messages after
+  a talk stayed hidden behind the portrait (found by the bot harness).
 - **Talking to an object**: T)alk at a tile with no actor but a **shrine (393)** or one of the three
   statues (Mondain 397, Minax 398, Exodus 399) starts the conversation whose number is the object's
   **quality** (the shrines 192-199, the statues 189-191; the Codex altar's 200 exists too), exactly the
