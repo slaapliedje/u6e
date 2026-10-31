@@ -94,6 +94,8 @@ typedef struct {
     uint32_t    decl_v; uint8_t decl_t;     /* declared input/string var (DECL) */
     char        svar[CVM_NSVAR][40];        /* string vars (DATA string, input $Z, ...) */
     int         input_mode;                 /* 0=none 1=keyword(ASK) 2=var(INPUT*) */
+    char        askc[16];                   /* at an ASKC pause: the characters it accepts ("yn"), else "" */
+    int         input_num;                  /* at an INPUTNUM pause: digits only */
     int         done;
 } cvm_t;
 

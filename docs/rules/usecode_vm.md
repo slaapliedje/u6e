@@ -220,6 +220,9 @@ deterministic RNG seam so golden-transcript tests are reproducible.
   reference), stats and exp are copied back, and the status line's "Lv" follows.
 - Found and fixed while driving the shrine script (2026-10-28): **0xf8 ASKC** now PAUSES for one of its
   listed characters like ASK (it used to be skipped, so a "y/n" prompt fell straight through);
+  as in the reference it is a **single keypress**: only a listed character is taken, at once, without
+  Enter, and other keys are ignored; an **INPUTNUM** prompt takes digits only (2026-10-30: found by
+  the bot harness — a typed word at Lazeena's "Wouldst thou like to hear the news?" ended her talk);
   **0xd8 SETNAME** sets `$Y` to the named actor's name (a party member's from the roster, the speaker's
   from its script; it used to be ignored, printing empty names in "Who will meditate?" lists); the
   system vars **PARTYLIVE (0x17) and PARTYALL (0x18) are the party size MINUS the leader**, as the
@@ -248,6 +251,15 @@ bytecode's fall-through, not a VM fault. The host runner replays the same script
 (scratchpad vmrun). '1': a gargoyle whose live strength and HP were cut to 1 still pays 26; a deer 0; a
 giant rat 9; a daemon 55; the Avatar's level unchanged. '3': Lord British slain with exp 400, resurrected
 at karma 50 → exp 200.
+
+## 6d. The backtick in script text (2026-10-30)
+
+A backtick (\`) appears 20 times in the U6 scripts, always right before a `$` substitution
+(`$Z`, `$G`, `$0`), several at the start of a sentence (`"\`$G, ...`). We print the substituted
+word with its first letter capitalised and drop the backtick (Fyodor: "Pleased to meet thee, Jim."
+for a typed "jim"; a sentence opening with the title reads "Milord, ..."). Confidence: **probable**
+— inferred from where it occurs; not yet compared with the original's screen. Found by the bot
+harness (docs/design/bot_harness.md): the backtick was printed literally.
 
 ## 7. Status
 VERIFIED — the full conversation VM runs the real bytecode (greeting, expression

@@ -31,7 +31,7 @@ movement costs and drift, balloon inflate/board/land, the fan), docs/rules/vehic
 
 ## 2. Movement points: how a vehicle's speed works
 
-Each step costs movement points; the world advances one turn (NPCs act, the clock ticks)
+Each step costs movement points; the world advances one turn (NPCs act; the clock: movement_turns.md §3)
 per 5 points (a walking step costs 5: one turn, as today). A vehicle's step cost:
 
 | vehicle | cost of a step |

@@ -253,8 +253,11 @@ static bool check_keywords(const char*keys,const char*input){
 
 /* format + print a text run [s,s+n) honouring $P/$G/$N/#var; 0x0a -> space */
 static void print_text(cvm_t*vm,const uint8_t*s,int n){
+    int cap=-1;                                   /* '`': capitalise what comes next (usecode_vm.md §6d) */
     for(int i=0;i<n;){
         char c=(char)s[i];
+        if(cap>=0 && cap<vm->outlen){ char*f=&vm->out[cap]; if(*f>='a'&&*f<='z') *f=(char)(*f-32); cap=-1; }
+        if(c=='`'){ cap=vm->outlen; i++; continue; }
         if(c=='$'&&i+1<n){ char k=(char)s[i+1];
             if(k=='P') outs(vm,vm->player);
             else if(k=='G') outs(vm,vm->gtitle);
@@ -278,6 +281,7 @@ static void print_text(cvm_t*vm,const uint8_t*s,int n){
         if(c==0x0a){ outc(vm,' '); i++; continue; }
         outc(vm,c); i++;
     }
+    if(cap>=0 && cap<vm->outlen){ char*f=&vm->out[cap]; if(*f>='a'&&*f<='z') *f=(char)(*f-32); }
 }
 
 /* The conversation can carry a DATA BLOCK: a region of the script at byte
@@ -416,11 +420,14 @@ cvm_status cvm_run(cvm_t*vm){
             collect_input(vm);
             do_frame(vm,(uint8_t)vm->in[0].v);
             if(running(vm)){
-                if(vm->in[0].v==OP_ASK || vm->in[0].v==OP_ASKC){ vm->answer_mode=0; vm->input_mode=1; vm->out[vm->outlen]='\0'; return CVM_ASK; }   /* ASKC: one of the listed characters (§6c) */
+                if(vm->in[0].v==OP_ASK || vm->in[0].v==OP_ASKC){ vm->answer_mode=0; vm->input_mode=1; vm->out[vm->outlen]='\0';   /* ASKC: one of the listed characters (§6c) */
+                    int k=0; if(vm->in[0].v==OP_ASKC) while(vm->itext[k] && k<(int)sizeof vm->askc-1){ vm->askc[k]=vm->itext[k]; k++; }
+                    vm->askc[k]='\0'; vm->input_num=0; return CVM_ASK; }
                 do_ctrl(vm);
                 if(vm->done){ vm->out[vm->outlen]='\0'; return CVM_DONE; }
                 uint32_t op=vm->in[0].v;     /* INPUT*: pause for a value, stored into the decl'd var */
-                if(op==OP_INPUTSTR||op==OP_INPUT||op==OP_INPUTNUM){ vm->input_mode=2; vm->out[vm->outlen]='\0'; return CVM_ASK; }
+                if(op==OP_INPUTSTR||op==OP_INPUT||op==OP_INPUTNUM){ vm->input_mode=2; vm->askc[0]='\0'; vm->input_num=(op==OP_INPUTNUM);
+                    vm->out[vm->outlen]='\0'; return CVM_ASK; }
             }
         } else {
             vm->pc++;   /* stray byte */

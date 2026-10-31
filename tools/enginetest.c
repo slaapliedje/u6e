@@ -92,7 +92,7 @@ int main(int argc, char **argv)
                 moved = world_try_move(&w, dirs[i][0], dirs[i][1]);
         check("a passable step moves the player", moved && (w.px != ox || w.py != oy));
         check("turn counter advanced by 1",       w.turns == t0 + 1);
-        check("game clock advanced by step cost",  w.clock == c0 + 10);
+        check("game clock advanced by step cost",  w.clock == c0 + 1);   /* 5 points, min_pts unset (5): a minute */
     }
 
     /* 3) toroidal wrap: stepping off the west edge lands on the east edge */

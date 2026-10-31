@@ -3410,6 +3410,19 @@ static int obj_is_lightsight(const wobj_t*o){
  * floor tile is the key case) sits on it, so has_los blocks LOS through it. The two flags
  * differ: a table is impassable but see-over; an open door is passable + see-through. Rebuilt
  * when a door opens/closes (an opened door's tile is no longer a sight-blocker). (Stage 3) */
+/* forced passability (tileflag.md: tileflags3 bit2 "Breakthrough"): an object with that flag makes its
+ * tile walkable whatever the terrain — the open drawbridge's span over the moat, bridges, planks, docks,
+ * boats (42 tiles). A sorted list of tile indices behind a coarse 8x8-block filter (16 KB + 2 KB)
+ * instead of another 128 KB bitmap. */
+#define FORCE_MAX 4096
+static int32_t  g_force_idx[FORCE_MAX]; static int g_force_n;
+static uint8_t  g_force_blk[(1024/8)*(1024/8)/8];
+static bool force_pass_at(int32_t x, int32_t y)
+{   int32_t b=(y>>3)*(1024/8)+(x>>3); if(!(g_force_blk[b>>3]&(1u<<(b&7)))) return false;
+    int32_t idx=y*1024+x; int lo=0, hi=g_force_n-1;
+    while(lo<=hi){ int m=(lo+hi)>>1; if(g_force_idx[m]==idx) return true; if(g_force_idx[m]<idx) lo=m+1; else hi=m-1; }
+    return false; }
+
 static void build_blocked(void)
 {
     g_blocked_epoch++;                                 /* the map changed: walkers search their routes again */
@@ -3420,6 +3433,13 @@ static void build_blocked(void)
         if(g_tflags1[t]&0x02) g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7));   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
         if(blocks_sight(t))   g_sightblk[idx>>3]|=(uint8_t)(1u<<(idx&7));
     }
+    g_force_n=0; for(int i=0;i<(int)sizeof g_force_blk;i++) g_force_blk[i]=0;
+    for(int32_t i=0;g_tflags3 && i<g_ow.nobjs && g_force_n<FORCE_MAX;i++){ const wobj_t*o=&g_wobj[i];
+        if(!o->alive || o->tile>=2048 || !(g_tflags3[o->tile]&0x04)) continue;
+        int32_t b=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[b>>3]|=(uint8_t)(1u<<(b&7));
+        g_force_idx[g_force_n++]=(int32_t)o->y*1024+o->x; }
+    for(int gap=g_force_n/2;gap>0;gap/=2) for(int i=gap;i<g_force_n;i++){ int32_t v=g_force_idx[i]; int j=i;   /* shell sort */
+        while(j>=gap && g_force_idx[j-gap]>v){ g_force_idx[j]=g_force_idx[j-gap]; j-=gap; } g_force_idx[j]=v; }
     for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){    /* energy/force field blocks passage (§5a) */
         int32_t idx=(int32_t)g_fields[i].y*1024+g_fields[i].x;
         g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7)); }
@@ -4536,7 +4556,7 @@ static void compose_map(const world_t*w)
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     if(g_fx_on){ int32_t fvx=((int32_t)g_fx_x-left)&(U6_SURFACE_TILES-1), fvy=((int32_t)g_fx_y-top)&(U6_SURFACE_TILES-1);
         if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); }   /* a cannonball / burst over everything (cannons.md §1) */
-    if(g_pending_verb=='A'){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;                /* the A)ttack crosshair (combat.md §6b) */
+    if(g_pending_verb=='A'||g_pending_verb=='T'){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;   /* the A)ttack / T)alk crosshair (combat.md §6b) */
         if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); }
     if(g_gw_ghost_lvl>0){ int32_t gvx=((int32_t)g_gw_ghost_x-left)&(U6_SURFACE_TILES-1), gvy=((int32_t)g_gw_ghost_y-top)&(U6_SURFACE_TILES-1);   /* a member vanishing into a moongate */
         if(gvx<VT&&gvy<VT) draw_cell_dither(tmp,T,(int)gvx,(int)gvy,g_gw_ghost_tile,g_gw_ghost_lvl); }
@@ -4854,7 +4874,7 @@ static void draw_conversation(uint8_t col)
             const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-":"Attack-"):g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?((g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change"))?"Direction-":"Cast-(dir)?"):
-                           g_pending_verb=='T'?"Talk-(dir)?":g_pending_verb=='N'?"To-(dir)?":"Move-(dir)?";
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'?"To-(dir)?":"Move-(dir)?";
             ui_text(PANX+6, 150, p, col);
         }
     }
@@ -5123,7 +5143,7 @@ static void talk(int id)
             g_have_pc=1;
     }
     if(g_have_pc) conv_palette_enter(pidx);   /* ST: swap to this portrait's conversation palette */
-    g_talking=1;
+    g_talking=1; g_talk_actor=id;
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);   /* wait for the player to type a keyword/number */
 }
@@ -5827,7 +5847,7 @@ static int vehicle_try_move(world_t*w,int dx,int dy)
 /* the world advances one turn per 5 movement points (wind.md §2) */
 static void vehicle_turns(world_t*w,int cost)
 {   g_mp_acc+=cost;
-    while(g_mp_acc>=5){ g_mp_acc-=5; w->turns++; w->clock+=10;
+    while(g_mp_acc>=5){ g_mp_acc-=5; w->turns++; w->min_pts=g_adex[1]; world_spend(w,5);
         g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); } }
 
 /* one player step by (dx,dy): on foot, mounted, or steering a vessel. Advances the world by the
@@ -5838,6 +5858,7 @@ static int player_step(world_t*w,int dx,int dy)
     if(veh_aboard()){ int cost=vehicle_try_move(w,dx,dy); stepped=cost>0; if(stepped) vehicle_turns(w,cost); }
     else {
         if(g_alcohol>3 && rng_range(&g_crng,4)!=0){ dx=(int)rng_range(&g_crng,3)-1; dy=(int)rng_range(&g_crng,3)-1; msgcat(0,"Hic!"); }   /* drunk (usecode_use.md Food) */
+        w->min_pts=g_adex[1];                         /* a minute per the Avatar's dexterity in points (movement_turns.md §3) */
         stepped=(dx||dy) ? world_try_move(w,dx,dy) : 0;
         if(stepped){
             if(g_veh_kind==431){ g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;   /* mounted: re-face the horse sprite */
@@ -5848,7 +5869,7 @@ static int player_step(world_t*w,int dx,int dy)
 /* a passed turn (wind.md §3): a raft or the balloon drifts with the wind; the world moves on */
 static int player_pass(world_t*w)
 {   if((g_veh_kind==415||g_veh_kind==423) && g_wind!=WIND_CALM){ int cost=vehicle_try_move(w,0,0); if(cost>0){ vehicle_turns(w,cost); (void)step_triggers(w); return 1; } }
-    w->turns++; w->clock+=10; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w);
+    w->turns++; w->clock+=1; w->mp_acc=0; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w);   /* the rest of this minute */
     return 1; }
 
 /* horses (§4): a wandering horse actor at (x,y)? (its tile sits in obj 430's frame range) */
@@ -5880,6 +5901,8 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1));
     int ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
     int idx=objworld_at(&g_ow,tx,ty);
+    if(verb=='U' && idx>=0 && g_wobj[idx].obj_n==301)               /* a door hung in a doorway: U)se works the door, not the arch (usecode_use.md Doors) */
+        for(int dn=297;dn<=300;dn++){ int di=obj_idx_at(tx,ty,dn); if(di>=0 && g_wobj[di].alive){ idx=di; break; } }
     if(idx>=0 && (verb=='L'||verb=='U') && is_readable_objn(g_wobj[idx].obj_n)){
         read_object(idx); return 1;                              /* L)ook / U)se a readable -> show its text */
     }
@@ -8116,7 +8139,7 @@ static __attribute__((noinline)) int push_to(world_t*w,int dx,int dy)
             build_blocked(); }
         moved=1;
     }
-    if(moved){ w->turns++; w->clock+=10; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); }   /* the push spends the turn */
+    if(moved){ w->turns++; w->min_pts=g_adex[1]; world_spend(w,5); g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); }   /* the push spends the turn */
     return 1; }
 
 /* apply the armed verb to the tile (dx,dy) from the avatar. Returns 1 if the
@@ -9838,6 +9861,101 @@ out:
     #undef EB
 }
 
+/* ---- BOT mode (docs/design/bot_harness.md) ---------------------------------------------------
+ * When BOT.REQ exists the game reports its state on the console (Hatari --conout 2) so a host
+ * driver (tools/bot) can play it through the keyboard alone. After every key, and when a busy
+ * spell (camp, moongate walk, click-travel) ends, one "@S" line: the key count, the place, the
+ * modes, the party, the message box and the conversation text. F2..F5 print dumps (actors,
+ * objects + the pack, the passability file, the state again). Nothing here changes play. */
+static int      g_bot;                   /* BOT.REQ seen at boot                                 */
+static uint32_t g_bot_keys;              /* raw keys received (the driver's lock-step counter)   */
+static int      g_bot_busy;              /* busy at the end of the last loop                     */
+static uint32_t g_bot_rep;               /* g_bot_keys at the last report                        */
+static char     g_bot_ln[1400];
+static int bot_put(int n,const char*s){ while(*s && n<(int)sizeof g_bot_ln-3){ char c=*s++;
+    if(c=='\n'||c=='\r') c='|'; else if((unsigned char)c<0x20||c==0x7f) c='?'; g_bot_ln[n++]=c; } g_bot_ln[n]=0; return n; }
+static int bot_num(int n,long v){ char b[12]; int i=0, neg=v<0; if(neg) v=-v;
+    do{ b[i++]=(char)('0'+v%10); v/=10; }while(v && i<11); if(neg) b[i++]='-';
+    while(i && n<(int)sizeof g_bot_ln-3) g_bot_ln[n++]=b[--i]; g_bot_ln[n]=0; return n; }
+static int bot_kv(int n,const char*k,long v){ n=bot_put(n," "); n=bot_put(n,k); n=bot_put(n,"="); return bot_num(n,v); }
+/* Hatari NatFeats (emulator-only, like the bot): NF_STDERR prints to the host's stderr without the
+ * VT-52 drawing over our screen. nf_id = opcode $7300, nf_call = $7301, C arguments on the stack
+ * after the return address. Used only when BOT.REQ is present and the id query answers. */
+__asm__(".text\n.even\n_bot_nf_id:\n\t.dc.w 0x7300\n\trts\n_bot_nf_call:\n\t.dc.w 0x7301\n\trts\n");
+extern long bot_nf_id(const char *name) __asm__("_bot_nf_id");
+extern long bot_nf_call(long id, const char *s) __asm__("_bot_nf_call");
+static long g_bot_nf;                    /* NF_STDERR id, 0 = console (Cconws) */
+static void bot_flush(int n){ g_bot_ln[n++]='\r'; g_bot_ln[n++]='\n'; g_bot_ln[n]=0;
+    if(g_bot_nf) bot_nf_call(g_bot_nf, g_bot_ln); else Cconws(g_bot_ln); }
+static int bot_is_busy(void){ return g_resting || g_gw || g_travel_active; }
+static void bot_report(const world_t*w)
+{
+    int n=bot_put(0,"@S"); int day,mon,yr; cur_date(w,&day,&mon,&yr);
+    n=bot_kv(n,"k",(long)g_bot_keys); n=bot_kv(n,"busy",bot_is_busy());
+    n=bot_kv(n,"L",w->level); n=bot_kv(n,"X",(long)w->px); n=bot_kv(n,"Y",(long)w->py);
+    n=bot_kv(n,"min",clock_minutes(w)); n=bot_kv(n,"day",day); n=bot_kv(n,"mon",mon); n=bot_kv(n,"yr",yr);
+    n=bot_put(n," verb="); { char v[2]={(char)(g_pending_verb?g_pending_verb:'-'),0}; n=bot_put(n,v); }
+    n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
+    n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
+    n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
+    n=bot_kv(n,"over",g_game_over);
+    n=bot_put(n," askc="); n=bot_put(n,(g_await_input&&g_cv.askc[0])?g_cv.askc:"-"); n=bot_kv(n,"num",g_await_input&&g_cv.input_num);
+    { int foes=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay)||!g_ahp[i]||!actor_hostile(i)) continue;
+          int dx=ax-(int)w->px, dy=ay-(int)w->py; if(dx<0)dx=-dx; if(dy<0)dy=-dy; if(dx<=8&&dy<=8) foes++; }
+      n=bot_kv(n,"foes",foes); }
+    n=bot_put(n," party=");
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(p) n=bot_put(n,",");
+        n=bot_num(n,a); n=bot_put(n,":"); n=bot_num(n,g_ahp[a]); n=bot_put(n,"/"); n=bot_num(n,g_amaxhp[a]);
+        n=bot_put(n,":"); n=bot_num(n,g_amana[a]); n=bot_put(n,":"); n=bot_num(n,g_alevel[a]); }
+    n=bot_put(n," msg="); n=bot_put(n,g_msg);
+    if(g_talking){ n=bot_put(n," conv="); n=bot_put(n,g_transcript); }
+    if(g_await_input||g_casting||g_mantra){ n=bot_put(n," typed="); n=bot_put(n,g_inbuf); }
+    bot_flush(n);
+}
+/* F2: every actor on this level  "@A id x y hp maxhp tile hostile ally name-known" */
+static void bot_dump_actors(const world_t*w)
+{
+    for(int i=1;i<U6_MAX_ACTORS;i++){ int ax,ay; if(i==1){ ax=(int)w->px; ay=(int)w->py; } else if(!actor_pos(i,&ax,&ay)) continue;
+        int n=bot_put(0,"@A"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",ax); n=bot_kv(n,"y",ay);
+        n=bot_kv(n,"hp",g_ahp[i]); n=bot_kv(n,"max",g_amaxhp[i]); n=bot_kv(n,"tile",g_atile[i]);
+        n=bot_kv(n,"hostile",actor_hostile(i)); bot_flush(n); }
+    bot_flush(bot_put(0,"@A end"));
+}
+/* F3: on-map objects within 24 tiles + the party's pack  "@O idx obj frame x y qty q name" / "@I ..." */
+static void bot_dump_objects(const world_t*w)
+{
+    for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
+        int dx=(int)o->x-(int)w->px, dy=(int)o->y-(int)w->py; if(dx<-24||dx>24||dy<-24||dy>24) continue;
+        char nm[40]; obj_name(o->tile,nm,sizeof nm);
+        int n=bot_put(0,"@O"); n=bot_kv(n,"i",i); n=bot_kv(n,"obj",o->obj_n); n=bot_kv(n,"fr",(int)o->tile-basetile(o->obj_n));
+        n=bot_kv(n,"x",o->x); n=bot_kv(n,"y",o->y); n=bot_kv(n,"qty",o->qty); n=bot_kv(n,"q",o->quality);
+        n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
+    for(int i=0;i<g_ow.ninv;i++){ const invitem_t*it=&g_ow.inv[i]; char nm[40]; obj_name(it->tile,nm,sizeof nm);
+        int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality);
+        n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
+    bot_flush(bot_put(0,"@O end"));
+}
+/* F4: BOTPASS.BIN = one byte per tile of this level, row-major (span x span): bit0 walkable,
+ * bit1 a closed door, bit2 the door is locked (key / magic), bit3 water. GEMDOS Fcreate 0x3C /
+ * Fwrite 0x40 / Fclose 0x3E through plat_f*. */
+static void bot_dump_pass(const world_t*w)
+{
+    int span=(w->level==0)?U6_SURFACE_TILES:256; static uint8_t row[U6_SURFACE_TILES];
+    plat_file f=plat_fcreate("BOTPASS.BIN"); if(f<0){ bot_flush(bot_put(0,"@P fail")); return; }
+    for(int y=0;y<span;y++){
+        for(int x=0;x<span;x++) row[x]=(uint8_t)((world_is_passable(w,x,y)?1:0)|(tile_is_water(w,x,y)?8:0));
+        plat_fwrite(f,row,span);
+    }
+    plat_fclose(f);
+    /* doors are patched in by a second pass over the objects (cheaper than a lookup per tile) */
+    f=plat_fcreate("BOTDOOR.TXT");
+    for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||o->obj_n<297||o->obj_n>300) continue;
+        int fr=(int)o->tile-basetile(o->obj_n); int n=bot_put(0,""); n=bot_num(n,o->x); n=bot_put(n," "); n=bot_num(n,o->y);
+        n=bot_put(n," "); n=bot_num(n,fr); g_bot_ln[n++]='\n'; if(f>=0) plat_fwrite(f,g_bot_ln,n); }
+    if(f>=0) plat_fclose(f);
+    int n=bot_put(0,"@P done"); n=bot_kv(n,"L",w->level); n=bot_kv(n,"span",span); n=bot_kv(n,"forced",g_force_n); bot_flush(n);
+}
+
 int main(int argc, char **argv)
 {
     boot_chdir_to_exe(argc, argv);   /* resolve data relative to GAMEF.PRG (launchers that pass argv[0]) */
@@ -10373,6 +10491,9 @@ int main(int argc, char **argv)
         g_load_gold=0; g_load_karma=0; g_load_book_present=0; g_load_book_all=0; g_load_reag_present=0;
         g_have_lowcolor=0; g_have_ste=0; g_nconvpal=0; g_lc_ncyc=0; g_lcx_nb=0; g_nbook=0;
     }
+    /* magic_init seeded the pack before BASETILE was known: give those stacks their tiles now (else
+     * they draw and name as tile 0, "Nothing", in the inventory and E)quip panels) */
+    for(int i=0;i<g_ow.ninv;i++) if(!g_ow.inv[i].tile) g_ow.inv[i].tile=(uint16_t)basetile(g_ow.inv[i].obj_n);
 
     GameDef def = *gd;                 /* the game selected by the pack magic (M9) */
     def.start_x = startx; def.start_y = starty;   /* per-save start from the pack header */
@@ -10381,6 +10502,7 @@ int main(int argc, char **argv)
         Cconws("world_init failed\r\n"); Crawcin(); return 1; }
     build_blocked();                      /* impassable-object map (walls/furniture) */
     world_set_blocked_obj(&w, g_blocked); /* player + NPCs now respect object walls */
+    world_set_force_pass(&w, force_pass_at); /* ... and walk the bridges over water */
 
     /* Conversation + portrait libraries, loaded at runtime (never embedded):
      * the originals' CONVERSE.A/.B + PORTRAIT.A/.B (GEMDOS 8.3 names). These let
@@ -13293,6 +13415,8 @@ int main(int argc, char **argv)
           for(;;) vsync_pump(); } }   /* HOLD the walked frame (no anim advance) so planar vs chunky A/B is deterministic */
 #endif
 
+    { int32_t bl=0; uint8_t*br=(uint8_t*)plat_load_file("BOT.REQ",1,&bl); if(br){ g_bot=1;      /* "n" = NatFeats output (Hatari --natfeats on) */
+          if(bl>0 && br[0]=='n') g_bot_nf=bot_nf_id("NF_STDERR"); bot_report(&w); } }   /* bot mode: first report = ready */
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
     for (;;) {                                       /* interactive; holds frame for capture */
@@ -13304,23 +13428,32 @@ int main(int argc, char **argv)
         int moved=0;                                 /* set on a clean walk (map-only present) */
 
         int key = plat_input_raw();
+        if (key) g_bot_keys++;
         /* During gameplay (NOT text entry), drain any backlog to the NEWEST key so a
          * held arrow doesn't queue up behind a slow compose and lag the avatar. Text
          * entry (conversation / cast menu) keeps every keystroke. */
         if (key && !g_await_input && !g_casting && !g_mantra) {
-            int k2, guard=0; while ((k2=plat_input_raw()) && ++guard<64) key=k2;
+            int k2, guard=0; while ((k2=plat_input_raw()) && ++guard<64){ key=k2; g_bot_keys++; }
         }
         int redraw=0;
+        if (key && g_bot){ int sc=(key>>8)&0xFF;                 /* bot dumps (F2..F5): no game effect */
+            if(sc==0x3C){ bot_dump_actors(&w); key=0; } else if(sc==0x3D){ bot_dump_objects(&w); key=0; }
+            else if(sc==0x3E){ bot_dump_pass(&w); key=0; } else if(sc==0x3F) key=0; }
         if (key && g_peer_on){ g_peer_on=0; compose_map(&w); draw_border_tiles(); redraw=1; key=0; }   /* any key closes the gem's view */
         if (key && (g_resting || g_gw)) key=0;       /* the camp and the moongate walk take no input */
         if (key) {
             int a = key & 0xFF;
             g_travel_active=0;                       /* any key press cancels click-to-travel */
-            if (g_await_input) {                     /* typing a conversation reply */
+            if (g_await_input && g_cv.askc[0]) {     /* a y/n-style prompt: ONE of its listed keys, no Enter (usecode_vm.md §6c) */
+                if (a==0x1b) { end_talk(); redraw=1; }
+                else { char c=(char)((a>='A'&&a<='Z')?a+32:a); int ok=0;
+                    for(int k=0;g_cv.askc[k];k++){ char l=g_cv.askc[k]; if(l>='A'&&l<='Z') l=(char)(l+32); if(l==c) ok=1; }
+                    if (ok) { g_inbuf[0]=c; g_inbuf[1]=0; g_inlen=1; submit_input(); redraw=1; } }   /* any other key is ignored */
+            } else if (g_await_input) {              /* typing a conversation reply */
                 if      (a==0x0d) { submit_input(); redraw=1; }              /* Enter  */
                 else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } redraw=1; } /* Bksp */
                 else if (a==0x1b) { end_talk(); redraw=1; }                  /* Esc: leave */
-                else if (a>=0x20 && a<0x7f && g_inlen<CVM_INPUT-1) {         /* a char */
+                else if (a>=0x20 && a<0x7f && g_inlen<CVM_INPUT-1 && (!g_cv.input_num || (a>='0'&&a<='9'))) {   /* a char (a number prompt: digits) */
                     g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0; redraw=1;
                 }
             } else if (g_mantra) {                   /* typing a rune's mantra (usecode_use.md) */
@@ -13350,6 +13483,11 @@ int main(int argc, char **argv)
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
                     if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='T' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the T)alk crosshair walks the map window */
+                        if(nx>=-VT/2 && nx<=VT/2 && ny>=-VT/2 && ny<=VT/2){ g_tcur_dx=nx; g_tcur_dy=ny; }
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='T' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: talk to whoever stands there */
+                        compose_map(&w); draw_border_tiles(); (void)resolve_target(&w,'T',cx,cy); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='A' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: the attack lands there */
                         (void)resolve_target(&w,'A',cx,cy); g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
@@ -13405,10 +13543,9 @@ int main(int argc, char **argv)
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink);
                     redraw=1; }
                 else if (in==IN_QUIT) break;
-                else if (in==IN_TALK) {              /* talk to an adjacent NPC (a trainer advances thy level) */
-                    if (!g_talking) { int id=find_adjacent_npc(&w);
-                        if(id>=0){ talk(id); redraw=1; } }
-                }
+                else if (in==IN_TALK) { g_pending_verb='T'; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0;   /* T)alk-: the crosshair picks anyone in view, as the original (a trainer advances thy level) */
+                    compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='m'||a=='M') { g_pending_verb='M'; g_msg[0]=0; g_show_inv=0; redraw=1; }    /* M)ove-(dir)? (usecode_use.md) */
                 else if (dx||dy) {                   /* walk (or steer the vehicle) */
                     if (g_talking||g_show_inv||g_msg[0]) {   /* closing a panel needs a full present */
                         end_talk(); g_show_inv=0; g_msg[0]=0; redraw=1; }
@@ -13427,7 +13564,7 @@ int main(int argc, char **argv)
                 else if (v=='C'){ open_cast_menu(); }        /* Cast icon opens the spell menu */
                 else if (v=='D'){ g_msg[0]=0; arm_drop(); }  /* Drop icon: open the pack + arm the drop */
                 else if (v=='A'){ arm_attack(); }           /* Attack icon: the crosshair */
-                else if (v){ g_pending_verb=v; g_msg[0]=0; g_show_inv=0; }
+                else if (v){ g_pending_verb=v; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; }
                 else  { msgcat(0,"Not yet implemented."); g_pending_verb=0; g_show_inv=0; }
                 redraw=1;
             } else if (g_show_status) {               /* a click while viewing a character -> back to the roster */
@@ -13508,6 +13645,8 @@ int main(int argc, char **argv)
          * doubled present) Vsyncs internally, so don't Vsync again after it — the old code
          * did both, halving the rate to 30Hz whenever the mouse moved. The cheaper paths
          * (map-only present, or idle) rely on the explicit Vsync here. */
+        if (g_bot){ int b=bot_is_busy();                 /* report once the keys are handled and nothing runs on its own */
+            if(!b && (g_bot_keys!=g_bot_rep || g_bot_busy)){ bot_report(&w); g_bot_rep=g_bot_keys; } g_bot_busy=b; }
         if (g_game_over){ run_ending(&w); break; }        /* the Codex has vanished: the ending (docs/design/ending.md) */
         if (redraw){ if(g_peer_on) draw_peer(&w); present_frame(); }   /* full present (Vsyncs internally); the gem's view over the map */
         else { if (moved||anim_redraw) present_map();           /* map window (walk / tile anim) */

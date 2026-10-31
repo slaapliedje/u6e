@@ -7,6 +7,9 @@
 14 key 36
 24 key 72
 26 key 20
+26.6 key 77   # T)alk- crosshair onto Dupre (down-right), Enter
+27.2 key 80
+27.8 key 28
 31 key 49
 31.35 key 30
 31.700000000000003 key 50

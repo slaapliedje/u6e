@@ -81,3 +81,6 @@ desktop.ini
 # ============================================================
 .claude/settings.local.json
 
+
+# host Python caches (tools/bot, tools/video)
+__pycache__/

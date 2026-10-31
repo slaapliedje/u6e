@@ -23,6 +23,10 @@ A door object's **frame** encodes its state (frame = tile − basetile(obj_n)):
 - frame **0–3** = OPEN (the low bits are orientation/variant).
 - frame **4–7** = CLOSED.
 
+A door often shares its tile with a **doorway** arch (301) that the object list holds above it;
+U)se on that tile works the door (the arch has no use). Found 2026-10-30 by the bot harness: the
+castle door at (312,370) answered "Nothing happens with the doorway." and never opened.
+
 USE toggles state by ±4:
 - open  → close: frame += 4 (U6 refuses if an actor/blocking object is on the tile).
 - closed → open: frame -= 4.

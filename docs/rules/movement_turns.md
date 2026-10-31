@@ -7,7 +7,10 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M5
 > Provenance
 > - Derived from : our world model design + reading the U6 surface (u6map).
 > - References   : general U6 knowledge (tile-based movement, time advances per
->                  step); exact turn granularity to be confirmed by observation.
+>                  step); §3 time per step from READING ScummVM/Nuvie `core/player.cpp`
+>                  (the base step cost) and the U6 actor script `u6/actor.lua` (the turn
+>                  loop: one game minute per turn, every actor's movement points refilled
+>                  by its dexterity) — re-expressed, no code transcribed.
 > - Tools        : /tools/enginetest (headless), /render game demo.
 > - Validated by  : enginetest asserts passable steps move + advance the clock,
 >                  water steps are blocked (no move/turn), toroidal wrap, and
@@ -28,10 +31,21 @@ and a successful step advances the game clock by the move's turn cost.
 | step onto blocked tile   | no move; no turn; clock unchanged                 |
 | step off an edge         | wraps to the opposite edge (toroidal, 1024 = 2^10)|
 
-## 3. Turn cost (RuleSet hook)
-`move_turn_cost(world, dx, dy)` → ticks per step. U6 default = **10** (a
-placeholder for U6's turn granularity; refine by observation). Savage/Martian
-override only if they differ. Diagonal cost not yet distinguished.
+## 3. Turn cost and the clock (RuleSet hook)
+`move_turn_cost(world, dx, dy)` → the step's **movement points**; U6 = **5** for a walking step.
+The game clock counts **minutes**. In the reference one turn is one minute, and each minute every
+actor's movement points are refilled up to its **dexterity**; a step spends 5. So the Avatar takes
+about dexterity / 5 steps per game minute (dex 20 → 4 steps).
+
+u6e keeps one world turn per step (NPCs and the party act once per step, which matches the
+reference while their dexterities are close to the Avatar's) and charges the clock separately:
+the step's points accumulate and a minute passes per *Avatar dexterity* points (`world_spend`).
+A passed turn (space) ends the current minute. Vehicles spend their own points (wind.md §2) the
+same way; a M)ove push spends 5. Rest keeps explicit ten-minute rest turns (rest.md).
+Diagonal cost not yet distinguished; terrain impedance is not added yet.
+
+Until 2026-10-30 a step cost a flat **10 minutes** (a placeholder): a day passed in ~144 steps,
+about 40× too fast, so schedules, nightfall and torch fuel ran away while walking.
 
 ## 4. Passability — from TILEFLAG (real)
 Derived from **TILEFLAG** tileflags1: a tile is impassable for walking if

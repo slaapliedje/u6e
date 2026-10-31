@@ -19,11 +19,15 @@ typedef struct world {
     const uint8_t *passable;       /* [256]: 1 = walkable tile, 0 = blocked */
     const uint8_t *blocked_obj;    /* optional 1024x1024 bitmap: bit (y*1024+x) set =
                                     * impassable OBJECT on that tile. NULL = none. */
+    bool         (*force_pass)(int32_t x, int32_t y);   /* optional: an object makes impassable terrain
+                                    * walkable (a drawbridge span over the moat; tileflag.md tileflags3 bit2) */
     const RuleSet *rules;          /* never NULL after init (defaults to U6) */
     int32_t        px, py;         /* player tile position (wrapped)      */
     int32_t        level;          /* 0 = surface (1024x1024); 1..5 = dungeon level (256x256). map_levels.md */
     uint32_t       turns;          /* completed turns                     */
-    uint32_t       clock;          /* game-time ticks (sum of turn costs) */
+    uint32_t       clock;          /* game minutes since the start (movement_turns.md §3)            */
+    int32_t        mp_acc;         /* movement points spent toward the next game minute              */
+    int32_t        min_pts;        /* points per minute = the Avatar's dexterity (0 -> 5: a minute a step) */
     rng_t          rng;            /* deterministic RNG seam              */
 } world_t;
 
@@ -39,6 +43,12 @@ bool    world_is_passable(const world_t *w, int32_t x, int32_t y);/* tile at (x,
 /* Attach an optional object-blocking bitmap (1024x1024 bits, bit (y*1024+x) set =
  * an impassable object occupies that tile). world borrows it; pass NULL to clear. */
 void    world_set_blocked_obj(world_t *w, const uint8_t *bitmap);
+/* Attach the forced-passability test (NULL = none). Checked only where the terrain blocks. */
+void    world_set_force_pass(world_t *w, bool (*fn)(int32_t x, int32_t y));
+
+/* Spend movement points: a game minute passes per min_pts points (the reference refills every
+ * actor's points by its dexterity each minute; a walking step costs 5). */
+void    world_spend(world_t *w, int pts);
 
 /* Try to step the player by (dx,dy) (each -1/0/1). Moves + advances the turn
  * clock only if the destination is passable. Returns true if the player moved. */

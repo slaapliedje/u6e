@@ -7,7 +7,7 @@
 static int u6_move_turn_cost(const world_t *w, int dx, int dy)
 {
     (void)w; (void)dx; (void)dy;
-    return 10;   /* U6 advances time ~10 ticks per step */
+    return 5;    /* movement points of a walking step (movement_turns.md §3) */
 }
 const RuleSet ruleset_u6 = { u6_move_turn_cost };
 
@@ -70,12 +70,15 @@ bool world_init(world_t *w, const uint8_t *map, int32_t map_len,
     if (!u6map_load(&w->map, map, map_len, chunks, chunks_len)) return false;
     w->passable    = passable;
     w->blocked_obj = NULL;
+    w->force_pass = NULL;
     w->rules    = (def->rules) ? def->rules : &ruleset_u6;
     w->px       = def->start_x;
     w->py       = def->start_y;
     w->level    = 0;                 /* start on the surface */
     w->turns    = 0;
     w->clock    = 0;
+    w->mp_acc   = 0;
+    w->min_pts  = 0;
     rng_seed(&w->rng, seed);
     return true;
 }
@@ -113,13 +116,25 @@ bool world_transition(world_t *w, int kind, uint8_t quality)
 
 bool world_is_passable(const world_t *w, int32_t x, int32_t y)
 {
-    if (!w->passable[world_tile(w, x, y)]) return false;          /* terrain blocks */
     if (w->blocked_obj) {                                         /* impassable object? (the current level's bitmap) */
         int32_t bx = x & (U6_SURFACE_TILES - 1), by = y & (U6_SURFACE_TILES - 1);
         int32_t idx = by * U6_SURFACE_TILES + bx;
         if (w->blocked_obj[idx >> 3] & (1u << (idx & 7))) return false;
     }
-    return true;
+    if (w->passable[world_tile(w, x, y)]) return true;            /* the terrain lets us through */
+    return w->force_pass && w->force_pass(x & (U6_SURFACE_TILES - 1), y & (U6_SURFACE_TILES - 1));   /* a bridge over it */
+}
+
+void world_spend(world_t *w, int pts)
+{
+    int32_t per = w->min_pts > 0 ? w->min_pts : 5;
+    w->mp_acc += pts;
+    while (w->mp_acc >= per) { w->mp_acc -= per; w->clock++; }
+}
+
+void world_set_force_pass(world_t *w, bool (*fn)(int32_t x, int32_t y))
+{
+    if (w) w->force_pass = fn;
 }
 
 void world_set_blocked_obj(world_t *w, const uint8_t *bitmap)
@@ -140,6 +155,6 @@ bool world_try_move(world_t *w, int dx, int dy)
     w->px = nx;
     w->py = ny;
     w->turns++;
-    w->clock += (uint32_t)cost;
+    world_spend(w, cost);
     return true;
 }
