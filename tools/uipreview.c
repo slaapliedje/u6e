@@ -164,7 +164,7 @@ static void draw_party(void)
 static void draw_message(void)
 {
     static const char*line[]={
-        "A voice in the","darkness intones,","\"KAL LOR!\"","",
+        "Sample text for","the preview.","",
         "Avatar:","Thou art in Britannia.","",
         "Iolo: \"Well met!\"",
     };

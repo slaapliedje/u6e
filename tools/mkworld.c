@@ -509,6 +509,53 @@ static int extract_intro(const char *dir, char pages[IP_MAX][IP_LEN])
     free(d); return np;
 }
 
+/* Extract the intro's two DATA blocks from the user's U.EXE at build time (intro_sequence.md §1b):
+ * the gypsy casting choreography (vial/arm/hand/pour positions, liquid sprite numbers, virtue
+ * colours) and the living-room TV (channel programs, sprite offsets, news images). CLEAN-ROOM: the
+ * bytes live only in the user's executable and go into the never-committed pack; we know each
+ * block by its offset, length, Adler-32 and CRC-32 only. A U.EXE build where the block moved is
+ * found by rolling the Adler-32 over the file, then confirmed by the CRC. Not found => length 0
+ * and the engine leaves those animations out. */
+typedef struct { const char *name; long off; int len; uint32_t adler, crc; } ublk_t;
+static const ublk_t UBLK[2]={
+    { "gypsy", 0x16a25, 1190, 0x56109063u, 0xd8fa202au },
+    { "tv",    0x17374,  788, 0x20884298u, 0x3c5527f8u },
+};
+static uint32_t crc32_of(const uint8_t *p, int n)
+{
+    uint32_t c=0xffffffffu;
+    for(int i=0;i<n;i++){ c^=p[i]; for(int k=0;k<8;k++) c=(c>>1)^(0xedb88320u&(0u-(c&1u))); }
+    return ~c;
+}
+static long find_ublk(const uint8_t *d, long n, const ublk_t *b)
+{
+    if(b->off+b->len<=n && crc32_of(d+b->off,b->len)==b->crc) return b->off;
+    if(n<b->len) return -1;
+    uint32_t a=1, s=0;                                   /* Adler-32 of the first window */
+    for(int i=0;i<b->len;i++){ a=(a+d[i])%65521u; s=(s+a)%65521u; }
+    for(long o=0;;o++){
+        if(((s<<16)|a)==b->adler && crc32_of(d+o,b->len)==b->crc) return o;
+        if(o+b->len>=n) return -1;
+        uint32_t out=d[o], in=d[o+b->len];               /* roll: drop d[o], add d[o+len] */
+        a=(a+65521u-out+in)%65521u;
+        s=(s+65521u-(uint32_t)((b->len*(uint64_t)out)%65521u)+a-1u+65521u)%65521u;
+    }
+}
+/* Writes [u8 nblk] + nblk x [u16 len][len bytes] into the front-end TEXT section. */
+static void write_ublk(const char *dir, FILE *fe)
+{
+    char path[1024]; snprintf(path,sizeof path,"%s/U.EXE",dir);
+    long n=0; uint8_t *d=slurp_path(path,NULL,&n);
+    fputc(2,fe);
+    for(int k=0;k<2;k++){
+        long o=d?find_ublk(d,n,&UBLK[k]):-1;
+        if(o<0){ be16(fe,0); printf("intro data: %s block not found in U.EXE -> left out\n",UBLK[k].name); continue; }
+        be16(fe,(unsigned)UBLK[k].len); fwrite(d+o,1,(size_t)UBLK[k].len,fe);
+        printf("intro data: %s block %d bytes from U.EXE @%#lx\n",UBLK[k].name,UBLK[k].len,o);
+    }
+    free(d);
+}
+
 /* ---- CHARGEN CEREMONY TEXT (name/gender prompts + approach + gypsy greeting + flask outro) ----
  * Same clean-room rule as the questions/intro: these strings live ONLY in the user's U.EXE and go
  * straight into the never-committed build-artifact pack. Located STRUCTURALLY.
@@ -614,7 +661,7 @@ static int extract_chargen(const char *dir, chargen_text_t *o)
             continue;
         }
         /* §1B gargoyle-sacrifice opening: the narrative run right after the flask. It ends where the
-         * game's non-narrative SYSTEM messages begin ("A game is already in progress / Please run ...")
+         * game's non-narrative SYSTEM messages begin (the "game in progress" notice)
          * — that content transition is the structural stop boundary (plus the GARG_N cap). */
         if(strstr(buf,"in progress") || strstr(buf,"Please run")) break;
         if(o->ngarg<GARG_N) snprintf(o->garg[o->ngarg++],CG_LEN,"%s",buf);
@@ -2109,6 +2156,7 @@ int main(int argc, char **argv)
         for(int q=0;q<cg.nflask;q++){ int L=(int)strlen(cg.flask[q]); be16(fe,(unsigned)L); fwrite(cg.flask[q],1,(size_t)L,fe); }
         fputc(cg.ngarg,fe);                                    /* §1B gargoyle-sacrifice opening pages */
         for(int q=0;q<cg.ngarg;q++){ int L=(int)strlen(cg.garg[q]); be16(fe,(unsigned)L); fwrite(cg.garg[q],1,(size_t)L,fe); } }
+      write_ublk(dir, fe);                                     /* intro data blocks (U.EXE): gypsy + TV tables */
       /* NOTE: BOOK.DAT readable text moved OUT of the front-end block into the RESIDENT core section
        * U6BK (below) — on the ST the front-end (U6FE) is FREED after chargen, which nulled in-game
        * book/sign reading. Books belong with gameplay data, not the transient front-end. */

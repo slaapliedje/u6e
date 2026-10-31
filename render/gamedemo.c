@@ -685,21 +685,21 @@ static const char *g_intro_text[INTRO_NPAGES];    /* -> pack bytes (NOT NUL-term
 static int         g_intro_tlen[INTRO_NPAGES];
 static int         g_intro_have;                  /* 1 = real U.EXE narration loaded from pack */
 static const char *g_intro_fb[INTRO_NPAGES]={     /* fallback paraphrase (our words) */
-    "Upon your world, five seasons have passed since your triumphant homecoming from Britannia.",
-    "You have traded a life of peril for a world's quiet peace -- yet no screen replaces fallen friends.",
-    "Outside, a chill wind rises...",
-    "...and in moments the storm is upon thee, wild and unrelenting.",
-    "Tongues of lightning lash the sky, conducting an unceasing crescendo of thunder....",
-    "In a cataclysm of sound and light, a bolt of searing blue fire strikes the earth!",
-    "Lightning among the stones! Is this a sign from distant Britannia?",
-    "You bolt from thy house, running blind in the storm. Into the forest, down the path, to the stones.",
-    "Near the stones hangs the smell of damp, blasted earth. You glimpse a tiny obsidian stone in the circle!",
-    "Wondering, you pick it up....",
-    "From the heart of the stones a softly glowing door ascends in silence!",
-    "Memories wash over you as you clutch the stone -- last cast down by Lord British to banish Blackthorn!",
-    "But your joy gives way to dread. The gate to Britannia was ever blue -- as blue as the morning sky.",
-    "The portal quivers and sinks away, its crimson light wanes.",
-    "Desperation makes the choice an easy one.",
+    "Years have gone by on Earth since you came home from Britannia.",
+    "Life is quiet now, but you still miss the friends you left behind.",
+    "One evening the weather turns.",
+    "Within minutes a heavy storm breaks over the house.",
+    "Thunder rolls without pause as lightning splits the clouds.",
+    "Then one bolt, brighter than the rest, comes down close by!",
+    "It struck among the standing stones. Could it be a message from Britannia?",
+    "You run out into the rain and down the forest path to the stone circle.",
+    "The ground there is scorched. In the middle of the circle lies a small black stone.",
+    "You pick it up.",
+    "A glowing gateway rises silently out of the circle!",
+    "You know this stone: the one Lord British used to send Blackthorn away.",
+    "Yet something is wrong. A gate to Britannia should glow blue, not red.",
+    "The red gate shudders and starts to sink back into the earth.",
+    "There is no time to think. You step through.",
 };
 static int g_intro_page;                          /* current page WITHIN the scene (0-based) */
 #define INTRO_NCAP 3
@@ -755,22 +755,13 @@ static int g_hold_part = IF_FULL;
  * step; 82 static + finger, ends step; 83 endless road (two scrolling stripes 0x22 + 0x21); 84 n
  * a1..an random pick; 86 news image; 87 pick news image; 88 pledge (every 4th step, 37/38 alternate
  * every 16); 89 random 50..52; 8A end step; 8B rotate palette 224..228. */
-static const uint8_t TVP1[]={0x82,0x82,0x80,0x03,0x02,0x8A,0x02,0x8A,0x01,0x8A,0x01,0x8A,0x00,0x8A,0x00,0x8A,0x01,0x8A,0x01,0x81};
-static const uint8_t TVP2[]={0x82,0x82,0x80,0x28,0x03,0x8B,0x81};
-static const uint8_t TVP3[]={0x82,0x82,0x80,0x04,0x04,0x81,0x80,0x04,0x08,0x81,0x80,0x04,0x09,0x81,0x80,0x04,0x0A,0x81,0x80,0x04,0x0B,0x81,0x80,0x04,0x0C,0x81};
-static const uint8_t TVP4[]={0x82,0x82,0x87,0x80,0x46,0x0F,0x86,0x84,0x09,0x10,0x10,0x10,0x11,0x11,0x11,0x12,0x12,0x12,0x81};
-static const uint8_t TVP5[]={0x82,0x82,0x80,0x32,0x83,0x81};
-static const uint8_t TVP6[]={0x82,0x82,0x80,0x05,0x27,0x8A,0x28,0x8A,0x29,0x81,0x80,0x06,0x2A,0x8A,0x2A,0x8A,0x2B,0x8A,0x2B,0x8A,0x2C,0x8A,0x2C,0x8A,0x2D,0x8A,0x2D,0x81,
-                             0x80,0x0A,0x2E,0x8A,0x2F,0x8A,0x30,0x8A,0x84,0x09,0x2E,0x2E,0x2E,0x2F,0x2F,0x2F,0x30,0x30,0x30,0x8A,0x2E,0x8A,0x2F,0x8A,0x30,0x81};
-static const uint8_t TVP7[]={0x82,0x82,0x80,0x55,0x16,0x17,0x84,0x0C,0x13,0x13,0x13,0x13,0x14,0x14,0x14,0x14,0x15,0x15,0x15,0x15,0x88,0x81,
-                             0x80,0x0F,0x16,0x84,0x02,0x1A,0x1B,0x89,0x88,0x81,0x80,0x03,0x16,0x1A,0x89,0x88,0x81,0x80,0x03,0x16,0x1C,0x88,0x81,
-                             0x80,0x03,0x16,0x1D,0x88,0x81,0x80,0x03,0x16,0x1E,0x88,0x81,0x80,0x03,0x16,0x23,0x88,0x81,0x80,0x03,0x16,0x24,0x88,0x81,
-                             0x80,0x32,0x16,0x88,0x81};
-static const uint8_t *const TVP[7]={TVP1,TVP2,TVP3,TVP4,TVP5,TVP6,TVP7};
-static const int TVP_LEN[7]={(int)sizeof TVP1,(int)sizeof TVP2,(int)sizeof TVP3,(int)sizeof TVP4,(int)sizeof TVP5,(int)sizeof TVP6,(int)sizeof TVP7};
-static const uint8_t TV_XOFF[55]={0,0,0,0,0,0x1F,0x1F,0x1F,0,0,0,0,0,0x1F,0x1F,0,9,9,9,0x0C,0x0C,0x0C,0,4,0x1F,0x1F,4,0,4,4,4,0x1F,0x1F,0,0,6,6,8,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-static uint8_t       TV_YOFF[55]={0,0,0,0,0,2,2,2,0,0,0,0,0,2,2,0,7,7,7,3,3,3,0,2,2,2,0,0,0,0,1,2,2,0,0,3,8,0x1D,0x1C,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-static const uint8_t TV_NEWS[9]={5,6,7,0x0D,0x0E,0x18,0x19,0x1F,0x20};
+/* The programs and offset tables are the original's data: read from the user's U.EXE at build time
+ * (intro_sequence.md §1b, the "tv" block) and copied in by itbl_bind. Missing => every program
+ * has length 0 and the TV shows only static. */
+static uint8_t  TVP[7][80];
+static int      TVP_LEN[7];
+static uint8_t  TV_XOFF[55], TV_YOFF[55];
+static uint8_t  TV_NEWS[9];
 static struct { int prog,pos,loop_pos,loop_cnt,news,pledge_ctr,pledge_img,road;
                 int nspr; struct { int img,x,y; } spr[5]; int stat; int palrot; } g_tvs;
 static rng_t g_tv_rng;
@@ -1296,8 +1287,7 @@ static int logo_screens(void)                                /* returns 2 on Esc
     return 0;
 }
 
-/* "CLUTCH THE STONE" beat (nuvie stones_sequence @911-955, moongate page 1 "Exultant memories wash
- * over you as you clutch the stone..."): the hand holding the obsidian (INTRO_3 shape 6) rises from
+/* "CLUTCH THE STONE" beat (nuvie stones_sequence @911-955, moongate page 1): the hand holding the obsidian (INTRO_3 shape 6) rises from
  * y=0xc7 to 0x44 at x=0x9b while the whole scene — bg, ground cover, gate — scrolls UP 65 px (1 px per
  * 25 ms step; the hand 2 px), the caption holds on the scrolled scene with the crimson pulse, then
  * everything comes back down. Draw order: bg, cover, hand, gate (nuvie sprite order). Wall-clock
@@ -1589,9 +1579,14 @@ static void gypsy_update_bubbles(void){
 
 /* vial geometry (nuvie sprite positions; glass y=66, liquid y=77). vial_liquid shape at level L
  * (1..3) = 0x42 + GV_IMG_OFF[v] + (L-3) (GV_IMG_OFF = the full/level-3 set). */
-static const int GV_VIAL_X[8]={41,62,83,104,200,221,242,263};
-static const int GV_LIQ_X[8] ={44,65,86,107,203,224,245,266};
-static const int GV_IMG_OFF[8]={2,5,8,0xB,0x18,0x1B,0x1E,0x21};
+/* These and the pour/arm/hand tables below are the original's choreography data, read from the
+ * user's U.EXE at build time (intro_sequence.md §1b, the "gypsy" block) and copied in by itbl_bind;
+ * g_itbl_gyp = 0 (block missing) => the casting scene leaves the vials and the pour out. */
+static int g_itbl_gyp;
+static int16_t GV_VIAL_X[8], GV_IMG_OFF[8];
+static int16_t GT_HOFF[8], GT_VCOL[8], GT_VLIQ[96], GT_VLHX[96], GT_VLHY[12];
+static int16_t GT_ARMX[8], GT_HX[4][8], GT_HAND[5][8], GT_ARM[3][8];
+static int16_t GT_POUR_IMG[24], GT_POUR_X[24], GT_POUR_Y[3];
 
 /* composite the casting scene: bg -> jar liquid (behind glass) -> jar glass -> each vial's
  * liquid+glass at its current level (the vial being poured is hidden, carried by the hand) ->
@@ -1610,14 +1605,14 @@ static void draw_gypsy_scene(void){
         else gblit(8+g_jar_lvl, 146, 0x53 - g_jar_lvl);
     }
     gblit(16, 142, 56);                                          /* jar glass */
-    for(int v=0; v<8; v++){                                      /* vial LIQUIDS (behind the hand) */
+    for(int v=0; v<8 && g_itbl_gyp; v++){                        /* vial LIQUIDS (behind the hand) */
         if(v==g_pour_vial) continue;                            /* the lifted vial's liquid is g_vl_sh */
         int L=g_vial_lvl[v];
-        if(L>0) gblit(0x42 + GV_IMG_OFF[v] + (L-3), GV_LIQ_X[v], 77);
+        if(L>0) gblit(0x42 + GV_IMG_OFF[v] + (L-3), GV_VIAL_X[v]+3, 77);
     }
     if(g_vl_sh>=0)   gblit(g_vl_sh, g_vl_x, g_vl_y);            /* the lifted vial's liquid, following the hand */
     if(g_hand_sh>=0) gblit(g_hand_sh, g_hand_x, g_hand_y);      /* hand: over the liquids, under the glasses */
-    for(int v=0; v<8; v++){                                      /* vial GLASSES (frontmost) */
+    for(int v=0; v<8 && g_itbl_gyp; v++){                        /* vial GLASSES (frontmost) */
         if(v==g_pour_vial) continue;                            /* glass hidden while lifted */
         gblit(v<4?20:23, GV_VIAL_X[v], 66);                     /* vial glass (20 left / 23 right) */
     }
@@ -1625,23 +1620,13 @@ static void draw_gypsy_scene(void){
 
 /* nuvie gypsy_start_pouring: show the pour stream for (vial,level) + advance the jar one level. */
 static void gypsy_start_pour(int vial,int level){
-    static const int pour_img[24]={
-        0x2B,0x43,0x56,0x6B,0x24,0x74,0x19,0x2C,
-        0x2C,0x44,0x57,0x6C,0x23,0x73,0x18,0x2B,
-        0x2E,0x45,0x58,0x6D,0x22,0x72,0x17,0x2A };
-    static const int pour_y[3]={0x32,0x37,0x40};
-    static const int pour_x[24]={
-        0x92,0x92,0x92,0x92,0xA9,0xA9,0xA9,0xA9,
-        0x91,0x91,0x91,0x91,0xA9,0xA9,0xA9,0xA9,
-        0x94,0x94,0x94,0x94,0xAA,0xAA,0xAA,0xAA };
     if(level>=1 && level<=3){
-        int idx=(3-level)*8 + vial, img=pour_img[idx];
+        int idx=(3-level)*8 + vial, img=GT_POUR_IMG[idx];
         img += (vial>=6)?9:0x42;                 /* nuvie: vial_num>6 (1-based) => 0-based vials 6,7 */
-        g_pour_sh=img; g_pour_y=pour_y[3-level]-20; g_pour_x=pour_x[idx];
+        g_pour_sh=img; g_pour_y=GT_POUR_Y[3-level]-20; g_pour_x=GT_POUR_X[idx];
     }
     if(g_jar_lvl<7) g_jar_lvl++;                  /* the essence accumulates in the central jar */
-    { static const int vial_colors[8]={239,14,231,103,228,5,15,219};   /* nuvie per-virtue liquid colours */
-      bubble_add_color(vial_colors[vial]); g_bubble_ctr=0; }            /* start bubbling with this virtue's hue */
+    { bubble_add_color(GT_VCOL[vial]);                                 /* the virtue's liquid colour */ g_bubble_ctr=0; }            /* start bubbling with this virtue's hue */
 }
 static void gypsy_stop_pour(void){ g_pour_sh=-1; }
 
@@ -1656,39 +1641,11 @@ static void gvl_liquid(int img_num,int vial,int level,int hand_x,int hand_y){
         else if(img_num>0x12){ if(img_num==0x25) return; if(img_num==0x2e) si=2; }
         else { if(img_num==0x10) si=2; else if(img_num==0x11) si=0; }
     } else { int t=img_num-9; if(t==0) si=0; else if(t==1) si=1; else if(t>=2&&t<=5) si=3; }
-    static const int vliq[96]={
-        0x3A,0x4F,0x64,0x7C,0x28,0x7E,0x20,0x34,
-        0x36,0x4B,0x60,0x76,0x26,0x78,0x1C,0x30,
-        0x36,0x4B,0x60,0x76,0x26,0x78,0x1C,0x30,
-        0x3C,0x51,0x66,0x7F,0x14,0x5F,0x22,0x36,
-        0x38,0x4D,0x62,0x79,0x27,0x7B,0x1E,0x32,
-        0x38,0x4D,0x62,0x79,0x27,0x7B,0x1E,0x32,
-        0x40,0x53,0x68,0x81,0x29,0x83,0x24,0x38,
-        0x40,0x53,0x68,0x81,0x29,0x83,0x24,0x38,
-        0x40,0x53,0x68,0x81,0x29,0x83,0x24,0x38,
-        0x00,0x03,0x06,0x09,0x16,0x19,0x1C,0x1F,
-        0x01,0x04,0x07,0x0A,0x17,0x1A,0x1D,0x20,
-        0x02,0x05,0x08,0x0B,0x18,0x1B,0x1E,0x21 };
     int img_offset=(vial>=6 && si!=3)?9:0x42;
     if(level>0 && level<3){
-        g_vl_sh = vliq[(level-1)*8 + si*24 + vial] + img_offset;
-        static const int hy[12]={0x1B,0x13,0x13,0x16,0x0E,0x0E,0x0E,0x0E,0x0E,0x0B,0x0B,0x0B};
-        g_vl_y = hand_y + hy[si*3 + level - 1] - 20;
-        static const int hx[96]={
-            0x4,0x4,0x4,0x4,0x14,0x14,0x14,0x14,
-            0x4,0x4,0x4,0x4,0x13,0x13,0x13,0x13,
-            0x4,0x4,0x4,0x4,0x13,0x13,0x13,0x13,
-            0x4,0x4,0x4,0x4,0x17,0x17,0x17,0x17,
-            0x3,0x3,0x3,0x3,0x17,0x17,0x17,0x17,
-            0x3,0x3,0x3,0x3,0x17,0x17,0x17,0x17,
-            0x3,0x3,0x3,0x3,0x1B,0x1B,0x1B,0x1B,
-            0x3,0x3,0x3,0x3,0x1B,0x1B,0x1B,0x1B,
-            0x3,0x3,0x3,0x3,0x1B,0x1B,0x1B,0x1B,
-            0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,
-            0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,
-            0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3 };
-        static const int hx1[8]={10,10,10,10,-13,-13,-13,-13};
-        g_vl_x = hand_x + hx[si*24 + (level-1)*8 + vial] + hx1[vial];
+        g_vl_sh = GT_VLIQ[(level-1)*8 + si*24 + vial] + img_offset;
+        g_vl_y = hand_y + GT_VLHY[si*3 + level - 1] - 20;
+        g_vl_x = hand_x + GT_VLHX[si*24 + (level-1)*8 + vial] + GT_HOFF[vial];
     }
 }
 
@@ -1705,18 +1662,14 @@ static void gypsy_anim_frame(const char*cap){
  * vial, lift it, tip it over the central jar (the pour stream flows, the jar rises + the vial drains
  * one level), then set it back. `vial` (0..7) = the virtue that won this question. */
 static void gypsy_pour(int vial){
-    static const int vx[8]={41,62,83,104,200,221,242,263};
-    static const int arm0[8]={0,0,0,0,5,5,5,5}, arm1[8]={1,1,1,1,4,4,4,4}, arm2[8]={2,2,2,2,3,3,3,3};
-    static const int h0[8]={12,12,12,12,13,13,13,13}, h1[8]={9,9,9,9,17,17,17,17}, h2[8]={10,10,10,10,18,18,18,18};
-    static const int h3[8]={16,16,16,16,46,46,46,46}, h4[8]={15,15,15,15,37,37,37,37};
-    static const int armx[8]={93,93,93,93,172,172,172,172};
-    static const int hx0[8]={29,50,71,92,202,223,244,264}, hx1[8]={107,107,107,107,170,170,170,170};
-    static const int hx2[8]={109,109,109,109,168,168,168,168}, hx3[8]={112,112,112,112,165,165,165,165};
-    static const int hx4[8]={10,10,10,10,-13,-13,-13,-13};
+    const int16_t *vx=GV_VIAL_X, *armx=GT_ARMX, *hx4=GT_HOFF;
+    const int16_t *arm0=GT_ARM[0], *arm1=GT_ARM[1], *arm2=GT_ARM[2];
+    const int16_t *h0=GT_HAND[0], *h1=GT_HAND[1], *h2=GT_HAND[2], *h3=GT_HAND[3], *h4=GT_HAND[4];
+    const int16_t *hx0=GT_HX[0], *hx1=GT_HX[1], *hx2=GT_HX[2], *hx3=GT_HX[3];
     if(vial<0||vial>7) return;
     char cap[48]; { const char*a="The gypsy pours thy "; int n=0; for(const char*p=a;*p;p++) cap[n++]=*p;
         const char*vn=CC_VIRTUE[vial]; for(const char*p=vn;*p;p++) cap[n++]=*p; cap[n++]='.'; cap[n]=0; }
-    if(!g_gyp_scene){ if(g_vial_lvl[vial]>0) g_vial_lvl[vial]--; if(g_jar_lvl<7) g_jar_lvl++; return; }
+    if(!g_gyp_scene || !g_itbl_gyp){ if(g_vial_lvl[vial]>0) g_vial_lvl[vial]--; if(g_jar_lvl<7) g_jar_lvl++; return; }
     g_pour_vial=vial;
     int hnum=0xf;
     for(int idx=0; idx<=16; idx++){
@@ -2211,8 +2164,8 @@ static void cc_woods_intro(void)
 }
 
 /* Entering the wagon — the gypsy's greeting (authentic, PALETTES.INT 5): the casting scene with all
- * eight vials FULL, and the greeting read a page at a time on the tall parchment ("At last thou hast
- * come to fulfill thy destiny," ... "Let us begin the casting!"). U.EXE text via g_greet[]. */
+ * eight vials FULL, and the greeting read a page at a time on the tall parchment (the gypsy's
+ * welcome through to the start of the casting). U.EXE text via g_greet[]. */
 static void cc_gypsy_intro(void)
 {
     if(!g_gyp_scene) return;
@@ -9024,6 +8977,37 @@ static void fe_bind_ccport(const uint8_t *ap)
         g_cc_pw=(ap[0]<<8)|ap[1]; ap+=2; g_cc_ph=(ap[0]<<8)|ap[1]; ap+=2;
         for(int k=0;k<g_cc_nport;k++){ g_cc_port[k]=ap; ap+=(int32_t)g_cc_pw*g_cc_ph; }
 }
+/* The intro's U.EXE data blocks (intro_sequence.md §1b): [u8 nblk] + nblk x [u16 len][bytes];
+ * block 0 = gypsy (1190 bytes), block 1 = tv (788). Values inside are little-endian 16-bit words
+ * at the offsets below (ours: where each table sits in the block). Copied out, so they outlive
+ * the streamed TEXT section. A block of the wrong length is left out. */
+static const struct { int16_t *dst; uint16_t off; uint8_t n; } ITBL_GYP[]={
+    { GT_HOFF,0x000,8 },  { GT_VCOL,0x012,8 },  { GT_VLIQ,0x148,96 }, { GT_VLHX,0x208,96 },
+    { GT_VLHY,0x2c8,12 }, { GV_IMG_OFF,0x2e0,8 }, { GT_ARMX,0x2f0,8 }, { GV_VIAL_X,0x300,8 },
+    { GT_HX[0],0x310,8 }, { GT_HX[1],0x320,8 }, { GT_HX[2],0x340,8 }, { GT_HX[3],0x350,8 },
+    { GT_HAND[0],0x3b0,8 }, { GT_HAND[1],0x3c0,8 }, { GT_HAND[2],0x3e0,8 }, { GT_HAND[3],0x3f0,8 },
+    { GT_HAND[4],0x400,8 }, { GT_ARM[0],0x410,8 }, { GT_ARM[1],0x420,8 }, { GT_ARM[2],0x430,8 },
+    { GT_POUR_IMG,0x440,24 }, { GT_POUR_X,0x470,24 }, { GT_POUR_Y,0x4a0,3 },
+};
+static const uint8_t TVP_SIZE[7]={20,7,26,19,6,54,74};
+static const uint8_t *itbl_bind(const uint8_t *ap)
+{
+    int nblk=*ap++;
+    for(int k=0;k<nblk;k++){
+        int L=(ap[0]<<8)|ap[1]; const uint8_t *b=ap+2; ap=b+L;
+        if(k==0 && L==1190){
+            for(unsigned t=0;t<sizeof ITBL_GYP/sizeof ITBL_GYP[0];t++)
+                for(int i=0;i<ITBL_GYP[t].n;i++){ const uint8_t *w=b+ITBL_GYP[t].off+2*i;
+                    ITBL_GYP[t].dst[i]=(int16_t)(w[0]|(w[1]<<8)); }
+            g_itbl_gyp=1;
+        } else if(k==1 && L==788){
+            for(int i=0;i<9;i++)  TV_NEWS[i]=b[2*i];
+            for(int i=0;i<54;i++){ TV_XOFF[i]=b[0x12 + 2*i]; TV_YOFF[i]=b[0x7e + 2*i]; }
+            for(int p=0;p<7;p++){ memcpy(TVP[p],b+0xea+0x50*p,TVP_SIZE[p]); TVP_LEN[p]=TVP_SIZE[p]; }
+        }
+    }
+    return ap;
+}
 static void fe_bind_text(const uint8_t *ap)
 {
         /* gypsy questions (from U.EXE): [u8 nq] + nq x [u16 len][len bytes] (not NUL-term) */
@@ -9051,6 +9035,7 @@ static void fe_bind_text(const uint8_t *ap)
           for(int q=0;q<g_nftxt;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_ftxt[q]=(const char*)ap; g_ftxt_len[q]=L; ap+=L; }
           g_ngarg=*ap++; if(g_ngarg>CC_GARG_MAX) g_ngarg=CC_GARG_MAX;   /* §1B gargoyle-sacrifice opening */
           for(int q=0;q<g_ngarg;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_garg[q]=(const char*)ap; g_garg_len[q]=L; ap+=L; } }
+        itbl_bind(ap);
         /* (BOOK.DAT text lives in the RESIDENT core section U6BK — the front-end is freed on 4 MB machines.) */
 }
 static void fe_bind_gypsy(const uint8_t *ap)

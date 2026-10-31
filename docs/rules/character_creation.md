@@ -147,9 +147,10 @@ the poured virtue colours). Remaining = polish only (gypsy setup/closing narrati
       + glass(20 left/23 right @ vial_x,66); the poured vial's glass is hidden (carried by the hand).
       gypsy_pour(winner) = the 17-frame (idx 0..16) arm/hand path: reach to the vial, lift it, tip it
       over the jar (gypsy_start_pour shows the pour STREAM + advances the jar; gvl_liquid tracks the
-      lifted vial's liquid following the hand), drain one level at idx 11, then set it back. All the
-      nuvie tables ported verbatim (arm 1..6, hand 9+n, pour_img/pour_x/y, vial_liquid 96-table,
-      hand_x/hand_y offsets) with 1-based→0-based index conversion. Wired: run_chargen calls
+      lifted vial's liquid following the hand), drain one level at idx 11, then set it back. The
+      position/image tables (arm 1..6, hand 9+n, pour image/x/y, the 96-entry vial-liquid table,
+      hand x/y offsets) are the original's data, read from the user's U.EXE at build time
+      (intro_sequence.md §1b, "gypsy" block); 0-based indices. Wired: run_chargen calls
       gypsy_pour(win) after each cc_ask; cc_gypsy_intro sets vials FULL.
     - VALIDATED on TOS 3.06 TT: `CHARGEN.REQ='P'` (build/pour_frame.png — the arm+hand tip a vial over
       the jar mid-pour), `'q'` (build/pour_drain.png — 8 vials at distinct drain levels + jar), `'D'`
@@ -157,8 +158,8 @@ the poured virtue colours). Remaining = polish only (gypsy setup/closing narrati
       completes cleanly with no hang/crash).
   - **JAR BUBBLES — DONE + validated on TT** (2026-07-12; nuvie image_bubble_effect). As virtues pour
     in, the jar essence CHURNS: every 4th update, each non-transparent liquid pixel is re-randomised to
-    one of the poured virtues' colours (nuvie vial_colors {239,14,231,103,228,5,15,219}, palette-5
-    indices). gypsy_start_pour accumulates the poured virtue's colour (bubble_add_color, max 8);
+    one of the poured virtues' colours (palette-5 indices, the per-virtue colour list of the U.EXE
+    "gypsy" block, intro_sequence.md §1b). gypsy_start_pour accumulates the poured virtue's colour (bubble_add_color, max 8);
     bubble_effect speckles a WORKING COPY (g_jarbub) so the shared pack shape is never mutated;
     gypsy_update_bubbles fires it on the 4-count cadence. Runs during the pour (gypsy_anim_frame) AND
     while the player reads each question (cc_ask's wait loop now re-presents each idle frame). Validated:

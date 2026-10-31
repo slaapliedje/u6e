@@ -97,7 +97,7 @@ first-line offsets 13/12/8/9 px as listed in the code's page table.
 | 15 | the open Codex dissolves in over the closed one | twinkle | "The ancient book opens …" (4) big | end |
 | 16 | | twinkle | "…and when its wisdom is gleaned …" (4) big | |
 | 17 | the scroll goes; the open Codex dissolves out; the wall dissolves back; the stars go | | — | |
-| 18 | fade to black, then the congratulations scroll fades in at (1,68) | | CONGRATULATIONS / "Thou hast completed Ultima VI: The False" / "Prophet, in <elapsed>." / "Report thy feat unto Lord British at Origin Systems!" (wrapped) | |
+| 18 | fade to black, then the congratulations scroll fades in at (1,68) | | the congratulations text from END.EXE (title line, the completion line with the elapsed time spliced in, the closing line; wrapped) | |
 
 Afterwards a key ends the game: the engine returns to the desktop (the original's END.EXE
 returned to DOS).

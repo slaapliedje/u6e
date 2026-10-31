@@ -1,90 +1,155 @@
-# u6e — Ultima VI engine for Atari (clean-room remake)
+# u6e — Ultima VI for the Atari ST, TT and Falcon
 
-A from-scratch, clean-room reimplementation of the **Ultima VI** game engine
-for the Atari line — and, because the three games share one engine lineage,
-also **The Savage Empire** and **Martian Dreams**. Written in C for the
-Motorola 68000 (big-endian), it scales from a base 68000 ST up through STE,
-TT030, Falcon030, and 68000 + graphics-card setups from a single source tree
-and a single runtime hardware-detection path.
+A from-scratch, clean-room reimplementation of the **Ultima VI: The False Prophet** engine for
+the Atari 68000 line, written in C11. One source tree builds for a plain 4 MB ST, the TT030,
+the Falcon030 and VDI graphics cards, and picks its display path at run time.
 
-Original game data is **user-provided** (from your own DOS/ST copy). We ship no
-copyrighted assets — see [refdata/README.md](refdata/README.md).
-
-## Project goals
-1. One engine, all three games (data + small per-game rule deltas, not forks).
-2. Full Atari hardware matrix from one detection routine.
-3. Fix the original ST port's criticized 16-color palette — produce a low-color
-   result that visibly beats it (host-side, build-time quantization).
-
-## Repository map
-| Path            | What lives there |
-|-----------------|------------------|
-| [CLAUDE.md](CLAUDE.md) | Top-level project rules (clean-room, CPU, renderer, pipeline). |
-| [engine/](engine/)     | Shared, hardware-independent game logic (C). |
-| [render/](render/)     | Renderer interface + per-target backends (ST/STE/TT/Falcon/vcard). |
-| [platform/](platform/) | The only place that calls TOS/GEMDOS/BIOS/XBIOS (memory, I/O, input, timing). |
-| [dataformats/](dataformats/) | Loaders/parsers for the original game files. |
-| [tools/](tools/)       | Host-side asset pipeline (runs on the dev PC, not the ST). |
-| [docs/](docs/)         | Clean-room knowledge base: format/rules specs, design, milestones. |
-| [routines/](routines/) | Disassembly notebook — per-routine RE notes feeding the specs. |
-| [refdata/](refdata/)   | Your original game data (gitignored; never committed). |
-
-Each subsystem has its own `CLAUDE.md` with detailed rules and decisions.
-
-## Clean-room discipline (the core constraint)
-Reference projects (Nuvie, ScummVM, U6Edit, community decoders) and format
-pages may be **read** to UNDERSTAND a format/behavior and to write a spec in
-[docs/](docs/). Engine code is then implemented **from our spec**, never
-transcribed from their source. The /docs ↔ code boundary is the clean-room
-firewall. See [docs/CLAUDE.md](docs/CLAUDE.md).
-
-## Getting started (dev)
-- **Toolchain:** `m68k-atari-mint-gcc` (GCC 15.2.0). Full setup, CFLAGS, and
-  IDE/clangd configuration: [docs/design/toolchain.md](docs/design/toolchain.md).
-- **IDE:** clangd, configured by [.clangd](.clangd) + [.vscode/](.vscode/).
-  Install the clangd extension (recommended in `.vscode/extensions.json`).
-- **Emulator:** Hatari + EmuTOS with GEMDOS HD emulation.
-- **Plan:** work the milestones in
-  [docs/design/milestone.md](docs/design/milestone.md) (M0 = scaffolding &
-  "hello, hardware"); spec status lives in [docs/INDEX.md](docs/INDEX.md).
+You need **your own copy of the DOS Ultima VI data** (GOG sells it). This repository contains no
+game data: the engine reads the original files you provide, as ScummVM/Nuvie and other engine
+remakes do.
 
 ## Status
-**M0–M2 core done; M4 gate PASSED** (2026-06-23). Toolchain + IDE configured;
-the build→run→self-verify loop works. The `/platform` foundation is in
-(cookie-jar detection, ST-RAM/Alt-RAM pools, GEMDOS file I/O, measured-refresh
-timing). The `/dataformats` foundation decodes the original files — LZW, library
-containers, MAP/CHUNKS, palette, 16×16 tiles, and **conversations** — all
-validated host-side against real game data: `make mapdump` renders a recognizable
-Britannia world map, and `make convspike` runs a real NPC conversation (Dupre)
-end-to-end. The project's biggest risk — the conversation "usecode" — is retired
-(see [docs/design/m4-usecode-gate.md](docs/design/m4-usecode-gate.md)).
-**M3 + M5 done**: the U6 map renders on screen, and the **avatar walks it** —
-`make run-game` runs a walkable, scrolling U6 world on an emulated TT (real TOS
-3.06): arrows/WASD move the avatar, the view re-centers, water blocks movement,
-turns advance. The engine is portable and headless-tested (`make enginetest`).
-**M6 in progress**: the conversation VM is transcript-tested across all 200 NPCs
-(`make convtest`), and the world is now **populated** — `make run-game` walks a
-furnished U6 town (8329 objects decoded from the savegame, drawn over terrain).
-Next M6: NPC actors + schedules, object interaction/inventory, the usecode
-expression VM, save/restore → the first release tag.
+
+The whole game is playable from the intro to the ending:
+
+- **Front end:** the animated intro, title menu, character creation with the gypsy's questions,
+  and the gargoyle opening, using the original art and music.
+- **World:** the full surface, the dungeons and the gargoyle lands. NPCs follow their daily
+  schedules, and there is day and night, light sources, eclipses, moongates, the orb, ships,
+  skiffs, rafts, horses, wind and ship cannons.
+- **Conversations:** every NPC's conversation script runs on our own interpreter, with the
+  original portraits.
+- **Systems:**
+  - combat, with the A)ttack crosshair, missiles, and foes that cast;
+  - all 80 spells, reagents and spellbooks;
+  - shrines, mantras and leveling;
+  - equipment, containers, pushing, levers, doors and keys;
+  - resting, food and healers;
+  - joining and leaving the party.
+- **Saving:** S)ave writes a ScummVM/Nuvie-format save, so a save can be loaded in either engine.
+- **Music:** the original songs, played through the YM2149 sound chip on any Atari, a Roland MT-32
+  or General MIDI module on the MIDI port, or pre-rendered AdLib audio through STE/TT/Falcon DMA
+  sound. F1 cycles through the sources.
+
+Speed (idle frame rate, measured in Hatari): about **13 fps on a stock TT** and **11 fps on a
+stock Falcon**, both with no Fast RAM.
+
+What is still rough is listed under [Known issues](#known-issues). This is a **test release**:
+expect bugs, and please report them (see [Reporting bugs](#reporting-bugs)).
+
+| Machine | Binary | Display |
+|---|---|---|
+| ST / STE / Mega ST (68000, 4 MB) | `GAMEST.PRG` | 16 colours, quantised palettes per scene and per portrait |
+| TT030 | `GAME.PRG` or `GAMETT.PRG` | 256 colours (TT low) |
+| Falcon030 (stock, no FPU needed) | `GAME.PRG` or `GAMEF.PRG` | 256 colours (VIDEL) |
+| Graphics card (NVDI/EdDI), 68020+ | `GAME.PRG` | through the card's VDI driver |
+| Graphics card on a 68000 | `GAMEVC.PRG` | through the card's VDI driver |
+
+`GAME.PRG` is the unified 68020+ binary: it detects the TT, the Falcon or a card at start-up. No
+FPU is required anywhere. A 4 MB machine works; the engine streams the intro and front-end art
+when RAM is short.
+
+## Playing it
+
+### 1. Build the files (on a Linux PC, for now)
+
+The game's data packs are converted from your DOS files on a PC. (Converting them on the Atari at
+first boot, with nothing to do but copy the DOS files over, is planned: see
+[docs/design/first_boot_convert.md](docs/design/first_boot_convert.md).)
+
+You need `m68k-atari-mint-gcc` (see [docs/design/toolchain.md](docs/design/toolchain.md)), a host
+C compiler, `make`, and optionally Hatari for testing.
 
 ```sh
-make            # -> build/selftest.prg (base ST, 68000)
-make check      # headless self-verify on emulated ST + TT (PASS/FAIL)
-make dftest     # validate LZW + library decoders vs real /refdata files
-make mapdump    # decode world -> build/worldmap.png + tilesheet.png
-make convspike  # run a real NPC conversation end-to-end (M4 gate)
-make run-falcon # interactive run on an emulated Falcon
+mkdir -p refdata/dos/u6
+cp /path/to/your/ULTIMA6/* refdata/dos/u6/      # the DOS game folder (MAP, CHUNKS, U.EXE, ...)
+make world          # converts your data -> build/U6.PAK, build/U6FE.PAK, build/SAVE.000
+make game game-st game-falcon                    # -> build/game.prg, gamest.prg, gamef.prg
 ```
+
+Optional extras:
+- **Roofs:** if ScummVM is installed, `make world` takes the roof overlay from its `ultima.dat`
+  (Nuvie's add-on data, `ULTIMA_DAT=/path/to/ultima.dat`). Without it, buildings show their
+  floors from outside.
+- **AdLib music:** `make m2pcm` converts the AdLib songs to audio (about 20 MB of `.PCM` files
+  in `build/music/`) for the DMA sound path; copy them next to the game.
+
+### 2. Install on the Atari
+
+Copy these into one folder on the hard drive or CF card:
+
+- the `.PRG` for your machine;
+- `U6.PAK`, `U6FE.PAK`, `SAVE.000` from `build/`;
+- `CONVERSE.A`, `CONVERSE.B`, `PORTRAIT.A`, `PORTRAIT.B`, all `*.M` and `MIDI.DAT` from your DOS
+  folder;
+- a one-byte file `MENU.REQ` (any content), which boots to the intro and title menu.
+
+`make st-disks-falcon` (or `-st` / `-tt`) instead builds a set of `.ST` floppy images with an
+installer, `INSTALL.TOS`, for a Gotek or real floppies
+([docs/design/distribution.md](docs/design/distribution.md)).
+
+Music: with no `.PCM` files the game uses the YM2149. For an MT-32 or General MIDI module, press
+F1 in the game; the choice is saved in `MIDI.CFG`.
+
+### 3. Controls
+
+The original's keys: arrow keys walk. The first letter of each command starts it:
+
+- A)ttack, C)ast, T)alk, L)ook, G)et, D)rop, U)se, M)ove (push), E)quip, R)est, I)nventory, S)ave;
+- B toggles combat mode.
+
+Commands that need a direction or target take the arrow keys (or a crosshair, then Enter). Esc
+cancels. The mouse works on the command bar, the party roster and the map.
+
+## Known issues
+
+- Some conversations misbehave at the end of a talk: Chuckles keeps asking his riddles after
+  "bye"; Wilbur gives no reply to "y".
+- The Savage Empire and Martian Dreams boot and can be walked, but are not playable yet.
+- Only the GOG/DOS release's `U.EXE` has been tested for the intro data. With another version,
+  the TV and the gypsy's pour animation are left out rather than drawn wrong (`make world` says
+  so).
+
+## Reporting bugs
+
+Open an issue with:
+- the machine (or emulator and settings);
+- which `.PRG` you ran;
+- what you did and what you saw;
+- if you can, a save (`SAVED.000`) from just before the problem.
+
+Screenshots help. For crashes, the console output (Hatari `--conout 2`) is the most useful thing.
+
+## For developers
+
+- **Clean-room discipline.** ScummVM/Nuvie, community tools and format pages may be **read** to
+  understand a format or behaviour and to write our own spec in [docs/](docs/). The engine is then
+  written from that spec, never transcribed. Original data (art, text, tables) is never committed
+  or compiled in: anything the game needs from the original, such as the intro narration, the
+  gypsy's questions, or the TV and casting tables, is read from your files at build time. See
+  [CLAUDE.md](CLAUDE.md) and [docs/CLAUDE.md](docs/CLAUDE.md).
+- **Layout:**
+  - [engine/](engine/): game logic;
+  - [render/](render/): the renderer and its per-machine backends, plus the game shell (`gamedemo.c`);
+  - [platform/](platform/): TOS, GEMDOS and XBIOS calls;
+  - [dataformats/](dataformats/): decoders for the original files;
+  - [tools/](tools/): the host-side converters and tests;
+  - [docs/](docs/): the specs (index in [docs/INDEX.md](docs/INDEX.md)).
+- **Tests:**
+  - `make check`: the headless self-test on an emulated ST and TT;
+  - `make enginetest convtest cvmtest combattest`: host logic tests;
+  - [tools/bot/](tools/bot/): a bot that plays the game through Hatari to find bugs
+    ([docs/design/bot_harness.md](docs/design/bot_harness.md)).
+- **Emulation:** Hatari with EmuTOS or real TOS images. The primary targets are the stock TT and
+  Falcon, then the 4 MB ST.
 
 ## License
 
 u6e is licensed under the **GNU General Public License, version 2 or later**
-(`GPL-2.0-or-later`) — see [LICENSE](LICENSE). This matches **ScummVM** and **Nuvie**,
-the reference implementations whose data formats and behavior we studied (read to
-*understand*, never transcribed) to write our own specs — see *Clean-room discipline*
-above.
+(`GPL-2.0-or-later`); see [LICENSE](LICENSE). This matches ScummVM and Nuvie, whose behaviour and
+data formats we studied (read to understand, never transcribed) to write our own specs.
 
-The GPL covers **our** engine code and documentation only. We ship **no** original
-game data: Ultima VI and its assets remain the property of their rights holders and
-are user-provided at build time (see `refdata/README.md`).
+The GPL covers our engine code and documentation only. Ultima VI and its assets remain the
+property of their rights holders and are supplied by you (see
+[refdata/README.md](refdata/README.md)). Ultima is a trademark of Electronic Arts; this project is
+not affiliated with or endorsed by EA or Origin Systems.

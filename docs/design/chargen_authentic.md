@@ -82,7 +82,7 @@ Boot order:
      - P2: `You have traded the Avatar's …` (181 ch)
      - P3 (as the room pans to the window): `Outside, a chill wind rises...`
    - **Storm window (INTRO_2.SHP, PALETTES.INT 1)** — lightning flashes:
-     - `...and in moments, the storm is upon you.`
+     - `...and in moments, …` (short page)
      - `Tongues of lightning lash the …` (83 ch)
      - `In a cataclysm of sound …` (81 ch)
      - `Lightning among the stones!` / `Is this a sign from distant Britannia?`
@@ -94,7 +94,7 @@ Boot order:
    - **Red moongate (INTRO_3.SHP, PALETTES.INT 2, crimson palette-cycle)** — gate rises, Avatar walks in:
      - `...and from the heart of …` (78 ch)
      - `Exultant memories wash over you …` (161 ch)
-     - `But your joy soon gives way to apprehension.`
+     - `But your joy …` (short page)
      - `The gate to Britannia has …` (73 ch)
      - `Abruptly, the portal quivers and …` (90 ch)
      - `Desperation makes the decision an easy one.`
@@ -493,7 +493,7 @@ All front-end text is inside the front-end executable, byte-for-byte as quoted a
   | 97548 | `"Welcome, O Seeker!` |
   | 97570 | `A lonely stroll along an …` (48 ch) |
   | 97706 | `A woman's voice rings out with friendship…` |
-  | 97841 | `"At last thou hast come to fulfill thy destiny,` |
+  | 97841 | `"At last thou …` (gypsy greeting) |
   | 97945 | `"Sit before me now, and …` (57 ch) |
   | 98037 | `On a wooden table eight bottles stand…` |
   | 98110 | `"Behold the Virtues of the Avatar,` / `"Let us begin the casting!` |
@@ -503,12 +503,12 @@ All front-end text is inside the front-end executable, byte-for-byte as quoted a
   | 104647 | `"Drink of these waters and …` (53 ch) |
   | 104735 | `As you drink from the …` (52 ch) |
   | 104885 | `You wake in a different time…` |
-  | 105063 | `The sagas of Ultima IV and Ultima V…` |
+  | 105063 | `The sagas of …` |
   | 105213 | `Finally, tempered by your struggles…` |
   | 105345–107317 | Gargoyle sacrifice opening (`Dazed, you emerge…` … `portal's last handspan of light!`) |
 
 - **ST:** `refdata/st/u6/U.PRG` (same strings; different offsets — e.g. `shalt thou`@11979,
-  `Welcome, O Seeker`@41153, `fulfill thy destiny`@41473, `Let us begin the casting`@41773,
+  `Welcome, O Seeker`@41153, greeting page 2 @41473, `Let us begin the casting`@41773,
   `flask`@48279, `epic challenge of Ultima VI`@48987).
 - The menu OPTION LABELS are **not text** — they are art baked into `MAINMENU.SHP` shape 0
   (extract as an image, not a string).

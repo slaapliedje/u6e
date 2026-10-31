@@ -10,7 +10,7 @@
 >                  questions, character_creation.md). Page counts + scene structure only.
 > - Validated by : side-by-side DOSBox capture (each scene + narration page identified).
 > - Confidence   : confirmed (sequence/assets) / probable (exact frame timings).
-> - Last updated : 2026-08-15 (doorway reveal + black silhouette, real-Falcon feedback)
+> - Last updated : 2026-10-30 (§1b: the TV and gypsy tables come from U.EXE at build time)
 
 ## Advance model (IMPORTANT — differs from our current build)
 The original is **input-advanced**, NOT time-advanced. Each narration page holds indefinitely
@@ -37,27 +37,49 @@ each page. (For headless capture, advance on the sentinel/injected input or a lo
     finger visible), ends the step; **0x83** = "endless road": road_offset−− (wraps 14→1),
     YOFF[0x22] = 0x15−road_offset → draw 0x22, YOFF[0x22] = 0x24−road_offset → draw 0x22, draw 0x21;
     **0x84 n a₁..aₙ** = draw a random one of the n images; **0x86** = draw the current news
-    image; **0x87** = pick the news image at random from {5,6,7,0x0D,0x0E,0x18,0x19,0x1F,0x20};
+    image; **0x87** = pick the news image at random from the 9-entry news list (§1b);
     **0x88** = pledge: counter++, every 4th draw the pledge image (37, alternating with 38 every 16);
     **0x89** = draw a random one of images 50..52; **0x8A** = end of step; **0x8B** = rotate
     palette entries 224..228 by one. When a program runs out the next one starts (7 wraps to 1).
-    1 breathing `82 82 80 03 02 8A 02 8A 01 8A 01 8A 00 8A 00 8A 01 8A 01 81`
-    2 intestines `82 82 80 28 03 8B 81`
-    3 vacuum `82 82 80 04 04 81 80 04 08 81 80 04 09 81 80 04 0A 81 80 04 0B 81 80 04 0C 81`
-    4 anchor `82 82 87 80 46 0F 86 84 09 10 10 10 11 11 11 12 12 12 81`
-    5 endless road `82 82 80 32 83 81`
-    6 rock band `82 82 80 05 27 8A 28 8A 29 81 80 06 2A 8A 2A 8A 2B 8A 2B 8A 2C 8A 2C 8A 2D 8A 2D 81 80 0A 2E 8A 2F 8A 30 8A 84 09 2E 2E 2E 2F 2F 2F 30 30 30 8A 2E 8A 2F 8A 30 81`
-    7 pledge now `82 82 80 55 16 17 84 0C 13 13 13 13 14 14 14 14 15 15 15 15 88 81 80 0F 16 84 02 1A 1B 89 88 81 80 03 16 1A 89 88 81 80 03 16 1C 88 81 80 03 16 1D 88 81 80 03 16 1E 88 81 80 03 16 23 88 81 80 03 16 24 88 81 80 32 16 88 81`
-  - Sprite offsets (image 0..54): XOFF = `0 0 0 0 0 1F 1F 1F 0 0 0 0 0 1F 1F 0 9 9 9 0C 0C 0C 0 4 1F 1F 4 0 4 4 4 1F 1F 0 0 6 6 8 4 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`;
-    YOFF = `0 0 0 0 0 2 2 2 0 0 0 0 0 2 2 0 7 7 7 3 3 3 0 2 2 2 0 0 0 0 1 2 2 0 0 3 8 1D 1C 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`
-    (YOFF[0x22] is rewritten by the road op).
-  (Tables = the original's TV script data as transcribed in nuvie's intro.lua; the interpreter
-  above is implemented from THIS description.)
+    The programs are: 1 breathing, 2 intestines, 3 vacuum, 4 anchor, 5 endless road, 6 rock
+    band, 7 pledge now.
+  - Sprite offsets XOFF / YOFF per image (0..53; image 54 has offset 0); YOFF[0x22] is rewritten
+    by the road op.
+  - The program bytes, the offset tables and the news-image list are the ORIGINAL's data. They are
+    not reproduced here and not compiled into the engine: they are read from the user's U.EXE at
+    build time (the "tv" block, §1b).
 - **2 narration pages** (page 1 "five seasons…", page 2 "traded the Avatar's life…/television
   supermen…"). We have only page 1.
 - **PAN**: after the pages, the room pans right (avatar 2× parallax) to reveal the window — this is
   our existing pan; the user confirmed it's correct, it just triggers after a couple pages.
 
+
+### 1b. The intro's data blocks in U.EXE (read at build time)
+The TV's programs/offsets and the gypsy's casting choreography (character_creation.md §3c) are
+tables inside the original intro program. `mkworld` copies two blocks out of the user's U.EXE into
+the front-end TEXT section (memory_streaming.md section 5): `[u8 nblk=2]` + per block `[u16 len][len bytes]`.
+A block is identified by offset, length, Adler-32 and CRC-32 (the U.EXE of the GOG/DOS release):
+
+| block | offset | length | Adler-32 | CRC-32 |
+|---|---|---|---|---|
+| gypsy | 0x16A25 | 1190 | 0x56109063 | 0xD8FA202A |
+| tv | 0x17374 | 788 | 0x20884298 | 0x3C5527F8 |
+
+If the CRC does not match at the offset (another U.EXE build), the Adler-32 is rolled over the
+whole file and a hit is confirmed by the CRC; not found ⇒ length 0, and the engine leaves the TV
+programs (static only) or the vial/pour animation out. Values are little-endian 16-bit words.
+
+- **tv** (byte offsets in the block): news list 0x000 (9 words); XOFF 0x012 (54); YOFF 0x07E (54);
+  program p (1..7) at 0x0EA + 0x50·(p−1), bytes, lengths 20, 7, 26, 19, 6, 54, 74.
+- **gypsy**: pour hand offset 0x000 (8: x added per vial while lifted, also the hand-to-liquid
+  offset); virtue liquid colours 0x012 (8); lifted-vial liquid sprites 0x148 (96 = 4 hand poses ×
+  3 levels × 8 vials) and their x offsets 0x208 (96), y offsets 0x2C8 (12); vial-liquid image
+  offsets 0x2E0 (8); arm x 0x2F0 (8); vial x 0x300 (8; liquid x = vial x + 3); hand x per pose
+  0x310, 0x320, 0x340, 0x350 (8 each); hand image per pose 0x3B0, 0x3C0, 0x3E0, 0x3F0, 0x400;
+  arm image per pose 0x410, 0x420, 0x430; pour-stream image 0x440 (24 = 3 levels × 8 vials), pour x
+  0x470 (24), pour y 0x4A0 (3).
+- One pour image differs from nuvie's intro.lua: level 1, vial 0 is 0x2D in U.EXE (nuvie: 0x2E);
+  0x2D continues its column's step-by-one pattern, so we take the original's value.
 ### 2. Window / storm  (INTRO_2.SHP, PALETTES.INT 2)   — MISSING (the "lightning" scene)
 Close-up of a curtained, mullioned window onto a stormy twilight pine forest. Layers (nuvie
 load_window / intro_2.shp indices, in DRAW ORDER — the ground is drawn BEFORE the trees, whose
@@ -69,7 +91,7 @@ rain drops(4-7, spawn+fall), random **lightning flashes**(11-18, brief, random x
 and the two **door leaves** left(24, 66×200)/right(25, 67×200) — NOT curtains: they are the leaves of
 the house's DOORWAY, parked off-screen right (x=320 / x=573) until the pan. The whole window
 **flashes white** (glass 26→27) when lightning hits. **4 narration pages** ("…storm is upon you",
-"Tongues of lightning lash the sky…", "…bolt of searing blue fire strikes the earth!" [strike
+"Tongues of …", "…strikes the earth!" [strike
 appears], "Lightning among the stones!…"). **Implemented as nuvie's layered animation (2026-08-16,
 real-Falcon report "no rain or clouds; the lightning flashes behind the trees and lights the
 ground"):** one `display_window` step per 50 ms (nuvie runs it every 2nd 25 ms update): the big cloud
@@ -112,7 +134,7 @@ the stone is gone (bg img 5). Validated.
 
 ### 5. Moongate  (INTRO_3.SHP, PALETTES.INT 3, crimson palette-cycle 144-159)   — ✅ DONE
 The **red** moongate rises from the stones, then 4 input-advanced narration pages (crimson-pulsing
-throughout): (0) "…a softly glowing door ascends in silence!", (1) the **clutch-the-stone memory** —
+throughout): (0) the door rising from the stones, (1) the **clutch-the-stone memory** —
 "…as you clutch the stone… last cast down by Lord British to banish Blackthorn!" — during which
 (nuvie @911–955, implemented 2026-08-16) the hand holding the obsidian (INTRO_3 shape 6, 114×134) rises
 from y=0xC7 to 0x44 at x=0x9B while the WHOLE scene (bg, ground cover, gate) scrolls up 65 px (1 px per
