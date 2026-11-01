@@ -130,6 +130,7 @@ class Game:
 
     def objects(self):
         self.key('f3'); rows = [kv(l) for l in self.got if l.startswith(('@O ', '@I ')) and l != '@O end']
+        self.ready = [kv(l) for l in self.got if l.startswith('@E ')]           # readied things: id slot obj
         return [r for r in rows if 'i' in r], [r for r in rows if 'row' in r]
 
     def passmap(self):

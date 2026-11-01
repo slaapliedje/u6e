@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
-collect what looked wrong. Segments: castle, bridge, britain, shop, healer, cave, orb, shrine (default: all, in order)."""
+collect what looked wrong. Segments: castle, bridge, britain, shop, healer, sell, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
@@ -68,6 +68,38 @@ def seg_healer(p, kw):
         if 'art well' not in text and 'are well' not in text: p.issue('healer', 'nobody hurt, no "well": %r' % out[-3:])
     elif len(still) != len(hurt) - 1: p.issue('healer', 'heal mended %d of %s (still %s)' % (len(hurt) - len(still), hurt, still))
     elif g0 - g1 != (30 if g0 >= 30 else 0): p.issue('healer', 'heal cost %d with %d gold' % (g0 - g1, g0))
+
+def wait_for_work(p, aid, name, limit=400):
+    """pass turns (space) until actor aid is at work (worktype 0x90); False if it never is"""
+    for i in range(limit):
+        a = p.actor(aid) if i % 10 == 0 else a
+        if a and a.get('wt') == 0x90: return True
+        p.key('space', 'wait for %s' % name)
+    p.log('  %s never came to work (wt=%s, %02d:%02d)' % (name, a and a.get('wt'), p.g.state['min'] // 60, p.g.state['min'] % 60))
+    return False
+
+def seg_sell(p, kw):
+    """sell Max (18) a weapon: he names one the party carries and a price; yes: the item leaves the
+    pack and the gold goes up by the price"""
+    import re
+    if not wait_for_work(p, 18, 'Max'): p.issue('sell', 'Max never at work'); return
+    def carried():                                                      # the pack and everything readied, by type
+        c = {}
+        for r in p.g.objects()[1]: c[r['obj']] = c.get(r['obj'], 0) + (r['qty'] or 1)
+        for r in p.g.ready: c[r['obj']] = c.get(r['obj'], 0) + 1
+        return c
+    g0 = p.g.state['gold']; pack0 = carried()
+    out = p.talk_to(18, ['sell', '1', 'y'], 'Max')         # which of you: 1 (the Avatar holds the pooled pack, usecode_vm.md §6f)
+    if out is None: p.issue('sell', 'could not reach Max'); return
+    text = ' '.join(r for _, r in out)
+    m = re.search(r'take (\d+) gold for that ([^,?]+)', text)
+    pack1 = carried()
+    gone = {o: pack0[o] - pack1.get(o, 0) for o in pack0 if pack0[o] > pack1.get(o, 0)}
+    g1 = p.g.state['gold']
+    p.log('  Max: offer %s, gold %d -> %d, pack lost %s' % (m and m.groups(), g0, g1, gone))
+    if not m: p.issue('sell', 'no offer from Max: %r' % out[-3:]); return
+    if re.search(r'Aye,\s+has', text): p.issue('sell', 'no name in the offer: %r' % text[:120])
+    if g1 - g0 != int(m.group(1)) or sum(gone.values()) != 1: p.issue('sell', 'sold %s for %s: gold %d -> %d, pack lost %s' % (m.group(2), m.group(1), g0, g1, gone))
 
 CAVE = (185, 436)                                     # the nearest cave west of Britain that can be walked to (obj 326)
 
@@ -234,7 +266,7 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, healer=seg_healer, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, healer=seg_healer, sell=seg_sell, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

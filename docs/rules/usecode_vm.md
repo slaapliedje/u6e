@@ -337,8 +337,35 @@ letter; we copy the run as written.)
   the shared pack for each member made a party of four look four times as rich. GIVE / NEW / DELETE
   for any member still change the pooled pack. Consequence (deviations.md): at "Which of you?" the
   member who pays or sells is the Avatar (1); a companion has nothing of its own.
+- **Readied things are carried.** In the reference a character's readied weapon, armour, ring and so
+  on are part of its inventory, so HASOBJ / OBJCOUNT / OBJINPARTY see them and a merchant buying
+  ("sell") can take them. u6e counts every party member's readied things into the pooled pack the
+  scripts see. When a script takes items (DELETE, or GIVE to the NPC), they come from the pack first
+  and then off a companion's body (the last in the roster first), the Avatar's last; the amulet of
+  submission cannot be taken off and stays. Until 2026-10-31 readied things were invisible to
+  scripts, so with an empty pack Max said "none of you has anything I'm needing" to a party
+  carrying swords and bows (found by the bot's sell segment).
+- **WOUNDED(npc)** (0xda) is 1 when the actor's HP is below its maximum (a dead actor at 0 HP counts),
+  else 0. Until 2026-10-31 it read the dead flag, so a healer told a hurt party "Fret not, for all of
+  you are well!" and never healed anyone (found by the bot's healer segment).
 - Test hooks: cvmtest (OBJINPARTY with and without a body; RESURRECT asks for the pack; a second
   member counts 0 gold); the bot's healer segment (resurrect with nobody dead, heal for 30 or free).
+
+## 6g. Assigning into the data block (2026-10-31)
+
+> Provenance: READING Nuvie `core/converse_interpret.cpp` (the DECL and ASSIGN cases, set_db_integer)
+> to understand; Max's (18) sell menu inspected with our host dump. Re-expressed. Found by the bot's
+> sell segment: Max listed "1) Dagger 2) Dagger ... 5) Dagger" and bought "that Dagger" whichever
+> line was picked.
+
+A DECL's target can be an element of a data-block integer table instead of a numbered variable.
+Its raw (unevaluated) operands are then `loc, n, VAR, DATA` (the element at loc indexed by the
+value of variable n) or `loc, k, DATA` (the element at loc indexed by the constant k). The next
+ASSIGN writes its value into that element as a 2-byte integer, and later DATA reads of the same
+element see it, for the rest of the conversation (the script is reloaded for each conversation, so
+nothing persists). Merchants build their "which one?" lists this way: every matching item's index is
+stored into a scratch table, then printed and picked from it. A plain DECL (`n, VAR` or `n, SVAR`)
+clears the data-block target. Test hook: cvmtest (DECL into DATA, then DATA reads it back).
 
 ## 7. Status
 VERIFIED — the full conversation VM runs the real bytecode (greeting, expression

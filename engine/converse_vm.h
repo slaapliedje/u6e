@@ -22,6 +22,7 @@
 
 /* Game state the VM reads/mutates. Defaults (zeroed) make every conditional
  * take its "flag clear / not in party" branch; the host can preset state. */
+#define CVM_DBW 48                 /* data-block elements a conversation can write (§6g) */
 typedef struct {
     uint8_t  talk_flags[256];  /* per-NPC: 8 conversation flags (bit n)        */
     int32_t  var[64];          /* numbered conversation variables              */
@@ -37,6 +38,7 @@ typedef struct {
     uint8_t  knows_gargish;    /* var 0x15: 1 = player understands Gargish      */
     uint8_t  on_quest;         /* var 0x1A: 1 = on a sacred quest               */
     int16_t  avatar_hp;        /* var 0x19: avatar health                       */
+    uint8_t  wounded[256];     /* HP below max: WOUNDED reads it (usecode_vm.md §6f)            */
     uint8_t  lost_body;        /* a dead companion's body is gone: counts as carried (usecode_vm.md §6f) */
     uint8_t  resurrect_req;    /* RESURRECTs to apply: raise what a carried body names (§6f)    */
     uint8_t  poisoned[256];    /* per-NPC poison status (CURE clears)           */
@@ -97,6 +99,8 @@ typedef struct {
     char        input[CVM_INPUT];           /* player keyword */
     int         answer_mode;                /* 0=NO 1=YES 2=DONE */
     uint32_t    decl_v; uint8_t decl_t;     /* declared input/string var (DECL) */
+    uint8_t     db_lvar; uint32_t db_loc, db_off;   /* DECL into a data-block element (usecode_vm.md §6g) */
+    int32_t     dbw_pos[CVM_DBW]; uint16_t dbw_val[CVM_DBW]; int ndbw;   /* data-block writes, newest last */
     char        svar[CVM_NSVAR][40];        /* string vars (DATA string, input $Z, ...) */
     int         input_mode;                 /* 0=none 1=keyword(ASK) 2=var(INPUT*) */
     char        askc[16];                   /* at an ASKC pause: the characters it accepts ("yn"), else "" */

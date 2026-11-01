@@ -40,7 +40,7 @@ run.py (segments of the walkthrough)
   `foes` (hostile actors within 8 tiles), the party `id:hp/max:mp:level`, then the free text:
   `msg` (the message box), `conv` (the conversation transcript), `typed`.
 - **Dumps** on function keys (no game effect): F2 actors on this level (with each NPC's live worktype `wt`), F3 objects within 24
-  tiles plus the pack, F4 the passability file `BOTPASS.BIN` (one byte per tile: bit0 walkable as
+  tiles plus the pack and every member's readied things (`@E id slot obj`), F4 the passability file `BOTPASS.BIN` (one byte per tile: bit0 walkable as
   the player's step decides, bit3 water) and `BOTDOOR.TXT` (every door: x y frame).
 - **Output channel**: `BOT.REQ` holding `n` sends the lines through Hatari's NatFeats `NF_STDERR`
   (opcodes $7300 / $7301), which never touches the screen; otherwise GEMDOS `Cconws` (the VT-52
@@ -182,8 +182,15 @@ body it carries; and per-member gold counts saw the pooled purse once for each m
 with 2 gold in a party of four). All three in usecode_vm.md §6f; the HEALSYNC lines of the
 INVSYNC.BIN hook check a carried body and a lost one rising.
 
+`sell` (after `healer`; waits with space until Max, 18, is at work at 14:00) sells Max a weapon:
+the offered item must leave what the party carries (pack or readied, the F3 `@E` rows) and the gold
+rise by the offered price. Found: WOUNDED read the dead flag, so Tiberius called a hurt party well
+(§6f); readied things were invisible to scripts, so Max said nobody had anything he needed; and a
+DECL into a data-block element was dropped, so his "which one?" list showed every line as the first
+item (usecode_vm.md §6g). Run r26: 0 issues, 302 s, a Sword sold for 25 gold.
+
 ## 7. Next
 
 Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
-the ending; selling; a paid heal and a real resurrection (a companion has to die and its body be
+the ending; a paid heal and a real resurrection (a companion has to die and its body be
 carried to a healer), more spells.

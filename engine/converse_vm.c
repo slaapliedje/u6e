@@ -58,7 +58,7 @@ static void set_svar(cvm_t*vm,unsigned idx,const char*s){ idx=SVI(idx); int k=0;
 
 void cvm_game_init(cvm_game_t*g,uint32_t seed){
     for(int i=0;i<256;i++){ g->talk_flags[i]=0; g->in_party[i]=0;
-        g->poisoned[i]=0; g->dead[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->nearby[i]=0;
+        g->poisoned[i]=0; g->dead[i]=0; g->wounded[i]=0; g->healed_full[i]=0; g->worktype[i]=0; g->nearby[i]=0;
         g->str[i]=g->dex[i]=g->intel[i]=0; g->level[i]=1; g->exp[i]=0; }
     for(int i=0;i<1024;i++){ g->player_obj[i]=0; g->player_objq[i]=0; }
     for(int i=0;i<16;i++){ g->party_actor[i]=0; g->party_name[i][0]=0; } g->nparty=0;
@@ -192,7 +192,7 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
                   PUSH(wt); } break;
       case 0x9d: a=POP(); PUSH(0); break;                           /* HORSED      */
       case 0xd7: a=POP(); PUSH(vm->g->nearby[npc_num(vm,a)&0xff]); break;   /* NPCNEARBY: within 5 tiles of the speaker (usecode_vm.md §6) */
-      case OP_WOUNDED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->dead[np]?1:0); } break;
+      case OP_WOUNDED:{ int np=npc_num(vm,POP())&0xff; PUSH((vm->g->wounded[np]||vm->g->dead[np])?1:0); } break;   /* HP below max (§6f) */
       case OP_POISONED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->poisoned[np]?1:0); } break;
       case 0xe0: case 0xe1: case 0xe2: case 0xe3: case 0xe4:{        /* EXP/LVL/STR/INT/DEX(npc, delta): value+delta, stored (§6c) */
           int32_t dl=(int32_t)POP(); int np=npc_num(vm,POP())&0xff; int32_t v;
@@ -328,7 +328,15 @@ static int db_string(cvm_t*vm, uint32_t loc, uint32_t idx, char*out, int cap){
 static uint32_t db_integer(cvm_t*vm, uint32_t loc, uint32_t idx){
     int32_t p=(int32_t)loc + (int32_t)idx*2;
     if(p<0 || p+2>vm->len) return 0;
+    for(int k=vm->ndbw-1;k>=0;k--) if(vm->dbw_pos[k]==p) return vm->dbw_val[k];   /* written this conversation (§6g) */
     return rd2(vm->s+p);
+}
+/* ASSIGN into a data-block element (§6g): kept beside the read-only script, one entry per element */
+static void db_set_integer(cvm_t*vm, uint32_t loc, uint32_t idx, uint32_t v){
+    int32_t p=(int32_t)loc + (int32_t)idx*2;
+    if(p<0 || p+2>vm->len) return;
+    for(int k=0;k<vm->ndbw;k++) if(vm->dbw_pos[k]==p){ vm->dbw_val[k]=(uint16_t)v; return; }
+    if(vm->ndbw<CVM_DBW){ vm->dbw_pos[vm->ndbw]=p; vm->dbw_val[vm->ndbw]=(uint16_t)v; vm->ndbw++; }
 }
 
 /* find the data-block item at `loc` whose name (clamped to 4 chars, keyword
@@ -359,9 +367,14 @@ static void do_ctrl(cvm_t*vm){
       case OP_ENDIF: case OP_ELSE: break;
       case OP_SETF:{ int nn=npc_num(vm,ARG()); uint32_t f=ARG(); if(f<=7){ vm->g->talk_flags[nn&0xff]|=(uint8_t)(1u<<f); vm->g->mutations++; } } break;
       case OP_CLEARF:{ int nn=npc_num(vm,ARG()); uint32_t f=ARG(); if(f<=7){ vm->g->talk_flags[nn&0xff]&=(uint8_t)~(1u<<f); vm->g->mutations++; } } break;
-      case OP_DECL: vm->decl_v=ARG(); vm->decl_t=(uint8_t)ARG(); break;
+      case OP_DECL: vm->db_lvar=0;                                  /* loc,n,VAR,DATA / loc,k,DATA: a data-block element (§6g) */
+          if(vm->nin>=5 && vm->in[3].v==OP_VAR && !vm->in[3].d && vm->in[4].v==OP_DATA && !vm->in[4].d){
+              vm->db_lvar=1; vm->db_loc=vm->in[1].v; vm->db_off=(uint32_t)vm->g->var[vm->in[2].v&63]; }
+          else if(vm->nin>=4 && vm->in[3].v==OP_DATA && !vm->in[3].d){ vm->db_lvar=1; vm->db_loc=vm->in[1].v; vm->db_off=vm->in[2].v; }
+          vm->decl_v=ARG(); vm->decl_t=(uint8_t)ARG(); break;
       case OP_ASSIGN:{ uint32_t v=ARG();   /* string assign (decl_t 0xb3) already stored in svar[]; */
-          if(vm->decl_t!=0xb3 && vm->decl_v<64) vm->g->var[vm->decl_v]=(int32_t)v; } break;  /* don't clobber the int var */
+          if(vm->db_lvar) db_set_integer(vm,vm->db_loc,vm->db_off,v);
+          else if(vm->decl_t!=0xb3 && vm->decl_v<64) vm->g->var[vm->decl_v]=(int32_t)v; } break;  /* don't clobber the int var */
       case OP_SETNAME:{ int n=npc_num(vm,ARG())&0xff; const char*nm=0;   /* $Y = that actor's name: a party member's from the roster, the speaker's from its script (§6c) */
           for(int p=0;p<vm->g->nparty;p++) if(vm->g->party_actor[p]==n){ nm=vm->g->party_name[p]; break; }
           if(!nm && n==vm->npc) nm=vm->npcname; if(!nm) nm="";
@@ -387,7 +400,7 @@ static void do_ctrl(cvm_t*vm){
       case OP_DELETE:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(); ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
                        if(is_player(vm,np)) add(vm,o,0,-(int32_t)q);
                        vm->g->mutations++; } break;
-      case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;
+      case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->wounded[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
       case OP_RESURRECT:{ (void)ARG(); if(vm->g->resurrect_req<255) vm->g->resurrect_req++; vm->g->mutations++; } break;   /* the carrier's body rises (§6f) */
       case OP_PORTRAIT: vm->g->portrait_npc=npc_num(vm,ARG()); break;

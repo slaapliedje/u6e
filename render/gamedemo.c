@@ -4917,7 +4917,7 @@ static void sync_party_in(void)
     /* health the script can ask about (WOUNDED/POISONED) and mend (HEAL/CURE/RESURRECT): the
      * party's real state goes in; sync_health_out applies what a healer did (usecode_vm.md §6) */
     for(int i=0;i<256;i++){ g_cg.dead[i]=(uint8_t)((g_atile[i]!=0xffff || (i<U6_MAX_ACTORS && is_party_member(i))) && g_ahp[i]==0);   /* a dead companion is off the map (combat.md §3d) */
-        g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0);
+        g_cg.poisoned[i]=(uint8_t)(g_poison[i]?1:0); g_cg.wounded[i]=(uint8_t)(i<U6_MAX_ACTORS && g_ahp[i]<g_amaxhp[i]);
         g_cg.healed_full[i]=0; }
     g_cg.avatar_hp=(int16_t)g_ahp[1];
     g_cg.resurrect_req=0; g_cg.lost_body=(uint8_t)(lost_body_member()>0);   /* §6f: a companion whose body is gone counts as carried */
@@ -5012,6 +5012,8 @@ static void sync_health_out(void)
  * is the cvm_game_t <-> engine wiring made visible. */
 static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only);   /* fwd (save code below) */
 static void equip_refold(int a);                                              /* fwd (E)quip code below) */
+static int has_readied(int a,int on);                                        /* fwd (readied-item effects below) */
+static void ready_fx_off(int a,int on);                                       /* fwd */
 static void sync_party_out(void)
 {
     for(int i=1;i<256;i++){                          /* JOIN: add new members */
@@ -5054,11 +5056,27 @@ static void inv_remove_objn(int on, int qty)
 
 /* BEFORE a conversation: push the engine inventory into the VM's per-obj_n counts, so scripts
  * see what the player carries (has-object checks, merchant "dost thou have..."). */
+static int readied_count(int on)                      /* the party's readied things of type on (usecode_vm.md §6f) */
+{
+    int c=0; for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=1 && a<U6_MAX_ACTORS) c+=has_readied(a,on); }
+    return c;
+}
 static void sync_inv_in(void)
 {
     for(int i=0;i<1024;i++) g_cg.player_obj[i]=0;
     for(int i=0;i<g_ow.ninv;i++){ int on=g_ow.inv[i].obj_n&0x3ff, q=g_ow.inv[i].qty?g_ow.inv[i].qty:1;
         int t=(int)g_cg.player_obj[on]+q; g_cg.player_obj[on]=(int16_t)(t>32767?32767:t); }
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;   /* readied things are carried too (§6f) */
+        for(int sl=0;sl<EQ_NSLOTS;sl++){ int on=g_aready[a][sl]&0x3ff; if(on && g_cg.player_obj[on]<32767) g_cg.player_obj[on]++; } }
+}
+/* a script took n readied things of type on: from the companions first (last in the roster first), the
+ * Avatar last; the amulet of submission stays on (equipment.md §8) */
+static int unready_taken(int on, int n)
+{
+    for(int p=g_nparty-1;p>=0 && n>0;p--){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS||on==76) continue;
+        for(int sl=0;sl<EQ_NSLOTS && n>0;sl++) if(g_aready[a][sl]==on){
+            g_aready[a][sl]=0; ready_fx_off(a,on); if(on==90) g_torch_fuel[a]=0; equip_refold(a); n--; } }
+    return n;
 }
 
 /* AFTER a conversation turn: pull the VM's per-obj_n changes (GIVE/NEW/DELETE) back into the
@@ -5068,9 +5086,12 @@ static void sync_inv_out(void)
     for(int on=1;on<1024;on++){
         if(on==CVM_OBJ_GOLD) continue;                /* gold is the shared g_cg.gold */
         int have=0; for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].obj_n==on) have+=g_ow.inv[i].qty?g_ow.inv[i].qty:1;
-        int delta=(int)g_cg.player_obj[on]-have;
+        int rd=readied_count(on);
+        int delta=(int)g_cg.player_obj[on]-have-rd;
         if(delta>0) inv_add_objn(on,delta);           /* the NPC gave the player items */
-        else if(delta<0) inv_remove_objn(on,-delta);  /* the NPC took items */
+        else if(delta<0){ int take=-delta, fromp=take<have?take:have;   /* the NPC took items: the pack first, then readied ones */
+            if(fromp) inv_remove_objn(on,fromp);
+            if(take>fromp) (void)unready_taken(on,take-fromp); }
     }
 }
 
@@ -10005,7 +10026,7 @@ static void bot_dump_actors(const world_t*w)
         n=bot_kv(n,"hostile",actor_hostile(i)); n=bot_kv(n,"wt",i>1?npc_live_worktype(i):0); bot_flush(n); }
     bot_flush(bot_put(0,"@A end"));
 }
-/* F3: on-map objects within 24 tiles + the party's pack  "@O idx obj frame x y qty q name" / "@I ..." */
+/* F3: on-map objects within 24 tiles + the party's pack  "@O idx obj frame x y qty q name" / "@I ..." / readied "@E ..." */
 static void bot_dump_objects(const world_t*w)
 {
     for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
@@ -10017,6 +10038,8 @@ static void bot_dump_objects(const world_t*w)
     for(int i=0;i<g_ow.ninv;i++){ const invitem_t*it=&g_ow.inv[i]; char nm[40]; obj_name(it->tile,nm,sizeof nm);
         int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;   /* readied things "@E id slot obj" */
+        for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]){ int n=bot_put(0,"@E"); n=bot_kv(n,"id",a); n=bot_kv(n,"slot",sl); n=bot_kv(n,"obj",g_aready[a][sl]); bot_flush(n); } }
     bot_flush(bot_put(0,"@O end"));
 }
 /* F4: BOTPASS.BIN = one byte per tile of this level, row-major (span x span): bit0 walkable,

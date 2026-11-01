@@ -106,5 +106,20 @@ int main(void)
           int ok=strcmp(vm.out,pl[i].exp)==0; printf("  #3=%d -> \"%s\" %s\n",pl[i].v,vm.out,ok?"OK":"FAIL"); if(!ok){ qf++; fail++; } }
       printf(qf ? "plural markers: %d FAILURE(S)\n" : "plural markers: ALL PASS\n", qf); }
 
+    /* DECL into a data-block element, then ASSIGN and read it back (usecode_vm.md §6g) */
+    printf("\ndata-block assignment:\n");
+    { static const uint8_t blk[32]={0}; cvm_init(&vm,blk,32,&g,18,0,0); int df=0;
+      g.var[5]=1;
+      vm.nin=0; add_val(&vm,OP_DECL,0); add_val(&vm,10,0xd3); add_val(&vm,5,0xd3); add_val(&vm,OP_VAR,0); add_val(&vm,OP_DATA,0); do_ctrl(&vm);
+      vm.nin=0; add_val(&vm,OP_ASSIGN,0); add_val(&vm,42,0); do_ctrl(&vm);
+      vm.nin=0; add_val(&vm,OP_DECL,0); add_val(&vm,10,0xd3); add_val(&vm,3,0xd3); add_val(&vm,OP_DATA,0); do_ctrl(&vm);
+      vm.nin=0; add_val(&vm,OP_ASSIGN,0); add_val(&vm,7,0); do_ctrl(&vm);
+      int ok=db_integer(&vm,10,1)==42 && db_integer(&vm,10,3)==7 && db_integer(&vm,10,0)==0 && g.var[5]==1;
+      printf("  DB[var5]=42, DB[3]=7 read back %s\n", ok?"OK":"FAIL"); if(!ok){ df++; fail++; }
+      vm.nin=0; add_val(&vm,OP_DECL,0); add_val(&vm,9,0xd3); add_val(&vm,OP_VAR,0); do_ctrl(&vm);
+      vm.nin=0; add_val(&vm,OP_ASSIGN,0); add_val(&vm,99,0); do_ctrl(&vm);
+      ok=g.var[9]==99 && db_integer(&vm,10,1)==42; printf("  a plain DECL writes the variable again %s\n", ok?"OK":"FAIL"); if(!ok){ df++; fail++; }
+      printf(df ? "data-block assignment: %d FAILURE(S)\n" : "data-block assignment: ALL PASS\n", df); }
+
     return fail ? 1 : 0;
 }
