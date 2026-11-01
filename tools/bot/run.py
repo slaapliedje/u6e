@@ -52,13 +52,18 @@ def seg_shop(p, kw):
 
 def seg_healer(p, kw):
     """Tiberius (26) heals in his shop 9-18 (worktype 0x90). Carrying a companion's body, he asks 400
-    gold at once: paid, the companion stands up; short, he says how short and the body stays.
+    gold at once: if the carrier holds 400 the companion stands up (his script then takes nothing,
+    as in the reference; only a party collection pays); short, he says how short and the body stays.
     Carrying none, Resurrect says nobody is dead. Heal lists the wounded (the dead too) and mends
-    the chosen living one to full for 30 gold (with less, free or refused); all well when nobody is
-    hurt"""
+    the chosen living one to full for 30 of the patient's own gold (with less: free at karma 40 or
+    more, else refused; a companion holds no gold); all well when nobody is hurt"""
     if not wait_for_work(p, 26, 'Tiberius'): return
     party = p.g.state['party']; g0 = p.g.state['gold']
     dead = [m['id'] for m in party if m['hp'] == 0]
+    q = getattr(p, 'expect_body', None)
+    if q: p.approach(26); party = p.g.state['party']; g0 = p.g.state['gold']; dead = [m['id'] for m in party if m['hp'] == 0]
+    if q and not [r for r in p.g.objects()[1] if r['obj'] == 339 and r['q'] == q]:   # lost on the way (the Avatar fell, all were recalled)
+        p.issue('healer', 'the body of %d was gone before Tiberius (party %s, msg %r)' % (q, party, p.g.state['msg'][:80])); return
     hurt = [m['id'] for m in party if m['hp'] < m['max']]                # the numbered "Which of you?" list
     alive_hurt = [i for i in hurt if i not in dead]
     body = [r['q'] for r in p.g.objects()[1] if r['obj'] == 339]
@@ -73,9 +78,8 @@ def seg_healer(p, kw):
     spent = 0
     if body and dead:
         q = body[0]
-        if g0 >= 400:
-            spent = 400
-            if hp.get(q, 0) == 0 or q in body1: p.issue('healer', 'paid 400 for %d: hp %s, body %s' % (q, hp.get(q), body1))
+        if g0 >= 400:                                    # the script tests the carrier's own gold and then raises
+            if hp.get(q, 0) == 0 or q in body1: p.issue('healer', 'offered 400 for %d: hp %s, body %s' % (q, hp.get(q), body1))   # without taking it (usecode_vm.md §6f)
             elif not p.actor(q): p.issue('healer', 'resurrected %d is not on the map' % q)
         else:
             if 'short' not in low: p.issue('healer', 'resurrect with %d gold: no "short" (%r)' % (g0, out[:2]))
@@ -85,9 +89,11 @@ def seg_healer(p, kw):
         if 'art well' not in text and 'are well' not in text and not dead: p.issue('healer', 'nobody hurt, no "well": %r' % out[-3:])
     else:
         h = alive_hurt[0]; g_before = g0 - spent
+        own = g_before if h == 1 else 0                  # the script charges the PATIENT's gold; a companion holds none (pooled pack, §6f)
         if hp[h] == mx[h]:
-            if g_before - g1 != (30 if g_before >= 30 else 0): p.issue('healer', 'heal cost %d with %d gold' % (g_before - g1, g_before))
-        elif not (g_before < 30 and 'without an offering' in low): p.issue('healer', 'heal left %d at %d/%d (%r)' % (h, hp[h], mx[h], out[-3:]))
+            if g_before - g1 != (30 if own >= 30 else 0): p.issue('healer', 'heal of %d cost %d with %d gold' % (h, g_before - g1, g_before))
+            if own < 30 and 'without payment' not in low: p.issue('healer', 'free heal of %d without "without payment" (%r)' % (h, out[-2:]))
+        elif not (own < 30 and 'without an offering' in low): p.issue('healer', 'heal left %d at %d/%d (%r)' % (h, hp[h], mx[h], out[-3:]))
     for d in dead:
         if d not in alive_hurt and hp.get(d, 0) and not (body and g0 >= 400): p.issue('healer', 'dead %d rose without a resurrection' % d)
 
@@ -431,15 +437,19 @@ def seg_trade(p, kw):
     p.log('  sold %d to Max: %s; gold %d -> %d' % (len(sold), ', '.join(sold)[:500], g0, p.g.state['gold']))
 
 def seg_farm(p, kw):
-    """more cave trips while the purse and Max's share of the loot fall short of 400 gold (at most 5)"""
+    """more cave trips while the purse and Max's share of the loot fall short of 450 gold (the 400 of
+    a resurrection, Tiberius's cures at 10 a member, a margin; at most 5 trips)"""
     for trip in range(5):
         _, inv = p.g.objects()
         worth = sum({'iron helm': 10, 'leather armor': 20, 'chain mail': 40, 'plate mail': 80, 'sword': 25}.get(norm(r['name']), 0) * (r['qty'] or 1) for r in inv)
         heals = min(sum(r['qty'] or 1 for r in inv if r['obj'] == o) for o in (68, 72))   # ginseng, spider silk (Heal)
         p.log('  farm: gold %d, loot for Max ~%d, heals left %d' % (p.g.state['gold'], worth, heals))
-        if p.g.state['gold'] + worth >= 420: break
+        if p.g.state['gold'] + worth >= 450: break
         if p.g.state['L'] != 0: p.log('  farm: stuck below (L%d), no more trips' % p.g.state['L']); break
         if heals < 3: p.log('  farm: too few reagents to heal through another trip'); break
+        if p.cure_up() and not tiberius_cure(p):                        # no red potion: Tiberius cures for 10 gold
+            p.log('  farm: %s poisoned and no cure: no more trips' % p.poisoned()); break
+        if p.g.state['L'] != 0: break
         if (p.g.state['X'], p.g.state['Y']) == CAVE:                   # standing on the cave: step off (so walking back on enters it)
             p.nav.refresh()
             for dx, dy in DIRV.values():
@@ -449,14 +459,36 @@ def seg_farm(p, kw):
         p.rest_if_hurt(0.95)                                           # a camp at the cave mouth heals for free
         seg_cave(p, kw)
 
+def tiberius_cure(p):
+    """Tiberius (26) cures the poisoned: "cure" lists them by number and asks 10 gold for the one
+    chosen (with less he cures for nothing); once a member. True when nobody is left poisoned"""
+    sick = p.poisoned()
+    if not sick: return True
+    if not wait_for_work(p, 26, 'Tiberius'): return False
+    g0 = p.g.state['gold']
+    out = p.talk_to(26, ['cure', '1', 'y'] * len(sick), 'Tiberius', yes=True)
+    if out is None: p.issue('cure', 'could not reach Tiberius'); return False
+    left, g1 = p.poisoned(), p.g.state['gold']
+    p.log('  Tiberius cured %s -> still poisoned %s, gold %d -> %d' % (sick, left, g0, g1))
+    if left: p.issue('cure', 'Tiberius left %s poisoned (%r)' % (left, out[-3:]))
+    want = sum(10 if g0 - 10 * k >= 10 else 0 for k in range(len(sick) - len(left)))
+    if g0 - g1 != want: p.issue('cure', 'cures cost %d, expected %d' % (g0 - g1, want))
+    return not left
+
 def seg_paid(p, kw):
-    """with 400 gold: a companion dies again (the death segment) and Tiberius raises him for 400
-    (the healer segment checks the body, the purse and the risen companion)"""
-    if p.g.state['gold'] < 400: p.log('  only %d gold: no paid resurrection' % p.g.state['gold']); return
+    """with 400 gold: Tiberius first cures the poisoned (poison wears the party down on the way, and
+    it never lifts by itself), then a companion dies again (the death segment) and Tiberius raises
+    him once the offering of 400 is accepted (the healer segment checks the body, the purse and the
+    risen companion)"""
+    p.cure_up(); need = 400 + 10 * len(p.poisoned())
+    if p.g.state['gold'] < need: p.log('  only %d gold of %d: no paid resurrection' % (p.g.state['gold'], need)); return
+    if not tiberius_cure(p): return
     g0 = p.g.state['gold']
     seg_death(p, kw)
     if member(p, 4)['hp'] != 0: return
-    seg_healer(p, kw)
+    p.expect_body = 4
+    try: seg_healer(p, kw)
+    finally: p.expect_body = None
     m4 = member(p, 4)
     p.log('  paid resurrection: gold %d -> %d, Iolo %d/%d, on the map %s' % (g0, p.g.state['gold'], m4['hp'], m4['max'], bool(p.actor(4))))
     if m4['hp'] == 0: p.issue('paid', 'Iolo still dead after paying')
@@ -476,7 +508,7 @@ def main():
     try:
         for s in segs:
             log('== segment %s' % s); ts = time.time()
-            p.heal_up()
+            p.heal_up(); p.cure_up()
             try: SEGS[s](p, kw)
             except Danger as e: p.issue('danger', '%s: %s' % (s, e))
             except Exception as e: p.issue('crash', '%s: %s: %s' % (s, type(e).__name__, e)); raise

@@ -324,7 +324,22 @@ letter; we copy the run as written.)
   98, as the Resurrect spell, magic_skills.md §5f). A body whose quality names nobody, or an actor
   who is not dead, is still used up (the reference deletes the body only when the actor rose; u6e
   keeps it in that case). After Armageddon nothing rises. A healer resurrects only a companion whose
-  body the party carries; without one the script says nobody is dead.
+  body the party carries; without one the script says nobody is dead. The body leaves the pack the
+  script sees at once, as in the reference (which deletes it inside the op): the healers ask
+  OBJINPARTY(339) again straight after ("another slain friend?") and loop while it answers someone.
+  Until 2026-11-01 u6e removed the body only after the turn, so that loop raised the same companion
+  over and over (found by the bot's paid segment).
+- **What a resurrection costs** follows the healers' own bytecode (Tiberius, 26, inspected with our
+  host trace): after the "offering of 400 gold?" yes, the script compares the CARRIER's gold
+  (OBJCOUNT of OBJINPARTY's answer, gold 88, a quantity count in the reference too) with 400. Below
+  400 it totals the party member by member, and only that path DELETEs the gold ("Your party takes
+  up a collection", or "N gold pieces short"). At 400 or more it jumps straight to the raising and
+  takes nothing. u6e runs the script as written; with the pooled pack the carrier is the leader
+  holding all the gold, so a party with 400 is raised without paying, as a reference party whose
+  carrier holds 400 is. Heal and cure (30 and 10 gold) test the PATIENT's own gold instead: enough,
+  and it is DELETEd; too little, and at karma 40 or more the healer works for nothing ("Thou art
+  poor, but thy cause is just"), below 40 he refuses. A companion holds no gold in u6e, so a
+  companion is always healed free (or refused).
 - **A companion whose body is gone** (u6e does not save a companion's body, combat.md §3d, so after
   a load, or with the body left on another level, there is none to carry) counts as carried:
   OBJINPARTY(339) answers the leader, and RESURRECT with no body in the pack raises the first such
@@ -354,8 +369,8 @@ letter; we copy the run as written.)
   dead and at 0 HP (the reference would set HP on a body that stays dead). Until 2026-10-31 u6e's
   HEAL also cleared the dead flag, so Lord British, or a healer told to heal the dead member, raised
   it for nothing (found while building the bot's death segment).
-- Test hooks: cvmtest (OBJINPARTY with and without a body; RESURRECT asks for the pack; a second
-  member counts 0 gold); the bot's healer segment (resurrect with nobody dead, heal for 30 or free).
+- Test hooks: cvmtest (OBJINPARTY with and without a body; RESURRECT asks for the pack and takes
+  the body out of it at once; a second member counts 0 gold); the bot's healer segment (resurrect with nobody dead, heal for 30 or free).
 
 ## 6g. Assigning into the data block (2026-10-31)
 

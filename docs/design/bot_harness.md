@@ -37,7 +37,7 @@ run.py (segments of the walkthrough)
   counter), `busy`, `L X Y`, the clock and date, the armed verb, `talk` (actor id) and `ask`
   (text entry open), `askc` (the keys a y/n prompt accepts) and `num` (a number prompt), the
   cast / mantra / inventory / status / peer panels, combat mode, vehicle, `over` (the ending), `gold`, `karma`, `rest` (the camp prompt: 1 hours, 2 guard),
-  `foes` (hostile actors within 8 tiles), the party `id:hp/max:mp:level`, then the free text:
+  `foes` (hostile actors within 8 tiles), the party `id:hp/max:mp:level:poisoned`, then the free text:
   `msg` (the message box), `conv` (the conversation transcript), `typed`.
 - **Dumps** on function keys (no game effect): F2 actors on this level (with each NPC's live worktype `wt`), F3 objects within 24
   tiles plus the pack and every member's readied things (`@E id slot obj`), F4 the passability file `BOTPASS.BIN` (one byte per tile: bit0 walkable as
@@ -249,9 +249,10 @@ eggs.md §3c), and its remains hold it. u6e gave hatchlings nothing, so the part
   mail, iron helm, leather armour, plate mail), leave the rest. A looted chest that blocks the way
   (chests are impassable) is picked up when a walk finds no route.
 - `farm` (after `cave`): more cave trips, a camp at the cave mouth before each, while the purse plus
-  Max's share of the loot is under 420 and three Heals' worth of reagents remain (at most 5 trips).
+  Max's share of the loot is under 450 and three Heals' worth of reagents remain (at most 5 trips).
 - `trade`: sell Max only pack items he lists, never readied ones; waits for his shop hours when he
-  says it is shut. `paid`: with 400 gold, the death segment again, then Tiberius.
+  says it is shut. `paid`: with 400 gold, Tiberius cures the poisoned, then the death segment again,
+  then Tiberius raises Iolo.
 - `shrine` waits for daytime (fighting while it waits): Anya rests at night. `orb` moves and
   retries when a townsperson stands on the gate's tile ("Failed.").
 
@@ -268,10 +269,30 @@ Found by these runs (all fixed):
 Run r49: 0 → 95 gold from the first cave, 328 after two more trips, 408 after selling Max six pieces.
 The paid resurrection still did not happen: chest traps had poisoned the Avatar and Shamino, the
 Heal reagents were gone, and the Avatar died of poison on the way to Tiberius (poison kills in the
-reference too: 1 damage, 1 chance in 8 a turn); his death's recall raised Iolo instead. Next: report
-poison in `@S`, have Tiberius cure first (with a 30-gold margin), and skip or detect trapped chests.
+reference too: 1 damage, 1 chance in 8 a turn); his death's recall raised Iolo instead.
+
+Poison (2026-11-01): `@S` now reports each member as `id:hp/max:mp:level:poisoned`.
+`Player.cure_up` (before each segment and after each won fight) has a poisoned member drink a red
+potion, else the Avatar casts Dispel Magic on them (U6 has no Cure spell; Dispel Magic clears poison,
+magic_skills.md §5b). `farm` stops a trip early only if nothing cures (no potion, no reagents, and
+Tiberius unreachable: he cures for 10 gold a member); `paid` cures first and wants 400 + 10 a
+poisoned member. Trapped chests are still opened: a trap costs a Dispel, and skipping chests would
+halve the gold.
+
+Found by these runs (all fixed):
+- C)ast's "where?" took one direction key, so no keyboard cast could aim at the caster's own tile
+  (a click could): Enter there now does, and Dispel Magic aimed there cures the caster
+  (magic_skills.md §5b, MAGICFX '7'). A failed aim had left the verb armed, which swallowed the
+  next segments' keys;
+- the healers' RESURRECT took the body out of the pack only after the turn, but the script asks
+  "another slain friend?" in the same turn, so Tiberius raised Iolo again and again
+  (usecode_vm.md §6f, cvmtest).
+Not bugs: Tiberius's script charges nothing for a resurrection when the carrier holds 400 itself
+(only the party collection pays), and charges heals and cures to the patient's own gold, so a
+companion is healed free at karma 40 or more. The reference runs the same bytecode
+(usecode_vm.md §6f); the bot now expects it.
 
 ## 7. Next
 
 Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
-the ending; a paid resurrection (gold is now earned: §6g; poison and reagents stop it), more spells; theft (deviations.md).
+the ending; more spells; theft (deviations.md). The paid resurrection runs (§6g).

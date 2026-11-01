@@ -7085,6 +7085,7 @@ static void status_tick(void){
 }
 /* first actor along (dx,dy) within range, for a targeted status spell (msg on miss). */
 static int spell_target_actor(world_t*w,int dx,int dy,const char*sname){
+    if(!dx&&!dy&&!strcmp(sname,"Dispel Magic")) return g_nparty?g_party[0].actor:1;   /* aimed at the caster's own tile: the caster */
     if(!dx&&!dy){ int n=msgcat(0,sname); msgcat(n,": aim a direction."); return -1; }
     for(int r=1;r<=5;r++){ int tx=(int)((w->px+dx*r)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy*r)&(U6_SURFACE_TILES-1));
         int id=npc_at(w,tx,ty); if(id>=0) return id;
@@ -10068,7 +10069,7 @@ out:
  * When BOT.REQ exists the game reports its state on the console (Hatari --conout 2) so a host
  * driver (tools/bot) can play it through the keyboard alone. After every key, and when a busy
  * spell (camp, moongate walk, click-travel) ends, one "@S" line: the key count, the place, the
- * modes, the party, the message box and the conversation text. F2..F5 print dumps (actors,
+ * modes, the party (id:hp/max:mana:level:poisoned), the message box and the conversation text. F2..F5 print dumps (actors,
  * objects + the pack, the passability file, the state again). Nothing here changes play. */
 static int      g_bot;                   /* BOT.REQ seen at boot                                 */
 static uint32_t g_bot_keys;              /* raw keys received (the driver's lock-step counter)   */
@@ -10109,7 +10110,8 @@ static void bot_report(const world_t*w)
     n=bot_put(n," party=");
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(p) n=bot_put(n,",");
         n=bot_num(n,a); n=bot_put(n,":"); n=bot_num(n,g_ahp[a]); n=bot_put(n,"/"); n=bot_num(n,g_amaxhp[a]);
-        n=bot_put(n,":"); n=bot_num(n,g_amana[a]); n=bot_put(n,":"); n=bot_num(n,g_alevel[a]); }
+        n=bot_put(n,":"); n=bot_num(n,g_amana[a]); n=bot_put(n,":"); n=bot_num(n,g_alevel[a]);
+        n=bot_put(n,":"); n=bot_num(n,g_poison[a]?1:0); }
     n=bot_put(n," msg="); n=bot_put(n,g_msg);
     if(g_talking){ n=bot_put(n," conv="); n=bot_put(n,g_transcript); }
     if(g_await_input||g_casting||g_mantra){ n=bot_put(n," typed="); n=bot_put(n,g_inbuf); }
@@ -11714,7 +11716,9 @@ int main(int argc, char **argv)
                 g_poison[a]=255; int hp0=g_ahp[a]; for(t=0;t<80;t++) status_tick(); dbg_num("MX poison hp lost in 80 turns=", hp0-g_ahp[a]); dbg_num("MX poison persists=", g_poison[a]!=0); } }
             if(mode=='7'){ int a=MX_HATCH(349,1,0); if(a>=0){ g_asleep[a]=255; g_poison[a]=255; g_paralyze[a]=255; g_charm_sv[a]=0; g_charm[a]=255; g_ally[a]=1;
                 MX_CAST("Dispel Magic",1,0); dbg_num("MX dispel msg success=", !strcmp(g_msg,"Success")); dbg_num("MX all clear=", !g_asleep[a]&&!g_poison[a]&&!g_paralyze[a]&&!g_charm[a]&&!g_ally[a]);
-                MX_CAST("Dispel Magic",1,0); dbg_num("MX second dispel no effect=", !strcmp(g_msg,"No effect")); } }
+                MX_CAST("Dispel Magic",1,0); dbg_num("MX second dispel no effect=", !strcmp(g_msg,"No effect")); }
+                g_poison[1]=255; MX_CAST("Dispel Magic",0,0); dbg_num("MX own-tile dispel cures the caster=", !g_poison[1] && !strcmp(g_msg,"Success"));
+                MX_CAST("Kill",0,0); dbg_num("MX own-tile kill asks a direction=", g_ahp[1]>0 && strstr(g_msg,"aim a direction")!=0); }
             #undef MX_CAST
             #undef MX_HATCH
         }
@@ -13740,6 +13744,9 @@ int main(int argc, char **argv)
                     else if (g_pending_verb=='O' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the orb's Where: crosshair walks its 6x5 box (moongates.md §3) */
                         if(nx>=-3 && nx<=2 && ny>=-2 && ny<=2){ g_tcur_dx=nx; g_tcur_dy=ny; }
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='C' && a==0x0d && !(g_cast_spell>=0 && g_cast_spell<SPELL_COUNT && !strcmp(g_spells[g_cast_spell].name,"Wind Change"))){                                   /* Enter at "Cast-(dir)?": the caster's own tile (magic_skills.md §5b) */
+                        if(resolve_target(&w,'C',0,0)){ compose_map(&w); draw_border_tiles(); }
+                        g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0; draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='O' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: the red gate opens there */
                         (void)resolve_target(&w,'O',cx,cy); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: talk to whoever stands there */

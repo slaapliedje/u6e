@@ -334,6 +334,44 @@ class Player:
         if n: self.log('  healed x%d: party %s' % (n, ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in self.g.state['party'])))
         return n
 
+    def poisoned(self):
+        return [m['id'] for m in self.g.state['party'] if m.get('psn') and m['hp'] > 0]
+
+    def cure_up(self):
+        """each poisoned member drinks a red potion (a cure, usecode_use.md) while the pack holds one,
+        else the Avatar casts Dispel Magic on them (garlic + ginseng, magic_skills.md §5b); returns the
+        members still poisoned"""
+        for i in self.poisoned():
+            idx = [m['id'] for m in self.g.state['party']].index(i)
+            st = self.use_pack(275, 'red')
+            if st is not None:
+                if 'On whom' not in st['msg']: self.log('  red potion: %r' % st['msg']); self.idle(); continue
+                st = self.key(str(idx + 1), 'potion on %d' % i)
+                self.log('  red potion on %d: %r' % (i, st['msg'][-40:]))
+                if i in self.poisoned(): self.issue('cure', 'a red potion left %d poisoned (%r)' % (i, st['msg'][-60:]))
+            elif not self.dispel(i): break
+        return self.poisoned()
+
+    def dispel(self, i):
+        """C)ast Dispel Magic on member i: Enter for the Avatar's own tile, else the direction that
+        reaches them (orthogonally in line, within 5: the first actor along it, magic_skills.md §5b); True if they
+        are cured"""
+        a = self.actor(i) if i != 1 else None; x, y = self.nav.pos()
+        if i != 1 and not a: return False
+        d = (a['x'] - x, a['y'] - y) if a else (0, 0)
+        if max(abs(d[0]), abs(d[1])) > 5 or (d[0] and d[1]): return False   # the keys aim only orthogonally
+        u = ((d[0] > 0) - (d[0] < 0), (d[1] > 0) - (d[1] < 0))
+        st = self.key('c', 'cast')
+        if not st['cast']: self.idle(); return False
+        st = self.g.type('dispel magic'); self.check('cast dispel magic')
+        if 'where' not in st['msg'].lower(): self.log('  dispel magic: %r' % st['msg']); self.idle(); return False
+        st = self.key(VDIR[u] if u != (0, 0) else 'ret', 'dispel on %d' % i)
+        if st['verb'] == 'C': self.issue('cure', 'Cast Dispel Magic still armed after aiming (%r)' % st['msg']); self.idle()
+        ok = i not in self.poisoned()
+        self.log('  dispel magic on %d: %r%s' % (i, st['msg'][-50:], '' if ok else ' (still poisoned)'))
+        if 'success' in st['msg'].lower() and not ok: self.issue('cure', 'Dispel Magic succeeded but %d is still poisoned' % i)
+        return ok
+
     def open_spot(self, r=8):
         """the nearest reachable tile within r whose 3x3 block is all passable, or None"""
         self.nav.refresh(); x, y = self.nav.pos(); S = self.nav.span
@@ -385,7 +423,7 @@ class Player:
                 if not self.heal_up(): raise Danger('members %s near death, foes %d in view, no heal' % (self.near_death(), self.g.state['foes']))
                 continue
             if self.g.state['foes'] > ignore:
-                if self.foes(): self.fight(); ignore = 0; self.heal_up(); self.rest_if_hurt()
+                if self.foes(): self.fight(); ignore = 0; self.heal_up(); self.cure_up(); self.rest_if_hurt()
                 else: ignore = self.g.state['foes']
                 if self.g.state['L'] != lv: return self.g.state     # the walk took us to another level
                 continue
@@ -393,10 +431,11 @@ class Player:
             return st
         return self.g.state
 
-    def use_pack(self, obj_n):
-        """U)se a carried item: U, then U until the pack prompt names it, Enter; the state after"""
+    def use_pack(self, obj_n, name=''):
+        """U)se a carried item (whose name holds `name`): U, then U until the pack prompt names it,
+        Enter; the state after"""
         _, inv = self.g.objects()
-        names = [r.get('name', '') for r in inv if r['obj'] == obj_n]
+        names = [r.get('name', '') for r in inv if r['obj'] == obj_n and name in r.get('name', '').lower()]
         if not names: return None
         self.key('u')
         for _ in range(len(inv) + 4):

@@ -92,7 +92,9 @@ int main(void)
       g.player_obj[354]=1; OP2(339,5,0xc7,r); PK("OBJINPARTY(body) a mouse counts", r==1); g.player_obj[354]=0;
       g.player_obj[339]=1; OP2(339,9,0xc7,r); PK("OBJINPARTY(body, any quality) -> leader", r==1);
       OP2(1,88,0xbb,r); PK("OBJCOUNT(leader, gold) = all", r==497);
-      OP2(2,88,0xbb,r); PK("OBJCOUNT(companion, gold) = 0", r==0); }
+      OP2(2,88,0xbb,r); PK("OBJCOUNT(companion, gold) = 0", r==0);
+      vm.in[0].v=OP_RESURRECT; vm.in[1].v=1; vm.nin=2; g.resurrect_req=0; do_ctrl(&vm);   /* the body leaves the pack at once */
+      OP2(339,0,0xc7,r); PK("RESURRECT: body gone, OBJINPARTY 0x8001", g.resurrect_req==1 && g.player_obj[339]==0 && r==0x8001); g.resurrect_req=0; }
     #undef OP2
     #undef PK
     printf(pf ? "pack/gold/weight: %d FAILURE(S)\n" : "pack/gold/weight: ALL PASS\n", pf);

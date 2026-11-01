@@ -327,7 +327,10 @@ dragons, drakes, daemons, the balloon). "No effect" is printed for an immune tar
   "X is charmed."; charming an already charmed actor frees it. (u6e asks for a hostile target:
   "Failed" — the reference's only failure word) **Kill** (7): undead → No effect; the contest; else the target dies
   outright and the caster earns its experience. **Dispel Magic** (1): clears sleep, poison,
-  paralysis and charm on the target — Success / No effect.
+  paralysis and charm on the target — Success / No effect. It may be aimed at the caster's own
+  tile (Enter at "Cast-(dir)?", or a click on the caster) to clear the caster's own conditions (the
+  reference picks its target with a cursor that can rest on the caster; probable). The other single-target spells still
+  ask for a direction there.
 - Messages follow the reference: "Success", "Failed", "No effect"; the condition lines
   only what the reference prints (§5g): Poison / Sleep succeed silently, "X is paralyzed.", Curse
   "Success", "X is charmed.".
@@ -550,7 +553,8 @@ engine flow:
    numbered, with the conversation-style "> _" input box. The player types a
    menu NUMBER or a spell-NAME prefix (render/gamedemo cast_menu_parse); Enter
    selects. Self/party spells cast immediately; offensive spells arm a direction
-   ("Cast X where?") resolved by the existing verb→direction flow. Host tests:
+   ("Cast X where?") resolved by the existing verb→direction flow; Enter there aims at the
+   caster's own tile (2026-11-01; only Dispel Magic acts on it, §5b). Host tests:
    pass spell_num directly. (Combat-mode toggle moved off 'c' to 'b' + the
    Combat command-bar icon.)
 2. **Gate checks**, in order, each with its own failure message:
@@ -702,7 +706,8 @@ with the new words; host suites + make check pass.
   allies, a dog is untouched; '5' Mass Kill slays the gargoyle, spares the skeleton, blows a
   keg in the area; '6' the wear-off rolls: turns until sleep / paralysis / curse / protection
   end, poison's slow damage and its persistence; '7' Dispel Magic clears every condition
-  (Success) and then finds nothing (No effect).
+  (Success) and then finds nothing (No effect); aimed at the caster's own tile it cures the
+  poisoned caster, while Kill aimed there asks for a direction (2026-11-01, TT).
 - `SPELLS.REQ` (§5f, seeded RNG): '1' Douse/Ignite a brazier, Ignite a keg; '2' Magic Lock + Unlock
   Magic + Detect Magic on a spawned door and chest; '3' Trap, Detect Trap, Untrap, then a trapped chest
   opened; '4' Vanish + Reappear (and the save round-trip of 0x1c13) and Replicate; '5' Lightning,

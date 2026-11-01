@@ -402,7 +402,10 @@ static void do_ctrl(cvm_t*vm){
                        vm->g->mutations++; } break;
       case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->wounded[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;   /* full HP only: no cure, the dead stay dead (§6f) */
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
-      case OP_RESURRECT:{ (void)ARG(); if(vm->g->resurrect_req<255) vm->g->resurrect_req++; vm->g->mutations++; } break;   /* the carrier's body rises (§6f) */
+      case OP_RESURRECT:{ (void)ARG(); cvm_game_t*g=vm->g; if(g->resurrect_req<255) g->resurrect_req++; g->mutations++;   /* the carrier's body rises (§6f) */
+          if(g->player_obj[339]>0) g->player_obj[339]--;                 /* ... and leaves the pack now, so a script that asks */
+          else if(g->player_obj[354]>0) g->player_obj[354]--;            /* again ("another slain friend?") sees it gone */
+          else if(g->lost_body) g->lost_body=0; } break;
       case OP_PORTRAIT: vm->g->portrait_npc=npc_num(vm,ARG()); break;
       case OP_WORKTYPE:{ int np=npc_num(vm,ARG())&0xff; vm->g->worktype[np]=(uint8_t)ARG(); vm->g->mutations++; } break;
       case OP_WAIT: outc(vm,'*'); break;            /* page-break marker */

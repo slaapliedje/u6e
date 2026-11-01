@@ -29,7 +29,7 @@ def parse_state(line):
         if '=' not in tok: continue
         k, v = tok.split('=', 1)
         if k == 'party':
-            st[k] = [dict(zip(('id', 'hp', 'max', 'mp', 'lvl'), map(int, m.replace('/', ':').split(':')))) for m in v.split(',') if m]
+            st[k] = [dict(zip(('id', 'hp', 'max', 'mp', 'lvl', 'psn'), map(int, m.replace('/', ':').split(':')))) for m in v.split(',') if m]
         elif k in ('verb', 'askc'): st[k] = '' if v == '-' else v
         else:
             try: st[k] = int(v)
