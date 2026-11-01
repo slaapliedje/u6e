@@ -4,7 +4,7 @@
  * Flow: detect -> plat_mem_init -> rdr_init (TT-low 256c) -> load the asset
  * pack -> composite the tile region into the chunky backbuffer -> set palette
  * -> present (c2p to screen). Also dumps the backbuffer to OUT.RAW so the host
- * can verify the composite against the golden image. Reads pack U6.PAK from the
+ * can verify the composite against the golden image. Reads pack U6REG.PAK from the
  * current GEMDOS drive.
  */
 #include "render.h"
@@ -23,8 +23,8 @@ int main(void)
     if (!plat_mem_init(&caps)) { Cconws("mem init failed\r\n"); Crawcin(); return 1; }
 
     int32_t paklen = 0;
-    uint8_t *pak = (uint8_t *)plat_load_file("U6.PAK", /*fast=*/true, &paklen);
-    if (!pak || paklen < 780) { Cconws("cannot load U6.PAK\r\n"); Crawcin(); return 1; }
+    uint8_t *pak = (uint8_t *)plat_load_file("U6REG.PAK", /*fast=*/true, &paklen);
+    if (!pak || paklen < 780) { Cconws("cannot load U6REG.PAK\r\n"); Crawcin(); return 1; }
     if (pak[0] != 'U' || pak[1] != '6' || pak[2] != 'P' || pak[3] != '1') {
         Cconws("bad pack magic\r\n"); Crawcin(); return 1;
     }

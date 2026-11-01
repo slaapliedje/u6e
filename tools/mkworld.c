@@ -1334,6 +1334,11 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
 {
     uint8_t marker = (strcmp(prof->id, "savage") == 0)  ? U6LZC_COMP_SE
                    : (strcmp(prof->id, "martian") == 0) ? U6LZC_COMP_MD : U6LZC_COMP_SNIFF;
+    if (startx == 0 && starty == 0 && objlist_path){            /* 0 0 = where the actor list puts the player */
+        long ol; uint8_t *o = slurp_path(objlist_path, NULL, &ol);
+        if (o && ol >= 0x106){ const uint8_t *p = o + 0x100 + 3;  /* actor 1's position (LE 3 bytes) */
+            startx = p[0] | ((p[1] & 3) << 8); starty = (p[1] >> 2) | ((p[2] & 0xf) << 6); }
+        free(o); }
     long mn, cn, pn, on, in, bn, tfn, mtl, mskl, uz;
     uint8_t *mapb = slurp(dir, "MAP", &mn),          *chk = slurp(dir, "CHUNKS", &cn);
     uint8_t *palb = slurp(dir, prof->palette, &pn),  *ti  = slurp(dir, "TILEINDX.VGA", &in);

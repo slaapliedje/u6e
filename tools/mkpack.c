@@ -40,7 +40,7 @@ static void be16(FILE *f, unsigned v){ fputc((v>>8)&0xFF,f); fputc(v&0xFF,f); }
 int main(int argc, char **argv)
 {
     const char *dir   = argc > 1 ? argv[1] : "refdata/dos/u6";
-    const char *out   = argc > 2 ? argv[2] : "build/u6.pak";
+    const char *out   = argc > 2 ? argv[2] : "build/u6reg.pak";
     const char *gold  = argc > 3 ? argv[3] : "build/region_golden.png";
     int ox = argc > 4 ? atoi(argv[4]) : 336;
     int oy = argc > 5 ? atoi(argv[5]) : 336;

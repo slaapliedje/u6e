@@ -122,7 +122,9 @@ So an actor's combat gear (combat.md §4-6): scan the inventory chunk for record
 We compute these host-side (mkworld) and ship per-actor {weapon obj_n, AC}.
 
 ## 4. Per-game deltas
-SE/MD: same array scheme, a different `temp_actor` base and extra arrays.
+SE/MD: same array scheme, a different `temp_actor` base and extra arrays. Every game's starting
+objlist is the tail of its own LZDNGBLK, and a new game sets a few fields per game: see
+nuvie_save.md "A new game from the original files".
 
 ## 5. Validation method
 `make npcsched` decodes the table and (with SCHEDULE) places + renders NPCs.

@@ -159,6 +159,13 @@ unblocks (most foundational first):
   (a **CACT** core-pack section: obj_n + x,y,z + status per actor). Clean-room-pure follow-up: locate
   the objlist init template inside `GAME.EXE` (now that ground-truth bytes exist) so the ship pipeline
   needs no ScummVM. See `docs/formats/objlist.md` + RE `se_actors.md`.
+  **CORRECTED (2026-11-01): SE does ship its objlist.** It is the tail of `LZDNGBLK`, after the five
+  dungeon object blocks, exactly as in U6 (the hunt above never decoded LZDNGBLK past its blocks).
+  The reference's new-game path reads it there for all three games. `make world-se` / `world-md` now
+  build the roster with `mksave` + `nuviesave` from the game's own files, no ScummVM: SE gives the
+  same 167 actor types as the capture (positions differ only where that save's NPCs had walked);
+  MD gets its first roster, 123 actors, party of 3. Both packs start where the list puts the player
+  (SE (412,294), MD (417,628)). Spec: nuvie_save.md "A new game from the original files".
 - **Martian Dreams:** Mars; toroidal world; era/technology mechanics; far more `.LZC` scripted
   content (SCENE*/MIDGAME*/MARS); game palette = **`MDPAL`** (RGB6, first 768B; renders correctly).
 - **Container wrapping (SE/MD):** compressible core files (MAPTILES.VGA, MASKTYPE.VGA, LZOBJBLK) are

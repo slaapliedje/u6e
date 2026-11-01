@@ -12,7 +12,11 @@
  * (SVMCR header + a tiny thumbnail + the header offset as the last u32): ScummVM's load menu
  * lists a save by that header and ignores files without one. The objlist gets Nuvie's new-game
  * defaults (name/stats/level/magic) — character creation overrides them at save time.
- * Usage: mksave <u6dir> <out.000> [avatar name]
+ * The Savage Empire and Martian Dreams start the same way (nuvie_save.md "A new game from the
+ * original files"): their LZOBJBLK / LZDNGBLK are one-item .LZC libraries around the same LZW
+ * streams, and only the game tag, the egg object and the new-game objlist fields differ. The game
+ * is MKWORLD_GAME (u6 / savage / martian, as for mkworld), else found by its executable.
+ * Usage: mksave <gamedir> <out.000> [avatar name]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +24,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "u6lzw.h"
+#include "u6lzc.h"
 
 #define MAXREC 40000
 
@@ -39,10 +44,29 @@ static uint8_t *slurp(const char *dir, const char *name, long *n)
     uint8_t *b = malloc((size_t)*n); if (fread(b, 1, (size_t)*n, f) != (size_t)*n){ fclose(f); free(b); *n = 0; return NULL; }
     fclose(f); return b;
 }
+typedef struct { const char *id; uint8_t tag[2]; int egg; uint8_t lzc; } game_t;
+static const game_t GAMES[3] = {
+    { "u6",      { '6', 'U' }, 335, 0 },
+    { "savage",  { 'E', 'S' }, 230, U6LZC_COMP_SE },
+    { "martian", { 'D', 'M' }, 466, U6LZC_COMP_MD },
+};
+static const game_t *g_game = &GAMES[0];
+
 static uint8_t *unlzw(const char *dir, const char *name, long *outlen)
 {
     long n; uint8_t *b = slurp(dir, name, &n);
     if (!b){ printf("mksave: %s/%s not found\n", dir, name); return NULL; }
+    if (g_game->lzc){                                             /* SE/MD: a one-item .LZC around the LZW */
+        u6lzc_t lc; int32_t isz; uint8_t fl; const uint8_t *p;
+        if (!u6lzc_open(&lc, b, (int32_t)n, g_game->lzc) || !(p = u6lzc_entry(&lc, 0, &isz, &fl))){
+            printf("mksave: %s: not an .LZC library\n", name); free(b); return NULL; }
+        int32_t cap = u6lzc_is_compressed(&lc, 0) ? u6lzw_unpacked_size(p, isz) : isz;
+        uint8_t *out = cap > 0 ? malloc((size_t)cap) : NULL;
+        int32_t got = out ? u6lzc_read(&lc, 0, out, cap) : -1;
+        free(b);
+        if (got <= 0){ printf("mksave: %s: LZC item decode failed\n", name); free(out); return NULL; }
+        *outlen = got; return out;
+    }
     int32_t un = u6lzw_unpacked_size(b, (int32_t)n);
     if (un <= 0){ printf("mksave: %s: not an LZW container\n", name); free(b); return NULL; }
     uint8_t *out = malloc((size_t)un);
@@ -118,7 +142,7 @@ static void emit_tree(chunk_t *c, rec_t *recs, int k)
 static chunk_t *dest_of(const rec_t *r, int *stats)
 {
     if (r->loc == 0x10 || r->loc == 0x18){ stats[0]++; return &g_inv; }
-    if (r->obj_n == 335){ stats[1]++; return &g_eggs; }
+    if (r->obj_n == g_game->egg){ stats[1]++; return &g_eggs; }
     if (r->z == 0){ stats[2]++; return &g_surf[((r->y >> 7) & 7) * 8 + ((r->x >> 7) & 7)]; }
     if (r->z >= 1 && r->z <= 5){ stats[3]++; return &g_dng[r->z - 1]; }
     stats[4]++; return &g_surf[((r->y >> 7) & 7) * 8 + ((r->x >> 7) & 7)];
@@ -140,6 +164,12 @@ int main(int argc, char **argv)
 {
     if (argc < 3){ printf("usage: %s <u6dir> <out.000> [avatar name]\n", argv[0]); return 2; }
     const char *dir = argv[1], *out = argv[2], *name = argc > 3 ? argv[3] : "Avatar";
+    {   const char *id = getenv("MKWORLD_GAME"); long n; uint8_t *probe;
+        if (!id || !*id){ id = "u6";
+            if ((probe = slurp(dir, "SAVAGE.EXE", &n))){ free(probe); id = "savage"; }
+            else if ((probe = slurp(dir, "MARTIAN.EXE", &n))){ free(probe); id = "martian"; } }
+        for (int i = 0; i < 3; i++) if (!strcmp(id, GAMES[i].id)) g_game = &GAMES[i];
+        printf("mksave: game %s\n", g_game->id); }
     long sn, dn;
     uint8_t *surf = unlzw(dir, "LZOBJBLK", &sn); if (!surf) return 2;
     uint8_t *dng  = unlzw(dir, "LZDNGBLK", &dn); if (!dng) return 2;
@@ -151,7 +181,7 @@ int main(int argc, char **argv)
     pos = 0;
     distribute_stream(dng, dn, &pos, 5, recs, stats);
     long objlist_size = dn - pos;
-    if (objlist_size < 0x1c73){ printf("mksave: objlist too short (%ld)\n", objlist_size); return 2; }
+    if (objlist_size < 0x1c73){ printf("mksave: objlist too short (%ld)\n", objlist_size); return 2; }   /* every game's reaches past 0x1c72 */
     uint8_t *objlist = dng + pos;
     printf("mksave: carried/readied %d, eggs %d, surface %d, dungeon %d, other %d; objlist %ld bytes\n",
            stats[0], stats[1], stats[2], stats[3], stats[4], objlist_size);
@@ -161,18 +191,26 @@ int main(int argc, char **argv)
      * gender @0x1c71 (0 male), portrait @0x1c72, str/dex/int @0x901/0xa01/0xb01, exp @0xc02 (u16),
      * level @0xff2, magic @0x13f2 (objlist.md). */
     {   size_t len = strlen(name); if (len > 13) len = 13;
+        const int str = 15, dex = 15, in = 15;
         memset(objlist + 0xf00, 0, 14); memcpy(objlist + 0xf00, name, len);
-        objlist[0x1c71] = 0; objlist[0x1c72] = 1;
-        objlist[0x901] = 15; objlist[0xa01] = 15; objlist[0xb01] = 15;
-        objlist[0xc02] = 0x72; objlist[0xc03] = 0x01;
-        objlist[0xff2] = 3; objlist[0x13f2] = 30; }
+        objlist[0x901] = str; objlist[0xa01] = dex; objlist[0xb01] = in;
+        if (g_game == &GAMES[0]){                                  /* U6 */
+            objlist[0x1c71] = 0; objlist[0x1c72] = 1;
+            objlist[0xc02] = 0x72; objlist[0xc03] = 0x01;          /* 370 */
+            objlist[0xff2] = 3; objlist[0x13f2] = (uint8_t)(2 * in); }
+        else if (g_game == &GAMES[1]){                             /* SE */
+            objlist[0xe01] = (uint8_t)(2 * str + in); objlist[0x14f2] = dex; }
+        else {                                                     /* MD */
+            objlist[0xc02] = 600 & 0xff; objlist[0xc03] = 600 >> 8;
+            objlist[0xe01] = (uint8_t)(2 * str + 4 * 24); objlist[0xff2] = 4;
+            objlist[0x14f2] = dex; objlist[0x15f2] = 20; } }
     {   const uint8_t *pb = objlist + 0x100 + 3;
         int x = pb[0] | ((pb[1] & 3) << 8), y = (pb[1] >> 2) | ((pb[2] & 0xf) << 6);
         int party = 0; for (int i = 1; i < 256; i++) if (objlist[0x800 + i] & 0x80) party++;
         printf("mksave: avatar at (%d,%d) %02d:%02d, party of %d\n", x, y, objlist[0x1bf4], objlist[0x1bf3], party); }
 
     FILE *f = fopen(out, "wb"); if (!f){ printf("mksave: cannot write %s\n", out); return 2; }
-    uint8_t hdr[4] = { 0x00, 0x01, '6', 'U' };                  /* version 256, tag MKTAG16('U','6'), LE */
+    uint8_t hdr[4] = { 0x00, 0x01, g_game->tag[0], g_game->tag[1] };   /* version 256, the game tag, LE */
     fwrite(hdr, 1, 4, f);
     chunk_write(f, &g_inv); chunk_write(f, &g_eggs);
     for (int i = 0; i < 64; i++) chunk_write(f, &g_surf[i]);

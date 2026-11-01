@@ -96,6 +96,44 @@ str/dex/int 0x900/0xa00/0xb00, exp 0xc00, HP 0xe00), but **little-endian** here
 `objlist_size` bytes; a ScummVM `.000` then carries trailing ScummVM metadata
 (thumbnail etc.) after it — a writer MUST preserve those trailing bytes.
 
+## A new game from the original files, all three games (2026-11-01)
+
+> Provenance: READING the reference's new-game path (ScummVM Nuvie `save/save_game.cpp`
+> load_new + the per-game new-game objlist updates; `core/obj_manager.cpp` for the egg object of
+> each game) to understand; re-expressed. Validated by: tools/mksave on the user's U6, SE and MD
+> files (U6 byte-identical to before; SE roster compared with the ScummVM-captured objlist).
+
+The starting state of every game comes from two of its own files; nothing is generated at run time:
+- **LZOBJBLK** holds the 64 surface object blocks.
+- **LZDNGBLK** holds the 5 dungeon object blocks, and right after them, in the same stream, the
+  starting **objlist**. This is true of The Savage Empire and Martian Dreams too: before
+  2026-11-01 we believed SE shipped no objlist and captured one from a ScummVM save
+  (multigame.md P2), but it is the tail of LZDNGBLK.
+- U6 stores both files as bare LZW containers. SE and MD wrap each in a one-item `.LZC`
+  library (lzc.md), whose item is the same LZW stream.
+
+The save writer then differs per game only in:
+| | U6 | SE | MD |
+|---|---|---|---|
+| game tag (u16 LE after the version) | `U6` (bytes `36 55`) | `SE` (bytes `45 53`) | `MD` (bytes `44 4D`) |
+| egg object (its records go to the eggs chunk) | 335 | 230 | 466 |
+
+and in the objlist fields a new game sets (offsets into the objlist; actor 1 = the player):
+| field | U6 | SE | MD |
+|---|---|---|---|
+| name (13 chars + NUL) @0xf00 | yes | yes | yes |
+| strength / dexterity / intelligence @0x901 / 0xa01 / 0xb01 | 15 each | 15 each | 15 each |
+| experience (u16) @0xc02 | 370 | unchanged | 600 |
+| hit points @0xe01 | unchanged | 2·str + int | 2·str + 96 (24 per level) |
+| level @0xff2 | 3 | unchanged | 4 |
+| magic points @0x13f2 | 2·int | — | — |
+| movement points @0x14f2 | — | dex | dex |
+| @0x15f2 | — | — | 20 (a second movement value) |
+| gender @0x1c71, portrait @0x1c72 | 0 / 1 | — | — |
+
+The values are the reference's defaults for a player who skipped character creation; our own
+character creation overwrites them at save time.
+
 ## Writing a save (round-trip)
 Strategy (host tool /tools/nuviewrite, and the model for the eventual on-target
 writer): **preserve every region we don't model byte-for-byte, and re-serialize

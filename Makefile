@@ -519,7 +519,7 @@ $(BUILD)/raw2png: tools/raw2png.c dataformats/u6pal.c tools/png.c
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 
 pack: $(BUILD)/mkpack
-	$(BUILD)/mkpack $(REFDATA) $(BUILD)/u6.pak $(BUILD)/region_golden.png $(OX) $(OY)
+	$(BUILD)/mkpack $(REFDATA) $(BUILD)/u6reg.pak $(BUILD)/region_golden.png $(OX) $(OY)
 
 # target: the render-demo .PRG (TT/Falcon arch). Links platform + render.
 RDEMO_SRC := platform/detect.c platform/platmem.c platform/platfile.c \
@@ -684,21 +684,25 @@ gamedata-st gamedata-tt: world
 # Reuses the U6 loaders (MAP/CHUNKS/tileset/palette/passable/objects); SE/MD wrap
 # the compressible core files in a single-item .LZC which mkworld unwraps.
 # SE_REFDATA / MD_REFDATA are defined with the lzctest target above.
-# default start = the dense village cluster coredump found (SE Kurak-valley huts),
-# so a boot lands on recognizable land rather than open ocean.
-SE_X ?= 380
-SE_Y ?= 555
-MD_X ?= 124
-MD_Y ?= 168
-world-se: $(BUILD)/mkworld
-	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y)
-world-md: $(BUILD)/mkworld
-	MKWORLD_GAME=martian $(BUILD)/mkworld $(MD_REFDATA) $(BUILD)/MD.PAK $(MD_X) $(MD_Y)
+# Start: 0 0 = where the game's own actor list puts the player (as U6); set SE_X/SE_Y or
+# MD_X/MD_Y to look somewhere else.
+SE_X ?= 0
+SE_Y ?= 0
+MD_X ?= 0
+MD_Y ?= 0
+# The starting actor roster (CACT) comes from each game's own LZDNGBLK, as for U6: mksave writes
+# the new-game save, nuviesave takes its objlist out, mkworld emits CACT from it
+# (docs/formats/nuvie_save.md "A new game from the original files").
+world-se: $(BUILD)/mkworld $(BUILD)/mksave $(BUILD)/nuviesave
+	MKWORLD_GAME=savage $(BUILD)/mksave $(SE_REFDATA) $(BUILD)/SAVE.SE
+	$(BUILD)/nuviesave $(BUILD)/SAVE.SE $(BUILD)/se.objblk $(BUILD)/se.objlist
+	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y) $(BUILD)/se.objlist
+world-md: $(BUILD)/mkworld $(BUILD)/mksave $(BUILD)/nuviesave
+	MKWORLD_GAME=martian $(BUILD)/mksave $(MD_REFDATA) $(BUILD)/SAVE.MD
+	$(BUILD)/nuviesave $(BUILD)/SAVE.MD $(BUILD)/md.objblk $(BUILD)/md.objlist
+	MKWORLD_GAME=martian $(BUILD)/mkworld $(MD_REFDATA) $(BUILD)/MD.PAK $(MD_X) $(MD_Y) $(BUILD)/md.objlist
 
-# SE with its initial ACTOR ROSTER (CACT). SE ships no savegame/objlist, so we
-# capture it from a ScummVM new-game save (docs/design/multigame.md P2 +
-# memory se-actor-capture): nuviesave extracts the objlist, then mkworld emits a
-# CACT section from it so the Kurak village boots populated with NPCs + party.
+# SE from a ScummVM save instead (the state that save holds; kept for comparisons).
 SE_SCUMMVM_SAVE ?= $(HOME)/.local/share/scummvm/saves/thesavageempire_enh.001
 world-se-svm: $(BUILD)/mkworld $(BUILD)/nuviesave
 	$(BUILD)/nuviesave "$(SE_SCUMMVM_SAVE)" $(BUILD)/se.objblk $(BUILD)/se.objlist
@@ -720,7 +724,7 @@ $(BUILD)/nuviesave: tools/nuviesave.c
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 # synthesize the PRISTINE new-game save (ScummVM layout) from the user's LZOBJBLK + LZDNGBLK:
 # the SAVE.000 template the on-target writer patches, and the state the shipped pack is built from
-$(BUILD)/mksave: tools/mksave.c dataformats/u6lzw.c
+$(BUILD)/mksave: tools/mksave.c dataformats/u6lzw.c dataformats/u6lzc.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 # Always regenerated (ms): `world-svm` / `save-engine` overwrite build/SAVE.000 with the user's
