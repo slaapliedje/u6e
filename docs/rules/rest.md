@@ -59,6 +59,8 @@ Aboard a **ship** the command is the hull repair of cannons.md §2 (no prompts).
   `s`: if the member slept (not the guard) and `s` < the number of members that had food,
   the deficit `d = max − hp` (a deficit of 1 counts as 2) heals by `d/2 + rand(0..d/2−1)`:
   `<name> has healed.` (the reference's `s < fed` is by index, not by who ate — kept).
+  A dead companion (0 HP, combat.md §3d) never heals by resting. Until 2026-10-31 it did, and stood
+  up again with half its HP back (found by the bot after its death segment).
 - If healing was allowed the rest counter becomes **12** (hours). It counts down once per game
   hour and lives in the objlist at **0x1bf2** (one byte; formats/objlist.md), so a save
   remembers when the party may heal by resting again.

@@ -251,7 +251,8 @@ the Wall-only tiles are doorways, arches and the open secret door frames — fix
 - **Potions (275, frame = colour).** U)se asks "On whom:" — a party member by number 1..5 (only
   the party can be dosed). blue 0 wakes a sleeper, red 1 cures poison, yellow 2 heals to full,
   green 3 poisons, orange 4 puts to sleep, purple 5 protects, black 6 makes invisible, white 7
-  (the original's x-ray vision) has no effect here. The potion is used up.
+  (the original's x-ray vision) has no effect here. The potion is used up. A dead companion
+  (0 HP, combat.md §3d) cannot be dosed: "No effect", and the potion is kept.
 - **Runes (242..249 = the eight virtues, Honesty first).** U)se asks "Mantra:" — a typed word.
   The right mantra (Honesty AHM, Compassion MU, Valor RA, Justice BEH, Sacrifice CAH, Honor SUMM,
   Spirituality OM, Humility LUM) while standing next to the shrine's force field (51, quality =

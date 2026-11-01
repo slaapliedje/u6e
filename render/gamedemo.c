@@ -4994,6 +4994,7 @@ static void sync_health_out(void)
         if(g_poison[a] && !g_cg.poisoned[a]) g_poison[a]=0;
         if(g_ahp[a]==0 && !g_cg.dead[a] && g_atile[a]==0xffff && g_wp){ companion_revive((world_t*)g_wp,a); continue; }   /* a dead companion stands up beside the Avatar (§3d); exp x karma/100 inside */
         if(g_ahp[a]==0 && !g_cg.dead[a]){ g_ahp[a]=1; if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[a]=(uint16_t)(((uint32_t)g_aexp[a]*(uint32_t)k)/100u); } }   /* a healer's RESURRECT: exp x karma/100 */
+        if(g_cg.healed_full[a] && g_ahp[a]==0){ g_cg.healed_full[a]=0; continue; }   /* HEAL never raises the dead (§6f) */
         if(g_cg.healed_full[a] && g_ahp[a]<g_amaxhp[a]){ g_ahp[a]=g_amaxhp[a]; g_cg.healed_full[a]=0; } }
     for(;g_cg.resurrect_req;g_cg.resurrect_req--){                   /* RESURRECT: the carried body rises on the Avatar's tile (§6f) */
         int row=-1, id=0;
@@ -6930,7 +6931,8 @@ static int do_attack(world_t*w,int dx,int dy)
     int ranged=(wobj!=40 && wobj!=47) && (dist>1 || mis);          /* the morning star and halberd reach, never shoot */
     int id=npc_at(w,tx,ty), oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
     { char nm[24]; nm[0]=0;                                        /* what the crosshair rests on */
-      if(id>=0) obj_name(npc_tile(id),nm,sizeof nm); else if(oi>=0) obj_name(g_wobj[oi].tile,nm,sizeof nm); else obj_name(world_tile(w,tx,ty),nm,sizeof nm);
+      if(id>=0 && is_party_member(id)) actor_name(id,nm,sizeof nm);   /* a companion by its name, as Look does */
+      else if(id>=0) obj_name(npc_tile(id),nm,sizeof nm); else if(oi>=0) obj_name(g_wobj[oi].tile,nm,sizeof nm); else obj_name(world_tile(w,tx,ty),nm,sizeof nm);
       int n=msgcat(0,nm[0]?nm:"nothing"); msgcat(n,"."); }
     int atk=ship?30:status_hit_role(1,g_adex[1]?g_adex[1]:15);
     int hit=(id>=0) ? combat_hit(atk,g_adex[id]?g_adex[id]:15,&g_crng) : (oi>=0);
@@ -6953,9 +6955,15 @@ static int do_attack(world_t*w,int dx,int dy)
     }
     if(id>=0){
         char nm[24]; obj_name(npc_tile(id),nm,sizeof nm); if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
+        int mate=is_party_member(id); if(mate) actor_name(id,nm,sizeof nm);   /* a companion struck (combat.md §3d) */
         if(!hit){ int n=msg_tail(); n=msgcat(n,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return 1; }
         int dmg=status_dmg(id,combat_damage(wmax,g_aac[id],&g_crng));  /* weapon vs armour, then Protection (§5b) */
         if(ship){ cannon_damage_actor(id,dmg,"Hit ","Killed "); return 1; }   /* the vehicle is the slayer: no experience */
+        if(mate){                                             /* a companion takes the blow but never turns on the party */
+            if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); return 1; }
+            int hp=g_ahp[id]; g_ahp[id]=(uint8_t)(dmg>=hp?0:hp-dmg);   /* at 0 it dies at the end of the turn (party_deaths) */
+            int n=msg_tail(); if(g_ahp[id]==0){ n=msgcat(n,nm); msgcat(n," killed!"); } else { n=msgcat(n,"Hit "); n=msgcat(n,nm); msgcat(n,"!"); }
+            sync_party_hp(); return 1; }
         g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1;       /* striking it makes it fight back (CB2); a struck coward turns to ASSAULT; a struck foe knows where you are */
         if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); return 1; }
         int hp=g_ahp[id]?g_ahp[id]:30;
@@ -7025,7 +7033,7 @@ static void fields_tick(const world_t*w){
             if(f->kind==0||f->kind==1){               /* fire / poison: damage */
                 int dmg=combat_damage(f->kind==0?9:4,0,&g_crng), hp=g_ahp[a]?g_ahp[a]:0;
                 g_ahp[a]=(dmg>=hp)?0:(uint8_t)(hp-dmg);
-                if(g_ahp[a]==0 && a!=1){ if(!is_party_member(a)) actor_die(a); else g_atile[a]=0xffff; }   /* slain (not the Avatar) */
+                if(g_ahp[a]==0 && !is_party_member(a)) actor_die(a);   /* slain; the party dies in party_deaths */
             } else if(f->kind==2){                    /* sleep */
                 g_asleep[a]=3;
             }
@@ -7055,7 +7063,7 @@ static void status_tick(void){
         if(g_paralyze[a] && rng_range(&g_crng,4)==0  && str_adj(a)>=d30()) g_paralyze[a]=0;
         if(g_asleep[a]   && rng_range(&g_crng,16)==0) g_asleep[a]=0;
         if(g_poison[a] && !g_protect[a] && rng_range(&g_crng,8)==0){ int hp=g_ahp[a];   /* poison: 1 HP now and then, never lifts by itself */
-            if(hp>0){ g_ahp[a]=(uint8_t)(hp-1); if(g_ahp[a]==0 && a!=1) g_atile[a]=0xffff; } }
+            if(hp>0){ g_ahp[a]=(uint8_t)(hp-1); if(g_ahp[a]==0 && !is_party_member(a)) actor_die(a); } }
     }
     sync_party_hp();                                  /* poison may have changed party HP */
 }
@@ -8288,7 +8296,7 @@ static void rest_finish(world_t*w)
     if(g_rest_fire>=0 && g_rest_fire<g_ow.nobjs && g_wobj[g_rest_fire].obj_n==253) g_wobj[g_rest_fire].tile=(uint16_t)basetile(253);
     int can_heal=(g_rest_counter==0), n=0; g_msg[0]=0;
     for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
-        if(can_heal && g_rest_slept[p] && p<g_rest_fed){
+        if(can_heal && g_rest_slept[p] && p<g_rest_fed && g_ahp[a]>0){   /* the dead stay dead (combat.md §3d) */
             int mx=g_amaxhp[a]?g_amaxhp[a]:30, d=mx-(int)g_ahp[a];
             if(d>0){ if(d==1) d=2; int h=(int)g_ahp[a]+(int)rng_range(&g_crng,(uint32_t)(d/2))+d/2; if(h>mx) h=mx; g_ahp[a]=(uint8_t)h;
                 n=msgcat(n,g_party[p].name); n=msgcat(n," has healed. "); } }
@@ -8741,6 +8749,7 @@ static void companion_die(const world_t*w,int id){
     if(fr==255) fr=0;
     if(body==338) fr=(int)rng_range(&g_crng,3);
     if(body && !veh_aboard()) (void)temp_obj_new(body,fr,g_actx[id],g_acty[id],id);
+    g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);           /* letting the party die is bad karma */
     g_atile[id]=0xffff; g_ahp[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=0; g_charm[id]=g_ally[id]=0; g_amoved[id]=0;
     (void)w; sync_party_hp(); build_blocked(); }
 /* a dead companion stands up beside the Avatar (its body, if one lies on this level, is removed) */
@@ -8750,6 +8759,7 @@ static void companion_revive(world_t*w,int id){
     resurrect_actor(w,id,(int)w->px,(int)w->py); }
 /* the Avatar at 0 HP (combat.md §3d): Lord British's resurrection in the throne room */
 static void avatar_death(world_t*w){
+    g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);           /* letting the party die is bad karma (before the exp loss) */
     if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
     else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
     for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl] && g_aready[1][sl]!=76) (void)equip_take_off(1,sl);   /* readied items back to the pack */
@@ -8800,6 +8810,7 @@ static void potion_to_member(int m)
 {
     if(m<0||m>=g_nparty){ msgcat(0,"nobody"); return; }
     int a=g_party[m].actor; if(a<1||a>=U6_MAX_ACTORS) return;
+    if(a!=1 && g_ahp[a]==0){ msgcat(0,"No effect"); return; }   /* the dead drink nothing (combat.md §3d) */
     int row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==275 && ((int)g_ow.inv[k].tile-basetile(275))==g_potion_frame){ row=k; break; }
     if(row<0){ msgcat(0,"No effect"); return; }
     if(g_ow.inv[row].qty>1) g_ow.inv[row].qty--;
@@ -10003,7 +10014,7 @@ static void bot_report(const world_t*w)
     n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
-    n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",g_cg.gold); n=bot_kv(n,"rest",g_rest_stage);
+    n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",g_cg.gold); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
     n=bot_put(n," askc="); n=bot_put(n,(g_await_input&&g_cv.askc[0])?g_cv.askc:"-"); n=bot_kv(n,"num",g_await_input&&g_cv.input_num);
     { int foes=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay)||!g_ahp[i]||!actor_hostile(i)) continue;
           int dx=ax-(int)w->px, dy=ay-(int)w->py; if(dx<0)dx=-dx; if(dy<0)dy=-dy; if(dx<=8&&dy<=8) foes++; }

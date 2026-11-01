@@ -39,7 +39,7 @@ class Player:
         self.nav = Nav(game, log); self.nav.keyfn = lambda k: self.key(k, 'walk')
         self.issues = []; self.nshot = 0; self.transcripts = {}
         self.ilog = open(os.path.join(outdir, 'issues.jsonl'), 'a')
-        self.dead_k = -1; self.hp_seen = {}; game.watch = self.watch
+        self.dead_k = -1; self.hp_seen = {}; self.meant = set(); game.watch = self.watch   # meant: companions killed on purpose
 
     # ---- issue log ------------------------------------------------------------------------------
     def issue(self, kind, detail, shot=True):
@@ -59,7 +59,7 @@ class Player:
         elif 'unending darkness' not in st.get('msg', '').lower(): self.dead_k = -1
         hp = {m['id']: m['hp'] for m in st.get('party', [])}
         for i, h in hp.items():                                      # a companion falls (combat.md §3d), in or out of a fight
-            if i != 1 and h == 0 and self.hp_seen.get(i, 0) > 0:
+            if i != 1 and h == 0 and self.hp_seen.get(i, 0) > 0 and i not in self.meant:
                 self.issue('combat', 'party member %d died (L%d (%d,%d), %r)' % (i, st['L'], st['X'], st['Y'], st.get('msg', '')[:80]), shot=False)
         self.hp_seen = hp
 
@@ -294,6 +294,8 @@ class Player:
             self.key('space', 'resting')
         hp1 = {m['id']: m['hp'] for m in self.g.state['party']}
         self.log('  rested %dh: %s -> %s (%s)' % (hours, hp0, hp1, self.g.state['msg'][:120]))
+        risen = [i for i in hp1 if hp0.get(i) == 0 and hp1[i] > 0]
+        if risen: self.issue('rest', 'dead members %s rose by resting' % risen)
         return self.g.state['msg']
 
     def walk(self, tx, ty, **kw):

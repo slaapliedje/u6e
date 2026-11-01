@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
-collect what looked wrong. Segments: castle, bridge, britain, shop, healer, sell, cave, orb, shrine (default: all, in order)."""
+collect what looked wrong. Segments: castle, bridge, britain, shop, sell, death, healer, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
@@ -51,23 +51,103 @@ def seg_shop(p, kw):
     if g2 < 0 or g1 - g2 != 3 * (t2 - t1) or g2 >= 3: p.issue('shop', 'asking %d torches with %d gold: gold %d, torches +%d' % (many, g1, g2, t2 - t1))
 
 def seg_healer(p, kw):
-    """Tiberius (26) heals in his shop 9-18 (worktype 0x90): Resurrect with nobody dead says so;
-    Heal mends the chosen wounded member to full for 30 gold, free when the purse is short,
-    and says all are well when nobody is hurt"""
-    a = p.actor(26)
-    if a and a.get('wt') != 0x90: p.log('  Tiberius not at work (wt=%s): skipped' % a.get('wt')); return
-    hurt = [m['id'] for m in p.g.state['party'] if 0 < m['hp'] < m['max']]
-    g0 = p.g.state['gold']
-    out = p.talk_to(26, ['resu', 'heal', '1', 'y'], 'Tiberius', yes=True)
+    """Tiberius (26) heals in his shop 9-18 (worktype 0x90). Carrying a companion's body, he asks 400
+    gold at once: paid, the companion stands up; short, he says how short and the body stays.
+    Carrying none, Resurrect says nobody is dead. Heal lists the wounded (the dead too) and mends
+    the chosen living one to full for 30 gold (with less, free or refused); all well when nobody is
+    hurt"""
+    if not wait_for_work(p, 26, 'Tiberius'): return
+    party = p.g.state['party']; g0 = p.g.state['gold']
+    dead = [m['id'] for m in party if m['hp'] == 0]
+    hurt = [m['id'] for m in party if m['hp'] < m['max']]                # the numbered "Which of you?" list
+    alive_hurt = [i for i in hurt if i not in dead]
+    body = [r['q'] for r in p.g.objects()[1] if r['obj'] == 339]
+    pick = hurt.index(alive_hurt[0]) + 1 if alive_hurt else 1
+    out = p.talk_to(26, (['y'] if body else ['resu']) + ['heal', str(pick), 'y'], 'Tiberius', yes=True)
     if out is None: p.issue('healer', 'could not reach Tiberius'); return
-    text = ' '.join(r for _, r in out)
-    if 'none of thy party is dead' not in text.lower(): p.issue('healer', 'resurrect with nobody dead: %r' % out[1:2])
-    g1 = p.g.state['gold']; still = [m['id'] for m in p.g.state['party'] if 0 < m['hp'] < m['max']]
-    p.log('  Tiberius: hurt %s -> %s, gold %d -> %d' % (hurt, still, g0, g1))
-    if not hurt:
-        if 'art well' not in text and 'are well' not in text: p.issue('healer', 'nobody hurt, no "well": %r' % out[-3:])
-    elif len(still) != len(hurt) - 1: p.issue('healer', 'heal mended %d of %s (still %s)' % (len(hurt) - len(still), hurt, still))
-    elif g0 - g1 != (30 if g0 >= 30 else 0): p.issue('healer', 'heal cost %d with %d gold' % (g0 - g1, g0))
+    text = ' '.join(r for _, r in out); low = text.lower()
+    party = p.g.state['party']; g1 = p.g.state['gold']
+    hp = {m['id']: m['hp'] for m in party}; mx = {m['id']: m['max'] for m in party}
+    body1 = [r['q'] for r in p.g.objects()[1] if r['obj'] == 339]
+    p.log('  Tiberius: dead %s, hurt %s, body %s -> hp %s, body %s, gold %d -> %d' % (dead, hurt, body, hp, body1, g0, g1))
+    spent = 0
+    if body and dead:
+        q = body[0]
+        if g0 >= 400:
+            spent = 400
+            if hp.get(q, 0) == 0 or q in body1: p.issue('healer', 'paid 400 for %d: hp %s, body %s' % (q, hp.get(q), body1))
+            elif not p.actor(q): p.issue('healer', 'resurrected %d is not on the map' % q)
+        else:
+            if 'short' not in low: p.issue('healer', 'resurrect with %d gold: no "short" (%r)' % (g0, out[:2]))
+            if hp.get(q, 0) != 0 or q not in body1: p.issue('healer', 'resurrected %d without paying (hp %s, body %s)' % (q, hp.get(q), body1))
+    elif not dead and 'none of thy party is dead' not in low: p.issue('healer', 'resurrect with nobody dead: %r' % out[1:2])
+    if not alive_hurt:
+        if 'art well' not in text and 'are well' not in text and not dead: p.issue('healer', 'nobody hurt, no "well": %r' % out[-3:])
+    else:
+        h = alive_hurt[0]; g_before = g0 - spent
+        if hp[h] == mx[h]:
+            if g_before - g1 != (30 if g_before >= 30 else 0): p.issue('healer', 'heal cost %d with %d gold' % (g_before - g1, g_before))
+        elif not (g_before < 30 and 'without an offering' in low): p.issue('healer', 'heal left %d at %d/%d (%r)' % (h, hp[h], mx[h], out[-3:]))
+    for d in dead:
+        if d not in alive_hurt and hp.get(d, 0) and not (body and g0 >= 400): p.issue('healer', 'dead %d rose without a resurrection' % d)
+
+def member(p, aid):
+    return next((m for m in p.g.state['party'] if m['id'] == aid), None)
+
+def strike(p, aid, name, waits=8):
+    """A)ttack party member aid once it stands beside the Avatar (walking up to it); the state after"""
+    for _ in range(waits):
+        a = p.actor(aid)
+        if not a: return None
+        x, y = p.nav.pos(); dx, dy = a['x'] - x, a['y'] - y
+        if max(abs(dx), abs(dy)) == 1: break
+        p.nav.refresh()                                                 # followers stand still while the Avatar waits: walk up
+        try: p.nav.goto(a['x'], a['y'], adj=True, max_steps=30)
+        except NavError as e: p.log('  to %s: %s' % (name, e)); p.key('space', 'wait')
+    else: return None
+    p.key('a', 'attack')
+    if dx: p.key('right' if dx > 0 else 'left')
+    if dy: p.key('down' if dy > 0 else 'up')
+    return p.key('ret', 'strike %s' % name)
+
+def seg_death(p, kw):
+    """the Avatar strikes Shamino (3) until he is hurt, then Iolo (4) until he dies (combat.md §3d):
+    a struck companion never turns hostile; at 0 HP "Iolo killed!", his body (339, quality 4) lies
+    where he stood, he leaves the map but stays in the roster at 0 HP, and karma drops 5; then the
+    Avatar picks the body up (the healer segment takes it to Tiberius)"""
+    k0 = p.g.state['karma']; p.meant.add(4)
+    for _ in range(12):
+        st = strike(p, 3, 'Shamino')
+        if st is None: p.issue('death', 'Shamino never came beside the Avatar'); return
+        if member(p, 3)['hp'] < member(p, 3)['max']: break
+    m3, a3 = member(p, 3), p.actor(3)
+    p.log('  Shamino struck: %r, hp %d/%d' % (st['msg'], m3['hp'], m3['max']))
+    if m3['hp'] == m3['max']: p.issue('death', 'Shamino never hurt in 12 blows (%r)' % st['msg'])
+    if a3 and a3['hostile']: p.issue('death', 'Shamino turned hostile when struck')
+    for _ in range(60):
+        a = p.actor(4)
+        if not a: break
+        spot = (a['x'], a['y'])
+        st = strike(p, 4, 'Iolo')
+        if st is None: p.issue('death', 'Iolo never came beside the Avatar'); return
+        if p.actor(4) and p.actor(4)['hostile']: p.issue('death', 'Iolo turned hostile when struck'); return
+        if 'Iolo killed' in st['msg']: break
+    else: p.issue('death', 'Iolo alive after 60 blows (%r)' % st['msg']); return
+    p.log('  Iolo: %r at %s, karma %d -> %d' % (st['msg'], spot, k0, p.g.state['karma']))
+    if 'Iolo killed' not in st['msg']: p.issue('death', 'no "Iolo killed!" (%r)' % st['msg'])
+    if p.actor(4): p.issue('death', 'dead Iolo still on the map: %r' % p.actor(4))
+    if not member(p, 4) or member(p, 4)['hp'] != 0: p.issue('death', 'roster after the death: %r' % p.g.state['party'])
+    if p.g.state['karma'] != max(k0 - 5, 0): p.issue('death', 'karma %d -> %d' % (k0, p.g.state['karma']))
+    body = [o for o in p.g.objects()[0] if o['obj'] == 339 and o['q'] == 4]
+    if not body: p.issue('death', 'no body of Iolo near %s' % (spot,)); return
+    b = body[0]
+    if (b['x'], b['y']) != spot: p.log('  the body lies at (%d,%d), not %s' % (b['x'], b['y'], spot))
+    p.nav.refresh(); x, y = p.nav.pos()
+    if abs(b['x'] - x) + abs(b['y'] - y) != 1: p.nav.goto(b['x'], b['y'], adj=True); x, y = p.nav.pos()
+    p.key('g'); st = p.key(VDIR[(b['x'] - x, b['y'] - y)], 'get the body')
+    held = [r for r in p.g.objects()[1] if r['obj'] == 339 and r['q'] == 4]
+    p.log('  get: %r, carried %d' % (st['msg'], len(held)))
+    if not held: p.issue('death', 'could not pick up the body: %r' % st['msg'])
 
 def wait_for_work(p, aid, name, limit=400):
     """pass turns (space) until actor aid is at work (worktype 0x90); False if it never is"""
@@ -266,7 +346,7 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, healer=seg_healer, sell=seg_sell, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

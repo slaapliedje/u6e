@@ -20,6 +20,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | Hatched worktypes: the coward's sight range is 5 for every flee code (reference 3 / 8, and a cornered retreater fights back); the stationary strike is a per-neighbour 16/81 chance, not 16 random picks; "toward a point ten tiles off" is one step; the tangle vine never crawls | eggs.md §5 | accepted |
 | Hatching: free actor slots only (an embryo is skipped when none is free); toss-to-free-tile searches 5×5 (the reference tries 3×2 / 2×3 / 4×4 spreads), no grouping by type | eggs.md §5 | accepted |
 | The experience formula's reading of the reference's actor table is ours (table values, evil/chaotic only); the shrine thresholds come from the scripts | combat.md §3 | accepted |
+| A party member brought to 0 HP costs 5 karma whatever the cause (the reference takes it in its blow / spell damage path) | combat.md §3d | accepted |
 | L)ook at an ACTOR shows the terrain under it (the reference names the actor and shows its portrait) | usecode_use.md (Clock and sundial) | open |
 
 ## Magic
@@ -59,6 +60,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 ## Save, text, tools
 | Deviation | Where | Status |
 |---|---|---|
+| HEAL on a dead party member leaves it at 0 HP (the reference sets full HP on a body that stays dead) | usecode_vm.md §6f | accepted |
 | The vanish slot (objlist 0x1c13) is OUR encoding `obj_n \| frame<<10` — the reference's `+1023+frame` does not round-trip | magic_skills.md §5f, objlist.md | accepted |
 | L)ook prints no weights, weapon or armour lines after the name (the reference's look_obj does) | usecode_use.md (Clock and sundial) | open |
 | A plural marker (`\s`) reaches the screen in some conversation lines ("gold piece\s short") | usecode_vm.md | open |

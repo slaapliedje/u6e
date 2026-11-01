@@ -36,7 +36,7 @@ run.py (segments of the walkthrough)
   (no camp, moongate walk or click-travel in progress). Fields: `k` keys received (the lock-step
   counter), `busy`, `L X Y`, the clock and date, the armed verb, `talk` (actor id) and `ask`
   (text entry open), `askc` (the keys a y/n prompt accepts) and `num` (a number prompt), the
-  cast / mantra / inventory / status / peer panels, combat mode, vehicle, `over` (the ending), `gold`, `rest` (the camp prompt: 1 hours, 2 guard),
+  cast / mantra / inventory / status / peer panels, combat mode, vehicle, `over` (the ending), `gold`, `karma`, `rest` (the camp prompt: 1 hours, 2 guard),
   `foes` (hostile actors within 8 tiles), the party `id:hp/max:mp:level`, then the free text:
   `msg` (the message box), `conv` (the conversation transcript), `typed`.
 - **Dumps** on function keys (no game effect): F2 actors on this level (with each NPC's live worktype `wt`), F3 objects within 24
@@ -189,8 +189,32 @@ rise by the offered price. Found: WOUNDED read the dead flag, so Tiberius called
 DECL into a data-block element was dropped, so his "which one?" list showed every line as the first
 item (usecode_vm.md §6g). Run r26: 0 issues, 302 s, a Sword sold for 25 gold.
 
+## 6f. A companion dies (2026-10-31)
+
+`death` (after `sell`, before `healer`; the order is now shop, sell, death, healer) has the Avatar
+walk up to Shamino (3) and A)ttack him until he is hurt, then Iolo (4) until "Iolo killed!". It checks
+that a struck companion never turns hostile, that Iolo leaves the map but stays in the roster at
+0 HP, that his body (339, quality 4) lies where he fell, that karma drops by 5 (the `@S` report now
+carries `karma`), and that G)et picks the body up. `healer` then takes it to Tiberius: carrying a
+body, he asks 400 gold at once, and with too little he must say how short, keep the body and leave
+Iolo dead; with 400 Iolo must stand up on the map. Heal is asked for the first living wounded
+member. `Player.meant` lists companions killed on purpose, so the watcher doesn't report them.
+
+Found while building it (combat.md §3d, usecode_vm.md §6f):
+- a companion killed by the Avatar's own blow, a field or poison was taken off the map at once, so
+  it left no body (party_deaths never saw it);
+- striking a companion turned it hostile and could award experience;
+- a companion's death cost no karma (the reference: 5, "allowing your party to die is bad karma");
+- HEAL cleared the dead flag, so Lord British's "heal", or a healer told to heal the dead member,
+  raised it for free.
+The crosshair now names a party member by its name ("Iolo."), not its type ("musician.").
+After the death, the cave segment's 8-hour camp healed dead Iolo back to 51 HP and he stood up
+again (rest.md §4); a yellow potion could do the same (usecode_use.md). Both now leave the dead
+alone, and the rest helper reports any member who rises from 0 HP. Run r30: 0 issues, 301 s.
+
+Still not run: a paid resurrection, since the party has 27 gold against Tiberius' 400.
+
 ## 7. Next
 
 Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
-the ending; a paid heal and a real resurrection (a companion has to die and its body be
-carried to a healer), more spells.
+the ending; a paid heal and a paid resurrection (the party needs 400 gold first), more spells.

@@ -121,5 +121,13 @@ int main(void)
       ok=g.var[9]==99 && db_integer(&vm,10,1)==42; printf("  a plain DECL writes the variable again %s\n", ok?"OK":"FAIL"); if(!ok){ df++; fail++; }
       printf(df ? "data-block assignment: %d FAILURE(S)\n" : "data-block assignment: ALL PASS\n", df); }
 
+    printf("\nHEAL:\n");
+    { static const uint8_t blk[4]={0}; cvm_init(&vm,blk,4,&g,26,0,0);
+      g.dead[4]=1; g.wounded[4]=1; g.poisoned[4]=0; g.poisoned[3]=1; g.wounded[3]=1; g.healed_full[3]=g.healed_full[4]=0;
+      vm.nin=0; add_val(&vm,OP_HEAL,0); add_val(&vm,4,0); do_ctrl(&vm);
+      vm.nin=0; add_val(&vm,OP_HEAL,0); add_val(&vm,3,0); do_ctrl(&vm);
+      int ok=g.dead[4]==1 && g.healed_full[4]==1 && g.poisoned[3]==1 && g.wounded[3]==0 && g.healed_full[3]==1;
+      printf("  HEAL leaves the dead dead and the poisoned poisoned %s\n", ok?"OK":"FAIL"); if(!ok) fail++; }
+
     return fail ? 1 : 0;
 }

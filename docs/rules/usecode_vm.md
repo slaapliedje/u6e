@@ -79,7 +79,7 @@ loops back to ASK; `BYE` (0xB6) ends. Text prints with $P/$G/$N/#var substitutio
   party's gold total: OBJCOUNT / HASOBJ of 88 read it and GIVE / NEW / DELETE of 88 change it (the
   gold object number was wrong before 2026-10-31, so every merchant answered "you don't have
   enough gold" whatever the party carried);
-- per-NPC poison/dead status (HEAL/CURE clear; RESURRECT raises the actor a carried body names, §6f; WOUNDED/POISONED read);
+- per-NPC poison/dead status (CURE clears the poison, HEAL only restores full HP; RESURRECT raises the actor a carried body names, §6f; WOUNDED/POISONED read);
 - NPC schedule worktype (WORKTYPE); the active PORTRAIT (host re-renders).
 A `mutations` counter records state-changing ops (used by tests). Defaults make
 every conditional take its "flag clear / not in party" branch; the host presets
@@ -348,6 +348,12 @@ letter; we copy the run as written.)
 - **WOUNDED(npc)** (0xda) is 1 when the actor's HP is below its maximum (a dead actor at 0 HP counts),
   else 0. Until 2026-10-31 it read the dead flag, so a healer told a hurt party "Fret not, for all of
   you are well!" and never healed anyone (found by the bot's healer segment).
+- **HEAL(npc)** (0xd9) sets the actor's HP to its maximum, nothing else (the reference's heal() is
+  set_hp(max)): it does not cure poison (CURE, 0xdb, does) and it does not raise the dead. Lord
+  British's "heal" HEALs every WOUNDED member, and a dead one is WOUNDED; u6e leaves a dead member
+  dead and at 0 HP (the reference would set HP on a body that stays dead). Until 2026-10-31 u6e's
+  HEAL also cleared the dead flag, so Lord British, or a healer told to heal the dead member, raised
+  it for nothing (found while building the bot's death segment).
 - Test hooks: cvmtest (OBJINPARTY with and without a body; RESURRECT asks for the pack; a second
   member counts 0 gold); the bot's healer segment (resurrect with nobody dead, heal for 30 or free).
 

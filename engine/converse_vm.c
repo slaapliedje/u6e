@@ -400,7 +400,7 @@ static void do_ctrl(cvm_t*vm){
       case OP_DELETE:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(); ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
                        if(is_player(vm,np)) add(vm,o,0,-(int32_t)q);
                        vm->g->mutations++; } break;
-      case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->dead[np]=0; vm->g->wounded[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;
+      case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->wounded[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;   /* full HP only: no cure, the dead stay dead (§6f) */
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
       case OP_RESURRECT:{ (void)ARG(); if(vm->g->resurrect_req<255) vm->g->resurrect_req++; vm->g->mutations++; } break;   /* the carrier's body rises (§6f) */
       case OP_PORTRAIT: vm->g->portrait_npc=npc_num(vm,ARG()); break;

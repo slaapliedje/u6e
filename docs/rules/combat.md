@@ -113,6 +113,16 @@ and destroyed objects persist". Hatched and summoned creatures leave the same re
   carries (usecode_vm.md §6f), or the Avatar's death below. A dead companion's body is temporary:
   after a save and a load the companion is still dead (0 HP) with no body, and a healer raises it as
   if the party carried one (§6f), or the Avatar's death revives it.
+- **Striking a companion** (from READING the reference's `actor.lua` actor_attack / actor_hit; found by
+  the bot harness): A)ttack may rest on a party member. The blow rolls to hit and for damage as against
+  anyone ("Hit Iolo!", "Iolo grazed.", "Missed Iolo."), but the companion never turns hostile, never
+  flees, and gives no experience. At 0 HP: "Iolo killed!" and it dies as above at the end of the turn.
+- **Karma**: a party member (the Avatar included) brought to 0 HP costs 5 karma ("allowing your
+  party to die is bad karma"), taken before the Avatar's experience loss below. u6e takes it at the
+  death itself, whatever the cause.
+- Every cause (a blow, the Avatar's own, a field, poison) leaves the companion on the map at 0 HP
+  until the end of the turn, so the death above (remains, roster) always runs. A non-party actor
+  killed by a field or by poison leaves its remains like one slain in combat (§3c).
 - **The Avatar at 0 HP**: at the end of that turn —
   1. "An unending darkness engulfs thee..." then "A voice in the darkness intones, "KAL LOR!"".
   2. A horse is dismounted, a vessel left where it is.
@@ -159,7 +169,7 @@ attack also needs a clear line (map_line_hit_check). MVP is MELEE only. The SHIP
   time, never beyond the weapon's range (Chebyshev distance; hands = 1) nor the view; Enter
   attacks the tile under it, Esc cancels, a click attacks the clicked tile (beyond range:
   `Out of range!`, no turn). Aboard a ship the weapon is the ship (cannons.md §1). The scroll
-  names what the crosshair rests on (the actor, else the top object, else the terrain).
+  names what the crosshair rests on (the actor — a party member by its own name — else the top object, else the terrain).
 - **Melee** (an adjacent tile with a non-missile weapon; the morning star and halberd never
   shoot): the hit roll (§2) and the blow (§3), or §3b on an object.
 - **A shot** (a missile weapon, or any target beyond one tile): the hit roll against the actor
