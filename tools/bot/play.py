@@ -39,7 +39,7 @@ class Player:
         self.nav = Nav(game, log); self.nav.keyfn = lambda k: self.key(k, 'walk')
         self.issues = []; self.nshot = 0; self.transcripts = {}
         self.ilog = open(os.path.join(outdir, 'issues.jsonl'), 'a')
-        self.dead_k = -1; self.hp_seen = {}; self.meant = set(); game.watch = self.watch   # meant: companions killed on purpose
+        self.dead_k = -1; self.hp_seen = {}; self.meant = set(); self.looted = set(); game.watch = self.watch   # meant: companions killed on purpose
 
     # ---- issue log ------------------------------------------------------------------------------
     def issue(self, kind, detail, shot=True):
@@ -128,8 +128,9 @@ class Player:
         return None
 
     def talk_to(self, aid, words=None, name='', yes=False):
-        """talk to actor aid and say each word; returns [(word, reply)] or None if not reached.
-        A y/n prompt pending before a word is answered n (yes=True: y)"""
+        """talk to actor aid and say each word (a callable word picks one from the transcript so far, None
+        ends); returns [(word, reply)] or None if not reached. A y/n prompt pending before a word is
+        answered n (yes=True: y)"""
         d = self.approach(aid)
         if not d: self.log('  could not reach %d %s' % (aid, name)); return None
         a = self.actor(aid); x, y = self.nav.pos()                 # T)alk-: walk the crosshair onto them, Enter
@@ -149,6 +150,9 @@ class Player:
             st = self.say(ans); self.check('answer %r to %d' % (ans, aid)); out.append((ans, st['conv']))
         for w in (words or []):
             if not self.g.state['ask']: break
+            if callable(w):                                        # a word chosen from what was said so far
+                w = w(self.g.state['conv'])
+                if w is None: break
             for _ in range(16):                                    # a y/n or number prompt is pending (a shop: each member, then 0)
                 if not (self.g.state['ask'] and (self.g.state.get('askc') or self.g.state.get('num'))): break
                 if self.g.state.get('num') and w.isdigit(): break             # the planned answer to this prompt
@@ -209,9 +213,11 @@ class Player:
         if (x, y) in goal: return []
         return self.nav.route(x, y, goal, limit=20000) if goal else None
 
-    def fight(self, max_turns=150):
+    def fight(self, max_turns=150, loot=True):
         """combat mode on; A)ttack the nearest foe when adjacent, else step toward it; until no foes are
-        near. Issues: a fight where no foe loses hp for 40 turns, a party member dying, game over."""
+        near, then loot the fallen. Issues: a fight where no foe loses hp for 40 turns, a party member
+        dying, game over."""
+        before = {o['i'] for o in self.g.objects()[0]} if loot else None
         if not self.g.state['combat']: self.key('b', 'combat on')
         stale = turns = misses = 0; seen = {}; msgs = []; hp0 = {p['id']: p['hp'] for p in self.g.state['party']}
         self.log('  fight at (%d,%d) L%d: %s' % (self.g.state['X'], self.g.state['Y'], self.g.state['L'],
@@ -249,7 +255,70 @@ class Player:
         if msgs: self.log('  combat log: ' + ' | '.join(msgs)[:1500])
         if self.g.state['combat']: self.key('b', 'combat off')
         self.log('  fight over after %d turns: party %s' % (turns, ' '.join('%d:%d/%d' % (p['id'], p['hp'], p['max']) for p in self.g.state['party'])))
+        if loot:
+            if self.foes(): self.log('  no loot: foes still near')
+            else: self.loot(before)
         return True
+
+    HOLDERS = (98, 168, 211, 339, 340, 341, 347, 350, 354, 369, 372)   # searchable remains and chests (usecode_use.md)
+
+    def clear_chests(self):
+        """G)et the chests this party looted that lie beside it (a chest blocks the way, and a slain
+        creature's chest can land in a narrow pass); True if one was taken"""
+        objs, _ = self.g.objects(); x, y = self.nav.pos(); took = False
+        for o in objs:
+            if o['obj'] != 98 or o['i'] not in self.looted or abs(o['x'] - x) + abs(o['y'] - y) != 1: continue
+            self.key('g'); st = self.key(VDIR[(o['x'] - x, o['y'] - y)], 'get the chest')
+            self.log('  a looted chest in the way at (%d,%d): %r' % (o['x'], o['y'], st['msg']))
+            took = took or 'You get' in st['msg']
+        if took: self.nav.refresh()
+        return took
+
+    KEEP = (88, 77, 275, 90, 128, 129, 133)                             # gold, gems, potions, torches, food
+    SELLS = ('sword', 'chain mail', 'iron helm', 'leather armor', 'leather armour', 'plate mail')   # what Max buys
+
+    def wanted(self, o):
+        n = o['name'].lower()
+        for a in ('the ', 'a ', 'an '):
+            if n.startswith(a): n = n[len(a):]
+        return o['obj'] in self.KEEP or n in self.SELLS
+
+    def loot(self, before, r=10, tries=24):
+        """after a fight: U)se the new bodies and chests (searching spills what they hold, eggs.md §3c)
+        and G)et what lies on top of the new things, until nothing new is left to take; returns the
+        gold gained"""
+        g0 = self.g.state.get('gold', 0); used = set(); skip = set(); took = []
+        for _ in range(tries):
+            objs, _ = self.g.objects(); x, y = self.nav.pos()
+            new = [o for o in objs if o['i'] not in before and o['i'] not in skip
+                   and abs(o['x'] - x) <= r and abs(o['y'] - y) <= r]
+            tops = {}                                         # each tile's topmost new thing (the highest index)
+            for o in new:
+                if o['obj'] in (338, 337, 134) or (o['obj'] >= 342 and o['obj'] not in self.HOLDERS): continue   # blood, a trap, a carcass, a beast's own remains
+                k = (o['x'], o['y'])
+                if k not in tops or o['i'] > tops[k]['i']: tops[k] = o
+            todo = [o for o in tops.values() if o['obj'] not in self.HOLDERS or o['i'] not in used]
+            if not todo:
+                if not took and not used: self.log('  loot: nothing new (%d new; near: %s)' % (len(new), ' '.join('%d:%d@%d,%d' % (o['i'], o['obj'], o['x'], o['y']) for o in objs if abs(o['x'] - x) <= 3 and abs(o['y'] - y) <= 3)))
+                break
+            o = min(todo, key=lambda o: abs(o['x'] - x) + abs(o['y'] - y))
+            try:
+                if abs(o['x'] - x) + abs(o['y'] - y) != 1: self.nav.refresh(); self.nav.goto(o['x'], o['y'], adj=True); x, y = self.nav.pos()
+            except Exception as e: self.log('  loot at (%d,%d): %s' % (o['x'], o['y'], e)); skip.add(o['i']); continue
+            if abs(o['x'] - x) + abs(o['y'] - y) != 1: skip.add(o['i']); continue
+            d = VDIR[(o['x'] - x, o['y'] - y)]
+            if o['obj'] in self.HOLDERS:
+                used.add(o['i']); self.looted.add(o['i']); self.key('u'); st = self.key(d, 'search %d' % o['obj'])
+                if 'nothing' in st['msg'].lower(): skip.add(o['i'])
+            elif not self.wanted(o):                          # not worth its weight: leave it, and what lies under it
+                skip.add(o['i'])
+            else:
+                self.key('g'); st = self.key(d, 'get %d' % o['obj'])
+                if 'You get' in st['msg']: took.append(st['msg'].split('You get', 1)[1].strip(' .'))
+                else: skip.add(o['i']); self.log('  get %s: %r' % (o['name'], st['msg']))
+        gained = self.g.state.get('gold', 0) - g0
+        if took: self.log('  looted: %s (gold %+d)' % (', '.join(took)[:400], gained))
+        return gained
 
     def heal_up(self, frac=0.6, tries=8):
         """C)ast Heal while a member is below frac of max HP (it lands on the most wounded,
@@ -308,7 +377,10 @@ class Player:
         ignore = 0; lv = self.g.state['L']                     # foes in view that cannot be reached
         for _ in range(30):
             hit = lambda s: s['foes'] or ' hits ' in s['msg'] or ' kills ' in s['msg']   # a foe out of view can still strike the rear
-            st = self.nav.goto(tx, ty, on_step=lambda s: s['foes'] > ignore or (hit(s) and self.near_death()), **kw)
+            try: st = self.nav.goto(tx, ty, on_step=lambda s: s['foes'] > ignore or (hit(s) and self.near_death()), **kw)
+            except NavError:
+                if not self.clear_chests(): raise
+                continue
             if hit(self.g.state) and self.near_death():                  # under fire: heal and go on, or give up the walk
                 if not self.heal_up(): raise Danger('members %s near death, foes %d in view, no heal' % (self.near_death(), self.g.state['foes']))
                 continue

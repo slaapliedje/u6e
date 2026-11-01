@@ -106,7 +106,10 @@ is childless by then).
 A slain creature leaves what the reference's actor-type table says — a dead body, a blood splat, its
 own object lying there, a carcass, or nothing — with the dead NPC's inventory inside (or on the tile
 for blood / nothing); the table, the dead flag and what is saved are in usecode_use.md "Created
-and destroyed objects persist". Hatched and summoned creatures leave the same remains, temporary.
+and destroyed objects persist". Hatched and summoned creatures leave the same remains, temporary,
+holding the kit they hatched with (eggs.md §3c). This holds whoever strikes the last blow
+(CORRECTED 2026-11-01: a foe the Avatar slew in melee used to vanish with no remains and no dead
+flag; only companions' blows and spells left them).
 
 ## 3d. Death of a party member and of the Avatar (2026-10-31)
 

@@ -6,7 +6,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
 from play import Player, keywords, Danger
-from nav import VDIR
+from nav import VDIR, DIRV, NavError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REF = os.environ.get('U6REF', os.path.join(ROOT, 'refdata', 'dos', 'u6'))
@@ -255,6 +255,7 @@ def seg_cave(p, kw):
     if st['L'] != 1: p.issue('cave', 'stepping onto the cave at %s left us on L%d (%d,%d)' % (CAVE, st['L'], st['X'], st['Y'])); return
     p.log('  entered L1 at (%d,%d)' % (st['X'], st['Y'])); arrived = {1: (st['X'], st['Y'])}
     st = p.use_pack(90)                                 # light a torch: the dungeon is dark
+    if st is not None and 'burned out' in st['msg'].lower(): st = p.use_pack(90)   # the lit one went out as we stepped in
     if st is None or 'lit' not in st['msg'].lower(): p.issue('cave', 'lighting a torch: %r' % (st and st['msg']))
     reach = explore(p)
     for o in ways(p, up=False, reach=reach):
@@ -280,7 +281,7 @@ def seg_cave(p, kw):
 
 ORB = {3: (435, 395), 8: (307, 352), 19: (923, 876)}     # moongates.md §3: position -> destination (surface)
 
-def orb_trip(p, pos, shot=False):
+def orb_trip(p, pos, shot=False, quiet=False):
     """U)se the orb, walk its crosshair to the box tile of position pos, Enter, step into the red gate;
     True if the party arrived at that position's destination"""
     dx, dy = pos % 5 - 3, pos // 5 - 2
@@ -297,7 +298,10 @@ def orb_trip(p, pos, shot=False):
     for _ in range(abs(dy)): p.key('down' if dy > 0 else 'up')
     if shot: p.g.shot('orb_crosshair.png')
     st = p.key('ret', 'orb gate %d' % pos)
-    if 'gate' not in st['msg'].lower(): p.issue('orb', 'position %d (%+d,%+d): %r' % (pos, dx, dy, st['msg'])); return False
+    if 'gate' not in st['msg'].lower():
+        if quiet and 'Failed' in st['msg']: p.log('  orb position %d: %r, moving' % (pos, st['msg']))
+        else: p.issue('orb', 'position %d (%+d,%+d): %r' % (pos, dx, dy, st['msg']))
+        return False
     tx, ty = ORB[pos]
     for _ in range(3):                                  # walk into the gate (the party follows over a few turns)
         try: p.nav.goto(x + dx, y + dy, on_step=lambda s: (s['X'], s['Y']) == (tx, ty))
@@ -316,7 +320,15 @@ def seg_orb(p, kw):
     the cave mouth if anyone is hurt (the shrine's guardians come next)"""
     p.rest_if_hurt(0.9)
     for pos in (3, 19, 8):
-        if not orb_trip(p, pos, shot=(pos == 3)): break
+        for attempt in range(3):                                         # someone standing on the gate's tile: "Failed."
+            if orb_trip(p, pos, shot=(pos == 3 and attempt == 0), quiet=attempt < 2): break
+            if 'Failed' not in p.g.state['msg']: return
+            p.idle(); p.nav.refresh(); x, y = p.nav.pos()
+            for dx, dy in DIRV.values():
+                if p.nav.cost(x + 2 * dx, y + 2 * dy) is not None:
+                    try: p.nav.goto(x + 2 * dx, y + 2 * dy); break
+                    except NavError: continue
+        else: return
 
 SHRINE = dict(pos=4, field=(503, 359), rune=243, mantra='mu', wrong='om')   # Compassion (usecode_use.md runes, moongates.md §3)
 
@@ -339,6 +351,11 @@ def seg_shrine(p, kw):
     """the Compassion quest: Anya's permission, Ariana's rune; the orb to the shrine, its guardians,
     a wrong and the right mantra on the rune at the force field, then meditate at the shrine"""
     sh = SHRINE; fx, fy = sh['field']
+    for _ in range(900):                                             # Anya and Ariana talk by day: wait for morning
+        if 9 <= p.g.state['min'] // 60 < 18: break
+        if p.g.state['foes'] and p.foes(): p.fight(); p.heal_up(); continue
+        p.key('space', 'wait for day')
+    p.log('  shrine quest from %02d:%02d; Ariana %s' % (p.g.state['min'] // 60, p.g.state['min'] % 60, p.actor(13)))
     p.talk_to(13, ['rune'], 'Ariana', yes=True)                      # "Do you need it?" y, y: ask my parents
     p.talk_to(15, ['rune'], 'Anya')                                  # her permission to borrow it
     p.talk_to(13, ['rune'], 'Ariana', yes=True)                      # "Did you get permission?" y
@@ -373,7 +390,79 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
+def norm(name):
+    """a merchant's item name and a look name compared alike: case, armour/armor, a leading article"""
+    n = name.lower().replace('armour', 'armor').strip()
+    for a in ('the ', 'a ', 'an '):
+        if n.startswith(a): n = n[len(a):]
+    return n
+
+def seg_trade(p, kw):
+    """sell Max (18) the loot the fights brought (eggs.md §3c), never what the party has readied: one
+    item a talk, each sale paying its price, until the purse holds 400 gold or he wants nothing more"""
+    import re
+    if not wait_for_work(p, 18, 'Max', limit=2500): p.issue('trade', 'Max never at work'); return
+    g0 = p.g.state['gold']; sold = []; closed = 0
+    for _ in range(30):
+        if p.g.state['gold'] >= 400: break
+        _, inv = p.g.objects()
+        loose = {norm(r['name']) for r in inv}                        # the pack's own things (readied ones are not in it)
+        def pick(conv):
+            items = re.findall(r'(\d+)\) ([A-Za-z\' -]+?)(?= \d+\)| "|$)', conv.split('> sell', 1)[-1])
+            for num, name in items:
+                if norm(name) in loose: return num
+            return None
+        gb = p.g.state['gold']
+        out = p.talk_to(18, ['sell', pick, 'y'], 'Max')
+        if out is None: p.issue('trade', 'could not reach Max'); return
+        text = ' '.join(r for _, r in out)
+        m = re.search(r'take (\d+) gold for that ([^,?]+)', text)
+        if not m and 'open' in text and closed < 3:                   # the shop shut while we walked over: next opening
+            closed += 1
+            for _ in range(2500):                                     # his shop hours (6-12, 14-17)
+                h = p.g.state['min'] // 60
+                if 6 <= h < 11 or 14 <= h < 16: break
+                p.key('space', 'shop shut')
+            if not wait_for_work(p, 18, 'Max', limit=2500): break
+            continue
+        if not m: break
+        price = int(m.group(1)); sold.append('%s %d' % (m.group(2), price))
+        if p.g.state['gold'] != gb + price: p.issue('trade', 'sold %s for %d: gold %d -> %d' % (m.group(2), price, gb, p.g.state['gold']))
+    p.log('  sold %d to Max: %s; gold %d -> %d' % (len(sold), ', '.join(sold)[:500], g0, p.g.state['gold']))
+
+def seg_farm(p, kw):
+    """more cave trips while the purse and Max's share of the loot fall short of 400 gold (at most 5)"""
+    for trip in range(5):
+        _, inv = p.g.objects()
+        worth = sum({'iron helm': 10, 'leather armor': 20, 'chain mail': 40, 'plate mail': 80, 'sword': 25}.get(norm(r['name']), 0) * (r['qty'] or 1) for r in inv)
+        heals = min(sum(r['qty'] or 1 for r in inv if r['obj'] == o) for o in (68, 72))   # ginseng, spider silk (Heal)
+        p.log('  farm: gold %d, loot for Max ~%d, heals left %d' % (p.g.state['gold'], worth, heals))
+        if p.g.state['gold'] + worth >= 420: break
+        if p.g.state['L'] != 0: p.log('  farm: stuck below (L%d), no more trips' % p.g.state['L']); break
+        if heals < 3: p.log('  farm: too few reagents to heal through another trip'); break
+        if (p.g.state['X'], p.g.state['Y']) == CAVE:                   # standing on the cave: step off (so walking back on enters it)
+            p.nav.refresh()
+            for dx, dy in DIRV.values():
+                if p.nav.cost(CAVE[0] + dx, CAVE[1] + dy) is not None:
+                    try: p.nav.goto(CAVE[0] + dx, CAVE[1] + dy); break
+                    except NavError: continue
+        p.rest_if_hurt(0.95)                                           # a camp at the cave mouth heals for free
+        seg_cave(p, kw)
+
+def seg_paid(p, kw):
+    """with 400 gold: a companion dies again (the death segment) and Tiberius raises him for 400
+    (the healer segment checks the body, the purse and the risen companion)"""
+    if p.g.state['gold'] < 400: p.log('  only %d gold: no paid resurrection' % p.g.state['gold']); return
+    g0 = p.g.state['gold']
+    seg_death(p, kw)
+    if member(p, 4)['hp'] != 0: return
+    seg_healer(p, kw)
+    m4 = member(p, 4)
+    p.log('  paid resurrection: gold %d -> %d, Iolo %d/%d, on the map %s' % (g0, p.g.state['gold'], m4['hp'], m4['max'], bool(p.actor(4))))
+    if m4['hp'] == 0: p.issue('paid', 'Iolo still dead after paying')
+    p.meant.clear()
+
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

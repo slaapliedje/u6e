@@ -13,10 +13,11 @@ level, hatching, temp actors), no pack change (eggs come from the save template'
 >   below; no code transcribed.
 > - References   : docs/formats/nuvie_save.md (eggs chunk), objblk.md (records, containment),
 >   docs/rules/combat.md (hostility by alignment, damage).
+>   §3c: the reference (ScummVM nuvie) actor.lua actor_init and creature table, read for understanding.
 > - Tools        : none
 > - Validated by  : EGG.REQ headless hook (§6) on emulated TT + stock 4 MB Falcon.
 > - Confidence   : confirmed for §1-§4; §5 lists our simplifications.
-> - Last updated : 2026-09-30
+> - Last updated : 2026-11-01
 
 ## 1. The egg object
 
@@ -81,6 +82,64 @@ holds until slain) and decides its turns:
 | 0x0e, 0x0d | stationary, tangle | never moves; a hostile one strikes a party member standing beside it (the reference tries 16 random tiles of the 9×9 around it: ≈16/81 per neighbour per turn; the tangle vine strikes a neighbour every other turn) |
 | 0x0f, 0x10, 0x8b-0x8e | guard walk east-west / north-south, walk N/E/S/W | half the turns a step along its facing (0x0f starts east, 0x10 north, 0x8b-0x8e as named); blocked, it turns back |
 | 0x00, 0x01 | motionless | nothing: a creature embryo whose quality is 0 never takes a turn (the reference's "nothing" worktype), hostile or not |
+
+## 3c. What a hatchling carries (2026-11-01; the reference's actor_init, read for understanding)
+
+A creature that hatches is given a kit from its type's row of the reference creature table
+(four lists: innate spells, weapons, armour, treasure). The spells are the charges of
+combat.md §7b. The other three lists are each rolled the same way: the chance starts at 1 in 2
+and doubles with each entry of the list (1/2 for the first entry, 1/4 for the second, …), and
+an entry that wins its roll is added:
+
+- **weapon**: one of it, readied; a spear, throwing axe or dagger (36–38) comes as 6–12 of
+  them. A bow or magic bow (41/54) adds 12–24 arrows (55), a crossbow or triple crossbow
+  (42/50) 12–24 bolts (56).
+- **armour**: one of it, readied.
+- **treasure**:
+  - **gold** (88): 2–60 coins (1–30 plus 1–30);
+  - **a chest** (98, closed): inside it a trap (the effect 337) half the time; 1–100 gold
+    3 times in 4; 1–10 of a food (meat 129, ham 133 or bread 128, one picked at random) 3
+    times in 4; 1–6 torches (90) 1 time in 4; 1–4 gems (77) 1 time in 11;
+  - **"spell"** (58, a caster's purse): 1–100 gold 3 times in 4 (never for a winged
+    gargoyle, 362); 1–100 of a food 1 time in 4; one potion (275) of a random colour (frame
+    0–7) 1 time in 4;
+  - **anything else** (meat for beasts, the musician's lute 158): one of it.
+
+| creature | weapons | armour | treasure |
+|---|---|---|---|
+| 98 mimic | — | — | chest, chest |
+| 347 reaper | — | — | spell, gold |
+| 348 sheep · 350 deer · 361 giant spider · 428 cow | — | — | meat |
+| 362 winged gargoyle | 46, 41, 47, 49 | 18, 1 | spell |
+| 363 worker gargoyle | 34, 49, 37 | 1, 9, 18, 20 | — |
+| 368 skeleton | 43, 36, 37, 41, 38 | 9, 1 | gold |
+| 369 drake | — | — | gold, gold |
+| 370 headless | 34, 36 | 17, 9 | gold |
+| 371 troll | 37, 36, 43, 41, 34 | 9, 18, 1, 19 | chest, gold, gold |
+| 372 mongbat | 38, 43, 36, 37 | 9, 17, 18 | chest, gold |
+| 376 fighter | 43, 42 | 21, 10, 3, 22 | gold, gold |
+| 377 swashbuckler | 43, 41, 33 | 19, 1, 9 | gold, gold |
+| 378 mage | 38 | 17, 1 | spell, chest, gold |
+| 379 villager | 43, 33 | 17 | gold |
+| 380 merchant | 38, 43 | 17, 1 | gold |
+| 382 guard | 42, 47 | 22, 10, 3 | gold |
+| 383 jester | 38, 33 | 17 | gold |
+| 384 peasant | 38, 34 | 185 | — |
+| 385 farmer | 105, 101 | 17 | gold |
+| 386 musician | 41, 33, 43 | 19, 1, 9 | gold, lute 158 |
+| 387 woman | 38 | 185 | gold |
+| 411 dragon | — | — | chest, gold, gold |
+| 424 cyclops | 44, 33, 34 | 20, 3, 13 | chest |
+
+Every other type carries nothing. A readied item goes to the slot equipment.md gives it and
+stays in the pack when that slot is taken; the creature fights with the best readied weapon and
+the summed armour (equipment.md §4), as a person does. When it dies, all of it goes into its
+body (combat.md §3c), the readied items unreadied; a creature that leaves only blood (338) or
+nothing drops it on its tile. These objects are temporary like their owner but free to take,
+and what the party takes is its own from then on.
+
+Deviation: the reference readies ranged weapons and its foes shoot them; ours fight hand to hand
+with whatever they readied (foes have no missile attacks yet; deviations.md).
 
 ## 4. Creature table (str, dex, int, hp, base damage, alignment)
 

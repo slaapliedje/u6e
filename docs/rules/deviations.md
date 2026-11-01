@@ -20,6 +20,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | Hatched worktypes: the coward's sight range is 5 for every flee code (reference 3 / 8, and a cornered retreater fights back); the stationary strike is a per-neighbour 16/81 chance, not 16 random picks; "toward a point ten tiles off" is one step; the tangle vine never crawls | eggs.md §5 | accepted |
 | Hatching: free actor slots only (an embryo is skipped when none is free); toss-to-free-tile searches 5×5 (the reference tries 3×2 / 2×3 / 4×4 spreads), no grouping by type | eggs.md §5 | accepted |
 | The experience formula's reading of the reference's actor table is ours (table values, evil/chaotic only); the shrine thresholds come from the scripts | combat.md §3 | accepted |
+| Foes fight hand to hand with whatever their kit readied, bows and slings included (the reference's foes shoot them); a hatchling folds its readied items into one weapon (the best) and summed armour | eggs.md §3c | open |
 | A party member brought to 0 HP costs 5 karma whatever the cause (the reference takes it in its blow / spell damage path) | combat.md §3d | accepted |
 | L)ook at an ACTOR shows the terrain under it (the reference names the actor and shows its portrait) | usecode_use.md (Clock and sundial) | open |
 
@@ -46,6 +47,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 ## Objects, use, movement
 | Deviation | Where | Status |
 |---|---|---|
+| Theft is not modelled: G)et on the surface of something not marked free to take costs nothing (the reference: 1 karma and "Stealing!!!", or "Stop Thief!!!" when an awake neutral townsperson stands within 5 — 5 karma more, and the guards come to arrest: the Yew jail or a fight) | usecode_use.md | open |
 | M)ove: no dark-tile refusal, no pusher→target missile-boundary line test (the wall under the thing only); push range = adjacent; a temp holder takes the pushed record out of the save; up to 64 records travel per push | usecode_use.md (M)ove) | accepted |
 | The staff is used from the pack (the original's "Not readied." gate dropped) | usecode_use.md (Staff) | accepted |
 | The secret-door reveal prints the reference's search line but not its name line before it (the hidden frame's run-filled look name "sign" is unverified) | usecode_use.md (Clock and sundial) | open |

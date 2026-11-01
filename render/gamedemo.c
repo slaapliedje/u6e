@@ -5243,7 +5243,8 @@ static int basetile(int obj_n)
  * open/close (frame +/- 4 => tile +/- 4). Returns 1 if the map must recompose. */
 /* searchable container object types (objblk.md §2: Nuvie's OBJTYPE_CONTAINER set) */
 static int is_container(int on){
-    return on==98||on==99||on==168||on==176||on==177||on==186||on==188||on==191||on==192||on==339;
+    return on==98||on==99||on==168||on==176||on==177||on==186||on==188||on==191||on==192||on==339
+        || on==211||on==340||on==341||on==347||on==350||on==354||on==369||on==372;   /* remains that hold a kit (usecode_use.md) */
 }
 /* may a SEARCH spill this container right now? chest/crate/barrel only when OPEN (frame 0);
  * bags/drawers/desks/bodies at any frame (Nuvie's per-frame usecode table). */
@@ -5467,6 +5468,14 @@ static int use_object(int idx)
     return r;
 }
 
+/* G)et gold coins: they join the shared gold pool (what merchants count and the save writes back as
+ * coins), not an inventory stack the pool never sees (usecode_use.md). 1 = taken. */
+static int take_gold(int idx){
+    if(!g_wko.gold || g_wobj[idx].obj_n!=g_wko.gold) return 0;
+    uint16_t q=g_wobj[idx].qty; if(!q) q=1;
+    int t=g_cg.gold+(int)q; g_cg.gold=(t>0x7fffffff)?0x7fffffff:t;
+    if(g_gd==&gamedef_u6) obj_destroy(idx); else { g_wobj[idx].alive=0; g_wobj[idx].dirty=1; }
+    return 1; }
 /* run a verb ('L'/'G'/'U') against the tile (dx,dy) from the avatar. */
 /* --- readable text: books / signs / plaques / tombstones (docs/formats/strings.md) --------- */
 /* readable object numbers: BOOK 151, SCROLL 152, TOMBSTONE 255, GRAVE 266, SIGN 332, SIGN_ARROW 333. */
@@ -5970,14 +5979,13 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         else {
             obj_name(g_wobj[idx].tile,nm,sizeof nm);
             uint16_t q=g_wobj[idx].qty; if(!q) q=1;
-            if(g_gd!=&gamedef_u6 && g_wko.gold && g_wobj[idx].obj_n==g_wko.gold){
-                /* SE/MD: GET gold -> the shared Gold pool (the "Gold:" count), not an inventory stack.
-                 * U6 keeps its existing path (gated out) so it stays byte-identical. */
-                int t=g_cg.gold+(int)q; g_cg.gold=(t>0x7fffffff)?0x7fffffff:t;
-                g_wobj[idx].alive=0; g_wobj[idx].dirty=1;
-                n=msgcat(0,"You get "); n=msgcat_int(n,q); n=msgcat(n," gold."); recompose=1;
+            if(take_gold(idx)){
+                n=msgcat(0,"You get "); n=msgcat_int(n,q);
+                if(g_gd==&gamedef_u6){ n=msgcat(n," "); n=msgcat(n,nm); msgcat(n,"."); } else msgcat(n," gold.");   /* "You get 30 gold coin." as for any stack */
+                recompose=1;
             }
             else if(objworld_get(&g_ow,idx)){
+                build_blocked();                                 /* a chest or other blocking thing no longer stands there */
                 if(g_wobj[idx].obj_n==73){ int fr=(int)g_wobj[idx].tile-basetile(73);          /* a dug-up moonstone: its gate is gone (moongates.md §4) */
                     if(fr>=0&&fr<8){ moonstone_set(fr,0,0,0); moongates_update(w); } }
                 n=msgcat(0,"You get ");
@@ -6976,8 +6984,8 @@ static int do_attack(world_t*w,int dx,int dy)
         if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); return 1; }
         int hp=g_ahp[id]?g_ahp[id]:30;
         if(dmg>=hp){                                          /* killed */
-            g_ahp[id]=0; g_atile[id]=0xffff;                 /* remove from world (actor_pos skips) */
             int gain=kill_exp(id);                       /* §3 exp-award table */
+            g_ahp[id]=0; actor_die(id);                      /* its remains (and what it carried) stay (§3c) */
             int n=msg_tail(); n=msgcat(n,"Killed "); n=msgcat(n,nm); n=msgcat(n,"! +"); n=msgcat_int(n,gain); msgcat(n,"exp");
             grant_exp(1,gain);   /* the Avatar's kill; gated by training */
         } else {
@@ -7087,10 +7095,55 @@ static int spell_target_actor(world_t*w,int dx,int dy,const char*sname){
 
 /* ---- summoning (docs/rules/magic_skills.md §5c) --------------------------- */
 /* a free actor slot for a summon (searches high slots, avoiding the demo slug 250). */
+/* what a hatched / summoned actor carries (eggs.md §3c): kept here until it dies, then into its body */
+static rng_t    g_egg_rng;                                 /* (the eggs' roller, below) */
+#define KIT_MAX 16
+#define KIT_READY 1                                       /* readied */
+#define KIT_INCHEST 2                                     /* inside the last chest before it */
+typedef struct { uint16_t obj_n, qty; uint8_t quality, frame, copies, flags; } kit_t;
+static kit_t   g_kit[U6_MAX_ACTORS-160][KIT_MAX];
+static uint8_t g_nkit[U6_MAX_ACTORS-160];
 static int summon_alloc(void){
-    for(int i=U6_MAX_ACTORS-2;i>=160;i--) if(i!=250 && g_atile[i]==0xffff) return i;
+    for(int i=U6_MAX_ACTORS-2;i>=160;i--) if(i!=250 && g_atile[i]==0xffff){ g_nkit[i-160]=0; return i; }
     return -1;
 }
+static void kit_add(int s,int on,int qty,int quality,int frame,int copies,int flags){
+    if(s<160 || s>=U6_MAX_ACTORS || g_nkit[s-160]>=KIT_MAX) return;
+    kit_t*k=&g_kit[s-160][g_nkit[s-160]++];
+    k->obj_n=(uint16_t)on; k->qty=(uint16_t)qty; k->quality=(uint8_t)quality; k->frame=(uint8_t)frame; k->copies=(uint8_t)copies; k->flags=(uint8_t)flags; }
+static int rng_between(int lo,int hi){ return lo+(int)rng_range(&g_egg_rng,hi-lo+1); }
+static const uint8_t KIT_FOOD[3]={129,133,128};             /* meat, ham, bread */
+/* roll a hatchling's weapons, armour and treasure (eggs.md §3c); readies what fits and folds it into
+ * the weapon and armour class it fights with */
+static void hatch_kit(int s,int obj_n){
+    uint16_t set[EQ_NSLOTS]={0}; const uint8_t*l; int n, chance;
+    n=monster_kit(obj_n,0,&l); chance=2;
+    for(int i=0;i<n;i++,chance*=2){ if(rng_between(1,chance)!=1) continue;
+        int v=l[i], q=(v>=36&&v<=38)?rng_between(6,12):1, rd=0;
+        for(int j=0;j<q;j++) if(equip_ready(set,v)>=0) rd++;
+        if(rd) kit_add(s,v,1,0,0,rd,KIT_READY);
+        if(q-rd) kit_add(s,v,1,0,0,q-rd,0);
+        if(v==41||v==54) kit_add(s,55,rng_between(12,24),0,0,1,0);
+        else if(v==42||v==50) kit_add(s,56,rng_between(12,24),0,0,1,0); }
+    n=monster_kit(obj_n,1,&l); chance=2;
+    for(int i=0;i<n;i++,chance*=2){ if(rng_between(1,chance)!=1) continue;
+        kit_add(s,l[i],1,0,0,1, equip_ready(set,l[i])>=0 ? KIT_READY : 0); }
+    n=monster_kit(obj_n,2,&l); chance=2;
+    for(int i=0;i<n;i++,chance*=2){ if(rng_between(1,chance)!=1) continue;
+        int v=l[i];
+        if(v==98){ kit_add(s,98,1,0,1,1,0);
+            if(rng_between(0,1)==1) kit_add(s,337,1,22,0,1,KIT_INCHEST);
+            if(rng_between(0,3)!=0) kit_add(s,88,rng_between(1,100),0,0,1,KIT_INCHEST);
+            if(rng_between(0,3)!=0){ int f=KIT_FOOD[rng_between(0,2)]; kit_add(s,f,rng_between(1,10),0,0,1,KIT_INCHEST); }
+            if(rng_between(0,3)==0) kit_add(s,90,rng_between(1,6),0,0,1,KIT_INCHEST);
+            if(rng_between(0,10)==0) kit_add(s,77,rng_between(1,4),0,0,1,KIT_INCHEST); }
+        else if(v==58){
+            if(rng_between(0,3)!=0 && obj_n!=362) kit_add(s,88,rng_between(1,100),0,0,1,0);
+            if(rng_between(0,3)==0){ int f=KIT_FOOD[rng_between(0,2)]; kit_add(s,f,rng_between(1,100),0,0,1,0); }
+            if(rng_between(0,3)==0) kit_add(s,275,1,0,rng_between(0,7),1,0); }
+        else if(v==88) kit_add(s,88,rng_between(1,30)+rng_between(1,30),0,0,1,0);
+        else kit_add(s,v,1,0,0,1,0); }
+    equip_fold(set,&g_aweapon[s],&g_aac[s]); }
 /* place a creature actor of obj_n at (x,y). mode: 1=allied, 2=hostile. Returns its slot or -1. */
 static int summon_creature(int x,int y,uint16_t obj_n,uint8_t mode,uint8_t life,uint8_t hp){
     int s=summon_alloc(); if(s<0) return -1;
@@ -7176,6 +7229,7 @@ static int hatch_creature(const world_t*w,int x,int y,int obj_n,int align)
     g_aweapon[s]=0; g_aac[s]=0; g_aflee[s]=0; g_asleep[s]=g_paralyze[s]=0; g_ainvis[s]=0;
     g_summon[s]=0; g_summon_life[s]=0; g_temp[s]=1; g_charm[s]=0;
     { int h=align_is_hostile(align); g_align_hostile[s]=(uint8_t)h; g_hostile[s]=0; g_alert[s]=(uint8_t)h; }
+    hatch_kit(s,obj_n);
     return s;
 }
 /* a plain-object embryo hatches as a temporary map object at the egg's tile (once per hatch) */
@@ -7426,6 +7480,20 @@ static void live_dropped_inv(int x,int y,int z){
  * reference's actor-type table (quality = the actor, so Seance / Resurrect find it); a real NPC's inventory goes
  * into the body (or onto the tile for blood / nothing) and the actor is flagged dead; temporaries leave
  * temporary remains */
+/* a slain hatchling's kit (eggs.md §3c) goes into its body bi, or onto (x,y) when it left none:
+ * temporary objects, free to take, the chest's contents inside the chest */
+static void kit_drop(int id,int bi,int x,int y){
+    if(id<160 || id>=U6_MAX_ACTORS) return;
+    int chest=-1;
+    for(int k=0;k<g_nkit[id-160];k++){ const kit_t*e=&g_kit[id-160][k];
+        int stack=is_stackable(e->obj_n), copies=stack?1:e->copies;
+        int holder=(e->flags&KIT_INCHEST)?chest:bi;
+        for(int c=0;c<copies;c++){
+            int slot=temp_obj_new(e->obj_n,e->frame,x,y,e->quality); if(slot<0) break;
+            wobj_t*o=&g_wobj[slot]; o->qty=(uint16_t)(stack?(uint32_t)e->qty*e->copies:1);
+            if(holder>=0){ o->alive=0; o->parent=(uint16_t)holder; }
+            if(e->obj_n==98) chest=slot; } }
+    g_nkit[id-160]=0; }
 static void actor_die(int id){
     if(id<1 || id>=U6_MAX_ACTORS) return;
     int on=actor_objn(id), fr=0, body=monster_remains(on,&fr);
@@ -7436,6 +7504,7 @@ static void actor_die(int id){
     g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0;
     int bi=-1;
     if(body) bi = temp ? temp_obj_new(body,fr,x,y,id) : persist_obj_new(body,fr,x,y,id);
+    if(temp) kit_drop(id, body!=338 ? bi : -1, x, y);
     if(!temp && g_wp && g_savetmpl){
         if(bi>=0 && body!=338){                                    /* the inventory goes into the body */
             (void)objects_reconcile(g_wp);                          /* the body's record exists now */
@@ -12821,10 +12890,9 @@ int main(int argc, char **argv)
                     int gi=-1; for(int32_t j=0;j<g_ow.nobjs;j++)
                         if(g_wobj[j].alive && g_wobj[j].obj_n==88 && g_wobj[j].x==cx && g_wobj[j].y==cy){ gi=(int)j; break; }
                     dbg_num("spilled gold qty=", gi>=0?g_wobj[gi].qty:-1);  /* the stack qty16 */
-                    if(gi>=0){ int inv0=g_ow.ninv;
-                        objworld_get(&g_ow,gi);              /* G)et takes the WHOLE stack */
-                        int q=-1; for(int i2=0;i2<g_ow.ninv;i2++) if(g_ow.inv[i2].obj_n==88) q=g_ow.inv[i2].qty;
-                        dbg_num("inv gold qty    =", q);
+                    if(gi>=0){ int inv0=g_ow.ninv, g0=g_cg.gold;
+                        take_gold(gi);                       /* G)et takes the WHOLE stack, into the party's gold */
+                        dbg_num("party gold +    =", g_cg.gold-g0);
                         dbg_num("inv stacks +    =", g_ow.ninv-inv0); }
                     use_object(ci);                          /* U)se again: closes the chest */
                     dbg_num("chest frame now =", (int)g_wobj[ci].tile - basetile(g_wobj[ci].obj_n));  /* 1 = closed */
@@ -13243,6 +13311,24 @@ int main(int argc, char **argv)
                 dbg_num("EGG checked=", g_egg_checked); dbg_num("EGG eggs hatched=", g_egg_hatched); dbg_num("EGG no free slot=", g_egg_nofree);
                 int n=0; for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) n++;
                 dbg_num("EGG hatched below=", n); }
+            else if(mode=='5'){                                    /* a hatchling's kit (eggs.md §3c) */
+                rng_seed(&g_egg_rng,0x6b17u);
+                static const int TY[3]={371,370,348};              /* troll, headless, sheep */
+                static const char*const TN[3]={"EGG troll ","EGG headless ","EGG sheep "};
+                for(int t=0;t<3;t++){ int nh=0, ngold=0, gsum=0, armed=0, armour=0, match=1, chests=0, beast=1;
+                    for(int r=0;r<40;r++){
+                        int s=hatch_creature(&w,(w.px+3)&(U6_SURFACE_TILES-1),w.py,TY[t],ALIGN_DEFAULT); if(s<0) break; nh++;
+                        int items=0; for(int k=0;k<g_nkit[s-160];k++){ const kit_t*e=&g_kit[s-160][k]; items+=is_stackable(e->obj_n)?1:e->copies;
+                            if(e->obj_n==88){ ngold++; gsum+=e->qty; } if(TY[t]==348 && e->obj_n!=129) beast=0; }
+                        if(g_aweapon[s]) armed++; if(g_aac[s]) armour++;
+                        int fr, rem=monster_remains(TY[t],&fr), n0=g_ow.nobjs; actor_die(s);
+                        int first=n0+(rem?1:0), got=0;           /* the remains come first (body or blood), then the kit */
+                        for(int i=first;i<g_ow.nobjs;i++){ if(g_wobj[i].obj_n==98) chests++; got++; }
+                        if(got!=items) match=0;
+                        for(int i=n0;i<g_ow.nobjs;i++){ g_wobj[i].alive=0; g_wobj[i].parent=WOBJ_PARENT_NONE; } g_ow.nobjs=(uint16_t)n0; }
+                    char k1[48]; const char*const SF[8]={"hatched=","with gold=","gold total=","armed=","armoured=","chests=","body holds kit=","beast meat only="};
+                    int V[8]={nh,ngold,gsum,armed,armour,chests,match,beast};
+                    for(int f=0;f<8;f++){ int q=0; for(const char*c=TN[t];*c;c++) k1[q++]=*c; for(const char*c=SF[f];*c;c++) k1[q++]=*c; k1[q]=0; dbg_num(k1,V[f]); } } }
             else if(mode=='4'){                                    /* hatched worktypes (eggs.md §3b) */
                 int M=U6_SURFACE_TILES-1; rng_seed(&g_crng,0x4e55u);
                 { int h8=0,hb=0,h9=0,hc=0,he=0,ha=0,hf=0,h10=0,hs=0,hn=0;   /* the level's creature embryos by worktype */

@@ -33,6 +33,7 @@ int monster_remains(int obj_n, int *frame);
 /* The creature type's innate SPELLS as U6 spell numbers (combat.md §7b): *out points at the list,
  * returns its length (0 = casts nothing). */
 int monster_spells(int obj_n, const uint8_t **out);
+int monster_kit(int obj_n, int list, const uint8_t **out);   /* a hatchling's kit (eggs.md §3c): list 0 weapons, 1 armour, 2 treasure */
 /* 1 if this alignment fights the party (evil / chaotic). */
 static inline int align_is_hostile(int align){ return align == ALIGN_EVIL || align == ALIGN_CHAOTIC; }
 

@@ -191,3 +191,46 @@ int monster_spells(int obj_n, const uint8_t **out)
     if (out) *out = 0;
     return 0;
 }
+
+/* a hatchling's kit per creature type (eggs.md §3c; the reference creature table's weapon, armour and
+ * treasure columns, read for understanding). Each list is rolled 1 in 2, 1 in 4, ... in order. */
+typedef struct { uint16_t obj_n; uint8_t wp[5], ar[4]; uint8_t tr[3]; } mon_kit_t;
+static const mon_kit_t MKIT[] = {
+    {  98, {0},                  {0},              { 98, 98 } },
+    { 347, {0},                  {0},              { 58, 88 } },
+    { 348, {0},                  {0},              { 129 } },
+    { 350, {0},                  {0},              { 129 } },
+    { 361, {0},                  {0},              { 129 } },
+    { 428, {0},                  {0},              { 129 } },
+    { 362, { 46, 41, 47, 49 },   { 18, 1 },        { 58 } },
+    { 363, { 34, 49, 37 },       { 1, 9, 18, 20 }, {0} },
+    { 368, { 43, 36, 37, 41, 38 },{ 9, 1 },        { 88 } },
+    { 369, {0},                  {0},              { 88, 88 } },
+    { 370, { 34, 36 },           { 17, 9 },        { 88 } },
+    { 371, { 37, 36, 43, 41, 34 },{ 9, 18, 1, 19 },{ 98, 88, 88 } },
+    { 372, { 38, 43, 36, 37 },   { 9, 17, 18 },    { 98, 88 } },
+    { 376, { 43, 42 },           { 21, 10, 3, 22 },{ 88, 88 } },
+    { 377, { 43, 41, 33 },       { 19, 1, 9 },     { 88, 88 } },
+    { 378, { 38 },               { 17, 1 },        { 58, 98, 88 } },
+    { 379, { 43, 33 },           { 17 },           { 88 } },
+    { 380, { 38, 43 },           { 17, 1 },        { 88 } },
+    { 382, { 42, 47 },           { 22, 10, 3 },    { 88 } },
+    { 383, { 38, 33 },           { 17 },           { 88 } },
+    { 384, { 38, 34 },           { 185 },          {0} },
+    { 385, { 105, 101 },         { 17 },           { 88 } },
+    { 386, { 41, 33, 43 },       { 19, 1, 9 },     { 88, 158 } },
+    { 387, { 38 },               { 185 },          { 88 } },
+    { 411, {0},                  {0},              { 98, 88, 88 } },
+    { 424, { 44, 33, 34 },       { 20, 3, 13 },    { 98 } },
+};
+int monster_kit(int obj_n, int list, const uint8_t **out)
+{
+    for (unsigned i = 0; i < sizeof MKIT / sizeof MKIT[0]; i++) if (MKIT[i].obj_n == obj_n){
+        const uint8_t *l = list == 0 ? MKIT[i].wp : list == 1 ? MKIT[i].ar : MKIT[i].tr;
+        int cap = list == 0 ? 5 : list == 1 ? 4 : 3, n = 0;
+        while (n < cap && l[n]) n++;
+        if (out) *out = l;
+        return n; }
+    if (out) *out = 0;
+    return 0;
+}

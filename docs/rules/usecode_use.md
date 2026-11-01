@@ -53,8 +53,11 @@ the graphic + message. Object-tile passability is a separate task.
 
 ## Containers (IMPLEMENTED 2026-07-02 — objblk.md §2 has the data spec)
 Container types: chest 98, backpack 99, remains 168, drawer 176, desk 177,
-barrel 186, bag 188, basket 191, crate 192, dead body 339. Behavior (verified
-vs ScummVM/Nuvie U6UseCode::use_container / search):
+barrel 186, bag 188, basket 191, crate 192, dead body 339, and the remains that
+carry a slain creature's kit (eggs.md §3c; added 2026-11-01 from the reference's
+object-type table): dead animal 211, dead cyclops 340, dead gargoyle 341, reaper
+347, deer 350, mouse 354, drake 369, mongbat 372 (searched at any frame, like a
+body). Behavior (verified vs ScummVM/Nuvie U6UseCode::use_container / search):
 - **U)se a chest/crate/barrel** toggles its open/close frame (0 = open, 1 =
   closed; tile = base+frame). OPENING also searches it. Chest frames beyond
   that: **2 = LOCKED, 3 = MAGICALLY locked** (chest only — crates/barrels
@@ -76,10 +79,13 @@ vs ScummVM/Nuvie U6UseCode::use_container / search):
 - **L)ook at a world container** searches it too (authentic U6: looking is
   how you loot corpses/bags on the ground).
 - **G)et takes the whole stack**: stackables carry a 16-bit quantity
-  (qty16, objblk.md §2); "You get 30 gold." Inventory merges stacks by obj_n.
+  (qty16, objblk.md §2); "You get 30 gold coin." Inventory merges stacks by obj_n.
+  **Gold coins (88) join the party's gold** (the count merchants take from and the save
+  writes back as coins), never a separate pack stack (CORRECTED 2026-11-01: U6 used to put
+  them in the pack, where no merchant or save could see them).
 Validated headlessly (COMBAT.BIN byte 14): an unlocked castle chest opens
 (frame 1→0), spills its 3 items (tile count 1→4) incl. a 5-gold stack, G)et
-banks 5 gold as one inventory stack, U)se closes it (0→1); a locked chest
+adds 5 to the party's gold, U)se closes it (0→1); a locked chest
 refuses; a dead body containing 150 gold loots via search.
 
 ## Lockpicks (IMPLEMENTED)

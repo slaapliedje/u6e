@@ -237,7 +237,41 @@ Found by the runs after Help went in (2026-10-31):
 
 Still not run: a paid resurrection, since the party has 27 gold against Tiberius' 400.
 
+## 6g. Gold: loot, farm, trade, paid (2026-11-01)
+
+Where gold comes from in the reference: Lord British's talk raises nobody and every healer asks 400
+(Tiberius, Dargoth, Tara, Tobatha, Dezana, Sasha); the money is in the creatures. A hatched creature
+carries a kit from the creature table (weapons, armour, treasure: gold, a chest, a caster's purse,
+eggs.md §3c), and its remains hold it. u6e gave hatchlings nothing, so the party could never earn.
+
+- `Player.loot` (after every won fight): U)se the new remains and chests, G)et what lies on top of
+  them while it is worth carrying (gold, gems, potions, torches, food, and what Max buys: sword, chain
+  mail, iron helm, leather armour, plate mail), leave the rest. A looted chest that blocks the way
+  (chests are impassable) is picked up when a walk finds no route.
+- `farm` (after `cave`): more cave trips, a camp at the cave mouth before each, while the purse plus
+  Max's share of the loot is under 420 and three Heals' worth of reagents remain (at most 5 trips).
+- `trade`: sell Max only pack items he lists, never readied ones; waits for his shop hours when he
+  says it is shut. `paid`: with 400 gold, the death segment again, then Tiberius.
+- `shrine` waits for daytime (fighting while it waits): Anya rests at night. `orb` moves and
+  retries when a townsperson stands on the gate's tile ("Failed.").
+
+Found by these runs (all fixed):
+- hatchlings carried nothing, and kit-holding remains (dead cyclops 340, dead gargoyle 341, reaper,
+  drake, mongbat, deer, mouse, dead animal) were not searchable (usecode_use.md containers);
+- a foe the **Avatar** slew in melee vanished: no remains, no dead flag (combat.md §3c);
+- G)et never rebuilt the blocking map, so a picked-up chest left an invisible wall;
+- U6 gold picked up went into the pack as an item, which no merchant and no save counted; it now
+  joins the party's gold (usecode_use.md);
+- the castle's worker gargoyles' armour and the cave's hammers overloaded the pack: Ariana would
+  not hand over the rune ("you're carrying too much") — correct, hence the selective loot.
+
+Run r49: 0 → 95 gold from the first cave, 328 after two more trips, 408 after selling Max six pieces.
+The paid resurrection still did not happen: chest traps had poisoned the Avatar and Shamino, the
+Heal reagents were gone, and the Avatar died of poison on the way to Tiberius (poison kills in the
+reference too: 1 damage, 1 chance in 8 a turn); his death's recall raised Iolo instead. Next: report
+poison in `@S`, have Tiberius cure first (with a 30-gold margin), and skip or detect trapped chests.
+
 ## 7. Next
 
 Segments still to write: the other seven shrines (their runes come from quests and NPCs), ships, the gargoyle lands and
-the ending; a paid heal and a paid resurrection (the party needs 400 gold first), more spells.
+the ending; a paid resurrection (gold is now earned: §6g; poison and reagents stop it), more spells; theft (deviations.md).
