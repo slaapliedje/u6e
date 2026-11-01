@@ -148,6 +148,15 @@ static const struct { uint16_t obj_n; uint8_t f; } MF[] = {
     { 366, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE }, { 365, MF_DOUBLE_FIRE|MF_SLEEP_IMMUNE },   /* tangle vine, its flower */
     { 373, MF_FIRE_IMMUNE|MF_UNDEAD|MF_SLEEP_IMMUNE },                        /* wisp */
 };
+/* creature types whose own blow rolls to hit on strength, not dexterity (combat.md §2) */
+static const uint16_t STRB[] = { 98, 347, 355, 362, 363, 365, 366, 367, 368, 370, 371, 373, 374, 376, 377, 378, 379,
+    380, 381, 382, 383, 384, 385, 386, 387, 409, 410, 424, 427, 428, 429, 430, 431 };
+int monster_str_based(int obj_n)
+{
+    for (unsigned i = 0; i < sizeof STRB / sizeof STRB[0]; i++) if (STRB[i] == obj_n) return 1;
+    return 0;
+}
+
 int monster_flags(int obj_n)
 {
     for (unsigned i = 0; i < sizeof MF / sizeof MF[0]; i++) if (MF[i].obj_n == obj_n) return MF[i].f;

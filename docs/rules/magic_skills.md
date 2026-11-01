@@ -403,8 +403,19 @@ Two spells relocate the whole party across the map:
 position, re-seeds each party member onto a free tile beside the new spot, and
 invalidates the incremental-scroll cache so the map does a FULL rebuild at the
 destination (a jump is not a 1-tile scroll).
-- **Help** finds Lord British at runtime (the trainer actor, obj_n 409) and
-  recalls the party to a free tile beside him. No reagents (KAL LOR).
+- **Help** (KAL LOR, no reagents; from READING the reference's `circle_01/help.lua` and the
+  `actor.lua` helpers it calls, re-expressed, 2026-10-31) is Lord British reviving the party, the
+  same recall as the Avatar's death (combat.md §3d) without the darkness, the karma or the losses:
+  1. every dead companion stands up again (not after Armageddon; experience × karma / 100 below
+     karma 98, as any resurrection);
+  2. the whole party is healed: full HP, no poison, sleep, paralysis or charm;
+  3. the party is moved to Lord British's throne room, (307,352) on the surface, from any level;
+  4. the clock runs on in whole hours until he sits on his throne (an hour in 8..11 or 14..17),
+     and the townsfolk stand where that hour puts them.
+  It prints nothing past the spell words. Foes keep hunting, combat mode stays, readied things
+  stay readied. A horse is dismounted and a vessel left where it is, as at the Avatar's death
+  (the reference moves the party alone). Until 2026-10-31 u6e's Help only moved the party beside
+  Lord British, wherever he stood, so a dead companion stayed dead.
 - **Gate Travel** reads the 8 **moonstone positions** the save stores in the
   OBJLIST at **0x1c1b** — 8 records of `[x u16][y u16][z u16]` little-endian
   (CONFIRMED by inspecting the user's save: coordinates spanning Britannia,

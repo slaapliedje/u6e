@@ -173,9 +173,10 @@ static int            g_gate_dest=0;              /* Gate Travel: which moonston
  * U6 alignment (objlist status 0x800 bit 0x20 = EVIL/CHAOTIC), so a post-treaty (NEUTRAL/GOOD)
  * gargoyle is simply not hostile — no separate peace flag needed. A CHARMED actor is pacified. */
 static int            actor_hostile(int i){ return (g_hostile[i] || g_align_hostile[i]) && !g_charm[i] && !g_ally[i]; }
-/* combat modifiers from status (§5b): a CURSED attacker rolls to-hit at a penalty;
- * a PROTECTED defender takes half damage. */
-static int            status_hit_role(int att,int base){ return g_curse[att]?(base>6?base-6:1):base; }
+/* combat modifiers from status (§5b): a PROTECTED defender takes half damage; the to-hit stats
+ * (combat.md §2) are hit_role / dex_adj, defined with the attack code */
+static int            hit_role(int att,int wobj);
+static int            dex_adj(int a);
 static int            status_dmg(int def,int dmg){ return g_protect[def]?(dmg+1)/2:dmg; }
 /* MAGIC (docs/rules/magic_skills.md): per-actor magic points (max = Intelligence);
  * g_known marks the spells the Avatar has in the spellbook. */
@@ -3083,6 +3084,7 @@ static void hostile_step(const world_t*w,int i);     /* combat.md CB2 (defined b
 static int  coward_step(const world_t*w,int i);      /* CB4 coward (defined below) */
 static int  adjacent_hostile(const world_t*w,int x,int y);  /* CB4 (defined below) */
 static void party_attack(int att,int def);                  /* CB4 (defined below) */
+static void lb_recall(world_t*w,int forget);                /* Lord British's revival: Help, the Avatar's death (defined below) */
 static void enemy_attack(int att,int def);                  /* a hostile's blow on a party member (defined below) */
 static int  ship_aboard(void);                               /* cannons.md: the party is aboard a ship (defined with the vehicle code) */
 static void ship_struck(int att);                            /* an enemy's hit on the party's ship -> hull (defined with the cannon code) */
@@ -6515,6 +6517,14 @@ static int actor_objn(int i){
     if(!g_basetile) return 0;
     for(int o=1;o<1024;o++){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8); if(b && b==(int)g_abase[i]) return o; }
     return 0; }
+/* the to-hit stats (combat.md §2): dexterity, 3 less when cursed, 1 asleep or in Time Stop; the attack
+ * role is strength for the club, mace, spiked helm and two-handed hammer, or an unarmed blow of a
+ * strength-based type (wobj 0), else dexterity; a glass sword (48) never misses (see the callers) */
+static int dex_adj(int a){ int v=g_adex[a]?g_adex[a]:15; if(g_curse[a]) v=(v<=3)?1:v-3; if(g_time_stop||g_asleep[a]) v=1; return v; }
+static int hit_role(int att,int wobj){
+    int str=(wobj==4||wobj==34||wobj==39||wobj==44) || (wobj==0 && monster_str_based(actor_objn(att)));
+    if(!str) return dex_adj(att);
+    int v=g_astr[att]?g_astr[att]:15; if(g_curse[att]) v=(v<=3)?1:v-3; return v; }
 static int monster_melee_max(int att){
     if(g_aweapon[att]) return weapon_dmg(g_aweapon[att]);    /* armed actor uses its readied weapon */
     mon_base_t mb; if(monster_base(actor_objn(att),&mb)) return mb.dmg;   /* unarmed: the creature table's base damage (combat.md §4, eggs.md §4) */
@@ -6528,8 +6538,7 @@ static void enemy_attack(int att,int def){
         if(nc>0) def=cand[rng_range(&g_crng,nc)]; }
     char an[24]; if(is_party_member(att)) actor_name(att,an,sizeof an); else obj_name(npc_tile(att),an,sizeof an);   /* a charmed companion strikes under its own name (combat.md §7b) */
     if(!an[0]){ an[0]='f'; an[1]='o'; an[2]='e'; an[3]=0; }
-    int adex=g_adex[att]?g_adex[att]:10, ddex=g_adex[def]?g_adex[def]:15;
-    if(!combat_hit(status_hit_role(att,adex),ddex,&g_crng)){ int n=msgcat(0,an); msgcat(n," misses."); return; }  /* curse penalty (§5b) */
+    if(g_aweapon[att]!=48 && !combat_hit(hit_role(att,g_aweapon[att]),dex_adj(def),&g_crng)){ int n=msgcat(0,an); msgcat(n," misses."); return; }   /* §2 */
     int wm=monster_melee_max(att);
     int dmg=status_dmg(def,combat_damage(wm,g_aac[def],&g_crng));  /* vs armour, then Protection halves it (§5b) */
     if(dmg<=0){ int n=msgcat(0,an); msgcat(n," grazes."); return; }
@@ -6701,7 +6710,7 @@ static void party_attack(int att,int def){
     char nm[24]; obj_name(npc_tile(def),nm,sizeof nm);
     if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
     int wobj=g_aweapon[att]?g_aweapon[att]:43, wmax=weapon_dmg(wobj); if(wmax<=0) wmax=4;
-    if(!combat_hit(status_hit_role(att,g_adex[att]?g_adex[att]:15), g_adex[def]?g_adex[def]:15, &g_crng)){
+    if(g_aweapon[att]!=48 && !combat_hit(hit_role(att,g_aweapon[att]), dex_adj(def), &g_crng)){   /* §2 */
         int n=msgcat(0,nm); msgcat(n," evades."); return; }
     int dmg=status_dmg(def,combat_damage(wmax, g_aac[def], &g_crng));
     if(dmg<=0){ int n=msgcat(0,nm); msgcat(n," grazed."); return; }
@@ -6821,8 +6830,7 @@ static void ship_break(void){
  * the damage roll (no armour) comes off the hull */
 static void ship_struck(int att){
     char an[24]; obj_name(npc_tile(att),an,sizeof an); if(!an[0]){ an[0]='f'; an[1]='o'; an[2]='e'; an[3]=0; }
-    int adex=g_adex[att]?g_adex[att]:10;
-    if(!combat_hit(status_hit_role(att,adex),30,&g_crng)){ int n=msgcat(0,an); msgcat(n," misses the ship."); return; }
+    if(!combat_hit(hit_role(att,g_aweapon[att]),30,&g_crng)){ int n=msgcat(0,an); msgcat(n," misses the ship."); return; }
     int dmg=combat_damage(monster_melee_max(att),0,&g_crng); if(dmg<1) dmg=1;
     int n=msgcat(0,an); msgcat(n," hits the ship!");
     if(ship_obj_hull_hit(g_veh_o[0],dmg)) ship_break();
@@ -6934,8 +6942,8 @@ static int do_attack(world_t*w,int dx,int dy)
       if(id>=0 && is_party_member(id)) actor_name(id,nm,sizeof nm);   /* a companion by its name, as Look does */
       else if(id>=0) obj_name(npc_tile(id),nm,sizeof nm); else if(oi>=0) obj_name(g_wobj[oi].tile,nm,sizeof nm); else obj_name(world_tile(w,tx,ty),nm,sizeof nm);
       int n=msgcat(0,nm[0]?nm:"nothing"); msgcat(n,"."); }
-    int atk=ship?30:status_hit_role(1,g_adex[1]?g_adex[1]:15);
-    int hit=(id>=0) ? combat_hit(atk,g_adex[id]?g_adex[id]:15,&g_crng) : (oi>=0);
+    int atk=ship?30:hit_role(1,g_avatar_weapon), sure=(!ship && g_avatar_weapon==48);   /* §2; the glass sword never misses */
+    int hit=(id>=0) ? (sure || combat_hit(atk,dex_adj(id),&g_crng)) : (oi>=0);
     if(ranged){
         if(!hit && id>=0){ tx=(tx+(int)rng_range(&g_crng,3)-1)&M; ty=(ty+(int)rng_range(&g_crng,3)-1)&M; }   /* a miss lands beside */
         int sx=(int)w->px, sy=(int)w->py, fx=sx, fy=sy;
@@ -6951,7 +6959,7 @@ static int do_attack(world_t*w,int dx,int dy)
         if(mis) fx_clear(w);
         tx=fx; ty=fy;
         id=npc_at(w,tx,ty); oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
-        if(!hit) hit=(id>=0) ? combat_hit(atk,g_adex[id]?g_adex[id]:15,&g_crng) : (oi>=0);
+        if(!hit) hit=(id>=0) ? (sure || combat_hit(atk,dex_adj(id),&g_crng)) : (oi>=0);
     }
     if(id>=0){
         char nm[24]; obj_name(npc_tile(id),nm,sizeof nm); if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
@@ -7715,15 +7723,8 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
         else if(clone_actor(w,id)<0){ msgcat(0,"No effect"); applied=0; }
         else { char foe[24]; obj_name(npc_tile(id),foe,sizeof foe);
             (void)foe; msgcat(0,"Success"); recompose=1; }
-    } else if(!strcmp(nm,"Help")){                        /* recall the party to Lord British (§5d) */
-        int lb=lord_british_actor();
-        int lx,ly;
-        if(lb<0 || !actor_pos(lb,&lx,&ly)){ g_msg[0]=0; applied=0; }
-        else { static const int dd[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{-1,-1},{1,-1},{-1,1}};
-            int tx=lx,ty=ly;                              /* a free tile beside Lord British */
-            for(int k=0;k<8;k++){ int nx=(int)((lx+dd[k][0])&(U6_SURFACE_TILES-1)), ny=(int)((ly+dd[k][1])&(U6_SURFACE_TILES-1));
-                if(npc_at(w,nx,ny)<0 && world_is_passable(w,nx,ny)){ tx=nx; ty=ny; break; } }
-            teleport_party(w,tx,ty); g_msg[0]=0; recompose=1; }   /* silent, as the reference */
+    } else if(!strcmp(nm,"Help")){                        /* Lord British revives and recalls the party (§5d) */
+        lb_recall(w,0); g_msg[0]=0; recompose=1;          /* silent, as the reference */
     } else if(!strcmp(nm,"Gate Travel")){                 /* moongate to a moonstone destination (§5d) */
         if(!g_savetmpl || g_objlist_off<0){ g_msg[0]=0; applied=0; }
         else { const uint8_t*ml=g_savetmpl+g_objlist_off+0x1c1b; int mx=-1,my=-1;
@@ -8267,6 +8268,7 @@ static const char* rest_prompt_text(void)
 /* the party lies down (sleepers show their body shape; the guard stands) or stands up again */
 static void rest_pose(int p,int a,int down)
 {   if(a==1){ g_avatar_ovr=down?(uint16_t)basetile(339):0; return; }
+    if(g_atile[a]==0xffff && g_ahp[a]==0) return;                 /* a dead companion is off the map (combat.md §3d) */
     if(down){ int on=actor_objn(a), body=(on==362||on==363)?341:(g_atpd[a]==4?339:0); if(!body) return;
         g_abase[a]=(uint16_t)basetile(body); g_atile[a]=g_abase[a]; g_atpd[a]=0; }
     else { g_abase[a]=g_rest_base[p]; g_atpd[a]=g_rest_tpd[p]; g_atile[a]=g_abase[a]; } }
@@ -8309,7 +8311,7 @@ static void rest_tick(world_t*w)
 {
     if(!g_resting) return;
     if(g_rest_meal==0){ int n=msgcat(0,"Mealtime!");                                       /* a bard plays */
-        for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a>1 && actor_objn(a)==386){ g_abase[a]=(uint16_t)basetile(392); g_atile[a]=g_abase[a];
+        for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a>1 && g_ahp[a]>0 && actor_objn(a)==386){ g_abase[a]=(uint16_t)basetile(392); g_atile[a]=g_abase[a];
             n=msgcat(n," "); n=msgcat(n,g_party[p].name); n=msgcat(n," plays a tune."); break; } }
         g_rest_meal++; return; }
     if(g_rest_meal<=g_nparty){ int p=g_rest_meal-1, a=g_party[p].actor, k=-1;                  /* each member eats */
@@ -8321,7 +8323,7 @@ static void rest_tick(world_t*w)
         g_rest_meal++; return; }
     if(g_rest_meal==g_nparty+1){ g_msg[0]=0;                                                 /* the sleep */
         for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
-            if(a>1 && actor_objn(a)==386){ g_abase[a]=g_rest_base[p]; g_atile[a]=g_abase[a]; }   /* the lute is put away */
+            if(a>1 && g_ahp[a]>0 && actor_objn(a)==386){ g_abase[a]=g_rest_base[p]; g_atile[a]=g_abase[a]; }   /* the lute is put away */
             if(p==g_rest_guard){ int n=msgcat(0,g_party[p].name); msgcat(n," stands guard while the party rests."); }
             else { g_rest_slept[p]=1; rest_pose(p,a,1); } }
         g_rest_meal++; return; }
@@ -8342,7 +8344,8 @@ static int rest_key(world_t*w,int a)
         g_rest_hours=v;
         if(g_nparty>1){ g_rest_stage=2; g_rest_len=0; g_rest_buf[0]=0; return 1; }
         rest_start(w,g_rest_hours,-1); return 1; }
-    { int g=(v>=1 && v<=g_nparty)?v-1:-1; int n=msgcat(0,"Who will guard? "); msgcat(n,g<0?"none":g_party[g].name);
+    { int g=(v>=1 && v<=g_nparty)?v-1:-1; if(g>=0 && g_ahp[g_party[g].actor]==0) g=-1;   /* the dead keep no watch */
+      int n=msgcat(0,"Who will guard? "); msgcat(n,g<0?"none":g_party[g].name);
       rest_start(w,g_rest_hours,g); }
     return 1;
 }
@@ -8751,18 +8754,24 @@ static void companion_die(const world_t*w,int id){
     if(body && !veh_aboard()) (void)temp_obj_new(body,fr,g_actx[id],g_acty[id],id);
     g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);           /* letting the party die is bad karma */
     g_atile[id]=0xffff; g_ahp[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=0; g_charm[id]=g_ally[id]=0; g_amoved[id]=0;
+    g_adead[id]=1;                                                /* dies once: only a resurrection clears it */
     (void)w; sync_party_hp(); build_blocked(); }
-/* a dead companion stands up beside the Avatar (its body, if one lies on this level, is removed) */
+/* a dead companion stands up beside the Avatar; its body is used up: the carried one first, else one lying
+ * on this level (combat.md §3d) */
 static void companion_revive(world_t*w,int id){
+    for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==339 && g_ow.inv[k].quality==(uint8_t)id){
+        if(g_ow.inv[k].qty>1) g_ow.inv[k].qty--; else { for(int m=k;m<g_ow.ninv-1;m++) g_ow.inv[m]=g_ow.inv[m+1]; g_ow.ninv--; }
+        if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
+        resurrect_actor(w,id,(int)w->px,(int)w->py); return; }
     for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
         if(o->alive && o->quality==(uint8_t)id && (o->obj_n==339||o->obj_n==340||o->obj_n==341||o->obj_n==338)){ obj_destroy(j); break; } }
     resurrect_actor(w,id,(int)w->px,(int)w->py); }
-/* the Avatar at 0 HP (combat.md §3d): Lord British's resurrection in the throne room */
-static void avatar_death(world_t*w){
-    g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);           /* letting the party die is bad karma (before the exp loss) */
+/* Lord British's revival (combat.md §3d, magic_skills.md §5d Help): off any vehicle, to the throne room
+ * on the surface, the dead stand up, everyone healed, the clock on to his throne hours; forget = the
+ * hunters forget the party (the Avatar's death, not Help) */
+static void lb_recall(world_t*w,int forget){
     if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
     else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
-    for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl] && g_aready[1][sl]!=76) (void)equip_take_off(1,sl);   /* readied items back to the pack */
     (void)travel_to(w,307,352,0);                                 /* the throne room, on the surface */
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
         if(a>1 && g_ahp[a]==0){ if(g_armageddon) continue; companion_revive(w,a); }
@@ -8771,8 +8780,14 @@ static void avatar_death(world_t*w){
     while(!((g_hour>=8&&g_hour<12)||(g_hour>=14&&g_hour<18))){ w->clock+=60; g_hour=clock_hour(w); g_minutes=clock_minutes(w); }
     for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y;                    /* time passed: townsfolk are where the hour puts them */
         if(is_party_member(i) || g_atile[i]==0xffff || (int)g_actz[i]!=g_cur_level) continue;
-        g_alert[i]=0; if(!g_temp[i] && i<160) g_hostile[i]=0;     /* the hunters forget the party */
+        if(forget){ g_alert[i]=0; if(!g_temp[i] && i<160) g_hostile[i]=0; }   /* the hunters forget the party */
         if(!actor_hostile(i) && npc_dest(i,&x,&y) && npc_at(w,x,y)<0){ g_actx[i]=(uint16_t)x; g_acty[i]=(uint16_t)y; } }
+    sync_party_hp(); build_blocked(); moongates_update(w); }
+/* the Avatar at 0 HP (combat.md §3d): Lord British's resurrection in the throne room */
+static void avatar_death(world_t*w){
+    g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);           /* letting the party die is bad karma (before the exp loss) */
+    for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl] && g_aready[1][sl]!=76) (void)equip_take_off(1,sl);   /* readied items back to the pack */
+    lb_recall(w,1);
     if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[1]=(uint16_t)(((uint32_t)g_aexp[1]*(uint32_t)k)/100u); }
     g_combat_mode=0; g_pending_verb=0; g_show_inv=0; if(g_talking) end_talk();
     sync_party_hp(); build_blocked(); moongates_update(w);
@@ -8781,7 +8796,10 @@ static void avatar_death(world_t*w){
 static int party_deaths(world_t*w){
     int changed=0;
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor;
-        if(a>1 && a<U6_MAX_ACTORS && g_ahp[a]==0 && g_atile[a]!=0xffff){ companion_die(w,a); changed=1; } }
+        if(a>1 && a<U6_MAX_ACTORS && g_ahp[a]==0 && g_atile[a]!=0xffff){
+            if(g_adead[a]) g_atile[a]=0xffff;                     /* already dead: something put it back on the map */
+            else companion_die(w,a);
+            changed=1; } }
     if(g_ahp[1]==0 && !g_game_over){ avatar_death(w); changed=1; }
     return changed; }
 /* ---- runes, potions, the gem (docs/rules/usecode_use.md) --------------------------------- */
@@ -12949,7 +12967,9 @@ int main(int argc, char **argv)
                 dbg_num("avatar protected =", g_protect[av]);         /* 20 */
                 dbg_num("dmg 10 -> protect=", status_dmg(av,10));     /* 5 */
                 dbg_num("dmg 10 -> unprot =", status_dmg(slot,10));   /* 10 */
-                dbg_num("curse role 20->  =", status_hit_role(av,20));/* 20 (avatar not cursed) */
+                { int d0=g_adex[av]; g_adex[av]=20; dbg_num("dex adj 20 ->    =", dex_adj(av));   /* 20 (avatar not cursed) */
+                  g_curse[av]=1; dbg_num("cursed dex 20 -> =", dex_adj(av)); g_curse[av]=0;      /* 17 (combat.md §2) */
+                  g_asleep[av]=1; dbg_num("asleep dex ->    =", dex_adj(av)); g_asleep[av]=0; g_adex[av]=d0; }   /* 1 */
             } else if(mode==21){                          /* MAGIC: summoning (magic_skills.md §5c) */
                 int av=1; g_aint[av]=32; g_amaxmana[av]=40; g_amana[av]=40;   /* archmage: circle 8 + mana */
                 /* two distinct VERIFIED-clear directions (8-way: the throne room crowds the cardinals
@@ -12986,16 +13006,16 @@ int main(int argc, char **argv)
                 int av=1; g_aint[av]=30; g_amaxmana[av]=40; g_amana[av]=40;   /* circle 7 + mana */
                 dbg_num("avatar x start  =", (int)w.px);
                 dbg_num("avatar y start  =", (int)w.py);
-                int lb=lord_british_actor();
-                int lx=-1,ly=-1; if(lb>=0) actor_pos(lb,&lx,&ly);
-                dbg_num("Lord British x  =", lx);
-                dbg_num("Lord British y  =", ly);
-                /* Help: recall the party to Lord British */
+                /* Help: Lord British revives and recalls the party; a dead companion stands up, the hurt are healed */
+                int mate=-1; for(int p=0;p<g_nparty;p++) if(g_party[p].actor>1){ mate=g_party[p].actor; break; }
+                if(mate>0){ g_ahp[mate]=0; companion_die(&w,mate); } g_ahp[av]=1; g_poison[av]=5;
                 cast_spell(&w,av,magic_find("Help"),0,0);
-                dbg_num("avatar x recall =", (int)w.px);
-                dbg_num("avatar y recall =", (int)w.py);
-                if(lb>=0){ int cx=lx>(int)w.px?lx-(int)w.px:(int)w.px-lx, cy=ly>(int)w.py?ly-(int)w.py:(int)w.py-ly;
-                    dbg_num("near LB (<=1)   =", (cx<=1&&cy<=1)?1:0); }               /* 1 */
+                dbg_num("avatar x recall =", (int)w.px);                   /* 307 */
+                dbg_num("avatar y recall =", (int)w.py);                   /* 352 */
+                dbg_num("help throne room=", w.px==307 && w.py==352 && w.level==0);
+                dbg_num("help mate rose  =", mate<0 || (g_ahp[mate]>0 && g_atile[mate]!=0xffff));
+                dbg_num("help avatar well=", g_ahp[av]==g_amaxhp[av] && g_poison[av]==0);
+                dbg_num("help lb hours   =", (g_hour>=8&&g_hour<12)||(g_hour>=14&&g_hour<18));
                 /* Gate Travel: moongate to a moonstone destination */
                 if(g_savetmpl && g_objlist_off>=0){ const uint8_t*ml=g_savetmpl+g_objlist_off+0x1c1b;
                     dbg_num("moonstone0 x    =", ml[0]|(ml[1]<<8));

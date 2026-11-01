@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
-collect what looked wrong. Segments: castle, bridge, britain, shop, sell, death, healer, cave, orb, shrine (default: all, in order)."""
+collect what looked wrong. Segments: castle, bridge, britain, shop, sell, death, healer, help, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game
@@ -149,6 +149,31 @@ def seg_death(p, kw):
     p.log('  get: %r, carried %d' % (st['msg'], len(held)))
     if not held: p.issue('death', 'could not pick up the body: %r' % st['msg'])
 
+def seg_help(p, kw):
+    """C)ast Help with a companion dead (magic_skills.md §5d): Lord British's revival. The party must
+    stand in the throne room (307,352) on the surface, the dead up on the map, everyone at full HP,
+    the hour one when he sits on his throne, karma unchanged"""
+    dead = [m['id'] for m in p.g.state['party'] if m['hp'] == 0]
+    k0 = p.g.state['karma']
+    st = p.key('c', 'cast')
+    if not st['cast']: p.issue('help', 'C did not open the spell prompt'); p.idle(); return
+    st = p.g.type('help'); p.check('cast help')
+    for _ in range(40):
+        if not p.g.state['busy']: break
+        p.key('space', 'recall')
+    st = p.g.state; p.nav.refresh(); hour = st['min'] // 60
+    p.log('  Help: %r, L%d (%d,%d) %02d:%02d, dead %s -> party %s, karma %d -> %d' % (st['msg'][:80], st['L'], st['X'], st['Y'], hour, st['min'] % 60, dead,
+          ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in st['party']), k0, st['karma']))
+    if (st['L'], st['X'], st['Y']) != (0, 307, 352): p.issue('help', 'Help landed at L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
+    if any(m['hp'] != m['max'] for m in st['party']): p.issue('help', 'not all healed: %r' % st['party'])
+    for d in dead:
+        if not p.actor(d): p.issue('help', 'dead %d not back on the map' % d)
+    if not (8 <= hour < 12 or 14 <= hour < 18): p.issue('help', 'hour %d: Lord British is not on his throne' % hour)
+    if st['karma'] != k0: p.issue('help', 'karma %d -> %d' % (k0, st['karma']))
+    left = [r['q'] for r in p.g.objects()[1] if r['obj'] == 339 and r['q'] in dead]
+    if left: p.issue('help', 'the bodies of %s still in the pack after they rose' % left)
+    p.meant.clear()
+
 def wait_for_work(p, aid, name, limit=400):
     """pass turns (space) until actor aid is at work (worktype 0x90); False if it never is"""
     for i in range(limit):
@@ -287,7 +312,9 @@ def orb_trip(p, pos, shot=False):
     p.log('  orb position %d -> (%d,%d)' % (pos, tx, ty)); return True
 
 def seg_orb(p, kw):
-    """the Orb of the Moons: to position 3, then 19, then home to the throne room (8)"""
+    """the Orb of the Moons: to position 3, then 19, then home to the throne room (8); first a camp at
+    the cave mouth if anyone is hurt (the shrine's guardians come next)"""
+    p.rest_if_hurt(0.9)
     for pos in (3, 19, 8):
         if not orb_trip(p, pos, shot=(pos == 3)): break
 
@@ -346,7 +373,7 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
+SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)

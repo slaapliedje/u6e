@@ -213,7 +213,7 @@ class Player:
         """combat mode on; A)ttack the nearest foe when adjacent, else step toward it; until no foes are
         near. Issues: a fight where no foe loses hp for 40 turns, a party member dying, game over."""
         if not self.g.state['combat']: self.key('b', 'combat on')
-        stale = turns = 0; seen = {}; msgs = []; hp0 = {p['id']: p['hp'] for p in self.g.state['party']}
+        stale = turns = misses = 0; seen = {}; msgs = []; hp0 = {p['id']: p['hp'] for p in self.g.state['party']}
         self.log('  fight at (%d,%d) L%d: %s' % (self.g.state['X'], self.g.state['Y'], self.g.state['L'],
                  ', '.join('#%d tile %d hp %d/%d' % (a['id'], a['tile'], a['hp'], a['max']) for a in self.foes())))
         while turns < max_turns:
@@ -225,7 +225,11 @@ class Player:
             prev = sum(seen.get(a['id'], a['hp']) for a in fs)
             stale = stale + 1 if total >= prev else 0
             for a in fs: seen[a['id']] = a['hp']
-            if stale >= 40: self.issue('combat', 'no foe hurt in 40 turns (%s)' % ', '.join('%d@%d,%d hp%d' % (a['id'], a['x'], a['y'], a['hp']) for a in fs[:4])); break
+            if stale >= 40:
+                who = ', '.join('%d@%d,%d hp%d' % (a['id'], a['x'], a['y'], a['hp']) for a in fs[:4])
+                if misses >= 20: self.log('  the Avatar missed %d times running (%s): too nimble for him (combat.md §2), moving on' % (misses, who))
+                else: self.issue('combat', 'no foe hurt in 40 turns (%s)' % who)
+                break
             f = fs[0]; x, y = self.nav.pos(); dx, dy = f['x'] - x, f['y'] - y
             if max(abs(dx), abs(dy)) <= 1:
                 self.key('a', 'attack')
@@ -233,6 +237,7 @@ class Player:
                 if dx: self.key('right' if dx > 0 else 'left')
                 if dy: self.key('down' if dy > 0 else 'up')
                 st = self.key('ret', 'attack %d' % f['id'])
+                misses = misses + 1 if 'Missed' in st['msg'] else 0
                 if 'not' in st['msg'].lower() and 'implemented' in st['msg'].lower(): self.issue('combat', 'attack: %r' % st['msg'])
             else:
                 path = self.approach_path(f)
@@ -302,8 +307,9 @@ class Player:
         """nav.goto, stopping to fight whenever foes come near; returns the final state"""
         ignore = 0; lv = self.g.state['L']                     # foes in view that cannot be reached
         for _ in range(30):
-            st = self.nav.goto(tx, ty, on_step=lambda s: s['foes'] > ignore or (s['foes'] and self.near_death()), **kw)
-            if self.g.state['foes'] and self.near_death():               # under fire: heal and go on, or give up the walk
+            hit = lambda s: s['foes'] or ' hits ' in s['msg'] or ' kills ' in s['msg']   # a foe out of view can still strike the rear
+            st = self.nav.goto(tx, ty, on_step=lambda s: s['foes'] > ignore or (hit(s) and self.near_death()), **kw)
+            if hit(self.g.state) and self.near_death():                  # under fire: heal and go on, or give up the walk
                 if not self.heal_up(): raise Danger('members %s near death, foes %d in view, no heal' % (self.near_death(), self.g.state['foes']))
                 continue
             if self.g.state['foes'] > ignore:

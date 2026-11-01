@@ -34,10 +34,21 @@ MISS  if  floor((foe_dex + 30 - attack_role) / 2) >= roll
 HIT   otherwise
 ```
 - `use_str` = the weapon is strength-based: obj_n ∈ {4 spiked helm, 34 club, 39 mace,
-  44 two-handed hammer}, or a monster flagged strength_based. Else dexterity.
+  44 two-handed hammer}, or the attacker fights unarmed (a creature's own blow, or a person with
+  nothing readied) and its type is flagged strength-based. Else dexterity. The flagged types (the
+  reference creature table's "uses strength" column, read 2026-10-31): 98 mimic, 355 gazer,
+  362 winged gargoyle, 363 gargoyle, 365 TV flower, 366 tangle vine, 367 daemon, 368 skeleton,
+  370 headless, 371 troll, 373 wisp, 374 hydra, 376 fighter, 377 swashbuckler, 378 mage,
+  379 villager, 380 merchant, 381 child, 382 guard, 383 jester, 384 peasant, 385 farmer,
+  386 musician, 387 woman, 409 Lord British, 410 the Avatar, 424 cyclops, 427 giant ant, 428 cow,
+  429 alligator, 430 horse, 431 horse with rider, 347 reaper.
 - `str_adj` = str (if cursed: max(1, str-3)).
 - `dex_adj` = dex (if cursed: max(1, dex-3); if asleep or time-stopped: 1).
 - Special: the **glass sword** (obj_n 48) and attacks on non-actors always hit.
+- Until 2026-10-31 u6e used dexterity for every blow, took 6 (not 3) off a cursed attacker, and
+  ignored the defender's curse, sleep and Time Stop (found reading the reference while checking a
+  bot fight where the Avatar missed a fleeing winged gargoyle 40 times running — legitimately: with
+  dexterity 48 against 18 it cannot be hit).
 - Intuition: higher attacker stat → lower threshold → more hits; higher defender dex →
   higher threshold → more misses. With equal 15/15 the threshold is 15, so ~50% hit.
 
@@ -120,6 +131,13 @@ and destroyed objects persist". Hatched and summoned creatures leave the same re
 - **Karma**: a party member (the Avatar included) brought to 0 HP costs 5 karma ("allowing your
   party to die is bad karma"), taken before the Avatar's experience loss below. u6e takes it at the
   death itself, whatever the cause.
+- **Whenever a dead companion rises** (the Avatar's death, Help, the Resurrect spell or a healer), its
+  body is used up: the one the party carries first (a dead body, 339, whose quality names it), else
+  one on the map (reference: Actor::find_body). Before 2026-10-31 a carried body stayed in the pack
+  after Help or the Avatar's death had raised its owner (found by the bot).
+- A companion dies once: the death sets its dead flag (the one the save keeps), and only a
+  resurrection clears it; a dead companion that something puts back on the map is simply taken off
+  again, without a second body or karma loss.
 - Every cause (a blow, the Avatar's own, a field, poison) leaves the companion on the map at 0 HP
   until the end of the turn, so the death above (remains, roster) always runs. A non-party actor
   killed by a field or by poison leaves its remains like one slain in combat (§3c).

@@ -212,6 +212,29 @@ After the death, the cave segment's 8-hour camp healed dead Iolo back to 51 HP a
 again (rest.md §4); a yellow potion could do the same (usecode_use.md). Both now leave the dead
 alone, and the rest helper reports any member who rises from 0 HP. Run r30: 0 issues, 301 s.
 
+`help` (after `healer`) casts Help with Iolo still dead: Lord British's revival (magic_skills.md
+§5d) must put the party in the throne room (307,352), Iolo back on the map, everyone at full HP,
+in one of his throne hours, with karma unchanged. Talking to Lord British raises nobody: his
+"heal" only HEALs and CUREs each member, with no RESURRECT; Help is how the game has him do it.
+Until 2026-10-31 u6e's Help only moved the party beside him.
+
+Found by the runs after Help went in (2026-10-31):
+- the camp put dead Iolo back on the map (laid down, stood up, and as the party's bard playing his
+  lute), and the game killed him again each time: two more bodies and 10 karma (rest.md §4); a
+  companion now dies once (its dead flag), and the dead take no part in the camp or the guard;
+- Help, and the Avatar's death, left the raised companion's carried body in the pack (combat.md §3d);
+- the to-hit roll used dexterity for every blow; the spec's rule (combat.md §2) is now the code:
+  strength for clubs, maces, the spiked helm, the two-handed hammer and the unarmed blows of
+  strength-based types, curse −3 on both sides, a sleeping or time-stopped defender at dexterity 1.
+  The fight that led there was legitimate: a winged gargoyle with dexterity 48 cannot be hit by an
+  Avatar with 18, so `fight` now notes "too nimble" after 20 straight misses instead of an issue;
+- harness: a dump key pressed as a camp ends is counted in the camp's last report, so the dump
+  arrived after the report the bot took as its answer (an empty pack: "rune not in the pack");
+  dumps now read on to their end marker and press again if the key was swallowed;
+- tactics: a cyclops out of the Avatar's view beat Iolo to death at the back of the line while the
+  bot walked on; the walk now stops to heal when anyone is struck, and the orb segment camps at the
+  cave mouth first. Run r36: 0 issues, 310 s.
+
 Still not run: a paid resurrection, since the party has 27 gold against Tiberius' 400.
 
 ## 7. Next

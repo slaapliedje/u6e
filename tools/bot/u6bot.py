@@ -125,11 +125,24 @@ class Game:
         for c in text: self.char(c)
         return self.key('ret') if enter else self.state
 
+    def dump(self, key, end):
+        """press a dump key and collect its lines up to the end marker: a report can arrive first (a key
+        that lands as a camp or a walk finishes is counted in that report), so read on until the marker"""
+        for _ in range(3):                                   # a key swallowed by a busy spell: press again
+            self.key(key)
+            if end in self.got: return
+            got = self.got
+            for s in self.lines(5):
+                got.append(s)
+                if s.startswith('@S'): self.state = parse_state(s)
+                if s == end: self.got = got; return
+        raise TimeoutError('dump %s: no %r' % (key, end))
+
     def actors(self):
-        self.key('f2'); return [kv(l) for l in self.got if l.startswith('@A ') and l != '@A end']
+        self.dump('f2', '@A end'); return [kv(l) for l in self.got if l.startswith('@A ') and l != '@A end']
 
     def objects(self):
-        self.key('f3'); rows = [kv(l) for l in self.got if l.startswith(('@O ', '@I ')) and l != '@O end']
+        self.dump('f3', '@O end'); rows = [kv(l) for l in self.got if l.startswith(('@O ', '@I ')) and l != '@O end']
         self.ready = [kv(l) for l in self.got if l.startswith('@E ')]           # readied things: id slot obj
         return [r for r in rows if 'i' in r], [r for r in rows if 'row' in r]
 
