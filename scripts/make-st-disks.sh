@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # make-st-disks.sh — build a set of Atari .ST floppy images (+ a hard-drive
 # installer) for the u6e engine from YOUR OWN original game data.
 #

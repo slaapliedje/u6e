@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """nav.py: routes over the game's own passability dump (BOTPASS.BIN + BOTDOOR.TXT) and walks them
 key by key: closed doors are opened with U)se, a tile someone stands on is waited out, then routed
 around. Every step is a real arrow key; nothing is teleported."""

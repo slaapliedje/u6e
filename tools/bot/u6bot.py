@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """u6bot.py: play u6e through Hatari's keyboard, lock-step with the game's bot reports.
 
 The game, started with BOT.REQ in its folder, prints one '@S' line after each key it has handled

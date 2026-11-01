@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* midirec <out.mid> [startfile]: private ALSA sequencer recorder.
  * Creates client "u6e-rec" with one writable port, so Hatari (PortMidi) can send straight
  * to it without the shared Midi Through port. Records until SIGINT/SIGTERM and writes a

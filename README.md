@@ -103,6 +103,8 @@ cancels. The mouse works on the command bar, the party roster and the map.
 
 ## Known issues
 
+- Where u6e knowingly behaves differently from the original (for example, theft is not punished
+  yet), the difference is listed in [docs/rules/deviations.md](docs/rules/deviations.md).
 - The Savage Empire and Martian Dreams boot and can be walked, but are not playable yet.
 - Only the GOG/DOS release's `U.EXE` has been tested for the intro data. With another version,
   the TV and the gypsy's pour animation are left out rather than drawn wrong (`make world` says

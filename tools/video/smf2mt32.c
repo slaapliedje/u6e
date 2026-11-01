@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Origin: written in the u7port session (the user's Ultima 7 port) for its MT-32 video; reused here unchanged. */
 /* smf2mt32 <in.mid> <out.wav> <romdir>: renders a Standard MIDI File (all tracks merged, tempo
  * map honoured, SysEx included) through libmt32emu (MT-32 1.07 ROMs) to 32 kHz stereo WAV. */

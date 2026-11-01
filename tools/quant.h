@@ -19,7 +19,7 @@ static int q_cmpG(const void *a, const void *b){ return ((const CCol*)a)->g - ((
 static int q_cmpB(const void *a, const void *b){ return ((const CCol*)a)->b - ((const CCol*)b)->b; }
 
 /* collect the unique colours of an RGB8 buffer (<=256 distinct). */
-static int q_build_hist(const uint8_t *rgb, long npix, CCol *out, int cap)
+static inline int q_build_hist(const uint8_t *rgb, long npix, CCol *out, int cap)
 {
     int n = 0;
     for (long i = 0; i < npix; i++) {

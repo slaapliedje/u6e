@@ -26,7 +26,10 @@ else
   SUFFIX    :=
 endif
 
-CFLAGS := $(ARCHFLAGS) -std=gnu11 -Os -Wall -Wextra -Iplatform
+# The code writes short guarded statements on one line ("if(c) a; b;"). GCC's misleading-indentation
+# warning flags every such line; an audit (2026-11-01) found each of them deliberate, so it is off.
+WSTYLE := -Wno-misleading-indentation
+CFLAGS := $(ARCHFLAGS) -std=gnu11 -Os -Wall $(WSTYLE) -Wextra -Iplatform
 LDFLAGS :=
 
 BUILD := build
@@ -88,7 +91,7 @@ $(SELFTEST_PRG): $(SELFTEST_OBJ)
 miditest: $(BUILD)/MIDITEST.PRG
 $(BUILD)/MIDITEST.PRG: platform/miditest.c
 	@mkdir -p $(BUILD)
-	$(CC) -m68000 -std=gnu11 -Os -Wall -Wextra -o $@ $<
+	$(CC) -m68000 -std=gnu11 -Os -Wall $(WSTYLE) -Wextra -o $@ $<
 	@echo "built $@"
 
 # --- run targets: EmuTOS works on every machine; real TOS for accuracy ---
@@ -116,14 +119,14 @@ run-falcon: $(BUILD)/selftest_020.prg
 ARANYM ?= aranym
 $(BUILD)/vcardtest.prg: render/vcardtest.c
 	@mkdir -p $(BUILD)
-	$(CC) -m68000 -std=gnu11 -Os -Wall -o $@ $< -lgem16
+	$(CC) -m68000 -std=gnu11 -Os -Wall $(WSTYLE) -o $@ $< -lgem16
 	@echo "built $@ (GEM VDI probe, 68000 + libgem16)"
 vcardtest: $(BUILD)/vcardtest.prg
 # M8 vcard RENDERER test: rdr_vcard.c (VDI card backend) + a test-pattern harness. GEM app, pure
 # 68000 + libgem16 + the portable C c2p (no 68020 asm). Validate under ARAnyM+fVDI+AFROS.
 $(BUILD)/vcardrender.prg: render/vcardrender.c render/render.c render/rdr_vcard.c platform/detect.c platform/platmem.c
 	@mkdir -p $(BUILD)
-	$(CC) -m68000 -std=gnu11 -Os -Wall -DHAVE_RDR_VCARD -Irender -Iplatform -o $@ $^ -lgem16
+	$(CC) -m68000 -std=gnu11 -Os -Wall $(WSTYLE) -DHAVE_RDR_VCARD -Irender -Iplatform -o $@ $^ -lgem16
 	@echo "built $@ (rdr_vcard VDI backend via render.c dispatch + test pattern, 68000 + libgem16)"
 vcardrender: $(BUILD)/vcardrender.prg
 # Hatari smoke test (built-in TT VDI: no EdDI, but exercises the vq_extnd path + reports the mode).
@@ -173,7 +176,7 @@ shot: all
 # Portable /dataformats decoders compiled with the HOST compiler for fast
 # validation against real data in /refdata (decode-correctness before hardware).
 HOSTCC     ?= cc
-HOSTCFLAGS ?= -O2 -std=gnu11 -Wall -Wextra -Idataformats
+HOSTCFLAGS ?= -O2 -std=gnu11 -Wall $(WSTYLE) -Wextra -Idataformats
 DF_SRC     := dataformats/u6lzw.c dataformats/u6lib.c
 REFDATA    ?= refdata/dos/u6
 
@@ -573,7 +576,7 @@ BENCH_ST_SRC := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(BENCH_SRC)) rend
 $(BUILD)/benchst.prg: $(BENCH_ST_SRC)
 	@mkdir -p $(BUILD)/obj_benchst
 	@for s in $^; do o=$(BUILD)/obj_benchst/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DBENCH -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DBENCH -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_benchst/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour bench)"
 # BLIT=1 adds Hatari's --blitter on so a plain-ST run emulates a Blitter-equipped Mega ST (8 MHz +
@@ -792,7 +795,7 @@ define HYBRID_BUILD
 	@for s in $(2); do o=$(BUILD)/$(3)/`echo $$s | tr / _`.o; \
 	  a=-m68020-60; \
 	  case $$s in *plattime.c|*rdr_st.c) a=-m68000;; esac; \
-	  $(CC) $$a -std=gnu11 -O2 -Wall $(HYBRID_INC) $(4) -c $$s -o $$o || exit 1; done
+	  $(CC) $$a -std=gnu11 -O2 -Wall $(WSTYLE) $(HYBRID_INC) $(4) -c $$s -o $$o || exit 1; done
 	$(CC) -std=gnu11 -O2 -o $(1) $(BUILD)/$(3)/*.o $(5)
 	@echo "built $(1) (68020 codegen + 68000 soft-float libc; runs FPU-free)"
 endef
@@ -834,7 +837,7 @@ GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch)"
 game-st: $(BUILD)/gamest.prg
@@ -868,7 +871,7 @@ GAME_SRC_VCARD := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) ren
 $(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
 	@mkdir -p $(BUILD)/obj_vc
 	@for s in $^; do o=$(BUILD)/obj_vc/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vc/*.o -lgem16
 	@echo "built $@ (pure 68000 + card; VDI backend via render.c dispatch, libgem16)"
 game-vcard: $(BUILD)/gamevc.prg
@@ -882,7 +885,7 @@ GAME_SRC_VCARD_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) 
 $(BUILD)/gamevcs.prg: $(GAME_SRC_VCARD_ST)
 	@mkdir -p $(BUILD)/obj_vcs
 	@for s in $^; do o=$(BUILD)/obj_vcs/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vcs/*.o -lgem16
 	@echo "built $@ (pure 68000 + card; libgem16)"
 game-vcard-st: $(BUILD)/gamevcs.prg

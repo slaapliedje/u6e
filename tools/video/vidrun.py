@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """vidrun.py <timeline> <outdir>: records u6e on a stock 4 MB Falcon in Hatari, in real time.
 Starts the private MIDI recorder (midirec), then Hatari with --avirecord and a command FIFO,
 and plays the timeline: one command per line, '<seconds> <cmd> [args]', seconds from launch.

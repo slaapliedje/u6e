@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """finish.py <rundir> [out.mp4]: turns a vidrun.py recording into a YouTube-ready MP4.
 1. renders music.mid through libmt32emu (MT-32 1.07 ROMs) -> music.wav
 2. finds two sync anchors: the menu's fade-in in the AVI and the menu song's cue in the MIDI

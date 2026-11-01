@@ -80,24 +80,24 @@ Boot order:
    - **Living room (INTRO_1.SHP, PALETTES.INT 0)** — TV channel-surf + ticking clock loop:
      - P1: `Upon your world, five seasons …` (90 ch)
      - P2: `You have traded the Avatar's …` (181 ch)
-     - P3 (as the room pans to the window): `Outside, a chill wind rises...`
+     - P3 (as the room pans to the window): `Outside, a chill …` (short page)
    - **Storm window (INTRO_2.SHP, PALETTES.INT 1)** — lightning flashes:
      - `...and in moments, …` (short page)
      - `Tongues of lightning lash the …` (83 ch)
      - `In a cataclysm of sound …` (81 ch)
-     - `Lightning among the stones!` / `Is this a sign from distant Britannia?`
+     - `Lightning among …` / `Is this a …` (two short lines)
    - **Forest path** (window frame slides off the same bg):
      - `You bolt from your house, …` (131 ch)
    - **The stones (INTRO_3.SHP, PALETTES.INT 2)** — obsidian + hand:
      - `Near the stones, the smell …` (178 ch)
-     - `Wondering, you pick it up....`
+     - `Wondering, you …` (short page)
    - **Red moongate (INTRO_3.SHP, PALETTES.INT 2, crimson palette-cycle)** — gate rises, Avatar walks in:
      - `...and from the heart of …` (78 ch)
      - `Exultant memories wash over you …` (161 ch)
      - `But your joy …` (short page)
      - `The gate to Britannia has …` (73 ch)
      - `Abruptly, the portal quivers and …` (90 ch)
-     - `Desperation makes the decision an easy one.`
+     - `Desperation makes …` (short page)
    - Then fade → **main menu**.
 
 ### 1B. The GARGOYLE SACRIFICE opening — the new-game cinematic (nuvie `intro()`)
@@ -110,23 +110,23 @@ priest and Dupre/Shamino/Iolo pull the Avatar out through a fresh moongate. The 
 
 - `Dazed, you emerge from the …` (147 ch)
 - `At first the plain is …` (168 ch)
-- `...but you have no place to go.`
+- `...but you have …` (short page)
 - `Before you can offer a …` (94 ch)
 - `With unearthly strength, the monsters …` (66 ch)
 - `Kneeling, the hordes sway and …` (80 ch)
 - `The leader unwraps a velvet …` (102 ch)
 - `Shouts and jeers explode from …` (128 ch)
 - `You close your eyes. A …` (73 ch)
-- `Catcalls, the dagger, a scream, Death....`
-- `Pandemonium. Shrieks of rage, of terror.`
-- `From the inevitable, an impossibility emerges.`
-- `You are still alive.`
+- `Catcalls, the …` (short page)
+- `Pandemonium. …` (short page)
+- `From the inevitable …` (short page)
+- `You are still …` (short page)
 - `Silent red light fills the …` (145 ch)
 - `Friendly faces vault from a …` (181 ch)
 - `"Quickly, old friend! To the …` (165 ch)
 - `Snatching the fallen priest's book, …` (151 ch)
 - `The gate wanes rapidly as …` (57 ch)
-- `...but not rapidly enough.`
+- `...but not …` (short page)
 - `From the mob's vanguard, three …` (166 ch)
 
 Then the game map begins. (The team's canonical new-game state drops the party at **Lord
@@ -181,7 +181,7 @@ scene; every text hold after the priest arrives runs the idle sway + gate cycle)
 1. Fade in on bg+altar+hordes(off-screen). Page 1 "Dazed…" (b2), page 2 "At first…" (b2).
 2. **Horde approach**, 96 steps: left moves per 6-step table x{+1,+1,0,+1,+1,+1}
    y{0,0,-1,0,0,-1}; right (from step 24) x−2/step, y per table {-1,-1,0,-1,-1,-1}x2.
-   Skip snaps: left (-4,77), right (182,79). Page "…no place to go." (b0).
+   Skip snaps: left (-4,77), right (182,79). Page "…but you have …" (b0).
 3. Page "Before you can offer a protest…" (b2).
 4. Page "With unearthly strength…" (b1) — **Avatar + ropes appear**.
 5. Hordes shift +4y. **Priest walk-in**: body/head from (213,141)/(291,155), 23 steps of
@@ -193,7 +193,7 @@ scene; every text hold after the priest arrives runs the idle sway + gate cycle)
    **gate palette cycle** — rotate palette entries 232..239 one step every 4th frame — which
    keeps running through every later beat until the gate sinks. Hold, cycling, until input.
 8. **Fade to black; four interlude pages** (b1 @ (1,80), each fade-in → wait → fade-out):
-   "Catcalls…", "Pandemonium…", "From the inevitable…", "You are still alive."
+   "Catcalls…", "Pandemonium…", "From the inevitable…", "You are still…"
 9. **Fade the full scene back in** (all sprites incl. risen gate). Priest head swaps to
    shape 10 (quarrel in forehead). Page "Silent red light…" (b2).
 10. **Priest falls**: 43 steps, body+head y+3/step (x jitters −1..+2); then hidden.
@@ -204,7 +204,7 @@ scene; every text hold after the priest arrives runs the idle sway + gate cycle)
     y+1/step (slides down behind the altar = pulled off it). Pages "Quickly, old friend!…"
     (b2), "Snatching the fallen priest's book…" (b2).
 13. Page "The gate wanes rapidly…" (b1) holds while the **gate sinks**: 151 steps, y+1 every
-    2nd step (cycle still running). Then "…but not rapidly enough." (b0) and "From the mob's
+    2nd step (cycle still running). Then "…but not…" (b0) and "From the mob's
     vanguard…" (b2) hold with sway only.
 14. Fade out; palette restored; gameplay begins.
 

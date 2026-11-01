@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
 """play.py: game actions on top of u6bot.Game + nav.Nav, with an issue log.
 
 Player.talk_to(id, words) walks next to an NPC, T)alks in its direction and types the words; the

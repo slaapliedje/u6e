@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 from PIL import Image
 def is_menu(path):
     """the u6e title + main menu on a 640x480 Falcon capture: blue title, black gap, grey panel"""

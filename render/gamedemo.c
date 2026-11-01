@@ -2238,7 +2238,6 @@ static void gg_compose_rect(rect_t r)
   for(int i=0;i<GS_N;i++){ int sh=g_ggs[i].shp;
     if(!g_ggs[i].vis || sh<0 || sh>=g_ngg || !g_gg[sh]) continue;
     blit_indexed_clip(g_gg[sh], g_gg_w[sh], g_gg_h[sh], g_ggs[i].x, g_ggs[i].y, r.x0,r.y0,r.x1,r.y1); } }
-static void gg_compose(void){ rect_t r={0,0,LW,LH}; gg_compose_rect(r); }
 
 /* which narration scroll: 0 small / 1 short from the pack; 2 = the shared medium g_scroll at
  * (px,py). Falls back to the shared scroll at the bottom when the pack lacks the small ones. */
@@ -3192,7 +3191,7 @@ static void step_npcs(const world_t*w)
                 g_amoved[i]=0; continue; }
             if(g_combat_mode){                          /* CB4: auto-fight an adjacent foe */
                 int tid=adjacent_hostile(w,x,y);
-                if(tid>=0){ int tx,ty; actor_pos(tid,&tx,&ty);
+                if(tid>=0){ int tx=x,ty=y; (void)actor_pos(tid,&tx,&ty);
                     g_facing[i]= ty<y?0:ty>y?2:tx>x?1:3; party_attack(i,tid); g_amoved[i]=0; continue; } }
             int cx=avx>x?avx-x:x-avx, cy=avy>y?avy-y:y-avy;
             if(cx<=1 && cy<=1){ g_amoved[i]=0; continue; }  /* already alongside */
@@ -7292,7 +7291,7 @@ static int nearest_hostile(int x,int y,int maxd,int*tx,int*ty){
 static void ally_step(const world_t*w,int i){
     int x=g_actx[i], y=g_acty[i], avx=(int)w->px, avy=(int)w->py;
     int adj=adjacent_hostile(w,x,y);
-    if(adj>=0){ int ax,ay; actor_pos(adj,&ax,&ay);
+    if(adj>=0){ int ax=x,ay=y; (void)actor_pos(adj,&ax,&ay);
         g_facing[i]= ay<y?0:ay>y?2:ax>x?1:3; party_attack(i,adj); g_amoved[i]=0; return; }
     int tx=avx,ty=avy, h=nearest_hostile(x,y,10,&tx,&ty);
     int gx=(h>=0)?tx:avx, gy=(h>=0)?ty:avy;               /* hunt a foe, else regroup on the Avatar */
