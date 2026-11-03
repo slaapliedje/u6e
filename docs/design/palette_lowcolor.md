@@ -313,6 +313,9 @@ We ship a PARALLEL 4-bit palette set rather than touching the validated 3-bit ST
       metallic gradient instead of the terrain-16's dithered grey. The gold menu-highlight ramp
       (U6PAL 14 + 33..36, recoloured per option by `menu_highlight`) is up-weighted at quantise time
       so it keeps a distinct yellow→orange spread.
+      Background: uncovered pixels and the screen the title clears to 0 count as colour 0, and the
+      slot nearest colour 0 is set to exactly that colour. Without this the art alone chose the 16,
+      so the title's black came out grey and the intro's olive.
 - [x] Colour-cycling on ST (FIRE) — DONE. Host reserves ST-16 slots for the 224–231 ramp (U6WZ),
       the engine rotates them each tick, rdr_st re-pushes the registers (+ band 0). Validated: only
       the brazier flames animate (`make GX=228 GY=167 shot-st-fire`, 760 px / 4 dots). Section above.

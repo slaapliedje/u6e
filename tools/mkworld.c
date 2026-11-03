@@ -1200,13 +1200,17 @@ static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, ui
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     cv_hist(pix,npix,freq);
-    freq[U6SHAPE_TRANSPARENT]=0;                 /* uncovered/transparent pixels never reach the screen */
+    freq[0]+=freq[U6SHAPE_TRANSPARENT];          /* uncovered pixels reach the screen as the cleared colour 0 */
+    freq[U6SHAPE_TRANSPARENT]=0;
     static CCol col[256]; int ncol=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
         col[ncol].r=RGB6TO8(pal6[i*3]); col[ncol].g=RGB6TO8(pal6[i*3+1]); col[ncol].b=RGB6TO8(pal6[i*3+2]);
         col[ncol].w=freq[i]; ncol++; }
     CCol pal[16]; int np = ncol ? q_median_cut(col,ncol,16,pal) : 0;
     q_snap_pal(pal,np,3);
+    if (np && freq[0]) {                         /* colour 0 is the background: keep it exact, or black drifts grey */
+        int r=q_snap3[RGB6TO8(pal6[0])], g=q_snap3[RGB6TO8(pal6[1])], b=q_snap3[RGB6TO8(pal6[2])];
+        int k=q_nearest(pal,np,r,g,b); pal[k].r=(uint8_t)r; pal[k].g=(uint8_t)g; pal[k].b=(uint8_t)b; }
     uint8_t *lvl=lc; uint8_t *lut=lc+48;
     for (int i=0;i<16;i++){ int r=0,g=0,b=0;
         if(i<np){ r=q_lv3[pal[i].r]; g=q_lv3[pal[i].g]; b=q_lv3[pal[i].b]; }
@@ -2305,6 +2309,8 @@ int main(int argc, char **argv)
         enum { NCOMB = 320*200*2 }; uint8_t *comb=scratch(NCOMB,0); int np=0;
         if(menu &&mw>0&&mh>0) for(int i=0;i<mw*mh;i++) comb[np++]=menu[i];
         if(title&&tw>0&&th>0) for(int i=0;i<tw*th;i++) comb[np++]=title[i];
+        { int bg=320*200-mw*mh-tw*th;                   /* run_menu clears the rest of the screen to 0 */
+          for(int k=0;k<bg && np<NCOMB;k++) comb[np++]=0; }
         static const uint8_t RAMP[]={14,33,34,35,36};   /* mirror gamedemo MENU_RAMP */
         for(unsigned r=0;r<sizeof RAMP/sizeof*RAMP;r++)  /* up-weight the ramp so it keeps distinct slots */
             for(int k=0;k<600 && np<NCOMB;k++) comb[np++]=RAMP[r];
