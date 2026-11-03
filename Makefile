@@ -1331,5 +1331,10 @@ st-disks-st:
 st-disks-tt:
 	scripts/make-st-disks.sh --target tt $(STDISK_ARGS)
 
+# the player's zip: programs + CONVERT.TOS, no game data (needs no refdata to build)
+.PHONY: release
+release: convert game game-st game-vcard
+	BUILD=$(BUILD) scripts/make-release.sh $(RELEASE_VERSION)
+
 clean:
 	rm -rf $(BUILD)

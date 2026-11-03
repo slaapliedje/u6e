@@ -202,8 +202,7 @@ not only the TT; the margin is tens of KB.
 
 - Finer streaming granularity (per scene inside INTRO) if a smaller-RAM config ever matters — the
   directory already allows it; only the group masks change.
-- The 1.4 MB BSS: `g_blocked/g_sightblk/g_indoor/g_dimcache` (4 × 128 K), `g_wobj` 216 K,
-  `s_stub_paper` 64 K (core packs only) are static and could become pool allocations sized per game.
+- BSS: see "Reclaimed statics, second round" for what is left.
 - SAVE.000 template stays a whole-file load when present (optional dev file).
 - PCM quality/size knobs already exist and are header-driven (`make m2pcm PCM_RATE=25033`
   renders 25 kHz; the backend programs the STE mode bits / Falcon prescaler from the header) —
@@ -217,6 +216,34 @@ were static BSS and are now chip-pool transients inside a mark / reset scope: th
 the incremental-scroll / dim self-test hook (mode 11). BSS fell from 1,536,100 to 1,346,148 bytes, and the
 load has 190 KB more headroom. Rule of thumb kept from item 2b: every save / load hook also runs on the
 4 MB Falcon, because the margin is what the binary's growth leaves.
+
+## Reclaimed statics, second round (2026-11-03)
+A new player's first start on a 4 MB TT (`--memsize 4 --ttram 0`) stopped at "not enough free memory":
+BSS had crept back up to 1,636,084 bytes and the code to 556 KB, against a TT that also spends 231 KB on
+screens. Nobody had run that machine since the first round. BSS is now 1,033,080 bytes:
+- **The three whole-map bitmaps** (384 KB) became page tables, `engine/sparsebits.h`: 1024 pages of 32x32
+  tiles at 128 bytes each. The whole game uses 135 (`g_blocked`), 100 (`g_sightblk`) and 109 (`g_indoor`)
+  pages. The blocked and sight stores are fixed at 340 and 256 pages, about 2.5x that; a bit set with a
+  store full is dropped. The indoor store is sized when the pack loads. Clearing one now touches 2 KB
+  instead of 128 KB, so `build_blocked` got cheaper too.
+- **The planar path's buffers** (167 KB, render/rdr_st.c) come from the pool in that backend's `rdr_init`:
+  the unified GAME.PRG links the ST backend and a TT or Falcon never uses it.
+- **`build_blocked`'s work lists** (52 KB at the full object count) are pool transients inside a mark /
+  reset. If they don't fit it keeps the last map; at these margins that has not happened.
+- **The black paper stub** (64 KB, SE/MD only) is allocated in that branch.
+
+| 4 MB, no Fast RAM | pool before | pool now | free after the core, before | now |
+|---|---|---|---|---|
+| ST, GAMEST.PRG | 1633 KB | 2216 KB | 467 KB | **876 KB** |
+| TT, GAME.PRG | 1495 KB | 2078 KB | did not load | **541 KB** |
+| Falcon, GAME.PRG | 1594 KB | 2177 KB | 296 KB | **865 KB** |
+
+Frame times are unchanged within noise (TT and Falcon scroll benches against the last commit). On all
+three: convert, title menu, play, S)ave, reboot, Journey Onward, "Game restored.".
+
+Rule of thumb kept: the margin is what the binary's growth leaves, so **a release test runs the 4 MB TT**,
+the tightest machine, not only the Falcon. Still in BSS if more is needed: `g_wobj` 216 KB, `g_dimcache`
+128 KB, four 31 KB map layers, the intro's `pbg` and `holdbg` (41 KB), the LZW dictionary 32 KB.
 
 ## U6FE.PAK: the pointer section (2026-10-28)
 The main menu runs BEFORE the core pack loads (on the 4 MB machines the front-end is freed first),

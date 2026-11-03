@@ -179,7 +179,7 @@ Emulated 2 MB ST (TOS 1.04): the whole conversion runs in 270 s with byte-identi
   plain-68000 program, their `main()`s renamed, so one binary runs on every machine of the line
   (196 KB code, 190 KB BSS). It converts whichever game's files are in the folder, told apart by
   SAVAGE.EXE / MARTIAN.EXE, else U6 by MAP + U6.CH (`platform/firstrun.h`, shared with the game).
-  - **Outputs:** SAVE.000, U6.PAK and, for U6, U6FE.PAK. Every game's core pack is called U6.PAK,
+  - **Outputs:** SAVE.000, MENU.REQ (boots to the intro and title menu), U6.PAK and, for U6, U6FE.PAK. Every game's core pack is called U6.PAK,
     because the game loads that name and tells the games apart by the pack's magic.
   - **Checks first:** the core files a conversion can't do without (the rest of the DOS set only
     adds front-end art, which mkworld goes without), the free space with `Dfree` (GEMDOS 0x36:
@@ -278,5 +278,7 @@ save template 8 s. The notice's estimate (`fr_estimate_s`) and the progress bar'
    including MiNT and MagiC (§3); still to check on real hardware.
 5. AdLib converter: per-instrument sampling on the host first, compared by ear with `m2pcm`'s
    output; then the real-time DMA mixer in the game, timed on a stock TT and Falcon.
-6. Update distribution.md: the floppy set ships the program and CONVERT.TOS only; the player
-   supplies the DOS files.
+6. Release zip (`make release`, scripts/make-release.sh): the programs, stripped, plus CONVERT.TOS,
+   README.TXT and LICENSE.TXT, and an allow-list that refuses anything else. It builds from a clean
+   export with no refdata. distribution.md's floppy set still carries converted packs; shipping it as
+   the program and CONVERT.TOS only is still to do.

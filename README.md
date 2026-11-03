@@ -51,11 +51,23 @@ when RAM is short.
 
 ## Playing it
 
-### 1. Build the files (on a Linux PC, for now)
+### From a release (no PC needed)
 
-The game's data packs are converted from your DOS files on a PC. (Converting them on the Atari at
-first boot, with nothing to do but copy the DOS files over, is planned: see
-[docs/design/first_boot_convert.md](docs/design/first_boot_convert.md).)
+The release zip holds the programs and `CONVERT.TOS`, and no game data.
+
+1. Make a folder on your hard drive or CF card, with about 13 MB free.
+2. Copy every file from your DOS `ULTIMA6` folder into it, then the program for your machine (see
+   the table above) and `CONVERT.TOS`.
+3. Run the program from the desktop. The first time, it offers to convert your files and says how
+   long that takes: about 3 minutes on an 8 MHz ST, under a minute on a stock TT or Falcon. It then
+   starts the game ([docs/design/first_boot_convert.md](docs/design/first_boot_convert.md)).
+
+Skip to [Controls](#3-controls).
+
+### 1. Build the files on a PC (for developers)
+
+`make release` needs no game data and writes the release zip to `build/`. To build the data packs on
+the PC as well:
 
 You need `m68k-atari-mint-gcc` (see [docs/design/toolchain.md](docs/design/toolchain.md)), a host
 C compiler, `make`, and optionally Hatari for testing.
@@ -99,13 +111,16 @@ The original's keys: arrow keys walk. The first letter of each command starts it
 - B toggles combat mode.
 
 Commands that need a direction or target take the arrow keys (or a crosshair, then Enter). Esc
-cancels. The mouse works on the command bar, the party roster and the map.
+cancels; with nothing to cancel, it asks whether to quit. The mouse works on the command bar, the party roster and the map.
 
 ## Known issues
 
 - Where u6e knowingly behaves differently from the original (for example, theft is not punished
   yet), the difference is listed in [docs/rules/deviations.md](docs/rules/deviations.md).
 - The Savage Empire and Martian Dreams boot and can be walked, but are not playable yet.
+- The title menu's Transfer a Character and Acknowledgements say "Not yet available."
+- Everything so far has been tested in Hatari on stock configurations. MagiC on a 4 MB ST leaves too
+  little memory for the game.
 - Only the GOG/DOS release's `U.EXE` has been tested for the intro data. With another version,
   the TV and the gypsy's pour animation are left out rather than drawn wrong (`make world` says
   so).
@@ -124,9 +139,11 @@ Screenshots help. For crashes, the console output (Hatari `--conout 2`) is the m
 
 - **Clean-room discipline.** ScummVM/Nuvie, community tools and format pages may be **read** to
   understand a format or behaviour and to write our own spec in [docs/](docs/). The engine is then
-  written from that spec, never transcribed. Original data (art, text, tables) is never committed
+  written from that spec, never transcribed. Original data (art, tables, conversations, narration) is never committed
   or compiled in: anything the game needs from the original, such as the intro narration, the
-  gypsy's questions, or the TV and casting tables, is read from your files at build time. See
+  gypsy's questions, or the TV and casting tables, is read from your files when they are converted.
+  The exception is about twenty short interface messages, such as "Not enough magic points.", whose
+  wording matches the original's. See
   [CLAUDE.md](CLAUDE.md) and [docs/CLAUDE.md](docs/CLAUDE.md).
 - **Layout:**
   - [engine/](engine/): game logic;

@@ -4,7 +4,7 @@
 
 Player.talk_to(id, words) walks next to an NPC, T)alks in its direction and types the words; the
 replies are collected. Player.issue() records anything suspicious with a screenshot; check() runs
-the generic checks after every action. Esc is never sent outside text entry: in u6e it quits."""
+the generic checks after every action. Esc is never sent outside text entry: in u6e it asks whether to quit."""
 import json, os, re, subprocess, time
 from nav import Nav, NavError, DIRV, VDIR
 
@@ -82,7 +82,7 @@ class Player:
         st = self.g.key(k); self.check(what or str(k)); return st
 
     def idle(self):
-        """leave any text entry or armed verb (Esc is safe there; in plain play it would quit)"""
+        """leave any text entry or armed verb (Esc is safe there; in plain play it arms the quit question)"""
         for _ in range(3):
             st = self.g.state
             if st['ask'] or st['cast'] or st['mantra'] or st['verb']: self.key('esc')

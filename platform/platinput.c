@@ -49,7 +49,7 @@ plat_input_t plat_input_map(int key)
     }
     switch (a) {
     case 't': case 'T': return IN_TALK;   /* U6 'T'alk command */
-    case 27:            return IN_QUIT;   /* Esc exits the demo (dev convenience) */
+    case 27:            return IN_QUIT;   /* Esc: the game asks before it quits */
     default: return IN_NONE;
     }
 }

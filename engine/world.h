@@ -9,6 +9,7 @@
 #define U6E_WORLD_H
 
 #include <stdint.h>
+#include "sparsebits.h"
 #include <stdbool.h>
 #include "u6map.h"
 #include "ruleset.h"
@@ -17,7 +18,7 @@
 typedef struct world {
     u6map_t        map;            /* decoded surface + chunks            */
     const uint8_t *passable;       /* [256]: 1 = walkable tile, 0 = blocked */
-    const uint8_t *blocked_obj;    /* optional 1024x1024 bitmap: bit (y*1024+x) set =
+    const sparsebits_t *blocked_obj;    /* optional 1024x1024 bitmap: bit (y*1024+x) set =
                                     * impassable OBJECT on that tile. NULL = none. */
     bool         (*force_pass)(int32_t x, int32_t y);   /* optional: an object makes impassable terrain
                                     * walkable (a drawbridge span over the moat; tileflag.md tileflags3 bit2) */
@@ -42,7 +43,7 @@ bool    world_is_passable(const world_t *w, int32_t x, int32_t y);/* tile at (x,
 
 /* Attach an optional object-blocking bitmap (1024x1024 bits, bit (y*1024+x) set =
  * an impassable object occupies that tile). world borrows it; pass NULL to clear. */
-void    world_set_blocked_obj(world_t *w, const uint8_t *bitmap);
+void    world_set_blocked_obj(world_t *w, const sparsebits_t *bitmap);
 /* Attach the forced-passability test (NULL = none). Checked only where the terrain blocks. */
 void    world_set_force_pass(world_t *w, bool (*fn)(int32_t x, int32_t y));
 

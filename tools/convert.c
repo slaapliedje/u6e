@@ -212,6 +212,8 @@ int main(int argc, char **argv)
     Fdelete("U6.PAK");
     if (Frename(0, "U6.TMP", "U6.PAK") != 0) { g_label = "Renaming U6.TMP"; exit(2); }
     Fdelete("CV_OBB.TMP"); Fdelete("CV_OBL.TMP"); Fdelete("CV_INV.TMP");
+    {   long fh = Fcreate("MENU.REQ", 0);               /* Fcreate 0x3C: boot to the intro and title menu */
+        if (fh >= 0) { Fwrite((short)fh, 1, "1"); Fclose((short)fh); } }
     g_finished = 1;
     g_done_w = g_total; g_label = "Done"; draw_status();
     printf("== done in %ld s\n", elapsed_s());

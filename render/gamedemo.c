@@ -244,8 +244,10 @@ static int            g_view_has_anim;     /* 1 if an ANIMDATA tile is in the ma
 static uint8_t        g_objanim[1024];     /* per-obj_n frame count (0=static): fire/flame objects cycle frame_n (U6WE) */
 static uint8_t        g_tflags[2048];       /* tileflags2 by tile: bit4 Foreground, bits6-7 size (U6WF) */
 static uint8_t        g_tflags1[2048];      /* tileflags1 by tile: bit1 Impassable, bit2 Wall (U6WG) */
-static uint8_t        g_blocked[1024*1024/8]; /* bitmap: impassable OBJECT on tile (y*1024+x) */
-static uint8_t        g_sightblk[1024*1024/8]; /* bitmap: sight-blocking OBJECT on tile (closed door etc.) for LOS */
+/* bit per tile, sparse: 135 and 100 pages in the whole of U6; the stores hold about 2.5x that */
+static uint8_t        g_blocked_store[340*SB_PAGE_BYTES], g_sightblk_store[256*SB_PAGE_BYTES];
+static sparsebits_t   g_blocked ={ .store=g_blocked_store,  .cap=340 };   /* impassable OBJECT on tile */
+static sparsebits_t   g_sightblk={ .store=g_sightblk_store, .cap=256 };   /* sight-blocking OBJECT on tile (closed door etc.) for LOS */
 /* MAGIC field-tile layer (docs/rules/magic_skills.md §5a): temporary fire/poison/
  * sleep/energy fields placed by spells. kind: 0 fire, 1 poison, 2 sleep, 3 energy(block). */
 #define MAXFIELDS 64
@@ -309,8 +311,8 @@ static const uint8_t *g_pd_dyngate=0;   /* idle persistent-g_ptmp: if set, a per
                                          * gates ONLY the planar dynamic blit (rdr_pdyn_cell -> g_ptmp) — the
                                          * chunky copy stays full so the INV2 verify still sees a whole tmp.
                                          * NULL = blit every cell (the full-copy path). See compose_map idle. */
-static uint8_t        g_indoor[1024*1024/8];  /* bitmap: tile is INDOOR (under a roof) -> low ambient (U6WI) */
-static int            tile_is_indoor(int x,int y){ int32_t i=(int32_t)y*1024+x; return (g_indoor[i>>3]>>(i&7))&1; }
+static sparsebits_t   g_indoor;               /* bit per tile: INDOOR (under a roof) -> low ambient (U6WI); store sized at load */
+static int            tile_is_indoor(int x,int y){ return sb_get(&g_indoor,x,y); }
 static const uint8_t *g_rtiles;               /* roof tileset (n*256, 255=transparent), points into pak (U6WK) */
 static int            g_nrtiles;
 static const uint8_t *g_roofmap;              /* g_nroof x {u32 pos=y*1024+x BE, u16 dense idx BE}, sorted by pos */
@@ -3410,17 +3412,22 @@ static bool force_pass_at(int32_t x, int32_t y)
 
 static void build_blocked(void)
 {
+    /* the per-object work lists are 52 KB at the full object count and live only for this call, so
+     * they come from the pool (a mark/reset costs nothing). Margin on a 4 MB machine: memory_streaming.md */
+    plat_mark wm=plat_chip_mark();
+    uint8_t  *cls=(uint8_t*)plat_alloc_chip((uint32_t)g_ow.nobjs+1u);          /* per object: bit 0 fg, bit 1 light/sight, bit 7 alive */
+    uint16_t *bkt=(uint16_t*)plat_alloc_chip(((uint32_t)g_ow.nobjs+1u)*2u);    /* per object: its bucket */
+    uint16_t *cur=(uint16_t*)plat_alloc_chip(3u*OBKT*OBKT*2u), *curfg=cur?cur+OBKT*OBKT:NULL, *curls=cur?cur+2*OBKT*OBKT:NULL;
+    if(!cls||!bkt||!cur){ plat_chip_reset(wm); return; }                       /* keeps the last map: never seen at the margins measured */
     g_blocked_epoch++;                                 /* the map changed: walkers search their routes again */
     if(!g_cls_ready) obj_class_init();
-    memset(g_blocked,0,sizeof g_blocked); memset(g_sightblk,0,sizeof g_sightblk);
+    sb_clear(&g_blocked); sb_clear(&g_sightblk);
     g_force_n=0; memset(g_force_blk,0,sizeof g_force_blk);
     /* Spatial bucket indexes (CSR: count -> prefix-sum -> fill) of all live objects, of the
      * FOREGROUND ones (obj_is_fg; pass 1 of compose_map scans only these) and of the LIGHT/SIGHT
      * ones (obj_is_lightsight; compute_light/vis scan only these), so a view visits only the
      * objects in the buckets it overlaps. One pass classifies each object, counts it into all three
      * and sets its blocking bits; a second fills the indexes in object order. */
-    static uint8_t  cls[MAXWOBJ];                     /* per object: bit 0 fg, bit 1 light/sight, bit 7 alive */
-    static uint16_t bkt[MAXWOBJ];                     /* per object: its bucket */
     memset(g_obkt_start,0,sizeof g_obkt_start); memset(g_fgbkt_start,0,sizeof g_fgbkt_start);
     memset(g_lsbkt_start,0,sizeof g_lsbkt_start);
     for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
@@ -3428,8 +3435,8 @@ static void build_blocked(void)
         int t=o->tile;
         if(t<2048){
             int32_t idx=(int32_t)o->y*1024+o->x;
-            if(g_tflags1[t]&0x02) g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7));   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
-            if(blocks_sight(t))   g_sightblk[idx>>3]|=(uint8_t)(1u<<(idx&7));
+            if(g_tflags1[t]&0x02) sb_set(&g_blocked,o->x,o->y);   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
+            if(blocks_sight(t))   sb_set(&g_sightblk,o->x,o->y);
             if(g_tflags3 && g_force_n<FORCE_MAX && (g_tflags3[t]&0x04)){
                 int32_t fb=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[fb>>3]|=(uint8_t)(1u<<(fb&7));
                 g_force_idx[g_force_n++]=idx; }
@@ -3443,19 +3450,18 @@ static void build_blocked(void)
     for(int gap=g_force_n/2;gap>0;gap/=2) for(int i=gap;i<g_force_n;i++){ int32_t v=g_force_idx[i]; int j=i;   /* shell sort */
         while(j>=gap && g_force_idx[j-gap]>v){ g_force_idx[j]=g_force_idx[j-gap]; j-=gap; } g_force_idx[j]=v; }
     for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){    /* energy/force field blocks passage (§5a) */
-        int32_t idx=(int32_t)g_fields[i].y*1024+g_fields[i].x;
-        g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7)); }
+        sb_set(&g_blocked,g_fields[i].x,g_fields[i].y); }
     for(int b=0;b<OBKT*OBKT;b++){
         g_obkt_start[b+1]=(uint16_t)(g_obkt_start[b+1]+g_obkt_start[b]);
         g_fgbkt_start[b+1]=(uint16_t)(g_fgbkt_start[b+1]+g_fgbkt_start[b]);
         g_lsbkt_start[b+1]=(uint16_t)(g_lsbkt_start[b+1]+g_lsbkt_start[b]); }
-    {   static uint16_t cur[OBKT*OBKT], curfg[OBKT*OBKT], curls[OBKT*OBKT];
-        memcpy(cur,g_obkt_start,sizeof cur); memcpy(curfg,g_fgbkt_start,sizeof curfg); memcpy(curls,g_lsbkt_start,sizeof curls);
+    {   memcpy(cur,g_obkt_start,OBKT*OBKT*2); memcpy(curfg,g_fgbkt_start,OBKT*OBKT*2); memcpy(curls,g_lsbkt_start,OBKT*OBKT*2);
         for(int32_t i=0;i<g_ow.nobjs;i++){ uint8_t c=cls[i]; if(!c) continue;
             int b=bkt[i];
             g_obkt_idx[cur[b]++]=(uint16_t)i;
             if(c&1) g_fgbkt_idx[curfg[b]++]=(uint16_t)i;
             if(c&2) g_lsbkt_idx[curls[b]++]=(uint16_t)i; } }
+    plat_chip_reset(wm);
 }
 
 /* substitute an animated tile slot for its current frame (animdata.md). The slot
@@ -4863,7 +4869,7 @@ static void draw_conversation(uint8_t col)
             const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-":"Attack-"):g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?((g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change"))?"Direction-":"Cast-(dir)?"):
-                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'?"To-(dir)?":"Move-(dir)?";
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'?"To-(dir)?":g_pending_verb=='Q'?"Quit? (y/n)":"Move-(dir)?";
             ui_text(PANX+6, 150, p, col);
         }
     }
@@ -6518,8 +6524,7 @@ static int nearest_party(const world_t*w,int x,int y,int*tx,int*ty,int*tid){
 /* is there a sight-blocking OBJECT (closed door, etc.) on this tile? (g_sightblk, built in
  * build_blocked) — complements the base-map sight-blocker test (blocks_sight). */
 static int sightblk_at(int x,int y){
-    int32_t idx=(int32_t)(y&(U6_SURFACE_TILES-1))*1024+(x&(U6_SURFACE_TILES-1));
-    return (g_sightblk[idx>>3]>>(idx&7))&1;
+    return sb_get(&g_sightblk,x,y);
 }
 /* line-of-sight: sample the cells along (x0,y0)->(x1,y1); blocked if any INTERMEDIATE cell is
  * a sight-blocker — a base-map boundary (blocks_sight) OR a sight-blocking object on it
@@ -8145,7 +8150,7 @@ static int type_movable(int on)                              /* weight 0 = fixed
 static const char* dir_name(int sx,int sy)
 {   static const char*N[3][3]={{"Northwest","North","Northeast"},{"West","","East"},{"Southwest","South","Southeast"}};
     return N[sy+1][sx+1]; }
-static int obj_blocks_at(int x,int y){ int32_t bi=(int32_t)y*1024+x; return (g_blocked[bi>>3]>>(bi&7))&1; }
+static int obj_blocks_at(int x,int y){ return sb_get(&g_blocked,x,y); }
 /* ---- M)ove INTO a container / ONTO a Support tile (usecode_use.md "M)ove") ------------------------ */
 static int tile_support(int t){ return (t>=0 && t<2048 && g_tflags3) ? ((g_tflags3[t]>>1)&1) : 0; }   /* tileflags3 bit1 */
 /* may the pushed thing i go INSIDE the map object ci? A holder on the map takes things when it is a
@@ -10464,13 +10469,16 @@ int main(int argc, char **argv)
     g_gd = gd ? gd : &gamedef_u6;                        /* authoritative loaded-game identity */
     g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
     const uint8_t *gettable;
-    static uint8_t s_stub_paper[64000+2];   /* black background (no PAPER.BMP)     */
+    uint8_t *s_stub_paper=NULL;              /* black background (no PAPER.BMP); 64 KB U6 never needs: pool */
     static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */
     static uint8_t s_stub_1k[1024];          /* empty gettable                      */
     static uint8_t s_stub_basetile[2048];    /* obj_n -> base tile 0                */
     const uint8_t *after_actors = NULL;
 
     if (is_core) {
+        s_stub_paper=(uint8_t*)plat_alloc_chip(64000+2);
+        if(!s_stub_paper){ music_stop_all(); rdr_shutdown(); Cconws("\r\n*** Not enough memory for this game's data.\r\n"); Crawcin(); return 1; }
+        memset(s_stub_paper,0,64000+2);
         g_font=s_stub_font; g_paper=s_stub_paper; g_nport=0; g_portraits=NULL;
         g_demo_npc=0; g_script_len=0; g_script=NULL; g_nsparty=0; g_savestate=0;
         for(int i=0;i<U6_MAX_ACTORS;i++){ g_atile[i]=0xffff; g_actz[i]=0xff;
@@ -10653,13 +10661,22 @@ int main(int argc, char **argv)
         /* tileflags1[2048] (U6WG): per-tile movement flags (bit1 Impass, bit2 Wall) */
         for(int i=0;i<2048;i++) g_tflags1[i]=ap[i];
         ap+=2048;
-        /* indoor bitmap (U6WI): [u32 rle_len][RLE {u16 count, u8 value}] -> g_indoor[].
-         * 1 bit/tile (idx=y*1024+x); "under a roof" => low daytime ambient (docs/rules/lighting.md §4). */
+        /* indoor bitmap (U6WI): [u32 rle_len][RLE {u16 count, u8 value}] of the bytes of the 1 bit/tile
+         * map (byte = y*128 + x/8); "under a roof" => low daytime ambient (docs/rules/lighting.md §4).
+         * Two passes: the first counts the pages for the store, the second fills them. */
         { uint32_t rl=((uint32_t)ap[0]<<24)|((uint32_t)ap[1]<<16)|((uint32_t)ap[2]<<8)|ap[3]; ap+=4;
-          const int NI=1024*1024/8; int o=0;
-          for(uint32_t r=0; r+3<=rl && o<NI; r+=3){ int cnt=(ap[r]<<8)|ap[r+1]; uint8_t v=ap[r+2];
-              if(cnt>NI-o) cnt=NI-o;
-              memset(g_indoor+o,v,(size_t)cnt); o+=cnt; }
+          const int32_t NI=1024*1024/8;
+          sb_clear(&g_indoor); g_indoor.store=NULL; g_indoor.cap=0;
+          for(int pass=0;pass<2;pass++){ int32_t o=0; g_indoor.npages=0;
+              for(uint32_t r=0; r+3<=rl && o<NI; r+=3){ int32_t cnt=(ap[r]<<8)|ap[r+1]; uint8_t v=ap[r+2];
+                  if(cnt>NI-o) cnt=NI-o;
+                  if(v) for(int32_t e=o+cnt;o<e;o++){ int y=(int)(o>>7), x=(int)(o&127)*8;
+                      if(!pass){ unsigned i=SB_PAGE_OF(x,y); if(!g_indoor.page[i]) g_indoor.page[i]=++g_indoor.npages; }
+                      else { uint8_t*b=sb_byte(&g_indoor,x,y); if(b) *b=v; } }
+                  else o+=cnt; }
+              if(!pass){ g_indoor.cap=g_indoor.npages; g_indoor.store=(uint8_t*)plat_alloc_chip((uint32_t)g_indoor.cap*SB_PAGE_BYTES);
+                  if(!g_indoor.store) g_indoor.cap=0;             /* no room: all outdoors, the game still plays */
+                  sb_clear(&g_indoor); } }
           ap+=rl;
         }
         /* darkening LUTs (U6WJ): NLEV x 256, palette index -> darker index per light level */
@@ -10792,7 +10809,7 @@ int main(int argc, char **argv)
         g_nanim=0;
         for(int i=0;i<1024;i++) g_objanim[i]=0;
         for(int lev=0;lev<NLEV;lev++) for(int i=0;i<256;i++) g_darklut[lev][i]=(uint8_t)i;
-        for(int i=0;i<(1024*1024/8);i++) g_indoor[i]=0;   /* all outdoor => full daylight */
+        sb_clear(&g_indoor);                              /* all outdoor => full daylight */
         g_nrtiles=0; g_nroof=0;
         for(int i=0;i<U6_MAX_ACTORS;i++){ g_aweapon[i]=0; g_aac[i]=0; g_align_hostile[i]=0;
             g_coward[i]=0; g_aexp[i]=0; g_trainer[i]=0; }
@@ -10809,7 +10826,7 @@ int main(int argc, char **argv)
     if (!world_init(&w,map,(int32_t)map_len,chunks,(int32_t)chunks_len,passable,&def,1)){
         Cconws("world_init failed\r\n"); Crawcin(); return 1; }
     build_blocked();                      /* impassable-object map (walls/furniture) */
-    world_set_blocked_obj(&w, g_blocked); /* player + NPCs now respect object walls */
+    world_set_blocked_obj(&w, &g_blocked); /* player + NPCs now respect object walls */
     world_set_force_pass(&w, force_pass_at); /* ... and walk the bridges over water */
 
     /* Conversation + portrait libraries, loaded at runtime (never embedded):
@@ -13837,7 +13854,8 @@ int main(int argc, char **argv)
                 } else if (g_show_status) { g_show_status=0; redraw=1; }  /* any other key returns (then still acts) */
                 if (g_talking && !g_await_input) { end_talk(); redraw=1; }   /* a finished conversation stays up until the next key, which then still acts */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
-                    if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
+                    if (g_pending_verb=='Q'){ g_pending_verb=0; g_msg[0]=0; redraw=1; if(a=='y'||a=='Y') break; }   /* Esc's question: any other key stays */
+                    else if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the T)alk crosshair walks the map window */
                         if(nx>=-VT/2 && nx<=VT/2 && ny>=-VT/2 && ny<=VT/2){ g_tcur_dx=nx; g_tcur_dy=ny; }
@@ -13906,7 +13924,7 @@ int main(int argc, char **argv)
                     (void)do_transition(&w, a=='>'?WL_DOWN:WL_UP, 0);
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink);
                     redraw=1; }
-                else if (in==IN_QUIT) break;
+                else if (in==IN_QUIT) { g_show_inv=0; msgcat(0,"Anything since your last save will be lost."); g_pending_verb='Q'; redraw=1; }   /* Esc quits, but asks */
                 else if (in==IN_TALK) { g_pending_verb='T'; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0;   /* T)alk-: the crosshair picks anyone in view, as the original (a trainer advances thy level) */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='m'||a=='M') { g_pending_verb='M'; g_msg[0]=0; g_show_inv=0; redraw=1; }    /* M)ove-(dir)? (usecode_use.md) */
@@ -13942,7 +13960,7 @@ int main(int argc, char **argv)
                 int dx,dy;
                 if (!g_casting && map_click_delta(g_mx,g_my,&dx,&dy)) {
                     if (g_talking||g_show_inv){ end_talk(); g_show_inv=0; }
-                    if (g_pending_verb) {                       /* an armed verb acts on that ONE tile */
+                    if (g_pending_verb && g_pending_verb!='Q') {  /* an armed verb acts on that ONE tile */
                         int pv=g_pending_verb; if(pv=='A') g_pending_verb=0;   /* the crosshair goes before the shot is drawn */
                         g_mouse_target=1;
                         if (resolve_target(&w,pv,dx,dy)){ compose_map(&w); draw_border_tiles(); }

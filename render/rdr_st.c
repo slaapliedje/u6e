@@ -112,8 +112,11 @@ static void c2p4_lut(const uint8_t *src, const uint8_t *lut, uint16_t *dst, int 
     }
 }
 
+static bool planar_alloc(void);
+
 bool rdr_init(const platform_caps_t *caps)
 {
+    if (!planar_alloc()) return false;
     g_has_blitter = caps && caps->has_blitter;   /* Phase 3: gate the Blitter masked-blit path */
     g_blit_present = g_has_blitter;              /* Blitter present is a clear win; on by default when present */
 
@@ -521,9 +524,9 @@ void rdr_force_blit_present(int on) { g_blit_present = on ? 1 : 0; }   /* BENCH 
 typedef struct { uint16_t *dst; int16_t dyinc_b; uint16_t opaque; int16_t tile; } blt_job_t;
 #define BLT_QUEUE_MAX 512                           /* max queued placements per flush */
 #define BLT_TILES_MAX 256                           /* max DISTINCT tiles per flush (arena) */
-static blt_job_t     g_bltq[BLT_QUEUE_MAX];
-static planar_tile_t g_bltq_tiles[BLT_TILES_MAX];   /* per-flush interned tile copies (eviction-proof) */
-static int32_t       g_bltq_tkey[BLT_TILES_MAX];    /* their keys (intern lookup) */
+static blt_job_t     *g_bltq;                       /* BLT_QUEUE_MAX */
+static planar_tile_t *g_bltq_tiles;                 /* BLT_TILES_MAX: per-flush interned tile copies (eviction-proof) */
+static int32_t       *g_bltq_tkey;                  /* BLT_TILES_MAX: their keys (intern lookup) */
 static int           g_bltn, g_bltq_ntiles;
 
 /* run one Blitter pass to completion. HOG mode: the CTRL write halts the CPU on its next bus access
@@ -587,8 +590,8 @@ static void blitter_flush(void){ if (g_bltn){ (void)Supexec(blitter_drain); g_bl
  * a cached planar_tile_t, built once from the (already-dimmed) chunky source, reused every frame.
  * Direct-mapped, same Knuth hash. 512x162 B = 81 KB. */
 #define PLANAR_SLOTS 512
-static planar_tile_t g_pcache[PLANAR_SLOTS];
-static int32_t       g_pkey[PLANAR_SLOTS];
+static planar_tile_t *g_pcache;                     /* PLANAR_SLOTS */
+static int32_t       *g_pkey;                       /* PLANAR_SLOTS */
 static int           g_pcache_ready;
 #ifdef BENCH
 uint32_t g_pcache_calls, g_pcache_miss;   /* planar-cache instrumentation */
@@ -633,8 +636,26 @@ int  rdr_native_planar_ok(void){
 #define PMAP_GROUPS   11                       /* 176 px = 11 groups (== gamedemo TMP_T) */
 #define PMAP_ROWS     176
 #define PMAP_STRIDE_W (PMAP_GROUPS*4)          /* 44 words / row */
-static uint16_t g_pdimmed[PMAP_ROWS*PMAP_STRIDE_W];  /* incremental planar dimmed STATIC layer */
-static uint16_t g_ptmp   [PMAP_ROWS*PMAP_STRIDE_W];  /* per-frame planar composite (mirrors chunky tmp) */
+static uint16_t *g_pdimmed;                          /* incremental planar dimmed STATIC layer */
+static uint16_t *g_ptmp;                             /* per-frame planar composite (mirrors chunky tmp) */
+#define PMAP_BYTES ((size_t)PMAP_ROWS*PMAP_STRIDE_W*2)
+
+/* The planar path's buffers (167 KB), from the pool in rdr_init rather than BSS: the unified GAME.PRG
+ * links this backend and a TT or Falcon never uses it, and those machines need the room to load the
+ * game (memory_streaming.md). ST-RAM, because the Blitter reads them. */
+static bool planar_alloc(void)
+{
+    g_bltq       = (blt_job_t *)plat_alloc_chip(BLT_QUEUE_MAX * sizeof(blt_job_t));
+    g_bltq_tiles = (planar_tile_t *)plat_alloc_chip(BLT_TILES_MAX * sizeof(planar_tile_t));
+    g_bltq_tkey  = (int32_t *)plat_alloc_chip(BLT_TILES_MAX * sizeof(int32_t));
+    g_pcache     = (planar_tile_t *)plat_alloc_chip(PLANAR_SLOTS * sizeof(planar_tile_t));
+    g_pkey       = (int32_t *)plat_alloc_chip(PLANAR_SLOTS * sizeof(int32_t));
+    g_pdimmed    = (uint16_t *)plat_alloc_chip(PMAP_BYTES);
+    g_ptmp       = (uint16_t *)plat_alloc_chip(PMAP_BYTES);
+    if (!g_bltq || !g_bltq_tiles || !g_bltq_tkey || !g_pcache || !g_pkey || !g_pdimmed || !g_ptmp) return false;
+    memset(g_pdimmed, 0, PMAP_BYTES); memset(g_ptmp, 0, PMAP_BYTES);
+    return true;
+}
 
 /* full rebuild: c2p all 176 rows of the (opaque) dimmed chunky map into g_pdimmed (jump/first frame). */
 void rdr_pstatic_rebuild(const uint8_t *dimmed, int cstride)
@@ -669,7 +690,7 @@ void rdr_pstatic_shift(int dx, int dy)
 }
 /* begin the frame's planar composite: g_ptmp = the static layer (mirrors memcpy(tmp,g_dimmed_map)). Any
  * queued STATIC blits (rdr_pstatic_blit -> g_pdimmed) are drained first so the copy sees the final layer. */
-void rdr_pframe_begin(void) { blitter_flush(); memcpy(g_ptmp, g_pdimmed, sizeof g_ptmp); }
+void rdr_pframe_begin(void) { blitter_flush(); memcpy(g_ptmp, g_pdimmed, PMAP_BYTES); }
 /* IDLE persistent-g_ptmp restore: instead of the whole-buffer copy above, refresh ONLY the cells flagged in
  * `dmask` (an 11x11 == PMAP_GROUPS-square view mask, index cy*11+cx) from the static layer g_pdimmed. Each
  * cell is 16 rows x 4 plane-words (group-aligned). The caller (compose_map, idle path) then redraws the
