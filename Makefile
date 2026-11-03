@@ -469,6 +469,13 @@ $(BUILD)/enginetest: tools/enginetest.c $(ENGINETEST_SRC)
 enginetest: $(BUILD)/enginetest
 	$(BUILD)/enginetest $(REFDATA)
 
+# Transfer a Character's parsers (docs/formats/transfer_saves.md)
+$(BUILD)/xfertest: tools/xfertest.c engine/transfer.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
+xfertest: $(BUILD)/xfertest
+	$(BUILD)/xfertest
+
 # combat math unit test (docs/rules/combat.md)
 $(BUILD)/combattest: tools/combattest.c engine/combat.c engine/rng.c
 	@mkdir -p $(BUILD)
@@ -534,7 +541,7 @@ rdemo: $(BUILD)/rdemo.prg
 BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
              platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
              engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
-             engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c engine/equip.c engine/monsters.c \
+             engine/save.c engine/transfer.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c engine/equip.c engine/monsters.c \
              dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6lzw_68k.s dataformats/u6obj.c \
              render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # Hybrid 020/no-FPU build (same as game.prg) + -DBENCH: runs on a stock FPU-less TT.
@@ -780,7 +787,7 @@ uipreview: world $(BUILD)/uipreview
 
 GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
             platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
-            engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
+            engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c engine/transfer.c \
             engine/combat.c engine/magic.c engine/music.c engine/equip.c engine/monsters.c \
             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6lzw_68k.s dataformats/u6obj.c \
             render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c

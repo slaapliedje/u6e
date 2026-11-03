@@ -30,6 +30,7 @@ int32_t   plat_fread(plat_file f, void *dst, int32_t len);
 int32_t   plat_fwrite(plat_file f, const void *src, int32_t len);
 int32_t   plat_fseek(plat_file f, int32_t off, int whence);
 int32_t   plat_fsize(plat_file f);   /* size in bytes; restores position */
+uint32_t  plat_drvmap(void);         /* the drives present: bit 0 = A, bit 1 = B, ... (BIOS Drvmap 0x0A) */
 
 /* Open path, allocate (fast ? plat_alloc_fast : plat_alloc_chip), read it all,
  * close. Returns buffer (NULL on any error); *out_len gets the byte count. */

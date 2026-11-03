@@ -8,7 +8,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 > Provenance
 > - Derived from : the deviation / simplification sections of the rule specs listed below (each of
 >   which cites the reference code it was read against). Nothing new is asserted here.
-> - Last updated : 2026-10-28 (completion-checklist items 1-14)
+> - Last updated : 2026-11-03 (title menu)
 
 ## Combat and creatures
 | Deviation | Where | Status |
@@ -69,6 +69,13 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | A plural marker (`\s`) reaches the screen in some conversation lines ("gold piece\s short") | usecode_vm.md | open |
 | Music: "Stones while camping" is a FIXME in the reference too; not played | music_areas.md §6 | accepted |
 | Host tool tools/tilestrip renders tile n+1 for tile n (off by one) | — | open (tool) |
+
+## Title menu
+| Deviation | Where | Status |
+|---|---|---|
+| Transfer a Character looks on any drive and in the game's folder, for a DOS or ST save, where the original looks on one machine's own paths | transfer_saves.md §5 | accepted |
+| Transfer decodes ST Ultima IV's BCD numbers, which the ST original misreads as binary (too-high stats, and no transfer at 2710 experience or more) | transfer_saves.md §1 | accepted |
+| Create and Transfer don't refuse a game in progress; the new character replaces a saved game only when the player saves | transfer_saves.md §4 | accepted |
 
 ## Performance
 | Deviation | Where | Status |

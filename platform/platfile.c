@@ -2,7 +2,7 @@
 /* platfile.c — GEMDOS file I/O.
  *
  * TOS calls used (named for verification):
- *   Fopen 0x3D, Fcreate 0x3C, Fclose 0x3E, Fread 0x3F, Fwrite 0x40, Fseek 0x42.
+ *   Fopen 0x3D, Fcreate 0x3C, Fclose 0x3E, Fread 0x3F, Fwrite 0x40, Fseek 0x42; BIOS Drvmap 0x0A.
  *
  * Alt-RAM read policy (decided here): GEMDOS disk transfers DMA into chip
  * (ST) RAM, so reading directly into an Alt/TT-RAM destination is unsafe on
@@ -109,6 +109,11 @@ void *plat_load_file(const char *path, bool fast, int32_t *out_len)
 
     if (out_len) *out_len = size;
     return buf;
+}
+
+uint32_t plat_drvmap(void)
+{
+    return (uint32_t)Drvmap();
 }
 
 int32_t plat_fsize_path(const char *path)

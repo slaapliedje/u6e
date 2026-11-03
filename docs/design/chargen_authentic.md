@@ -456,10 +456,9 @@ itself — it bridges into the sacrifice cinematic which delivers the party to B
 
 ---
 
-## 4. TRANSFER A CHARACTER (option 3) — for completeness
-Imports a character from an Ultima IV or Ultima V save. U.EXE prompts (title
-`TRANSFER A CHARACTER`): **`Enter the letter of the …` (105 ch)** and, on failure, **`No character found! If you …` (126 ch)** Not part of the gypsy ceremony; noted so our menu wiring is complete. (nuvie
-stubs this; low priority for us.)
+## 4. TRANSFER A CHARACTER (option 3)
+Imports a character from an Ultima IV or Ultima V save, without the gypsy or the sacrifice opening.
+Done: see [transfer_saves.md](../formats/transfer_saves.md).
 
 ---
 

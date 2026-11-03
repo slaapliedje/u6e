@@ -803,6 +803,58 @@ static int extract_chargen(const char *dir, chargen_text_t *o)
     free(d); return ok;
 }
 
+/* The Acknowledgements and Transfer a Character text from U.EXE, by content, and into the pack only
+ * (the rule above). Writes [u16 L][bytes] four times: the credits as they stand (NUL-separated
+ * fragments, %F and %P kept; the engine lays them out), the transfer title, its prompt and its
+ * "no character" notice (fragments joined, %P dropped). An empty string = not found. */
+static long frag_find(const uint8_t *d, long n, const char *needle)
+{
+    size_t k = strlen(needle);
+    for (long i = 0; i + (long)k <= n; i++) if (!memcmp(d + i, needle, k)) { while (i > 0 && d[i-1]) i--; return i; }
+    return -1;
+}
+/* from fragment p, through the first fragment ending "%P": written joined, without the %P */
+static void write_frags(FILE *fe, const uint8_t *d, long n, long p)
+{
+    char out[320]; int len = 0;
+    while (p >= 0 && p < n) {
+        long m = p; while (m < n && d[m]) m++;
+        int fl = (int)(m - p), end = fl >= 2 && d[m-2] == '%' && d[m-1] == 'P';
+        if (end) fl -= 2;
+        if (len + fl > (int)sizeof out) { len = 0; break; }
+        memcpy(out + len, d + p, (size_t)fl); len += fl;
+        if (end) break;
+        p = m + 1;
+    }
+    be16(fe, (unsigned)len); fwrite(out, 1, (size_t)len, fe);
+}
+static void write_menu_text(const char *dir, FILE *fe)
+{
+    char path[1024]; snprintf(path, sizeof path, "%s/U.EXE", dir);
+    long n = 0; uint8_t *d = slurp_path(path, NULL, &n);
+    long start = d ? frag_find(d, n, "A Lord British Production%P") : -1;
+    long sup = d ? frag_find(d, n, "%FAdditional Support") : -1;
+    long end = -1;
+    if (start >= 0 && sup > start) {
+        long p = sup, m;
+        for (;;) { m = p; while (m < n && d[m]) m++;
+            if (m >= n) break;
+            if (p != sup && m - p >= 2 && d[m-2] == '%' && d[m-1] == 'P') { end = m; break; }
+            p = m + 1; }
+    }
+    if (end > start && end - start < 2000) { be16(fe, (unsigned)(end - start)); fwrite(d + start, 1, (size_t)(end - start), fe); }
+    else { be16(fe, 0); printf("acknowledgements: not found in U.EXE\n"); }
+    long t = d ? frag_find(d, n, "TRANSFER A CHARACTER%P") : -1;
+    if (t >= 0) {
+        long q = t; while (q < n && d[q]) q++;
+        long ng = frag_find(d, n, "No character found!");
+        write_frags(fe, d, n, t);
+        write_frags(fe, d, n, q + 1);
+        write_frags(fe, d, n, ng);
+    } else { be16(fe, 0); be16(fe, 0); be16(fe, 0); printf("transfer text: not found in U.EXE\n"); }
+    free(d);
+}
+
 /* Extract BOOK.DAT's readable-text entries (signs / plaques / tombstones / books / scrolls).
  * BOOK.DAT is a library (docs/formats/strings.md): a 2-byte-LE offset index — offset[0] = the
  * index size, so entry count = offset[0]/2 — followed by NUL-terminated ASCII entries (\n = line
@@ -2393,6 +2445,7 @@ int main(int argc, char **argv)
         for(int q=0;q<cg.nflask;q++){ int L=(int)strlen(cg.flask[q]); be16(fe,(unsigned)L); fwrite(cg.flask[q],1,(size_t)L,fe); }
         fputc(cg.ngarg,fe);                                    /* §1B gargoyle-sacrifice opening pages */
         for(int q=0;q<cg.ngarg;q++){ int L=(int)strlen(cg.garg[q]); be16(fe,(unsigned)L); fwrite(cg.garg[q],1,(size_t)L,fe); } }
+      write_menu_text(dir, fe);                                /* Acknowledgements + Transfer a Character */
       write_ublk(dir, fe);                                     /* intro data blocks (U.EXE): gypsy + TV tables */
       /* NOTE: BOOK.DAT readable text moved OUT of the front-end block into the RESIDENT core section
        * U6BK (below) — on the ST the front-end (U6FE) is FREED after chargen, which nulled in-game

@@ -28,6 +28,12 @@ PLAY
   whether to quit. The mouse works on the command bar, the party roster
   and the map.
 
+TRANSFER A CHARACTER
+  The title menu can bring your Avatar over from Ultima IV or Ultima V,
+  ST or DOS. Press a drive letter to search that disk, or Return to use
+  the game folder, where you can copy SAVED.GAM (Ultima V), ROST.BIN
+  (Ultima IV, ST) or PARTY.SAV (Ultima IV, DOS).
+
 MUSIC
   The YM2149 sound chip plays the original songs by default. F1 cycles
   through the sources: automatic, Roland MT-32 or General MIDI on the

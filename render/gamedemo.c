@@ -24,6 +24,7 @@
 #include "objects.h"
 #include <string.h>            /* memcpy/memmove for the incremental map-scroll buffer */
 #include "save.h"
+#include "transfer.h"           /* Transfer a Character (docs/formats/transfer_saves.md) */
 #include "rng.h"
 #include "combat.h"
 #include "magic.h"
@@ -353,6 +354,8 @@ static const char *g_cc_qtext[28]; static int g_cc_qlen[28], g_cc_nq;          /
 #define CC_TXT_MAX 16
 #define CG_TXT_LEN 320                  /* max chars in one ceremony page (matches mkworld CG_LEN) */
 static const char *g_cc_np, *g_cc_gp;   static int g_cc_np_len, g_cc_gp_len;    /* name / gender prompt */
+static const char *g_ack, *g_xt_title, *g_xt_ask, *g_xt_none;                    /* Acknowledgements, Transfer a Character */
+static int g_ack_len, g_xt_title_len, g_xt_ask_len, g_xt_none_len;
 static const char *g_appr[CC_TXT_MAX];  static int g_appr_len[CC_TXT_MAX],  g_nappr;   /* woods approach pages */
 static const char *g_greet[CC_TXT_MAX]; static int g_greet_len[CC_TXT_MAX], g_ngreet;  /* gypsy greeting pages */
 static const char *g_ftxt[CC_TXT_MAX];  static int g_ftxt_len[CC_TXT_MAX],  g_nftxt;    /* flask/sleep/wake outro */
@@ -493,6 +496,7 @@ static uint8_t        g_sparty[MAXPARTY]; static int g_nsparty;  /* saved party 
 static char           g_avatar_name[16]="Avatar";  /* player name (chargen result; passed to the conversation VM as the %token) */
 static const char    *g_avatar_title="milord";     /* $G honorific: milord (male) / milady (female), U6 get_gender_title */
 static int            g_cc_done;                    /* set once character creation completes -> apply g_cc_* to the Avatar */
+static int            g_cc_xfer, g_cc_xexp, g_cc_xlevel, g_cc_xhp;   /* ...and a transferred one's experience, level and HP */
 
 /* command-icon bar (tiles 400..409: Attack Cast Talk Look Get Drop Move Use Rest Combat) */
 #define CMDX 8
@@ -2577,6 +2581,7 @@ static void run_chargen_body(void)
  * of COMMON: stream it in for the run (no-op when resident), release it after. */
 static void run_chargen(void)
 {
+    g_cc_done=g_cc_xfer=0;                                        /* a new character replaces a transferred one */
     if(!fe_group_load(FEG_CHARGEN,1)) return;
     run_chargen_body();
     fe_group_free(1);
@@ -2669,6 +2674,7 @@ static void chargen_capture(int which)
  * party {Avatar,Dupre,Shamino,Iolo} from the original SAVEGAME/OBJLIST), and character creation
  * OVERLAYS just six fields onto the Avatar: name, gender, portrait, Str, Dex, Int. No-op unless
  * character creation actually ran (a plain "Journey Onward" keeps the shipped default Avatar). */
+static void sync_party_hp(void);
 static void apply_chargen(void)
 {
     if(!g_cc_done) return;
@@ -2677,6 +2683,7 @@ static void apply_chargen(void)
      * it now that chargen set a new Int — the load-time value (§ actor block, from the shipped
      * OBJLIST Int) is stale. Start the new game rested: current = max. */
     g_amaxmana[1]=(uint8_t)magic_max_mana(g_aint[1],1); g_amana[1]=g_amaxmana[1];
+    if(g_cc_xfer){ g_aexp[1]=(uint16_t)g_cc_xexp; g_alevel[1]=(int8_t)g_cc_xlevel; g_ahp[1]=g_amaxhp[1]=(uint8_t)g_cc_xhp; sync_party_hp(); }
     { int o=0; while(g_cc_name[o]&&o<15){ g_avatar_name[o]=g_cc_name[o]; o++; } g_avatar_name[o]=0; }
     for(int p=0;p<g_nparty;p++) if(g_party[p].actor==1){
         int o=0; while(g_avatar_name[o]&&o<15){ g_party[p].name[o]=g_avatar_name[o]; o++; }
@@ -2698,7 +2705,7 @@ static void apply_chargen(void)
  * the menu options (Introduction / Create a Character / Transfer a Character /
  * Acknowledgements / Journey Onward), tinted yellow->orange by distance from the
  * selected one; arrows move, Enter/Space selects. Returns the chosen index (0..4). Only
- * "Journey Onward" (4) exits to play; the others flash "Not yet available." */
+ * "Journey Onward" (4) exits to play; the others run and come back. */
 /* Menu text palette indices (from MAINMENU.SHP via U6PAL): the option text is the
  * gold->orange gradient 33..36; index 14 is the bright yellow the shape bakes onto its
  * default-selected option. The real U6 menu tints EVERY option by its DISTANCE from the
@@ -2717,6 +2724,193 @@ static void menu_highlight(int mx,int my,int mw,int mh,int sel,int rowh)
         uint8_t col = MENU_RAMP[dist];
         for(int x=0;x<mw;x++){ uint8_t v=d[x];
             if(v==14 || (v>=33 && v<=36)) d[x]=col; } }   /* text pixels -> distance tint */
+}
+
+/* ---- Acknowledgements and Transfer a Character (docs/formats/transfer_saves.md) ---- */
+/* wait for a key or a click; returns 0 on Esc */
+static int fe_wait_page(void)
+{
+    g_fe_pend=0;
+    for(;;){
+        int key=fe_readkey(), mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);
+        if(key) return (key&0xFF)!=0x1b;
+        if(mclick) return 1;
+        vsync_pump(); }
+}
+/* the text s[0..len) centred on the parchment, one row per \n */
+static int vel_lines(const char *s,int len,int y,uint8_t col)
+{
+    char row[64]; int r=0;
+    for(int i=0;i<=len;i++){
+        if(i==len || s[i]=='\n'){ row[r]=0; if(r) ptext(VEL_X+(284-ptextw(row))/2,y,row,col); y+=9; r=0; }
+        else if(r<(int)sizeof row-1) row[r++]=s[i]; }
+    return y;
+}
+/* The credits: "%F" marks a heading's start and end, "%P" is a pause we don't need, a NUL just
+ * joins two pieces. Four pages of 3, 1, 2 and 2 headings under the header (the original's split). */
+#define ACK_HEAD 12                                     /* a heading (palette index, the original's) */
+#define ACK_NAME 0x3d                                   /* the names under it */
+static void run_acknowledgements(void)
+{
+    static const uint8_t NHEAD[4]={3,1,2,2};
+    if(g_ack_len<=0 || !fe_group_load(FEG_CHARGEN,1)) return;
+    const char *p=g_ack, *e=g_ack+g_ack_len, *hdr=p;
+    while(p<e && *p) p++;                               /* the header: the first piece */
+    int hl=(int)(p-hdr); if(hl>=2 && hdr[hl-2]=='%') hl-=2;
+    for(int pg=0;pg<4;pg++){
+        vel_base();
+        int y=vel_lines(hdr,hl,VEL_Y+7,VEL_INK);
+        for(int x=VEL_X+14; x<=VEL_X+269; x++) ui_px(x,y,VEL_INK);
+        y+=5;
+        int heads=0, inhead=0, atstart=1; char row[64]; int r=0;
+        while(p<e){
+            char c=*p;
+            if(c=='%' && p+1<e && p[1]=='F'){
+                if(!inhead && heads==NHEAD[pg]) break;  /* the next heading is the next page's */
+                if(!inhead) heads++;
+                inhead=!inhead; p+=2; continue; }
+            if(c=='%' && p+1<e && p[1]=='P'){ p+=2; continue; }
+            if(c==0){ p++; continue; }
+            p++;
+            if(c=='\n'){
+                if(r){ row[r]=0; ptext(VEL_X+(284-ptextw(row))/2,y,row,inhead?ACK_HEAD:ACK_NAME); r=0; atstart=0; y+=9; }
+                else if(!atstart) y+=4;                 /* a blank row: half height, to fit the page */
+                continue; }
+            if(r<(int)sizeof row-1) row[r++]=c;
+        }
+        if(r){ row[r]=0; ptext(VEL_X+(284-ptextw(row))/2,y,row,ACK_NAME); }
+        rdr_present_doubled(LH);
+        if(!fe_wait_page()) break;
+    }
+    fe_group_free(1);
+}
+
+static void itoa_u(int v,char *s)
+{
+    char t[8]; int n=0;
+    do { t[n++]=(char)('0'+v%10); v/=10; } while(v && n<7);
+    while(n) *s++=t[--n];
+    *s=0;
+}
+/* Try one file as one of the three kinds (0 PARTY.SAV, 1 ROST.BIN, 2 SAVED.GAM). */
+static int xfer_try(const char *path,int kind,xfer_char_t *c)
+{
+    static uint8_t head[XFER_HEAD_BYTES];
+    plat_file f=plat_fopen(path,PLAT_RDONLY);
+    if(f==PLAT_BADFILE) return 0;
+    int32_t n=plat_fread(f,head,(int32_t)sizeof head);
+    plat_fclose(f);
+    if(n<=0) return 0;
+    return kind==0 ? xfer_parse_party_sav(head,n,c) : kind==1 ? xfer_parse_rost_bin(head,n,c) : xfer_parse_saved_gam(head,n,c);
+}
+/* The first character found. drive = 'A'.. searches that drive's root and the original's folders;
+ * 0 = the game's own folder. */
+static int xfer_find(int drive,xfer_char_t *c)
+{
+    static const struct { const char *path; uint8_t kind; } TRY[]={
+        {"PARTY.SAV",0},{"SAVED.GAM",2},{"ROST.BIN",1},
+        {"ULTIMA\\SAVED.GAM",2},{"ULTIMA\\PARTY.SAV",0},{"ULTMAPP\\ROST.BIN",1},{"PLAYDISK\\SAVED.GAM",2} };
+    char path[32];
+    for(int i=0;i<(int)(sizeof TRY/sizeof TRY[0]);i++){
+        int o=0;
+        if(!drive && i>=3) break;
+        if(drive){ path[o++]=(char)drive; path[o++]=':'; path[o++]='\\'; }
+        for(const char *s=TRY[i].path;*s;s++) path[o++]=*s;
+        path[o]=0;
+        if(xfer_try(path,TRY[i].kind,c)) return 1; }
+    return 0;
+}
+/* The review: the old character beside the new, Sex / Portrait / Continue / Exit. Returns 1 on Continue. */
+static int xfer_review(const xfer_char_t *c)
+{
+    static const int BX[4]={28,95,154,221}; enum { BTN_Y=174 };
+    static const char CLS[9][9]={"Mage","Bard","Fighter","Druid","Tinker","Paladin","Ranger","Shepherd","Avatar"};
+    static const char LBL[9][6]={"Name","Sex","Class","Str","Dex","Int","Magic","Exp","Level"};
+    const int OLD[6]={c->str,c->dex,c->intel,c->magic,c->exp,c->level};
+    const int NEW[6]={c->new_str,c->new_dex,c->new_int,c->new_magic,c->new_exp,c->new_level};
+    int p=0, btn=0; g_cc_gender=c->male; g_fe_pend=0;
+    for(;;){
+        char num[8];
+        vel_base();
+        ptext(83,85,c->game==4?"Ultima IV":"Ultima V",VEL_INK);
+        ptext(164,85,"Ultima VI",VEL_INK);
+        for(int i=0;i<9;i++) ptext(30,94+i*8,LBL[i],VEL_INK);
+        ptext(83,94,c->name,VEL_INK);                  ptext(164,94,c->name,VEL_INK);
+        ptext(83,102,c->male?"Male":"Female",VEL_INK); ptext(164,102,g_cc_gender?"Male":"Female",VEL_INK);
+        ptext(83,110,CLS[c->cls],VEL_INK);             ptext(164,110,CLS[XFER_CLASS_AVATAR],VEL_INK);
+        for(int i=0;i<6;i++){
+            itoa_u(OLD[i],num); ptext(83,118+i*8,num,VEL_INK);
+            itoa_u(NEW[i],num); ptext(164,118+i*8,num,VEL_INK); }
+        if(g_cc_nport>=12){ int idx=g_cc_gender*6+p; blit_opaque(g_cc_port[idx],g_cc_pw,g_cc_ph,195,118); }
+        for(int i=0;i<4;i++) if(g_vel[i+1]) blit_indexed(g_vel[i+1],g_vel_w[i+1],g_vel_h[i+1],BX[i],BTN_Y);
+        { int w=g_vel[btn+1]?g_vel_w[btn+1]:60, uy=BTN_Y+14;
+          for(int t=0;t<w && BX[btn]+t<LW;t++){ ROW(uy)[BX[btn]+t]=248; ROW(uy+1)[BX[btn]+t]=248; } }
+        fe_cursor_blit();
+        rdr_present_doubled(LH);
+
+        int mux,muy,mclick,act=-1; fe_mouse(&mux,&muy,&mclick);
+        if(mclick && muy>=BTN_Y && muy<BTN_Y+16)
+            for(int i=0;i<4;i++) if(g_vel[i+1] && mux>=BX[i] && mux<BX[i]+g_vel_w[i+1]) act=i;
+        int key=fe_readkey();
+        if(key){ int ch=key&0xFF, sc=(key>>8)&0xFF;
+            if((sc==0x48||sc==0x4b) && btn>0) btn--;
+            else if((sc==0x50||sc==0x4d) && btn<3) btn++;
+            else if(ch=='s'||ch=='S') act=0;
+            else if(ch=='p'||ch=='P') act=1;
+            else if(ch=='c'||ch=='C') act=2;
+            else if(ch==0x1b)         act=3;
+            else if(ch==0x0d)         act=btn; }
+        if(act<0){ vsync_pump(); continue; }
+        if(act==0) g_cc_gender=!g_cc_gender;
+        else if(act==1) p=(p+1)%6;
+        else if(act==2){ g_cc_portrait=p; return 1; }
+        else return 0;
+    }
+}
+static void run_transfer(void)
+{
+    if(!fe_group_load(FEG_CHARGEN,1)) return;
+    uint32_t drives=plat_drvmap();
+    int drive=-1; xfer_char_t c;
+    fe_cursor_show(1); g_fe_pend=0;
+    { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
+    while(drive<0){
+        enum { LET_Y=150, LET_W=14 };
+        int x0=VEL_X+(284-16*LET_W)/2;
+        vel_base();
+        if(g_xt_title_len>0) vel_lines(g_xt_title,g_xt_title_len,VEL_Y+6,VEL_INK);
+        if(g_xt_ask_len>0)   vel_lines(g_xt_ask,g_xt_ask_len,VEL_Y+24,VEL_INK);
+        for(int i=0;i<16;i++) if(drives&(1uL<<i)){ char l[2]={(char)('A'+i),0}; ptext(x0+i*LET_W,LET_Y,l,VEL_INK); }
+        { const char *h="Return: this game's folder. Esc: back.";
+          ptext(VEL_X+(284-ptextw(h))/2,LET_Y+14,h,VEL_INK); }
+        fe_cursor_blit();
+        rdr_present_doubled(LH);
+        int mux,muy,mclick; fe_mouse(&mux,&muy,&mclick);
+        if(mclick && muy>=LET_Y-2 && muy<LET_Y+10 && mux>=x0){ int i=(mux-x0)/LET_W; if(i<16 && (drives&(1uL<<i))) drive='A'+i; }
+        int key=fe_readkey();
+        if(key){ int ch=key&0xFF;
+            if(ch==0x1b){ fe_cursor_show(0); fe_group_free(1); return; }
+            if(ch==0x0d) drive=0;
+            if(ch>='a'&&ch<='z') ch-=32;
+            if(ch>='A'&&ch<='P'&&(drives&(1uL<<(ch-'A')))) drive=ch; }
+        if(drive<0) vsync_pump();
+    }
+    if(!xfer_find(drive,&c)){
+        vel_base();
+        if(g_xt_none_len>0) pwrap(g_xt_none,g_xt_none_len,VEL_Y+30,250,10,VEL_INK,1);
+        else ptext(VEL_X+30,VEL_Y+30,"No character found!",VEL_INK);
+        fe_cursor_blit();
+        rdr_present_doubled(LH);
+        (void)fe_wait_page();
+    } else if(xfer_review(&c)){
+        int o=0; while(c.name[o]){ g_cc_name[o]=c.name[o]; o++; } g_cc_name[o]=0;
+        g_cc_str=c.new_str; g_cc_dex=c.new_dex; g_cc_int=c.new_int;
+        g_cc_xexp=c.new_exp; g_cc_xlevel=c.new_level; g_cc_xhp=c.new_hp;
+        cc_keep_face();
+        g_cc_xfer=1; g_cc_done=1;
+    }
+    fe_cursor_show(0);
+    fe_group_free(1);
 }
 
 static int run_menu(void)
@@ -2739,8 +2933,7 @@ static int run_menu(void)
         if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
         blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
         menu_highlight(mx,my,mw,g_menu_h,sel,rowh);         /* yellow->orange distance tint */
-        if(note==1) ui_text((LW-ui_textw("Not yet available."))/2, my+g_menu_h+10, "Not yet available.", 15);
-        else if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
+        if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
         fe_cursor_show(1); fe_cursor_blit();                /* nuvie: pointer visible on the main menu */
         rdr_present_doubled(LH);
 
@@ -2774,7 +2967,8 @@ static int run_menu(void)
                     g_menu_journey=1; return 4; }    /* Journey Onward -> play (load SAVED.000 if present) */
         else if(act==0) run_intro();                     /* Introduction -> cutscene, then back */
         else if(act==1){ run_chargen(); if(g_cc_done){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; } }  /* Create -> new game */
-        else note=1;                                     /* Transfer / Acknowledgements -> not yet */
+        else if(act==2){ run_transfer(); if(g_cc_done) sel=4; }   /* Transfer -> back here, on Journey Onward */
+        else run_acknowledgements();                     /* Acknowledgements -> pages, then back */
     }
 }
 
@@ -9289,7 +9483,12 @@ static void fe_bind_text(const uint8_t *ap)
           g_nftxt=*ap++; if(g_nftxt>CC_TXT_MAX) g_nftxt=CC_TXT_MAX;
           for(int q=0;q<g_nftxt;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_ftxt[q]=(const char*)ap; g_ftxt_len[q]=L; ap+=L; }
           g_ngarg=*ap++; if(g_ngarg>CC_GARG_MAX) g_ngarg=CC_GARG_MAX;   /* §1B gargoyle-sacrifice opening */
-          for(int q=0;q<g_ngarg;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_garg[q]=(const char*)ap; g_garg_len[q]=L; ap+=L; } }
+          for(int q=0;q<g_ngarg;q++){ L=(ap[0]<<8)|ap[1]; ap+=2; g_garg[q]=(const char*)ap; g_garg_len[q]=L; ap+=L; }
+          /* Acknowledgements + Transfer a Character (U.EXE): [u16 L][bytes] four times */
+          L=(ap[0]<<8)|ap[1]; ap+=2; g_ack=(const char*)ap;      g_ack_len=L;      ap+=L;
+          L=(ap[0]<<8)|ap[1]; ap+=2; g_xt_title=(const char*)ap; g_xt_title_len=L; ap+=L;
+          L=(ap[0]<<8)|ap[1]; ap+=2; g_xt_ask=(const char*)ap;   g_xt_ask_len=L;   ap+=L;
+          L=(ap[0]<<8)|ap[1]; ap+=2; g_xt_none=(const char*)ap;  g_xt_none_len=L;  ap+=L; }
         itbl_bind(ap);
         /* (BOOK.DAT text lives in the RESIDENT core section U6BK — the front-end is freed on 4 MB machines.) */
 }
@@ -9421,7 +9620,7 @@ static void fe_bind(int id, const uint8_t *ap)
     case FES_GATE:   if(ap) fe_bind_gate(ap);   else { g_gate=g_cover=0; } break;
     case FES_CCPORT: if(ap) fe_bind_ccport(ap); else { g_cc_nport=0; for(int k=0;k<12;k++) g_cc_port[k]=0; } break;
     case FES_TEXT:   if(ap) fe_bind_text(ap);   else { g_cc_nq=0; g_intro_have=0; g_cc_np=g_cc_gp=0; g_cc_np_len=g_cc_gp_len=0;
-                                                       g_nappr=g_ngreet=g_nftxt=g_ngarg=0;
+                                                       g_nappr=g_ngreet=g_nftxt=g_ngarg=0; g_ack_len=g_xt_title_len=g_xt_ask_len=g_xt_none_len=0;
                                                        for(int q=0;q<INTRO_NPAGES;q++){ g_intro_text[q]=g_intro_fb[q]; g_intro_tlen[q]=(int)strlen(g_intro_fb[q]); } } break;
     case FES_GYPSY:  if(ap) fe_bind_gypsy(ap);  else { g_gyp_scene=g_gyp_scroll=g_gyp_pal=g_gyp_lc=0; g_ngsh=0; for(int i=0;i<NGSH;i++) g_gsh[i]=0; } break;
     case FES_WOODS:  if(ap) fe_bind_woods(ap);  else { g_woods=g_woods_pal=g_woods_lc=0; } break;

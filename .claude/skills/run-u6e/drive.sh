@@ -140,7 +140,7 @@ cmd_scene(){
 }
 
 cmd_check(){ echo ">> headless TEXT self-test (ST + TT) — VT-52 console mirrored to stdout"; make check; }
-cmd_logic(){ echo ">> host-side logic tests (no emulator)"; make enginetest convtest cvmtest combattest savetest equiptest; }
+cmd_logic(){ echo ">> host-side logic tests (no emulator)"; make enginetest convtest cvmtest combattest savetest equiptest xfertest; }
 
 case "${1:-}" in
   scene) shift; cmd_scene "$@";;

@@ -118,7 +118,8 @@ cancels; with nothing to cancel, it asks whether to quit. The mouse works on the
 - Where u6e knowingly behaves differently from the original (for example, theft is not punished
   yet), the difference is listed in [docs/rules/deviations.md](docs/rules/deviations.md).
 - The Savage Empire and Martian Dreams boot and can be walked, but are not playable yet.
-- The title menu's Transfer a Character and Acknowledgements say "Not yet available."
+- Transfer a Character has been tried with real ST saves from Ultima IV and V. The DOS save
+  formats come from reading the original's `U.EXE`, and no real DOS save has been tried yet.
 - Everything so far has been tested in Hatari on stock configurations. MagiC on a 4 MB ST leaves too
   little memory for the game.
 - Only the GOG/DOS release's `U.EXE` has been tested for the intro data. With another version,
