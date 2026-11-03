@@ -3,6 +3,9 @@
  * Clean-room: implemented from our shapes.md spec (container [u32 size][N u32
  * offsets], shape hdr rightX/leftX/upperY/lowerY, plain/RLE pixel blocks). */
 #include "u6shape.h"
+#include <stddef.h>
+#include <string.h>
+#include "mul16.h"
 
 static uint32_t le32(const uint8_t *p){ return (uint32_t)(p[0]|(p[1]<<8)|(p[2]<<16)|((uint32_t)p[3]<<24)); }
 static uint16_t le16(const uint8_t *p){ return (uint16_t)(p[0]|(p[1]<<8)); }
@@ -28,6 +31,19 @@ int u6shape_hotspot(const uint8_t *d, int32_t len, int idx, int *hx, int *hy)
     return 1;
 }
 
+int u6shape_size(const uint8_t *d, int32_t len, int idx, int *w, int *h)
+{
+    int n = u6shape_count(d, len);
+    if (idx < 0 || idx >= n) return 0;
+    uint32_t off = le32(d + 4 + idx * 4);
+    if (off + 8 > (uint32_t)len) return 0;
+    const uint8_t *sh = d + off;
+    int W = le16(sh + 2) + le16(sh) + 1, H = le16(sh + 4) + le16(sh + 6) + 1;
+    if (W <= 0 || H <= 0 || W > 2048 || H > 2048) return 0;
+    *w = W; *h = H;
+    return 1;
+}
+
 int u6shape_decode(const uint8_t *d, int32_t len, int idx,
                    int *w, int *h, uint8_t *out, int32_t outcap)
 {
@@ -45,7 +61,7 @@ int u6shape_decode(const uint8_t *d, int32_t len, int idx,
      * transparent key; no U6 shape uses 255 inside a block) and copy block pixels LITERALLY —
      * index 0 inside a block is OPAQUE BLACK (eyes, boot soles, the altar's dark band ...).
      * shapes.md "Transparency". */
-    for (int32_t i = 0; i < (int32_t)W * H; i++) out[i] = U6SHAPE_TRANSPARENT;
+    memset(out, U6SHAPE_TRANSPARENT, (size_t)((int32_t)W * H));
     const uint8_t *p = sh + 8;
     while (p + 6 <= end) {
         uint16_t dl = le16(p); p += 2;
@@ -54,16 +70,26 @@ int u6shape_decode(const uint8_t *d, int32_t len, int idx,
         int px = lX + le16s(p); p += 2;
         int py = uY + le16s(p); p += 2;
         int wrote = 0;
+        /* a block is one row: NULL when it is off the canvas (W, H <= 2048, so a 16-bit multiply).
+         * Each run is clipped to the row once, then filled or copied whole. */
+        uint8_t *row = (py >= 0 && py < H) ? out + muls16((int16_t)py, (int16_t)W) : NULL;
         while (wrote < blen && p < end) {
             if (flag) {                              /* RLE */
                 uint8_t b = *p++; int cnt = b >> 1;
                 if (b & 1) { uint8_t v = (p < end) ? *p++ : 0;
-                    for (int i = 0; i < cnt; i++) { if (px >= 0 && px < W && py >= 0 && py < H) out[py * W + px] = v; px++; } }
-                else       { for (int i = 0; i < cnt && p < end; i++) { uint8_t v = *p++;
-                    if (px >= 0 && px < W && py >= 0 && py < H) out[py * W + px] = v; px++; } }
+                    int a = px < 0 ? 0 : px, e = px + cnt > W ? W : px + cnt;
+                    if (row && a < e) memset(row + a, v, (size_t)(e - a));
+                    px += cnt; }
+                else { int n = cnt < end - p ? cnt : (int)(end - p);   /* a literal run, cut at the end of the data */
+                    int a = px < 0 ? 0 : px, e = px + n > W ? W : px + n;
+                    if (row && a < e) memcpy(row + a, p + (a - px), (size_t)(e - a));
+                    p += n; px += n; }
                 wrote += cnt;
-            } else {                                 /* plain literal */
-                uint8_t v = *p++; if (px >= 0 && px < W && py >= 0 && py < H) out[py * W + px] = v; px++; wrote++;
+            } else {                                 /* plain literal: the rest of the block at once */
+                int n = blen - wrote < end - p ? blen - wrote : (int)(end - p);
+                int a = px < 0 ? 0 : px, e = px + n > W ? W : px + n;
+                if (row && a < e) memcpy(row + a, p + (a - px), (size_t)(e - a));
+                p += n; px += n; wrote += n;
             }
         }
     }

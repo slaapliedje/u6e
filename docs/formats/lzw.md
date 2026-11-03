@@ -1,7 +1,7 @@
 # Format: LZW container (compressed data files)
 
 Games: U6 / Savage / Martian — shared (same engine lineage; verified on U6)
-Implemented by: /dataformats (u6lzw.c/.h), /tools (dftest)
+Implemented by: /dataformats (u6lzw.c/.h; the loop in 68000 asm in u6lzw_68k.s on the Atari), /tools (dftest)
 Tracked in: /docs/INDEX.md  ·  Milestone: M2
 
 > Provenance

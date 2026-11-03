@@ -32,6 +32,7 @@
 
 #include <mint/osbind.h>
 #include "platinput.h"
+#include <mint/cookie.h>
 #include <mint/falcon.h>   /* VsetMode/VsetScreen/VsetRGB + mode bits (BPS8/VGA/VERTFLAG) */
 #include <mint/linea.h>    /* line-A: hide the AES mouse sprite */
 #include <string.h>
@@ -116,6 +117,16 @@ static long videl_force_base(void)
     return 0;
 }
 
+/* base + VIDEL mode. MagiC takes VsetScreen's mode form as a request to change the DESKTOP's resolution:
+ * it reloads its screen driver, fails, restarts the shell and stops at a memory-repair prompt (seen in
+ * Hatari, MagiC 6.2). So there: VsetMode (XBIOS 88), then Setscreen base only (XBIOS 5, rez -1). */
+static void videl_set(void *log, void *phys, short mode)
+{
+    long v;
+    if (Getcookie(C_MagX, &v) == C_FOUND) { VsetMode(mode); Setscreen(log, phys, -1); }
+    else VsetScreen(log, phys, 3, mode);
+}
+
 bool rdr_init(const platform_caps_t *caps)
 {
     (void)caps;
@@ -150,7 +161,7 @@ bool rdr_init(const platform_caps_t *caps)
      * Setscreen(base only, XBIOS 5 rez -1) -> VsetMode (XBIOS 88) -> the VIDEL base registers
      * $FFFF8201/03/0D written directly (Supexec, XBIOS 38). g_diag records which rung was needed. */
     { short mode = falcon_mode();
-      VsetScreen(g_screen, g_screen, 3, mode);
+      videl_set(g_screen, g_screen, mode);
       Vsync();                                                          /* the switch lands at the VBL */
       g_diag = 0;
       if (Physbase() != (void *)g_screen) { g_diag |= 1;
@@ -171,7 +182,7 @@ bool rdr_init(const platform_caps_t *caps)
           VsetMode(mode); Vsync(); (void)Supexec(videl_read);
           if (!(g_hw[0] & 0x100)) {                                     /* truecolor won't take: use 8bpp */
               g_diag |= 0x80; g_tc = 0; mode = falcon_mode(); g_req_mode = mode;
-              VsetScreen(g_screen, g_screen, 3, mode); Vsync(); (void)Supexec(videl_read); } }
+              videl_set(g_screen, g_screen, mode); Vsync(); (void)Supexec(videl_read); } }
       if (!g_tc && !(g_hw[0] & 0x010)) g_diag |= 0x100;
     }
 
@@ -191,7 +202,7 @@ void rdr_shutdown(void)
 {
     plat_mouse_hook_shutdown();
     linea9();                                              /* show mouse for desktop */
-    VsetScreen(g_old_log, g_old_phys, 3, g_old_mode);     /* restore mode + base */
+    videl_set(g_old_log, g_old_phys, g_old_mode);          /* restore mode + base */
     Vsync();
 }
 

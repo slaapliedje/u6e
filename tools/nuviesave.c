@@ -65,5 +65,6 @@ int main(int argc,char**argv){
         printf("wrote %s (%u bytes, objlist)\n", argv[3], objlist_size); } }
     if(argc>4){ FILE*o=fopen(argv[4],"wb"); if(o){ fwrite(d+inv_start,1,inv_end-inv_start,o); fclose(o);
         printf("wrote %s (%ld bytes, actor-inventory chunk)\n", argv[4], inv_end-inv_start); } }
+    free(d);
     return 0;
 }

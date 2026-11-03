@@ -36,6 +36,9 @@
 #include <string.h>
 #include <math.h>
 #include "quant.h"
+#include "cvasm.h"
+#include "cvhook.h"   /* progress marks for CONVERT.TOS; no-ops in the host build */
+#include "mul16.h"
 #include "u6lzw.h"
 #include "u6lzc.h"
 #include "u6lib.h"
@@ -60,6 +63,29 @@ static uint8_t *slurp(const char *d, const char *name, long *n)
     FILE *f = fopen(p, "rb"); if (!f) { printf("cannot read %s\n", p); exit(2); }
     fseek(f, 0, SEEK_END); *n = ftell(f); fseek(f, 0, SEEK_SET);
     uint8_t *b = malloc((size_t)*n); fread(b, 1, (size_t)*n, f); fclose(f); return b;
+}
+/* the size of <d>/<name>, or -1; and a read of it into a buffer the caller sized, so a file can
+ * land at an offset inside a bigger block without a second copy (the Atari-side converter's
+ * memory is tight) */
+static long fsize_in(const char *d, const char *name)
+{
+    char p[1024]; snprintf(p, sizeof p, "%s/%s", d, name);
+    FILE *f = fopen(p, "rb"); if (!f) return -1;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fclose(f); return n;
+}
+static void slurp_into(const char *d, const char *name, uint8_t *buf, long n)
+{
+    char p[1024]; snprintf(p, sizeof p, "%s/%s", d, name);
+    FILE *f = fopen(p, "rb"); if (!f) { printf("cannot read %s\n", p); exit(2); }
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) { printf("short read %s\n", p); exit(2); }
+    fclose(f);
+}
+/* a scratch buffer of n bytes set to `fill` (the front-end scene canvases); out of memory is fatal */
+static uint8_t *scratch(size_t n, int fill)
+{
+    uint8_t *b = malloc(n ? n : 1);
+    if (!b) { printf("out of memory (%lu bytes)\n", (unsigned long)n); exit(2); }
+    memset(b, fill, n); return b;
 }
 static void be16(FILE *f, unsigned v){ fputc((v>>8)&0xFF,f); fputc(v&0xFF,f); }
 static void be32(FILE *f, unsigned long v){ fputc((v>>24)&0xFF,f); fputc((v>>16)&0xFF,f); fputc((v>>8)&0xFF,f); fputc(v&0xFF,f); }
@@ -128,7 +154,8 @@ static uint8_t *slurp_path(const char *path, const char *fallback, long *n)
  * then writes `run` tile values. See docs/rules/lighting.md §4. Returns roofed-tile
  * count, or -1 if the file is absent/unreadable (caller falls back to floor-tiles). */
 #define WORLDW 1024
-static long load_roof_indoor(const char *dir, uint8_t *indoor /* WORLDW*WORLDW */)
+#define INDOOR_N (WORLDW*WORLDW/8)        /* the indoor bitmap: 1 bit/tile, bit x&7 of byte idx>>3 */
+static long load_roof_indoor(const char *dir, uint8_t *bits /* INDOOR_N */)
 {
     long rn; uint8_t *rd = NULL;
     const char *envp = getenv("ROOF_MAP");
@@ -136,7 +163,7 @@ static long load_roof_indoor(const char *dir, uint8_t *indoor /* WORLDW*WORLDW *
     if (envp)  rd = slurp_path(envp, NULL, &rn);
     if (!rd)   rd = slurp_path(relp, "build/roof_map_00.dat", &rn);
     if (!rd || rn < 3) { free(rd); return -1; }
-    memset(indoor, 0, (size_t)WORLDW * WORLDW);
+    memset(bits, 0, INDOOR_N);
     long p = 0, idx = 0, nroof = 0;
     while (p + 3 <= rn){
         int skip = rd[p] | (rd[p+1] << 8); p += 2;
@@ -144,7 +171,7 @@ static long load_roof_indoor(const char *dir, uint8_t *indoor /* WORLDW*WORLDW *
         idx += skip;
         for (int i = 0; i < run && p + 2 <= rn; i++){
             int val = rd[p] | (rd[p+1] << 8); p += 2;
-            if (idx >= 0 && idx < WORLDW*WORLDW && val){ indoor[idx] = 1; nroof++; }
+            if (idx >= 0 && idx < WORLDW*WORLDW && val){ bits[idx >> 3] |= (uint8_t)(1 << (idx & 7)); nroof++; }
             idx++;
         }
     }
@@ -158,7 +185,9 @@ static long load_roof_indoor(const char *dir, uint8_t *indoor /* WORLDW*WORLDW *
  * day). FALLBACK (file absent) = U6's own manmade FLOOR/CARPET tiles + wall-dilate
  * (self-contained, but over-darkens: it marks every shop interior). Output: 1 bit/
  * tile (131072 B, idx=y*1024+x), byte-RLE'd {u16 count, u8 value} big-endian summing
- * to 131072. Returns malloc'd RLE (*out_len) or NULL. */
+ * to 131072. Returns malloc'd RLE (*out_len) or NULL.
+ * Worked on bit planes (128 KB each), not a byte per tile: the converter also runs on a
+ * 4 MB Atari. */
 static uint8_t *build_indoor_rle(const char *dir, const uint8_t *mapb, long mn,
                                  const uint8_t *chk, long cn, const uint8_t *tflag,
                                  const u6_object_t *objs, int32_t nobj, const uint8_t *bt,
@@ -166,18 +195,23 @@ static uint8_t *build_indoor_rle(const char *dir, const uint8_t *mapb, long mn,
                                  int startx, int starty, long *out_len)
 {
     *out_len = 0;
-    uint8_t *indoor = malloc((size_t)WORLDW * WORLDW);
-    if (!indoor) { printf("indoor: OOM\n"); return NULL; }
+    uint8_t *bits = malloc(INDOOR_N);     /* indoor (the fallback: floor/carpet, then the walls that join) */
+    if (!bits) { printf("indoor: OOM\n"); return NULL; }
     const char *src; int32_t nfloor = 0, nwall = 0;
+    uint8_t pc[256];
+    for (int v = 0; v < 256; v++){ int k = 0; for (int b = 0; b < 8; b++) k += (v >> b) & 1; pc[v] = (uint8_t)k; }
 
-    long nroof = load_roof_indoor(dir, indoor);
+    long nroof = load_roof_indoor(dir, bits);
     if (nroof >= 0){
         src = "roof_map_00.dat (ScummVM)"; nfloor = (int32_t)nroof;
     } else {
         /* fallback: floor/carpet tiles + wall-dilate */
         src = "floor-tile FALLBACK (no roof_map_00.dat)";
         u6map_t m;
-        if (!u6map_load(&m, mapb, (int32_t)mn, chk, (int32_t)cn)){ printf("indoor: u6map_load failed\n"); free(indoor); return NULL; }
+        if (!u6map_load(&m, mapb, (int32_t)mn, chk, (int32_t)cn)){ printf("indoor: u6map_load failed\n"); free(bits); return NULL; }
+        uint8_t *bar = calloc(INDOOR_N, 1);                  /* barrier (wall) plane */
+        if (!bar) { printf("indoor: OOM\n"); free(bits); return NULL; }
+        memset(bits, 0, INDOOR_N);
         static uint8_t isfloor[NTILES]; memset(isfloor, 0, sizeof isfloor);
         { int prev = -1; long pos = 0;
           while (pos + 2 <= look_len){
@@ -189,51 +223,79 @@ static uint8_t *build_indoor_rle(const char *dir, const uint8_t *mapb, long mn,
           } }
         #define BND(t) ((t) >= 0 && (t) < NTILES && (tflag[0x800 + (t)] & 0x04))
         #define FLR(t) ((t) >= 0 && (t) < NTILES && isfloor[t])
-        uint8_t *barrier = malloc((size_t)WORLDW * WORLDW);
-        if (!barrier){ printf("indoor: OOM\n"); free(indoor); return NULL; }
-        for (int y = 0; y < WORLDW; y++)
-            for (int x = 0; x < WORLDW; x++){
-                int tile = u6map_surface_tile(&m, x, y);
-                barrier[y*WORLDW + x] = BND(tile) ? 1 : 0;
-                indoor [y*WORLDW + x] = FLR(tile) ? 1 : 0;
-            }
+        /* The surface is 128x128 chunks of 8x8 tiles, so a row of 8 tiles is one of 8 rows of one of
+         * 1024 chunks: pack each of those once (barrier byte, floor byte; bit b = tile b), and a map
+         * row is a lookup per chunk. Entry 1024 stands for a chunk number off the end: all tile 0. */
+        { uint8_t cell[256];
+          for (int t = 0; t < 256; t++) cell[t] = (uint8_t)((BND(t) ? 1 : 0) | (FLR(t) ? 2 : 0));
+          uint8_t *packed = malloc((U6_CHUNK_COUNT + 1) * 16L);
+          if (!packed) { printf("indoor: OOM\n"); free(bar); free(bits); return NULL; }
+          for (long c = 0; c <= U6_CHUNK_COUNT; c++) for (int wy = 0; wy < 8; wy++){
+              uint8_t f = 0, w = 0;
+              for (int b = 0; b < 8; b++){
+                  int t = (c < U6_CHUNK_COUNT && (c+1)*64 <= cn) ? m.chunks[c*64 + wy*8 + b] : 0;
+                  uint8_t k = cell[t]; w |= (uint8_t)((k & 1) << b); f |= (uint8_t)(((k >> 1) & 1) << b); }
+              packed[c*16 + wy*2] = w; packed[c*16 + wy*2 + 1] = f; }
+          uint8_t *fp = bits, *bp = bar;
+          for (int y = 0; y < WORLDW; y++){
+              if (!(y & 63)) cv_tick();
+              uint16_t rowc[U6_SURFACE_CHUNKS]; u6map_surface_row_chunks(&m, y, rowc);
+              for (int cx = 0; cx < U6_SURFACE_CHUNKS; cx++){
+                  unsigned c = rowc[cx]; if (c > U6_CHUNK_COUNT) c = U6_CHUNK_COUNT;
+                  const uint8_t *k = packed + ((unsigned long)c << 4) + (y & 7)*2;
+                  *bp++ = k[0]; *fp++ = k[1]; }
+          }
+          free(packed); }
         for (int32_t i = 0; i < nobj; i++){
             if (objs[i].z != 0) continue;
             int x = objs[i].x, y = objs[i].y;
             if (x < 0 || x >= WORLDW || y < 0 || y >= WORLDW) continue;
             int base = u6_basetile(bt, objs[i].obj_n);
-            if (FLR(base)) indoor[y*WORLDW + x] = 1;
+            if (FLR(base)) bits[(long)y*(WORLDW/8) + (x >> 3)] |= (uint8_t)(1 << (x & 7));
         }
-        for (int i = 0; i < WORLDW*WORLDW; i++) nfloor += indoor[i];
-        for (int y = 0; y < WORLDW; y++)
-            for (int x = 0; x < WORLDW; x++){
-                int i = y*WORLDW + x; if (!barrier[i] || indoor[i]) continue;
-                int up = ((y-1)&(WORLDW-1))*WORLDW + x, dn = ((y+1)&(WORLDW-1))*WORLDW + x;
-                int lf = y*WORLDW + ((x-1)&(WORLDW-1)), rt = y*WORLDW + ((x+1)&(WORLDW-1));
-                if ((!barrier[up]&&indoor[up]) || (!barrier[dn]&&indoor[dn]) ||
-                    (!barrier[lf]&&indoor[lf]) || (!barrier[rt]&&indoor[rt])){ indoor[i] = 1; nwall++; }
+        /* wall-dilate: a barrier that is not indoor joins the inside when a neighbour (4-way, the
+         * map wraps) is indoor and not a barrier. Joining only sets bits where the barrier plane is
+         * set, so "indoor and not a barrier" never changes and the planes can be marked in place.
+         * Bit b of byte i is x = 8i+b: the west neighbour is bit b-1 (bit 7 of byte i-1 for b=0). */
+        #define G(r, i) (bits[(r) + ((i) & (WORLDW/8-1))] & (uint8_t)~bar[(r) + ((i) & (WORLDW/8-1))])
+        for (int y = 0; y < WORLDW; y++){
+            if (!(y & 63)) cv_tick();
+            long cur = (long)y*(WORLDW/8), up = (long)((y-1)&(WORLDW-1))*(WORLDW/8), dn = (long)((y+1)&(WORLDW-1))*(WORLDW/8);
+            for (int i = 0; i < WORLDW/8; i++){
+                uint8_t lone = bar[cur+i] & (uint8_t)~bits[cur+i];
+                if (!lone) continue;
+                uint8_t g = G(cur, i);
+                uint8_t nb = G(up, i) | G(dn, i) | (uint8_t)(g << 1) | (uint8_t)(G(cur, i-1) >> 7)
+                                                 | (uint8_t)(g >> 1) | (uint8_t)(G(cur, i+1) << 7);
+                uint8_t add = lone & nb;
+                if (add){ bits[cur+i] |= add; nwall += pc[add]; }
             }
+        }
+        #undef G
         #undef BND
         #undef FLR
-        free(barrier);
+        free(bar);
+        int32_t nset = 0; for (long i = 0; i < INDOOR_N; i++) nset += pc[bits[i]];
+        nfloor = nset - nwall;                               /* floor tiles, before the walls joined */
     }
 
-    /* pack to bits (idx = y*1024+x) then byte-RLE */
-    static uint8_t bits[WORLDW*WORLDW/8];
-    memset(bits, 0, sizeof bits);
-    for (int i = 0; i < WORLDW*WORLDW; i++) if (indoor[i]) bits[i>>3] |= (uint8_t)(1u << (i&7));
-    int N = WORLDW*WORLDW/8;
-    uint8_t *rle = malloc((size_t)N * 3 + 16); long rl = 0;
+    /* byte-RLE: count the runs, then fill a buffer of exactly that size */
+    int N = INDOOR_N; long rl = 0;
+    for (int i = 0; i < N; ){ int v = bits[i], run = (int)cv_run(bits+i, N-i < 65535 ? N-i : 65535, v);
+        rl += 3; i += run; }
+    uint8_t *rle = malloc((size_t)rl + 16); rl = 0;
+    if (!rle) { printf("indoor: OOM\n"); free(bits); return NULL; }
     for (int i = 0; i < N; ){
-        int v = bits[i], run = 1;
-        while (i+run < N && bits[i+run] == v && run < 65535) run++;
+        int v = bits[i], run = (int)cv_run(bits+i, N-i < 65535 ? N-i : 65535, v);
         rle[rl++] = (uint8_t)((run>>8)&0xFF); rle[rl++] = (uint8_t)(run&0xFF); rle[rl++] = (uint8_t)v;
         i += run;
     }
+#ifndef __m68k__                                          /* (the Atari's output is compared with the host's) */
     { int o = 0, ok = 1;                                  /* RLE round-trip self-check */
       for (long r = 0; r+3 <= rl && o < N; r += 3){ int cnt = (rle[r]<<8)|rle[r+1], vv = rle[r+2];
           while (cnt-- > 0 && o < N){ if (bits[o] != vv) ok = 0; o++; } }
       if (!ok || o != N) printf("indoor: RLE self-check FAILED (o=%d/%d)\n", o, N); }
+#endif
 
     printf("indoor: source=%s; %d tiles%s (%.2f%%); RLE %d->%ld bytes\n",
            src, nfloor+nwall, nwall?" (incl dilated walls)":"", 100.0*(nfloor+nwall)/(WORLDW*WORLDW), N, rl);
@@ -242,29 +304,57 @@ static uint8_t *build_indoor_rle(const char *dir, const uint8_t *mapb, long mn,
           {0,0,"open"},{500,500,"open"},{800,200,"open"} };
       for (unsigned k = 0; k < sizeof ck/sizeof*ck; k++){
           int i = ck[k].y*WORLDW + ck[k].x;
-          printf("   (%d,%d) %-11s : %s\n", ck[k].x, ck[k].y, ck[k].l, indoor[i] ? "INDOOR" : "outdoor"); }
+          printf("   (%d,%d) %-11s : %s\n", ck[k].x, ck[k].y, ck[k].l, ((bits[i >> 3] >> (i & 7)) & 1) ? "INDOOR" : "outdoor"); }
     }
-    free(indoor);
+    free(bits);
     *out_len = rl; return rle;
 }
 
 /* Darkening LUTs (U6WJ) for the lighting overlay (docs/rules/lighting.md §3). NLEV
  * brightness levels; lut[lev][i] = the palette index nearest to colour i scaled toward
- * black by lev/(NLEV-1) (lev 0 = black, NLEV-1 = identity). The engine applies
- * darklut[light>>5] to each map cell. Computed HOST-SIDE because a 256-entry nearest-
- * colour search per LUT entry (~4e5 searches) is too slow to build on the 68000.
+ * black by lev/(NLEV-1) (lev 0 = black, NLEV-1 = identity), the lowest index on a tie.
+ * The engine applies darklut[light>>5] to each map cell. Built at conversion time, not at
+ * game start: 4096 nearest-colour searches over 256 colours.
+ * The search walks the palette in order of red outward from the target's red and stops in
+ * each direction once the red difference alone is past the best distance, which visits a
+ * fraction of the 256 colours on a 68000 and finds the same entry as a full scan.
  * NLEV must match the engine's (render/gamedemo.c). Palette is RGB6 (u6pal, 0..63). */
 #define NLEV 16
 static void build_darklut(const uint8_t *pal, uint8_t lut[NLEV][256])
 {
+    uint32_t sq[511];                       /* squares of -255..255: a table read, not a muls.w (70 cycles) */
+    for (int i = 0; i < 511; i++) sq[i] = (uint32_t)((i-255)*(i-255));
+    const uint32_t *sq0 = sq + 255;
+    /* the palette by red, index order within a red (a counting sort); first[v] = the first
+     * position whose red is >= v */
+    uint8_t ord[256]; int first[257] = { 0 };
+    for (int j = 0; j < 256; j++) first[pal[j*3] + 1]++;
+    for (int v = 0; v < 256; v++) first[v + 1] += first[v];
+    { int at[256]; for (int v = 0; v < 256; v++) at[v] = first[v];
+      for (int j = 0; j < 256; j++) ord[at[pal[j*3]]++] = (uint8_t)j; }
     for (int lev = 0; lev < NLEV; lev++)
         for (int i = 0; i < 256; i++){
-            int tr = pal[i*3]*lev/(NLEV-1), tg = pal[i*3+1]*lev/(NLEV-1), tb = pal[i*3+2]*lev/(NLEV-1);
-            int best = 0, bd = 0x7fffffff;
-            for (int j = 0; j < 256; j++){
-                int dr = pal[j*3]-tr, dg = pal[j*3+1]-tg, db = pal[j*3+2]-tb;
-                int d = dr*dr + dg*dg + db*db;
-                if (d < bd){ bd = d; best = j; }
+            uint16_t rem;                   /* value * level / (NLEV-1) fits the 16-bit forms */
+            int tr = divu16(mulu16(pal[i*3], (uint16_t)lev), NLEV-1, &rem), tg = divu16(mulu16(pal[i*3+1], (uint16_t)lev), NLEV-1, &rem),
+                tb = divu16(mulu16(pal[i*3+2], (uint16_t)lev), NLEV-1, &rem);
+            const uint32_t *sg = sq0 - tg, *sb = sq0 - tb;
+            int best = 256; uint32_t bd = 0xffffffffu;
+            int up = first[tr], dn = up - 1;
+            while (up < 256 || dn >= 0){
+                if (up < 256){
+                    const uint8_t *p = pal + ord[up]*3;
+                    uint32_t dr = sq0[p[0] - tr];
+                    if (dr > bd) up = 256;          /* every colour further up is redder still */
+                    else { uint32_t d = dr + sg[p[1]] + sb[p[2]]; int j = ord[up];
+                           if (d < bd || (d == bd && j < best)){ bd = d; best = j; } up++; }
+                }
+                if (dn >= 0){
+                    const uint8_t *p = pal + ord[dn]*3;
+                    uint32_t dr = sq0[p[0] - tr];
+                    if (dr > bd) dn = -1;
+                    else { uint32_t d = dr + sg[p[1]] + sb[p[2]]; int j = ord[dn];
+                           if (d < bd || (d == bd && j < best)){ bd = d; best = j; } dn--; }
+                }
             }
             lut[lev][i] = (uint8_t)best;
         }
@@ -290,20 +380,51 @@ static uint8_t *load_bmp8(const char *dir, int *ow, int *oh)
     free(b); *ow=W; *oh=H; return pix;
 }
 
+/* Decoded .SHP files. Each .SHP is one whole-file LZW stream, so decoding it once per shape was
+ * most of the build time on a 68000. The front-end asks for shapes file by file but comes back
+ * to the small files (BLOCKS, MONTAGE) between the big ones, so files up to SHP_SMALL bytes stay
+ * decoded (about 100 KB for U6) and one slot holds the current big file (INTRO_2.SHP, 226 KB). */
+#define SHP_SMALL (64L*1024)
+#define SHP_SLOTS 12
+typedef struct { char name[16]; uint8_t *data; int32_t len; } shp_slot_t;
+static shp_slot_t shp_cache[SHP_SLOTS];   /* [0] = the big file; [1..] = small files */
+
+static void shp_flush(void)
+{
+    for (int i = 0; i < SHP_SLOTS; i++) { free(shp_cache[i].data); shp_cache[i].data = NULL; shp_cache[i].name[0] = 0; }
+}
+
+/* -> the decoded bytes of `name` (owned by the cache, valid until the next call), or NULL */
+static const uint8_t *shp_get(const char *dir, const char *name, int32_t *dn)
+{
+    for (int i = 0; i < SHP_SLOTS; i++)
+        if (shp_cache[i].data && strcmp(shp_cache[i].name, name) == 0) { *dn = shp_cache[i].len; return shp_cache[i].data; }
+    long n; uint8_t *raw = slurp(dir, name, &n);
+    if (!raw) return NULL;
+    uint8_t *d = raw; int32_t len = (int32_t)n;
+    int32_t un = u6lzw_unpacked_size(raw, (int32_t)n);
+    if (un > 0) { d = malloc((size_t)un); len = d ? u6lzw_decompress(raw, (int32_t)n, d, un) : -1; free(raw); }
+    if (!d || len < 0) { free(d); return NULL; }
+    int slot = 0;                                   /* big, or no free small slot: the big slot */
+    if (len <= SHP_SMALL)
+        for (int i = 1; i < SHP_SLOTS; i++) if (!shp_cache[i].data) { slot = i; break; }
+    free(shp_cache[slot].data);
+    shp_cache[slot].data = d; shp_cache[slot].len = len;
+    snprintf(shp_cache[slot].name, sizeof shp_cache[slot].name, "%s", name);
+    *dn = len; return d;
+}
+
 /* Decode shape `idx` of a U6 .SHP (whole-file LZW) -> malloc'd W*H 8-bit indexed
  * pixels + dims, or NULL (docs/formats/shapes.md; front-end title/menu/intro art). */
 static uint8_t *load_shape(const char *dir, const char *name, int idx, int *ow, int *oh)
 {
-    long n; uint8_t *raw = slurp(dir, name, &n);
-    if(!raw) return NULL;
-    int32_t un = u6lzw_unpacked_size(raw,(int32_t)n);
-    uint8_t *d = raw; int32_t dn = (int32_t)n; int freed=0;
-    if(un>0){ d=malloc((size_t)un); dn=u6lzw_decompress(raw,(int32_t)n,d,un); freed=1; }
-    static uint8_t cv[512*512];
-    int w=0,h=0; uint8_t *out=NULL;
-    if(u6shape_decode(d,dn,idx,&w,&h,cv,(int32_t)sizeof cv)){
-        out=malloc((size_t)w*h); memcpy(out,cv,(size_t)w*h); *ow=w; *oh=h; }
-    if(freed) free(d); free(raw);
+    int32_t dn; const uint8_t *d = shp_get(dir, name, &dn);
+    cv_tick();
+    if(!d) return NULL;
+    int w=0,h=0; uint8_t *out=NULL;                 /* decoded straight into a block of its size */
+    if(!u6shape_size(d,dn,idx,&w,&h) || (int32_t)w*h > 512*512 || !(out=malloc((size_t)w*h))) return NULL;
+    if(!u6shape_decode(d,dn,idx,&w,&h,out,(int32_t)w*h)){ free(out); return NULL; }
+    *ow=w; *oh=h;
     return out;
 }
 
@@ -311,13 +432,9 @@ static uint8_t *load_shape(const char *dir, const char *name, int idx, int *ow, 
  * (x - hot_x, y - hot_y); the intro's lightning bolts/strikes are the shapes that need it. */
 static uint8_t *load_shape_hot(const char *dir, const char *name, int idx, int *ow, int *oh, int *hx, int *hy)
 {
-    long n; uint8_t *raw = slurp(dir, name, &n); *hx=*hy=0;
-    if(!raw) return NULL;
-    int32_t un = u6lzw_unpacked_size(raw,(int32_t)n);
-    uint8_t *d = raw; int32_t dn = (int32_t)n; int freed=0;
-    if(un>0){ d=malloc((size_t)un); dn=u6lzw_decompress(raw,(int32_t)n,d,un); freed=1; }
+    int32_t dn; const uint8_t *d = shp_get(dir, name, &dn); *hx=*hy=0;
+    if(!d) return NULL;
     u6shape_hotspot(d,dn,idx,hx,hy);
-    if(freed) free(d); free(raw);
     return load_shape(dir,name,idx,ow,oh);
 }
 
@@ -358,11 +475,8 @@ typedef struct { int idx, dx, dy; } ishape_t;
 static void compose_shapes(const char *dir, const char *file, const ishape_t *shp, int nsh,
                            uint8_t *canvas, int cw, int ch)
 {
-    long n; uint8_t *raw = slurp(dir, file, &n);
-    if(!raw) return;
-    int32_t un = u6lzw_unpacked_size(raw,(int32_t)n);
-    uint8_t *d = raw; int32_t dn = (int32_t)n; int freed=0;
-    if(un>0){ d=malloc((size_t)un); dn=u6lzw_decompress(raw,(int32_t)n,d,un); freed=1; }
+    int32_t dn; const uint8_t *d = shp_get(dir, file, &dn);
+    if(!d) return;
     uint32_t off0 = (uint32_t)(d[4]|(d[5]<<8)|(d[6]<<16)|((uint32_t)d[7]<<24));
     int nshapes = (int)((off0-4)/4);
     const uint8_t *end = d+dn;
@@ -380,18 +494,27 @@ static void compose_shapes(const char *dir, const char *file, const ishape_t *sh
             int px=ox+lX+(int16_t)(p[0]|(p[1]<<8)); p+=2;
             int py=oy+uY+(int16_t)(p[0]|(p[1]<<8)); p+=2;
             int wrote=0;
+            /* the block's row (NULL off the canvas; canvases are < 32768 wide and high, so a
+             * 16-bit multiply); each run is clipped to it once */
+            uint8_t *row=((unsigned)py<(unsigned)ch)?canvas+muls16((int16_t)py,(int16_t)cw):NULL;
             while(wrote<blen && p<end){
                 if(flag){ int b=*p++, cnt=b>>1;
                     if(b&1){ uint8_t v=(p<end)?*p++:0;
-                        for(int i=0;i<cnt;i++){ if((unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
-                    else   { for(int i=0;i<cnt&&p<end;i++){ uint8_t v=*p++;
-                        if((unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; } }
+                        int a=px<0?0:px, e=px+cnt>cw?cw:px+cnt;
+                        if(row&&a<e) memset(row+a,v,(size_t)(e-a));
+                        px+=cnt; }
+                    else   { int n=cnt<end-p?cnt:(int)(end-p);
+                        int a=px<0?0:px, e=px+n>cw?cw:px+n;
+                        if(row&&a<e) memcpy(row+a,p+(a-px),(size_t)(e-a));
+                        p+=n; px+=n; }
                     wrote+=cnt;
-                } else { uint8_t v=*p++; if((unsigned)px<(unsigned)cw&&(unsigned)py<(unsigned)ch) canvas[py*cw+px]=v; px++; wrote++; }
+                } else { int n=blen-wrote<end-p?blen-wrote:(int)(end-p);    /* plain literal: the rest of the block */
+                    int a=px<0?0:px, e=px+n>cw?cw:px+n;
+                    if(row&&a<e) memcpy(row+a,p+(a-px),(size_t)(e-a));
+                    p+=n; px+=n; wrote+=n; }
             }
         }
     }
-    if(freed) free(d); free(raw);
 }
 
 /* Extract the gypsy's 28 virtue questions from the user's U.EXE at build time. CLEAN-ROOM:
@@ -410,10 +533,12 @@ static int extract_questions(const char *dir, char qbuf[GQ_MAX][GQ_LEN])
     char path[1024]; snprintf(path,sizeof path,"%s/U.EXE",dir);
     long n; uint8_t *d=slurp_path(path,NULL,&n);
     if(!d){ printf("chargen questions: U.EXE not found -> generic prompts\n"); return 0; }
-    typedef struct { long off; int qflag; char text[GQ_LEN]; } page_t;
-    static page_t pg[2048]; int npg=0;
+    /* the pages of the current run of question pages (a ring of the last GQ_MAX), not every page */
+    typedef struct { long off; char text[GQ_LEN]; } page_t;
+    page_t *pg=malloc(sizeof(page_t)*GQ_MAX); int npg=0, run=0;
+    if(!pg){ free(d); printf("chargen questions: out of memory -> generic prompts\n"); return 0; }
     long i=0;
-    while(i<n && npg<2048){
+    while(i<n && npg<2048 && run<GQ_MAX){
         long j=i; while(j<n && d[j]!=0) j++;               /* first NUL-terminated string */
         int flen=(int)(j-i), ok=flen>0;
         for(int k=0;k<flen && ok;k++){ uint8_t c=d[i+k]; if(c<32||c>=127) ok=0; }
@@ -432,23 +557,20 @@ static int extract_questions(const char *dir, char qbuf[GQ_MAX][GQ_LEN])
         if(done && al>=2){
             acc[al-2]=0; al-=2;                              /* strip the "%c" terminator */
             int qf = (al>4 && strstr(acc," A) ") && strstr(acc," B) ") && acc[al-1]=='?');
-            pg[npg].off=i; pg[npg].qflag=qf;
-            memcpy(pg[npg].text,acc,(size_t)al+1); npg++;
+            run = qf ? run+1 : 0;
+            if(qf){ pg[npg%GQ_MAX].off=i; memcpy(pg[npg%GQ_MAX].text,acc,(size_t)al+1); }
+            npg++;
             i=k;
         } else i=j+1;
     }
-    int best=-1;
-    for(int s=0;s+GQ_MAX<=npg;s++){
-        int run=1; for(int t=0;t<GQ_MAX;t++) if(!pg[s+t].qflag){ run=0; break; }
-        if(run){ best=s; break; }
-    }
-    if(best<0){ printf("chargen questions: no 28-run found in U.EXE -> generic prompts\n"); free(d); return 0; }
+    if(run<GQ_MAX){ printf("chargen questions: no 28-run found in U.EXE -> generic prompts\n"); free(pg); free(d); return 0; }
+    int best=npg-GQ_MAX;                                     /* the first page of the run */
     for(int q=0;q<GQ_MAX;q++){
-        const char*t=pg[best+q].text; if(t[0]=='"') t++;    /* drop the dangling open-quote */
+        const char*t=pg[(best+q)%GQ_MAX].text; if(t[0]=='"') t++;    /* drop the dangling open-quote */
         snprintf(qbuf[q],GQ_LEN,"%s",t);
     }
-    printf("chargen questions: extracted %d from U.EXE @%#lx\n", GQ_MAX, pg[best].off);
-    free(d); return GQ_MAX;
+    printf("chargen questions: extracted %d from U.EXE @%#lx\n", GQ_MAX, pg[best%GQ_MAX].off);
+    free(pg); free(d); return GQ_MAX;
 }
 
 /* Extract the intro cutscene NARRATION (15 pages) from the user's U.EXE at build time. CLEAN-ROOM:
@@ -533,12 +655,14 @@ static long find_ublk(const uint8_t *d, long n, const ublk_t *b)
     if(n<b->len) return -1;
     uint32_t a=1, s=0;                                   /* Adler-32 of the first window */
     for(int i=0;i<b->len;i++){ a=(a+d[i])%65521u; s=(s+a)%65521u; }
+    /* the roll below reduces by subtraction, not %: each divide is a library call on a 68000 */
+    uint32_t lenout[256]; for(int v=0;v<256;v++) lenout[v]=(uint32_t)((b->len*(uint64_t)v)%65521u);
     for(long o=0;;o++){
         if(((s<<16)|a)==b->adler && crc32_of(d+o,b->len)==b->crc) return o;
         if(o+b->len>=n) return -1;
         uint32_t out=d[o], in=d[o+b->len];               /* roll: drop d[o], add d[o+len] */
-        a=(a+65521u-out+in)%65521u;
-        s=(s+65521u-(uint32_t)((b->len*(uint64_t)out)%65521u)+a-1u+65521u)%65521u;
+        a=a+65521u-out+in;                     while(a>=65521u) a-=65521u;   /* < 2*65521 */
+        s=s+65521u-lenout[out]+a-1u+65521u;    while(s>=65521u) s-=65521u;   /* < 4*65521 */
     }
 }
 /* Writes [u8 nblk] + nblk x [u16 len][len bytes] into the front-end TEXT section. */
@@ -686,20 +810,19 @@ static int extract_chargen(const char *dir, chargen_text_t *o)
  * terminated, \n preserved). Returns the entry count. The engine indexes by (object quality - 1). */
 #define BOOK_MAX 256
 #define BOOK_LEN 2048
-static int extract_books(const char *dir, char books[BOOK_MAX][BOOK_LEN])
+static int extract_books(const char *dir, FILE *f)   /* writes [u16 nbook][nbook x [u16 len][bytes]] */
 {
     long n; uint8_t *d = slurp(dir, "BOOK.DAT", &n);
-    if(!d || n < 4){ free(d); return 0; }
-    int idxsz = d[0] | (d[1]<<8);                    /* offset[0] = index size in bytes */
+    int idxsz = (d && n >= 4) ? (d[0] | (d[1]<<8)) : 0; /* offset[0] = index size in bytes */
     int cnt = idxsz/2;
-    if(cnt<1 || cnt>BOOK_MAX || idxsz>n){ free(d); printf("BOOK.DAT: bad index (%d)\n", idxsz); return 0; }
+    if(!d || n < 4){ free(d); be16(f,0); return 0; }
+    if(cnt<1 || cnt>BOOK_MAX || idxsz>n){ free(d); printf("BOOK.DAT: bad index (%d)\n", idxsz); be16(f,0); return 0; }
+    be16(f,(unsigned)cnt);
     for(int i=0;i<cnt;i++){
-        int off = d[i*2] | (d[i*2+1]<<8);
-        books[i][0]=0;
-        if(off<idxsz || off>=(int)n) continue;
-        int t=0;                                     /* copy up to the entry's NUL (\n preserved) */
-        for(int k=off; k<(int)n && d[k] && t<BOOK_LEN-1; k++) books[i][t++]=(char)d[k];
-        books[i][t]=0;
+        int off = d[i*2] | (d[i*2+1]<<8), t=0;
+        if(off>=idxsz && off<(int)n)                 /* up to the entry's NUL (\n preserved) */
+            while(off+t<(int)n && d[off+t] && t<BOOK_LEN-1) t++;
+        be16(f,(unsigned)t); if(t) fwrite(d+off,1,(size_t)t,f);
     }
     free(d);
     return cnt;
@@ -721,12 +844,13 @@ static uint8_t *build_roof(const char *dir, int *out_ntiles, uint8_t **out_map, 
     long rn; uint8_t *rd=slurp_path(mp,NULL,&rn);
     if(!rd){ char p[1200]; snprintf(p,sizeof p,"%s/roof_map_00.dat",dir); rd=slurp_path(p,NULL,&rn); }
     if(!rd){ free(bmp); printf("roof: no roof_map_00.dat -> roofs disabled\n"); return NULL; }
-    static int32_t rpos[8192]; static int rval[8192]; int nroof=0;
+    int32_t *rpos=malloc(sizeof(int32_t)*8192); int *rval=malloc(sizeof(int)*8192), *remap=malloc(sizeof(int)*4096); int nroof=0;
+    if(!rpos||!rval||!remap){ free(rpos); free(rval); free(remap); free(rd); free(bmp); printf("roof: out of memory\n"); return NULL; }
     { long p=0,idx=0; while(p+3<=rn && nroof<8192){ int sk=rd[p]|(rd[p+1]<<8); p+=2; int run=rd[p++]; idx+=sk;
         for(int i=0;i<run && p+2<=rn && nroof<8192;i++){ int val=rd[p]|(rd[p+1]<<8); p+=2;
             if(val){ rpos[nroof]=(int32_t)idx; rval[nroof]=val; nroof++; } idx++; } } }
     free(rd);
-    static int remap[4096]; for(int i=0;i<4096;i++) remap[i]=-1;
+    for(int i=0;i<4096;i++) remap[i]=-1;
     int ntiles=0;
     for(int i=0;i<nroof;i++){ int v=rval[i]; if(v>=0 && v<4096 && remap[v]<0) remap[v]=ntiles++; }
     uint8_t *tiles=malloc((size_t)ntiles*256);
@@ -743,6 +867,7 @@ static uint8_t *build_roof(const char *dir, int *out_ntiles, uint8_t **out_map, 
         map[ml++]=(uint8_t)((di>>8)&0xFF);  map[ml++]=(uint8_t)(di&0xFF); }
     printf("roof: %d roofed tiles, %d distinct roof-tiles; map %ld B, tileset %d B\n",
            nroof, ntiles, ml, ntiles*256);
+    free(rpos); free(rval); free(remap);
     *out_ntiles=ntiles; *out_map=map; *out_maplen=ml; return tiles;
 }
 
@@ -867,7 +992,25 @@ static int scan_reagents(const char *path, uint8_t counts[8]){
  *   lut[256]    = lut[i] = the 16-colour index nearest to U6PAL colour i (transparent 255 too)
  * Returns the weighted RMS error (0..255 per channel) for the build log. U6PAL is RGB6 (0..63).
  * The side-by-side vs-EGA quality comparison lives in the tools/quantize QA target. */
-#define RGB6TO8(v) (((v)*255+31)/63)
+/* 6-bit VGA level -> 8-bit, (v*255+31)/63, from a table: a 32-bit divide is a library call on
+ * the 68000 the Atari-side converter runs on. */
+static int rgb6to8(int v)
+{
+    static int16_t t[256]; static int ready;
+    if (!ready) { for (int i = 0; i < 256; i++) t[i] = (int16_t)((i*255+31)/63); ready = 1; }
+    return (unsigned)v < 256 ? t[v] : (v*255+31)/63;
+}
+#define RGB6TO8(v) rgb6to8(v)
+
+/* a 256-colour 6-bit palette as r,g,b bytes in 8 bits; the same palette comes back ~330 times */
+static const uint8_t *pal6to8(const uint8_t *pal6)
+{
+    static uint8_t last[768], pal8[768]; static int have;
+    if (!have || memcmp(last, pal6, 768)) {
+        for (int i = 0; i < 768; i++) pal8[i] = (uint8_t)RGB6TO8(pal6[i]);
+        memcpy(last, pal6, 768); have = 1; }
+    return pal8;
+}
 
 /* Colour cycling on the ST (docs/formats/palette_cycling.md): the engine can't push a rotated
  * 256-colour palette to 16-colour hardware, so we RESERVE a small contiguous block of the 16 for
@@ -900,15 +1043,15 @@ static int quantize_colors(CCol *col, int ncol, const uint8_t *palb,
     /* STE 4-bit levels (optional): snap the SAME centroids to the 4-bit gamut (0..15), BEFORE the
      * 3-bit snap below mutates pal. The ST 3-bit and STE 4-bit palettes share centroids + LUT (the
      * nearest box is the same at either precision); only the displayed intensity is finer on STE. */
+    q_lv_init();
     if (pal_lvl4) for (int i=0;i<16;i++){ int r=0,g=0,b=0;
-        if(i<npal){ r=(pal[i].r*15+127)/255; g=(pal[i].g*15+127)/255; b=(pal[i].b*15+127)/255; }
+        if(i<npal){ r=q_lv4[pal[i].r]; g=q_lv4[pal[i].g]; b=q_lv4[pal[i].b]; }
         pal_lvl4[i*3]=(uint8_t)r; pal_lvl4[i*3+1]=(uint8_t)g; pal_lvl4[i*3+2]=(uint8_t)b; }
     q_snap_pal(pal,npal,3);
     for (int i=0;i<16;i++){ int r=0,g=0,b=0;               /* slots >= npal stay black (a cycle-reserve pass may overwrite them) */
-        if(i<npal){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
+        if(i<npal){ r=q_lv3[pal[i].r]; g=q_lv3[pal[i].g]; b=q_lv3[pal[i].b]; }
         pal_lvl[i*3]=(uint8_t)r; pal_lvl[i*3+1]=(uint8_t)g; pal_lvl[i*3+2]=(uint8_t)b; }
-    for (int i=0;i<256;i++)                                /* nearest among the npal general boxes only */
-        lut[i]=(uint8_t)q_nearest(pal,npal,RGB6TO8(palb[i*3]),RGB6TO8(palb[i*3+1]),RGB6TO8(palb[i*3+2]));
+    q_lut(pal,npal,pal6to8(palb),lut);                     /* nearest among the npal general boxes only */
     for (int i=0;i<npal;i++) snap[i]=pal[i];
     return npal;
 }
@@ -947,12 +1090,19 @@ static double quant_rms(const long freq[256], const uint8_t *palb, const uint8_t
 
 /* U6WW single global palette: quantise the whole 2048-tile set (usage-weighted, transparent 255
  * excluded) to the scene-neutral optimised 16. Fills pal_lvl[48] + lut[256]; returns weighted RMS. */
-static double build_lowcolor(u6tileset_t *ts, const uint8_t *palb,
+/* terrain colour histogram: every pixel of every tile but the transparent 255, counted as main()
+ * writes the tileset (the low-colour and conversation palettes both weigh by it) */
+static long g_terr[256];
+static void terrain_count(const uint8_t tile[256])
+{
+    cv_hist(tile, 256, g_terr);
+    g_terr[255] = 0;
+}
+
+static double build_lowcolor(const uint8_t *palb,
                              uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256])
 {
-    static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
-    for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
-        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
+    static long freq[256]; for (int i=0;i<256;i++) freq[i]=g_terr[i];
     /* Hold the fire ramp OUT of the median-cut: it gets ST_CYC_SLOTS dedicated slots (reserve_cycle
      * below) so the engine can rotate it. Leaving it in would waste a general box on a colour we
      * pin anyway, and let non-fire pixels land on the (rotating) reserved slots. */
@@ -997,7 +1147,7 @@ static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint
 static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, uint8_t lc[48+256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
-    for (int i=0;i<npix;i++) freq[pix[i]]++;
+    cv_hist(pix,npix,freq);
     freq[U6SHAPE_TRANSPARENT]=0;                 /* uncovered/transparent pixels never reach the screen */
     static CCol col[256]; int ncol=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
@@ -1007,10 +1157,9 @@ static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, ui
     q_snap_pal(pal,np,3);
     uint8_t *lvl=lc; uint8_t *lut=lc+48;
     for (int i=0;i<16;i++){ int r=0,g=0,b=0;
-        if(i<np){ r=(pal[i].r*7+127)/255; g=(pal[i].g*7+127)/255; b=(pal[i].b*7+127)/255; }
+        if(i<np){ r=q_lv3[pal[i].r]; g=q_lv3[pal[i].g]; b=q_lv3[pal[i].b]; }
         lvl[i*3]=(uint8_t)r; lvl[i*3+1]=(uint8_t)g; lvl[i*3+2]=(uint8_t)b; }
-    for (int i=0;i<256;i++)
-        lut[i]=(uint8_t)(np?q_nearest(pal,np,RGB6TO8(pal6[i*3]),RGB6TO8(pal6[i*3+1]),RGB6TO8(pal6[i*3+2])):0);
+    if (np) q_lut(pal,np,pal6to8(pal6),lut); else memset(lut,0,256);
 }
 #undef RGB6TO8
 
@@ -1021,13 +1170,11 @@ static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, ui
  * + the TERRAIN histogram (~35%, so the frozen map stays recognisable) + PARCHMENT (~15%, the text
  * panel). Indexed EXACTLY as the engine loads portraits: idx<98 -> PORTRAIT.A[idx], else B[idx-98].
  * [4 "U6WY"][u16 nport][nport x (48 pal 3-bit levels + 256 lut)]. */
-static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, const uint8_t *palb,
+static void build_conv_palettes(FILE *f, const uint8_t *paper, const uint8_t *palb,
                                 const uint8_t *portA, long portAlen, const uint8_t *portB, long portBlen,
                                 uint8_t *conv4, int *nport_out)   /* conv4 (nport*48) = STE 4-bit companions for U6WS */
 {
-    static long terr[256], parch[256]; for (int i=0;i<256;i++){ terr[i]=0; parch[i]=0; }
-    for (int t=0;t<NTILES;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
-        for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) terr[c]++; } }
+    static long terr[256], parch[256]; for (int i=0;i<256;i++){ terr[i]=g_terr[i]; parch[i]=0; }
     for (int i=0;i<320*200;i++){ int c=paper[i]; if(c!=255) parch[c]++; }
     long St=0,Sc=0; for (int i=0;i<256;i++){ St+=terr[i]; Sc+=parch[i]; }
     if(!St) St=1; if(!Sc) Sc=1;
@@ -1037,9 +1184,34 @@ static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, 
     int cA=okA?u6lib_count(&A):0, cB=okB?u6lib_count(&B):0;
     int nport = 98 + cB;                                        /* engine split: A=0..97, B=98+ */
 
+    /* comb for a colour the portrait doesn't use: round(terr*35000/St + parch*15000/Sc), the
+     * same for every portrait, so worked out once (64-bit divides are library calls on a 68000) */
+    static long nopf[256];
+    { uint64_t D = (uint64_t)St*(uint64_t)Sc;
+      for (int i=0;i<256;i++){
+          uint64_t N = (uint64_t)terr[i]*35000u*(uint64_t)Sc + (uint64_t)parch[i]*15000u*(uint64_t)St;
+          uint64_t q = N/D, r = N - q*D;
+          nopf[i] = (long)(q + (2*r >= D)); } }
+    /* For a colour the portrait does use, comb = round(pf*50000/Sp + terr*35000/St + parch*15000/Sc).
+     * Split each term into whole + fraction: the wholes add up, and the rounding only asks how many
+     * of 1/2, 3/2, 5/2 the fractions ra/Sp + rb/St + rc/Sc reach. With G = rb/St + rc/Sc = gn/StSc
+     * (per colour, worked out once), the fraction reaches (2k-1)/2 when
+     *   2*ra*StSc >= Sp*T[k],  T[k] = (2k-1)*StSc - 2*gn   (always, when T[k] <= 0),
+     * which takes a 16-bit divide and 16x64 multiplies per colour instead of 64-bit divides; the
+     * result is the same as rounding the exact sum over the common denominator Sp*St*Sc. */
+    const uint64_t StSc = (uint64_t)St*(uint64_t)Sc;
+    static long qbc[256];  static int64_t thr[256][3];
+    for (int i=0;i<256;i++){
+        uint64_t B = (uint64_t)terr[i]*35000u, C = (uint64_t)parch[i]*15000u;
+        uint64_t qb = B/(uint64_t)St, rb = B - qb*(uint64_t)St, qc = C/(uint64_t)Sc, rc = C - qc*(uint64_t)Sc;
+        uint64_t gn = rb*(uint64_t)Sc + rc*(uint64_t)St;
+        qbc[i] = (long)(qb + qc);
+        for (int k=0;k<3;k++) thr[i][k] = (int64_t)((uint64_t)(2*k+1)*StSc) - (int64_t)(2*gn); }
+
     fwrite("U6WY",1,4,f); be16(f,(unsigned)nport);
     int made=0;
     for (int idx=0; idx<nport; idx++){
+        cv_tick();
         uint8_t port[56*64]; int have=0;
         const u6lib_t *lib=(idx<98)?&A:&B; int li=(idx<98)?idx:idx-98;
         int libok=(idx<98)?okA:okB, libc=(idx<98)?cA:cB;
@@ -1050,14 +1222,21 @@ static void build_conv_palettes(FILE *f, u6tileset_t *ts, const uint8_t *paper, 
         if (!have){                                            /* no portrait -> ship terrain-16 (near-no-op swap) */
             for (int i=0;i<256;i++) comb[i]=terr[i];
         } else {
-            static long pf[256]; long Sp=0; for(int i=0;i<256;i++) pf[i]=0;
-            for (int i=0;i<56*64;i++){ int c=port[i]; if(c!=255){ pf[c]++; Sp++; } }
+            static long pf[256]; for(int i=0;i<256;i++) pf[i]=0;
+            cv_hist(port,56*64,pf);
+            long Sp=56*64-pf[255]; pf[255]=0;
             if(Sp<1) Sp=1;
-            for (int i=0;i<256;i++){                            /* portrait 50% / terrain 35% / parchment 15% */
-                double w = (double)pf[i]*50000.0/(double)Sp
-                         + (double)terr[i]*35000.0/(double)St
-                         + (double)parch[i]*15000.0/(double)Sc;
-                comb[i]=(long)(w+0.5); }
+            /* portrait 50% / terrain 35% / parchment 15%: comb = round(pf*50000/Sp + terr*35000/St
+             * + parch*15000/Sc), exactly (see qbc/thr above). Sp <= 56*64, so pf*50000 < 2^32,
+             * the quotient <= 50000 and 2*ra < 2*Sp all fit the 16-bit forms. */
+            for (int i=0;i<256;i++){
+                if (!pf[i]) { comb[i]=nopf[i]; continue; }   /* the same fraction with Sp cancelled */
+                uint16_t ra; long c = (long)divu16(mulu16((uint16_t)pf[i], 50000u), (uint16_t)Sp, &ra) + qbc[i];
+                uint64_t lhs = mulu16x64((uint16_t)(2*ra), StSc);
+                for (int k=0;k<3;k++){
+                    if (thr[i][k] > 0 && lhs < mulu16x64((uint16_t)Sp, (uint64_t)thr[i][k])) break;
+                    c++; }
+                comb[i]=c; }
             made++;
         }
         static CCol col[256]; int nc=colors_from_freq(comb,palb,col); CCol snap[16];
@@ -1247,34 +1426,37 @@ static int convert_faces(const char *dir, const char *name, uint8_t marker, FILE
 {
     long fl; uint8_t *b = slurp(dir, name, &fl);
     u6lzc_t lc;
-    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); return 0; }
+    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); free(b); return 0; }
     int ni = u6lzc_count(&lc);
-    static uint8_t px[256 * 256];
+    uint8_t *px = scratch(256 * 256, 0);
+    #define px_cap (256 * 256)
     int FW = 0, FH = 0, nvalid = 0;
     for (int it = 0; it < ni; it++){                     /* pass 1: max dims (faces vary 79x85/79x86) */
         int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
         if (!p) continue;
-        int w, h; if (!u6shape_decode(p, sz, 0, &w, &h, px, sizeof px)) continue;
+        int w, h; if (!u6shape_decode(p, sz, 0, &w, &h, px, px_cap)) continue;
         if (w > FW) FW = w; if (h > FH) FH = h; nvalid++;
     }
-    if (nvalid == 0 || FW <= 0){ printf("%s: no decodable faces\n", name); return 0; }
+    if (nvalid == 0 || FW <= 0){ printf("%s: no decodable faces\n", name); free(px); free(b); return 0; }
     /* SLOT-INDEXED bank: emit ALL ni slots at a uniform FWxFH cell so bank[i] is
      * FACES.LZC slot i (the SE actor->portrait map is face(actor N) = slot N-1;
      * see docs/formats/portraits.md). Absent/undecodable slots -> blank (index 0
      * = transparent); shorter faces are top-left padded to FH. */
     fwrite("CFAC", 1, 4, out); be16(out, (unsigned)ni); be16(out, (unsigned)FW); be16(out, (unsigned)FH);
-    static uint8_t cell[256 * 256];
+    uint8_t *cell = scratch((size_t)FW * FH, 0);
     for (int it = 0; it < ni; it++){                     /* pass 2: one cell per slot */
         memset(cell, 0, (size_t)FW * FH);
         int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
         int w = 0, h = 0;
-        if (p && u6shape_decode(p, sz, 0, &w, &h, px, sizeof px) && w <= FW && h <= FH){
+        if (p && u6shape_decode(p, sz, 0, &w, &h, px, px_cap) && w <= FW && h <= FH){
             for (int i = 0; i < w * h; i++) if (px[i] == U6SHAPE_TRANSPARENT) px[i] = 0;   /* opaque cell */
             for (int y = 0; y < h; y++) memcpy(cell + (size_t)y * FW, px + (size_t)y * w, (size_t)w); }
         fwrite(cell, 1, (size_t)FW * FH, out);
     }
     printf("  +CFAC: %s -> %d slots %dx%d (%d present, %d B)\n",
            name, ni, FW, FH, nvalid, ni * FW * FH);
+    #undef px_cap
+    free(cell); free(px); free(b);
     return ni;
 }
 
@@ -1290,16 +1472,16 @@ static int convert_talk(const char *dir, const char *name, uint8_t marker, FILE 
 {
     long fl; uint8_t *b = slurp(dir, name, &fl);
     u6lzc_t lc;
-    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); return 0; }
+    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("%s: not an .LZC\n", name); free(b); return 0; }
     int ni = u6lzc_count(&lc);
-    static uint8_t dec[1 << 17];
+    enum { NDEC = 1 << 17, NBLOB = 1 << 15 };
+    uint8_t *dec = scratch(NDEC, 0), *blob = scratch(NBLOB, 0);
     static uint16_t off[256];
-    static uint8_t  blob[1 << 15];
     for (int i = 0; i < 256; i++) off[i] = 0xFFFF;
     int blen = 0, nnpc = 0;
     for (int it = 0; it < ni; it++){
         int32_t sz; uint8_t flg; if (!u6lzc_entry(&lc, it, &sz, &flg)) continue;
-        int32_t got = u6lzc_read(&lc, it, dec, sizeof dec);
+        int32_t got = u6lzc_read(&lc, it, dec, NDEC);
         if (got < 3 || dec[0] != 0xFF) continue;
         int actor = dec[1];
         if (actor <= 0 || actor >= 256 || off[actor] != 0xFFFF) continue;   /* first wins */
@@ -1310,17 +1492,19 @@ static int convert_talk(const char *dir, const char *name, uint8_t marker, FILE 
         int ds = j; while (j < got && dec[j] >= 32 && dec[j] < 127) j++;     /* description run */
         int dlen = j - ds;
         if (nlen <= 0) continue;
-        if (blen + nlen + dlen + 2 > (int)sizeof blob) break;               /* blob full */
+        if (blen + nlen + dlen + 2 > NBLOB) break;                          /* blob full */
         off[actor] = (uint16_t)blen;
         memcpy(blob + blen, dec + ns, (size_t)nlen); blen += nlen; blob[blen++] = 0;
         memcpy(blob + blen, dec + ds, (size_t)dlen); blen += dlen; blob[blen++] = 0;
         nnpc++;
     }
-    if (nnpc == 0){ printf("%s: no conversations decoded\n", name); return 0; }
+    free(dec); free(b);
+    if (nnpc == 0){ printf("%s: no conversations decoded\n", name); free(blob); return 0; }
     fwrite("CTLK", 1, 4, out); be16(out, 256); be16(out, (unsigned)blen);
     for (int i = 0; i < 256; i++) be16(out, off[i]);
     fwrite(blob, 1, (size_t)blen, out);
     printf("  +CTLK: %s -> %d NPC names/descriptions (blob %d B)\n", name, nnpc, blen);
+    free(blob);
     return nnpc;
 }
 
@@ -1340,9 +1524,11 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
             startx = p[0] | ((p[1] & 3) << 8); starty = (p[1] >> 2) | ((p[2] & 0xf) << 6); }
         free(o); }
     long mn, cn, pn, on, in, bn, tfn, mtl, mskl, uz;
+    cv_step("Map and objects");
     uint8_t *mapb = slurp(dir, "MAP", &mn),          *chk = slurp(dir, "CHUNKS", &cn);
     uint8_t *palb = slurp(dir, prof->palette, &pn),  *ti  = slurp(dir, "TILEINDX.VGA", &in);
-    uint8_t *ot   = slurp(dir, "OBJTILES.VGA", &on), *bt  = slurp(dir, "BASETILE", &bn);
+    uint8_t *bt   = slurp(dir, "BASETILE", &bn);
+    on = fsize_in(dir, "OBJTILES.VGA"); if (on < 0){ printf("cannot read %s/OBJTILES.VGA\n", dir); exit(2); }
     uint8_t *tflag = slurp(dir, "TILEFLAG", &tfn);
     uint8_t *mtc = load_core_asset(dir, "MAPTILES.VGA", marker, &mtl);   /* LZC/LZW -> logical */
     uint8_t *msk = load_core_asset(dir, "MASKTYPE.VGA", marker, &mskl);
@@ -1353,23 +1539,16 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
 
     u6pal_t pal; u6pal_parse(&pal, palb, (int32_t)pn);   /* validate the palette parses */
 
-    /* combined tileset (maptiles ++ objtiles), MASKTYPE-aware decode */
-    int32_t comb_len = (int32_t)mtl + (int32_t)on;
-    uint8_t *comb = malloc((size_t)comb_len);
-    memcpy(comb, mtc, (size_t)mtl);
-    memcpy(comb + mtl, ot, (size_t)on);
-    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
-    if (mskl < NTILES){ printf("MASKTYPE too small (%ld, need >=%d)\n", mskl, NTILES); return 2; }
-    u6tile_set_masktype(&ts, msk);
-
     /* passability from TILEFLAG (shared Impassable|Wall rule) */
     static uint8_t passable[256]; compute_passable_tflag(tflag, passable);
 
     /* objects: LZOBJBLK -> world decode -> repack surface roots + contained chains */
     u6_object_t *objs = malloc(sizeof(u6_object_t) * MAXOBJ);
     int32_t nobj = u6obj_decode_world(od, (int32_t)uz, objs, MAXOBJ);
+    free(od);
     int nsurf = 0;
-    { static int32_t shipidx[MAXOBJ];
+    { int32_t *shipidx = malloc(sizeof(int32_t) * MAXOBJ);
+      if (!shipidx){ printf("out of memory (objects)\n"); return 2; }
       for (int32_t i = 0; i < nobj; i++){
           int keep; uint16_t newpar = U6OBJ_PARENT_NONE;
           if (objs[i].parent == U6OBJ_PARENT_NONE) keep = (objs[i].z == 0);
@@ -1378,7 +1557,22 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
           if (keep){ objs[nsurf] = objs[i]; objs[nsurf].parent = newpar;
               if (newpar != U6OBJ_PARENT_NONE){ objs[nsurf].x = 0; objs[nsurf].y = 0; objs[nsurf].z = 0xF; }
               nsurf++; } }
-      nobj = nsurf; }
+      free(shipidx);
+      nobj = nsurf;
+      u6_object_t *fit = realloc(objs, sizeof(u6_object_t) * (size_t)(nobj ? nobj : 1));
+      if (fit) objs = fit; }
+
+    cv_step("Tiles");
+    /* combined tileset (maptiles ++ objtiles), MASKTYPE-aware decode (after the objects, whose
+     * decode buffer is the other big block) */
+    int32_t comb_len = (int32_t)mtl + (int32_t)on;
+    uint8_t *comb = malloc((size_t)comb_len);
+    if (!comb){ printf("out of memory (tileset)\n"); return 2; }
+    memcpy(comb, mtc, (size_t)mtl); free(mtc);
+    slurp_into(dir, "OBJTILES.VGA", comb + mtl, on);
+    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
+    if (mskl < NTILES){ printf("MASKTYPE too small (%ld, need >=%d)\n", mskl, NTILES); return 2; }
+    u6tile_set_masktype(&ts, msk);
 
     FILE *f = fopen(out, "wb"); if (!f){ printf("cannot write %s\n", out); return 2; }
     fwrite(prof->magic, 1, 4, f);                     /* per-game core magic (SEWT/MDWT/U6WT) */
@@ -1388,6 +1582,7 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
     be16(f, 12*60);                                   /* start_min = noon (core packs have no save clock) */
     fwrite(mapb, 1, (size_t)mn, f); fwrite(chk, 1, (size_t)cn, f);
     for (int t = 0; t < NTILES; t++){ uint8_t tile[256]; u6tile_decode(&ts, t, tile); fwrite(tile, 1, 256, f); }
+    free(comb); free(msk); free(ti);
     fwrite(palb, 1, 768, f);
     fwrite(passable, 1, 256, f);
     for (int32_t i = 0; i < nobj; i++){               /* {u16 x,y,tile,obj_n,qty16,quality,parent} BE */
@@ -1396,6 +1591,7 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
         be16(f, contained ? 0 : objs[i].x); be16(f, contained ? 0 : objs[i].y);
         be16(f, (unsigned)tile); be16(f, objs[i].obj_n);
         be16(f, objs[i].quantity); be16(f, objs[i].quality); be16(f, objs[i].parent); }
+    free(objs); free(mapb); free(chk);
 
     /* Optional "CLOK" section (object identity): SE/MD LOOK.LZC decodes to the
      * SAME run-fill tile->name table as U6's LOOK.LZD ([u16 tile][name\0]...),
@@ -1431,9 +1627,11 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
 
     /* Optional "CFAC" section: the game's portrait library (79x85 U6 shapes),
      * slot-indexed so face(actor N) = FACES slot N-1 (docs/formats/portraits.md). */
+    cv_step("Portraits");
     if (prof->faces) convert_faces(dir, prof->faces, marker, f);
 
     /* Optional "CTLK" section: per-actor NPC name + look-description from TALK.LZC. */
+    cv_step("Conversation art");
     if (prof->talk) convert_talk(dir, prof->talk, marker, f);
 
     /* Optional "CACT" section: the initial ACTOR ROSTER. SE/MD ship NO
@@ -1450,6 +1648,7 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
      * because the core loader stubs BASETILE. The avatar (actor 1) is planted at
      * the demo start; other party members get "no position" (z=0xff) so the
      * engine spawns them beside the avatar (party-follow, gamedemo). */
+    cv_step("People");
     int have_cact = 0, cact_npc = 0, cact_party = 0;
     if (objlist_path){
         long oln; uint8_t *objl = slurp_path(objlist_path, NULL, &oln);
@@ -1500,6 +1699,7 @@ static int emit_core_pack(const GameProfile *prof, const char *dir,
     if (have_font)  printf("  +CFNT: %s -> 8x8 font (2048 B)\n", prof->font);
     if (have_cact)  printf("  +CACT: %d actors placed (party=%d) from captured objlist %s\n",
                            cact_npc, cact_party, objlist_path);
+    free(palb); free(bt); free(tflag); free(lookd);
     return 0;
 }
 
@@ -1542,9 +1742,9 @@ int main(int argc, char **argv)
       snprintf(fe_path,sizeof fe_path,"%.*sU6FE.PAK",d,out); }
 
     long mn,cn,pn,tn,on,bn,in,zn,fn;
+    cv_step("Map and objects");
     uint8_t *mapb=slurp(dir,"MAP",&mn), *chk=slurp(dir,"CHUNKS",&cn);
-    uint8_t *palb=slurp(dir,"U6PAL",&pn), *mtc=slurp(dir,"MAPTILES.VGA",&tn);
-    uint8_t *ot=slurp(dir,"OBJTILES.VGA",&on), *ti=slurp(dir,"TILEINDX.VGA",&in);
+    uint8_t *palb=slurp(dir,"U6PAL",&pn);
     uint8_t *bt=slurp(dir,"BASETILE",&bn), *lz=slurp(dir,"LZOBJBLK",&zn);
     uint8_t *font=slurp(dir,"U6.CH",&fn);          /* 2048-byte authentic font */
     long adn; uint8_t *adat=slurp(dir,"ANIMDATA",&adn);   /* tile-animation table */
@@ -1552,23 +1752,6 @@ int main(int argc, char **argv)
 
     u6pal_t pal; u6pal_parse(&pal, palb, (int32_t)pn);
 
-    /* combined tileset blob + per-tile index */
-    int32_t musz = u6lzw_unpacked_size(mtc, (int32_t)tn);
-    int32_t comb_len = musz + (int32_t)on;
-    uint8_t *comb = malloc(comb_len);
-    u6lzw_decompress(mtc, (int32_t)tn, comb, musz);
-    memcpy(comb + musz, ot, (size_t)on);
-    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
-
-    /* MASKTYPE.VGA (LZW): per-tile encoding so transparent / pixel-block tiles
-     * (e.g. the map-window border tiles 432-439) decode correctly, not as raw
-     * 256-byte garbage. */
-    long mskn; uint8_t *mskc = slurp(dir,"MASKTYPE.VGA",&mskn);
-    int32_t msksz = u6lzw_unpacked_size(mskc,(int32_t)mskn);
-    uint8_t *msk = malloc((size_t)(msksz>0?msksz:1));
-    if (msksz < NTILES || u6lzw_decompress(mskc,(int32_t)mskn,msk,msksz)!=msksz){
-        printf("MASKTYPE.VGA decode failed (got %d, need >=%d)\n",msksz,NTILES); return 2; }
-    u6tile_set_masktype(&ts, msk);
 
     static uint8_t passable[256];   /* filled from TILEFLAG below (after it loads) */
 
@@ -1579,13 +1762,16 @@ int main(int argc, char **argv)
     if (svm){ long sz; od = slurp_path(svm_objblk, NULL, &sz); uz=(int32_t)sz;
         if(!od){ printf("cannot read svm objblk %s\n",svm_objblk); return 2; } }
     else { uz = u6lzw_unpacked_size(lz, (int32_t)zn); od = malloc(uz); u6lzw_decompress(lz, (int32_t)zn, od, uz); }
+    free(lz);
     u6_object_t *objs = malloc(sizeof(u6_object_t)*MAXOBJ);
     int32_t nobj = u6obj_decode_world(od, uz, objs, MAXOBJ);   /* on-map + in-container chains */
+    free(od);
     /* REPACK to the shipped world set: on-map surface (z==0) roots + the contained chains
      * rooted in them, remapping each parent link to the packed index (parents always precede
      * children in decode order, so one forward pass suffices). objblk.md §2 Containment. */
     int nsurf = 0, ncontained = 0;
-    { static int32_t shipidx[MAXOBJ];
+    { int32_t *shipidx = malloc(sizeof(int32_t)*MAXOBJ);
+      if (!shipidx){ printf("out of memory (objects)\n"); return 2; }
       for (int32_t i=0;i<nobj;i++){
           int keep; uint16_t newpar=U6OBJ_PARENT_NONE;
           if (objs[i].parent==U6OBJ_PARENT_NONE) keep = (objs[i].z==0);
@@ -1596,7 +1782,10 @@ int main(int argc, char **argv)
                   objs[nsurf].x=0; objs[nsurf].y=0; objs[nsurf].z=0xF; }  /* neutralize (off-surface) */
               nsurf++; }
       }
-      nobj = nsurf; }
+      free(shipidx);
+      nobj = nsurf;
+      u6_object_t *fit = realloc(objs, sizeof(u6_object_t)*(size_t)(nobj ? nobj : 1));   /* give back the rest */
+      if (fit) objs = fit; }
 
     /* object look-names (LOOK.LZD, whole-file LZW; tile-indexed run-fill table)
      * + a precomputed gettable[obj_n] from TILEFLAG (see docs/formats/look.md,
@@ -1607,6 +1796,7 @@ int main(int argc, char **argv)
     uint8_t *lookd = malloc((size_t)(look_len>0?look_len:1));
     if (look_len<=0 || u6lzw_decompress(lkc,(int32_t)lkn,lookd,look_len)!=look_len){
         printf("LOOK.LZD decode failed (got %d)\n", look_len); return 2; }
+    free(lkc);
     uint8_t *tflag = slurp(dir,"TILEFLAG",&tfn);
     if (tfn < 0x1C00){ printf("TILEFLAG too small (%ld, need 7168)\n",tfn); return 2; }
     compute_passable_tflag(tflag, passable);   /* real terrain passability (Impassable|Wall) */
@@ -1673,27 +1863,18 @@ int main(int argc, char **argv)
         }
         #undef LE32
     }
+    free(curc); free(curd);
     if (!cpix||cw<=0||ch<=0||cw>64||ch>64){ printf("U6MCGA.PTR cursor decode failed\n"); return 2; }
 
     /* authentic background: PAPER.BMP (whole-file LZW U6Bmp -> 320x200 indices) */
     long ppn; uint8_t *paperc = slurp(dir,"PAPER.BMP",&ppn);
     int32_t pun = u6lzw_unpacked_size(paperc,(int32_t)ppn);
     uint8_t *paperd = malloc((size_t)pun);
-    u6lzw_decompress(paperc,(int32_t)ppn,paperd,pun);
+    u6lzw_decompress(paperc,(int32_t)ppn,paperd,pun); free(paperc);
     int pw=paperd[0]|(paperd[1]<<8), ph=paperd[2]|(paperd[3]<<8);
     if (pw!=320||ph!=200){ printf("PAPER.BMP %dx%d unexpected\n",pw,ph); return 2; }
     uint8_t *paper = paperd+4;                      /* 64000 pixels */
 
-    /* sample portraits (PORTRAIT.A items 0..NPORT-1: 4-byte lib of LZW 56x64) */
-    long prn; uint8_t *pra = slurp(dir,"PORTRAIT.A",&prn);
-    long prbn=0; uint8_t *prb = slurp_path("refdata/dos/u6/PORTRAIT.B", NULL, &prbn);   /* full set for U6WY conv palettes */
-    if(!prb){ char pbp[1100]; snprintf(pbp,sizeof pbp,"%s/PORTRAIT.B",dir); prb=slurp_path(pbp,NULL,&prbn); }
-    u6lib_t plib;
-    if (!u6lib_open(&plib,pra,(int32_t)prn,4,false)){ printf("PORTRAIT.A open failed\n"); return 2; }
-    static uint8_t portbuf[NPORT][56*64];
-    for (int i=0;i<NPORT;i++){ int32_t sz; const uint8_t *blob=u6lib_entry(&plib,i,&sz);
-        if (!blob||u6lzw_unpacked_size(blob,sz)!=56*64){ printf("portrait %d bad\n",i); return 2; }
-        u6lzw_decompress(blob,sz,portbuf[i],56*64); }
 
     /* NPC actors: appearance from OBJLIST (savegame), schedules from SCHEDULE.
      * We pre-resolve each actor's tile (basetile(obj_n)+frame) and ship that +
@@ -1779,9 +1960,7 @@ int main(int argc, char **argv)
 
     /* indoor bitmap (U6WI): per-tile "under a roof" via building-enclosure flood.
      * Gates daylight to outdoors so castle interiors are dark away from torches. */
-    long indoor_rle_len = 0;
-    uint8_t *indoor_rle = build_indoor_rle(dir, mapb, mn, chk, cn, tflag, objs, nobj, bt,
-                                           lookd, look_len, startx, starty, &indoor_rle_len);
+    long indoor_rle_len = 0; uint8_t *indoor_rle = NULL;   /* built once the tileset is freed, below */
 
     FILE *f = fopen(out, "wb"); if (!f) { printf("cannot write %s\n", out); return 2; }
     fwrite("U6WT", 1, 4, f);   /* U6WT: 14B object records {x,y,tile,obj_n,qty16,quality,parent} (quality = key id on locks/keys); U6WS 12B; U6WR gold; U6WP trainer; U6WO exp */
@@ -1790,9 +1969,42 @@ int main(int argc, char **argv)
     be16(f,(unsigned)startx); be16(f,(unsigned)starty);
     be16(f,(unsigned)start_min);
     fwrite(mapb,1,(size_t)mn,f); fwrite(chk,1,(size_t)cn,f);
+    cv_step("Tiles");
+    /* combined tileset blob + per-tile index (loaded here, at its first use, and freed after
+     * U6WX band 1 below: it is the converter's biggest block) */
+    uint8_t *mtc=slurp(dir,"MAPTILES.VGA",&tn), *ti=slurp(dir,"TILEINDX.VGA",&in);
+    on=fsize_in(dir,"OBJTILES.VGA"); if(on<0){ printf("cannot read %s/OBJTILES.VGA\n",dir); exit(2); }
+    int32_t musz = u6lzw_unpacked_size(mtc, (int32_t)tn);
+    int32_t comb_len = musz + (int32_t)on;
+    uint8_t *comb = malloc(comb_len);
+    u6lzw_decompress(mtc, (int32_t)tn, comb, musz); free(mtc);
+    slurp_into(dir, "OBJTILES.VGA", comb + musz, on);
+    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
+
+    /* MASKTYPE.VGA (LZW): per-tile encoding so transparent / pixel-block tiles
+     * (e.g. the map-window border tiles 432-439) decode correctly, not as raw
+     * 256-byte garbage. */
+    long mskn; uint8_t *mskc = slurp(dir,"MASKTYPE.VGA",&mskn);
+    int32_t msksz = u6lzw_unpacked_size(mskc,(int32_t)mskn);
+    uint8_t *msk = malloc((size_t)(msksz>0?msksz:1));
+    if (msksz < NTILES || u6lzw_decompress(mskc,(int32_t)mskn,msk,msksz)!=msksz){
+        printf("MASKTYPE.VGA decode failed (got %d, need >=%d)\n",msksz,NTILES); return 2; }
+    free(mskc);
+    u6tile_set_masktype(&ts, msk);
+    memset(g_terr, 0, sizeof g_terr);
     for (int t=0;t<NTILES;t++){ uint8_t tile[256];          /* full combined tileset */
+        if (!(t & 63)) cv_tick();
         u6tile_decode(&ts,t,tile);                          /* MASKTYPE-aware decode */
+        terrain_count(tile);
         fwrite(tile,1,256,f); }
+    /* U6WX band 1 (the command bar's 16) is the tileset's last use: work it out now, so the
+     * 400 KB tileset is freed before the front-end art (written below U6WW) */
+    static uint8_t cb_pal[48], cb_pal4[48], cb_lut[256];
+    build_command_band(&ts, paperd+4, palb, cb_pal, cb_pal4, cb_lut);
+    free(comb); free(msk); free(ti); comb=NULL;
+    cv_step("Indoor map");
+    indoor_rle = build_indoor_rle(dir, mapb, mn, chk, cn, tflag, objs, nobj, bt,
+                                  lookd, look_len, startx, starty, &indoor_rle_len);
     fwrite(palb,1,768,f);
     fwrite(passable,1,256,f);
     for (int32_t i=0;i<nobj;i++){                 /* repacked world objects (surface roots + contained chains) */
@@ -1808,16 +2020,28 @@ int main(int argc, char **argv)
         be16(f, objs[i].parent); }
     printf("objects: %d shipped (%d contained in containers; %d stackable types)\n",
            (int)nobj, ncontained, nstack);
+    free(objs); free(mapb); free(chk); objs=NULL;
     fwrite(font,1,2048,f);                         /* authentic U6.CH font */
     fwrite(paper,1,64000,f);                        /* PAPER.BMP 320x200 background */
+    /* sample portraits (PORTRAIT.A items 0..NPORT-1: 4-byte lib of LZW 56x64) */
+    long prn; uint8_t *pra = slurp(dir,"PORTRAIT.A",&prn);
+    u6lib_t plib;
+    if (!u6lib_open(&plib,pra,(int32_t)prn,4,false)){ printf("PORTRAIT.A open failed\n"); return 2; }
+    uint8_t (*portbuf)[56*64] = malloc((size_t)NPORT*56*64);
+    if (!portbuf){ printf("out of memory (portraits)\n"); return 2; }
+    for (int i=0;i<NPORT;i++){ int32_t sz; const uint8_t *blob=u6lib_entry(&plib,i,&sz);
+        if (!blob||u6lzw_unpacked_size(blob,sz)!=56*64){ printf("portrait %d bad\n",i); return 2; }
+        u6lzw_decompress(blob,sz,portbuf[i],56*64); }
+    free(pra);                         /* read again, with PORTRAIT.B, for the conversation palettes */
     be16(f,NPORT);                                  /* portrait count, then 56x64 each */
     for (int i=0;i<NPORT;i++) fwrite(portbuf[i],1,56*64,f);
+    free(portbuf);
 
     /* demo NPC: ship the FULL decompressed conversation script so the engine's
      * usecode VM runs it on-target. [u16 npc][u16 script_len][script bytes].
      * (Portrait = NPC-1, already in the shipped portrait set.) */
     long ccn; uint8_t *ccb = slurp(dir,"CONVERSE.A",&ccn);
-    int32_t scr_len=0; uint8_t *scr=conv_script(ccb,ccn,DEMO_NPC,&scr_len);
+    int32_t scr_len=0; uint8_t *scr=conv_script(ccb,ccn,DEMO_NPC,&scr_len); free(ccb);
     if (!scr) printf("warning: demo NPC %d script not decompressed\n", DEMO_NPC);
     be16(f,DEMO_NPC); be16(f,(unsigned)(scr?scr_len:0));
     if (scr&&scr_len>0) fwrite(scr,1,(size_t)scr_len,f);
@@ -1837,18 +2061,20 @@ int main(int argc, char **argv)
 
     /* object verbs: [u32 look_len][LOOK payload][gettable 1024 by obj_n] */
     be32(f,(unsigned long)look_len);
-    fwrite(lookd,1,(size_t)look_len,f);
+    fwrite(lookd,1,(size_t)look_len,f); free(lookd);
     fwrite(gettable,1,1024,f);
 
     /* mouse cursor: [u8 w][u8 h][u8 hotx][u8 hoty][w*h pixels] (255=transparent) */
     fputc(cw,f); fputc(ch,f); fputc(chx,f); fputc(chy,f);
     fwrite(cpix,1,(size_t)cw*ch,f);
 
+    cv_step("World tables");
     /* BASETILE (2048 bytes = 1024 obj_n x u16 LE): obj_n -> base tile, so the
      * engine can recover an object's frame (tile - base) for frame-aware use
      * (doors) and future animation. Shipped verbatim (little-endian). */
     fwrite(bt,1,(size_t)(bn<2048?bn:2048),f);
     if(bn<2048){ for(long k=bn;k<2048;k++) fputc(0,f); }
+    free(bt);
 
     /* ANIMDATA tile-animation table (U6WD): [u16 nanim] then nanim x
      * {u16 dest_tile, u16 src_base, u8 nframes, u8 speed}. The engine fills the
@@ -1885,6 +2111,7 @@ int main(int argc, char **argv)
      * 1 bit/tile (idx=y*1024+x); decodes to 131072 bytes. See docs/rules/lighting.md. */
     be32(f,(unsigned long)indoor_rle_len);
     if (indoor_rle && indoor_rle_len>0) fwrite(indoor_rle,1,(size_t)indoor_rle_len,f);
+    free(indoor_rle);
 
     /* darkening LUTs (U6WJ): NLEV x 256 bytes for the lighting overlay (lighting.md §3) */
     { static uint8_t darklut[NLEV][256]; build_darklut(palb, darklut);
@@ -1940,6 +2167,7 @@ int main(int argc, char **argv)
     /* per-tile TILEFLAGS3 (U6W3, magic-guarded): the TILEFLAG block at 0x1400 verbatim (tileflag.md) — bit3 is
      * the Vanish / Replicate flag, bit1 Support, bits 6-7 the article (rules/magic_skills.md §5f). */
     { fwrite("U6W3",1,4,f); fwrite(tflag+0x1400,1,2048,f); }
+    free(tflag);
 
     /* per-actor hostile-by-alignment flag (U6WM): 256 x u8 (combat.md §7 / CB4) */
     { int nh=0; for (int i=0;i<NACT;i++){ fputc(ahostile[i],f); nh+=ahostile[i]; }
@@ -1962,6 +2190,7 @@ int main(int argc, char **argv)
     { int karma = (svm && objl && oln>0x1bf9) ? objl[0x1bf9] : 0;
       fputc((uint8_t)karma, f);
       printf("karma: avatar=%d (objlist 0x1bf9)\n", karma); }
+    free(objl); objl=NULL;
     /* avatar SPELLBOOK (U6WR cont.): [u8 present][u8 all][16B known-spell bitset by U6 spell_num].
      * Loaded from the save's spellbook (obj 57 -> spell 58 by quality); present=0 => engine keeps its
      * demo/implemented set. (magic_skills.md §4; Nuvie Magic::spellbook_has_spell.) */
@@ -1988,15 +2217,18 @@ int main(int argc, char **argv)
      * [256 lut][2048 font][front-end block] — the palette/lut let the ST render the front-end in the
      * game's optimised 16 while its core (U6WW) isn't loaded yet. Computed once, reused for U6WW. */
     static uint8_t g_lc_pal[48], g_lc_pal4[48], g_lc_lut[256];   /* g_lc_pal4 = STE 4-bit game 16 (U6WS) */
-    build_lowcolor(&ts, palb, g_lc_pal, g_lc_pal4, g_lc_lut);   /* the game 16 + 256->16 LUT (also shipped as U6WW) */
+    build_lowcolor(palb, g_lc_pal, g_lc_pal4, g_lc_lut);   /* the game 16 + 256->16 LUT (also shipped as U6WW) */
     FILE *fe = f;
     /* U6FE.PAK v2 section directory (fepack.h): [u8 nsec] + nsec x [u8 id][u32 off][u32 len], written
      * as a placeholder here and PATCHED at the end (fe_dir_close) once every section's extent is known.
      * FE_SEC(id) marks the start of section `id`; the previous section ends there. */
     long fe_dir_pos = 0, fe_sec_off[FEPACK_MAX_SEC], fe_sec_len[FEPACK_MAX_SEC]; int fe_nsec = 0, fe_cur = -1;
     for(int i=0;i<FEPACK_MAX_SEC;i++){ fe_sec_off[i]=0; fe_sec_len[i]=0; }
+    static const char *const fe_label[FES_N] = { "Main menu", "Intro scenes", "Intro: TV", "Intro: moongate",
+        "Portraits", "Intro text", "Gypsy", "Woods", "Storm", "Stones", "Into the gate", "Gargoyles",
+        "Vellum", "Font", "Logos", "Scroll", "Ending", "Pointer" };
     #define FE_SEC(id) do { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; \
-                            fe_cur=(id); fe_sec_off[fe_cur]=_p; if(fe_cur+1>fe_nsec) fe_nsec=fe_cur+1; } while(0)
+                            cv_step(fe_label[(id)]); fe_cur=(id); fe_sec_off[fe_cur]=_p; if(fe_cur+1>fe_nsec) fe_nsec=fe_cur+1; } while(0)
     if(slim){ fwrite("NOFE",1,4,f);
         fe = fopen(fe_path,"wb");
         if(fe){ fwrite(FEPACK_MAGIC,1,4,fe); fwrite(palb,1,768,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
@@ -2018,13 +2250,13 @@ int main(int argc, char **argv)
        * by menu_highlight) is up-weighted so it keeps a distinct yellow->orange spread after the cut.
        * Shipped after the title pixels: [48 ST-3bit levels][256 lut]. (docs/design/palette_lowcolor.md) */
       { uint8_t lc[48+256];
-        static uint8_t comb[320*200*2]; int np=0;
+        enum { NCOMB = 320*200*2 }; uint8_t *comb=scratch(NCOMB,0); int np=0;
         if(menu &&mw>0&&mh>0) for(int i=0;i<mw*mh;i++) comb[np++]=menu[i];
         if(title&&tw>0&&th>0) for(int i=0;i<tw*th;i++) comb[np++]=title[i];
         static const uint8_t RAMP[]={14,33,34,35,36};   /* mirror gamedemo MENU_RAMP */
         for(unsigned r=0;r<sizeof RAMP/sizeof*RAMP;r++)  /* up-weight the ramp so it keeps distinct slots */
-            for(int k=0;k<600 && np<(int)sizeof comb;k++) comb[np++]=RAMP[r];
-        build_scene_lc(palb, comb, np, lc);
+            for(int k=0;k<600 && np<NCOMB;k++) comb[np++]=RAMP[r];
+        build_scene_lc(palb, comb, np, lc); free(comb);
         fwrite(lc,1,sizeof lc,fe); }
       printf("front-end: menu %dx%d, title %dx%d (+per-scene title 16)\n", mw,mh,tw,th);
       free(menu); free(title); }
@@ -2058,14 +2290,13 @@ int main(int argc, char **argv)
         fwrite(pal,1,768,fe);
         uint8_t lc[48+256];                                   /* per-scene ST 16 + 256->16 LUT (after the pal) */
         if(SC[i].type != 1){                                  /* type 0 (static) or 2 (gate-rise): bg only */
-          static uint8_t canvas[320*200]; memset(canvas,0,sizeof canvas);
+          uint8_t *canvas=scratch(320*200,0);
           compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, canvas, 320, 200);
           build_scene_lc(pal, canvas, 320*200, lc); fwrite(lc,1,sizeof lc,fe);
-          be16(fe,320); be16(fe,200); fwrite(canvas,1,sizeof canvas,fe);
+          be16(fe,320); be16(fe,200); fwrite(canvas,1,320*200,fe); free(canvas);
           printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
         } else {
-          static uint8_t pano[640*200], fg[320*200];
-          memset(pano,0,sizeof pano); memset(fg,U6SHAPE_TRANSPARENT,sizeof fg);   /* fg = overlay layer */
+          uint8_t *pano=scratch(640*200,0), *fg=scratch(320*200,U6SHAPE_TRANSPARENT);   /* fg = overlay layer */
           compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, pano, 640, 200);
           compose_shapes(dir, SC[i].file, SC[i].fg, SC[i].nfg, fg,   320, 200);
           /* blank the 4 LED digit cells (over the baked "88:88") so the engine can draw
@@ -2074,8 +2305,9 @@ int main(int argc, char **argv)
             for(int c=0;c<4;c++) for(int yy=0x14;yy<0x14+5;yy++)
               for(int xx=CX[c];xx<CX[c]+3;xx++) pano[yy*640+xx]=0; }
           build_scene_lc(pal, pano, 640*200, lc); fwrite(lc,1,sizeof lc,fe);   /* quantise the panorama */
-          be16(fe,640); be16(fe,200); fwrite(pano,1,sizeof pano,fe);
-          be16(fe,320);              fwrite(fg,1,sizeof fg,fe);
+          be16(fe,640); be16(fe,200); fwrite(pano,1,640*200,fe);
+          be16(fe,320);              fwrite(fg,1,320*200,fe);
+          free(pano); free(fg);
           printf("intro scene %d: PAN %s pal %d (640 panorama + 320 fg)\n", i, SC[i].file, SC[i].pal);
         } }
       FE_SEC(FES_SCROLL);
@@ -2125,7 +2357,7 @@ int main(int argc, char **argv)
       { int nmp=12, pw0=0,ph0=0; uint8_t *p0=load_shape(dir,"MONTAGE.SHP",0,&pw0,&ph0);
         fputc(nmp,fe); be16(fe,(unsigned)pw0); be16(fe,(unsigned)ph0); free(p0);
         for(int k=0;k<nmp;k++){ int w=0,h=0; uint8_t*mp=load_shape(dir,"MONTAGE.SHP",k,&w,&h);
-          if(mp) for(int i=0;i<w*h;i++) if(mp[i]==U6SHAPE_TRANSPARENT) mp[i]=0;   /* opaque consumer */
+          if(mp){ long np=(long)w*h; for(long i=0;i<np;i++) if(mp[i]==U6SHAPE_TRANSPARENT) mp[i]=0; }   /* opaque consumer */
           if(mp&&w==pw0&&h==ph0) fwrite(mp,1,(size_t)w*h,fe);
           else { static uint8_t z[56*64]; memset(z,0,sizeof z); fwrite(z,1,(size_t)pw0*ph0,fe); }
           free(mp); }
@@ -2177,10 +2409,10 @@ int main(int argc, char **argv)
       { static const ishape_t GYP[] = { {0,0,-20} };    /* bg only: gypsy + empty table (no vials/jar) */
         uint8_t p5[768]; if(!load_intpal(dir,5,p5)) memset(p5,0,sizeof p5);
         fwrite(p5,1,768,fe);
-        static uint8_t gsc[320*200]; memset(gsc,0,sizeof gsc);
+        uint8_t *gsc=scratch(320*200,0);
         compose_shapes(dir,"GYPSY.SHP",GYP,(int)(sizeof GYP/sizeof GYP[0]),gsc,320,200);
         { uint8_t lc[48+256]; build_scene_lc(p5,gsc,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* gypsy ST 16 */
-        be16(fe,320); be16(fe,200); fwrite(gsc,1,sizeof gsc,fe);
+        be16(fe,320); be16(fe,200); fwrite(gsc,1,320*200,fe); free(gsc);
         int sw=0,sh=0; uint8_t*sc=load_shape(dir,"BLOCKS.SHP",3,&sw,&sh);
         be16(fe,(unsigned)sw); be16(fe,(unsigned)sh);
         if(sc&&sw>0&&sh>0) fwrite(sc,1,(size_t)sw*sh,fe); free(sc);
@@ -2199,11 +2431,11 @@ int main(int argc, char **argv)
        * left (nuvie scroll_lounge-style). [768 pal4][u16 ww][u16 wh][ww*wh]. */
       { uint8_t p4[768]; if(!load_intpal(dir,4,p4)) memset(p4,0,sizeof p4);
         fwrite(p4,1,768,fe);
-        static uint8_t wpano[511*200]; memset(wpano,0,sizeof wpano);
+        uint8_t *wpano=scratch(511*200,0);
         static const ishape_t WD[]={{0,0,0},{1,320,0}};
         compose_shapes(dir,"WOODS.SHP",WD,2,wpano,511,200);
         { uint8_t lc[48+256]; build_scene_lc(p4,wpano,511*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* woods ST 16 */
-        be16(fe,511); be16(fe,200); fwrite(wpano,1,sizeof wpano,fe);
+        be16(fe,511); be16(fe,200); fwrite(wpano,1,511*200,fe); free(wpano);
         printf("gypsy woods: WOODS.SHP panorama 511x200 pal4\n"); }
       FE_SEC(FES_STORM);
       /* STORM WINDOW scene (INTRO_2.SHP, PALETTES.INT 2 — nuvie window_sequence/display_window): a
@@ -2219,10 +2451,11 @@ int main(int argc, char **argv)
        * cloud big, cloud 2, cloud 3, rain 4,5,6,7, frame 28, glass 26, glass 27, door 24, door 25. */
       { uint8_t p2[768]; if(!load_intpal(dir,2,p2)) memset(p2,0,sizeof p2);
         fwrite(p2,1,768,fe);
-        static uint8_t sbase[320*200]; memset(sbase,0,sizeof sbase);
+        uint8_t *sbase=scratch(320*200,0);
         static const ishape_t WIN[]={{1,0,0},{10,0,76},{8,0,0},{28,0,0},{26,57,0}};   /* for the ST 16 only */
         compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
         { uint8_t lc[48+256]; build_scene_lc(p2,sbase,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* storm ST 16 */
+        free(sbase);
         /* bolts + strikes carry their HOTSPOT: nuvie draws a sprite at (x - hot_x, y - hot_y) — the
          * strikes' hotspot is the ground-splash point (e.g. 57,130), so (158,114) is where the bolt HITS;
          * the small bolts' hotspot is their right edge. [u16 w][u16 h][u16 hx][u16 hy][pix]. */
@@ -2266,8 +2499,11 @@ int main(int argc, char **argv)
         long tot=0;
         for(int k=0;k<nav;k++){ int w=0,h=0; uint8_t*ap=load_shape(dir,"INTRO_3.SHP",7+k,&w,&h);
           int x0=w,y0=h,x1=-1,y1=-1;
-          if(ap) for(int y=0;y<h;y++) for(int x=0;x<w;x++) if(ap[y*w+x]!=U6SHAPE_TRANSPARENT){
-            if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+          if(ap){ int aw=w, ah=h; const uint8_t *ar=ap;
+            for(int y=0;y<ah;y++,ar+=aw){                     /* in from each edge: the middle can't move the box */
+              int l=(int)cv_run(ar,aw,U6SHAPE_TRANSPARENT); if(l==aw) continue;
+              int r=aw-1; while(r>x1 && ar[r]==U6SHAPE_TRANSPARENT) r--;
+              if(l<x0)x0=l; if(r>x1)x1=r; if(y<y0)y0=y; if(y>y1)y1=y; } }
           if(x1<0){ x0=y0=0; x1=y1=0; }                       /* empty frame -> 1x1 at (0,0) */
           int cw=x1-x0+1, ch=y1-y0+1;
           be16(fe,(unsigned)x0); be16(fe,(unsigned)y0); be16(fe,(unsigned)cw); be16(fe,(unsigned)ch);
@@ -2288,9 +2524,10 @@ int main(int argc, char **argv)
          * arrived spots + priest + bound Avatar + altar + ropes + risen gate). */
         { static const ishape_t GG[] = { {6,0,0},{3,-4,77},{4,182,79},{8,144,30},{11,222,44},
                                          {9,49,68},{5,0,112},{12,210,132},{7,120,58} };
-          static uint8_t gsc[320*200]; memset(gsc,0,sizeof gsc);
+          uint8_t *gsc=scratch(320*200,0);
           compose_shapes(dir,"INTRO.SHP",GG,(int)(sizeof GG/sizeof GG[0]),gsc,320,200);
-          { uint8_t lc[48+256]; build_scene_lc(p7,gsc,320*200,lc); fwrite(lc,1,sizeof lc,fe); } }
+          { uint8_t lc[48+256]; build_scene_lc(p7,gsc,320*200,lc); fwrite(lc,1,sizeof lc,fe); }
+          free(gsc); }
         be16(fe, GG_NSH); { int nshipped=0; long gpre=ftell(fe);
         for(int i=0;i<GG_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"INTRO.SHP",i,&w,&h);
           if(sp&&w>0&&h>0){ be16(fe,(unsigned)w); be16(fe,(unsigned)h); fwrite(sp,1,(size_t)w*h,fe); nshipped++; }
@@ -2309,15 +2546,17 @@ int main(int argc, char **argv)
        * 16 Continue (66x16 @86,146), 4 Exit (72x16 @80,163). Menu palette (U6PAL ~ PALETTES.INT 0).
        * [48+256 ST lc][u8 n=5] + n x [u16 w][u16 h][w*h] (255 = transparent). */
       { static const int VEL[5]={0,3,18,16,4}; static const int VX[5]={16,94,62,86,80}, VY[5]={80,112,129,146,163};
-        static uint8_t vsc[320*200]; memset(vsc,0,sizeof vsc);
+        uint8_t *vsc=scratch(320*200,0);
         uint8_t *vp[5]; int vw[5],vh[5];
         for(int k=0;k<5;k++){ vw[k]=vh[k]=0; vp[k]=load_shape(dir,"VELLUM1.SHP",VEL[k],&vw[k],&vh[k]);
-          if(vp[k]) for(int y=0;y<vh[k];y++) for(int x=0;x<vw[k];x++){ uint8_t v=vp[k][y*vw[k]+x];
-            int sx=VX[k]+x, sy=VY[k]+y; if(v!=U6SHAPE_TRANSPARENT && sx<320 && sy<200) vsc[sy*320+sx]=v; } }
+          if(vp[k]){ const uint8_t *sr=vp[k]; int sw=vw[k], sh=vh[k]; uint8_t *dr=vsc+VY[k]*320L;
+            for(int y=0;y<sh;y++,sr+=sw,dr+=320) if(VY[k]+y<200) for(int x=0;x<sw;x++){ uint8_t v=sr[x];
+              if(v!=U6SHAPE_TRANSPARENT && VX[k]+x<320) dr[VX[k]+x]=v; } } }
         { int mw=0,mh=0; uint8_t *m0=load_shape(dir,"MONTAGE.SHP",0,&mw,&mh);   /* + a face at (195,118) */
           if(m0){ for(int y=0;y<mh;y++) for(int x=0;x<mw;x++){ int sx=195+x, sy=118+y; if(sx<320&&sy<200) vsc[sy*320+sx]=(m0[y*mw+x]==U6SHAPE_TRANSPARENT)?0:m0[y*mw+x]; } free(m0); } }
         for(int k=0;k<400;k++) vsc[k]=0x48;                     /* weight the parchment ink (0x48) */
         { uint8_t lc[48+256]; build_scene_lc(palb, vsc, 320*200, lc); fwrite(lc,1,sizeof lc,fe); }
+        free(vsc);
         fputc(5,fe);
         for(int k=0;k<5;k++){ be16(fe,(unsigned)vw[k]); be16(fe,(unsigned)vh[k]);
           if(vp[k]&&vw[k]>0&&vh[k]>0) fwrite(vp[k],1,(size_t)vw[k]*vh[k],fe); free(vp[k]); }
@@ -2352,11 +2591,11 @@ int main(int argc, char **argv)
         static const int LOGO[2]={0x45,0x46};
         for(int k=0;k<2;k++){ int w=0,h=0; uint8_t *lp=load_shape(dir,"INTRO_1.SHP",LOGO[k],&w,&h);
           if(!lp||w<=0||h<=0){ be16(fe,0); be16(fe,0); be32(fe,0); free(lp); continue; }
-          static uint8_t rle[320*200*2]; long n=0; long tot=(long)w*h;
+          long n=0; long tot=(long)w*h; uint8_t *rle=scratch((size_t)tot*2,0);
           for(long i=0;i<tot;){ uint8_t v=lp[i]; if(v==U6SHAPE_TRANSPARENT) v=0; long r=1;
             while(i+r<tot && r<255){ uint8_t u=lp[i+r]; if(u==U6SHAPE_TRANSPARENT) u=0; if(u!=v) break; r++; }
             rle[n++]=(uint8_t)r; rle[n++]=v; i+=r; }
-          be16(fe,(unsigned)w); be16(fe,(unsigned)h); be32(fe,(uint32_t)n); fwrite(rle,1,(size_t)n,fe);
+          be16(fe,(unsigned)w); be16(fe,(unsigned)h); be32(fe,(uint32_t)n); fwrite(rle,1,(size_t)n,fe); free(rle);
           printf("boot logo %d: INTRO_1.SHP %d %dx%d -> %ld RLE bytes\n", k, LOGO[k], w, h, n); free(lp); } }
       FE_SEC(FES_END);
       /* THE ENDING (docs/design/ending.md §2): ENDPAL.LBM as 6-bit + an ST 16 for the tableau + the RAW
@@ -2368,12 +2607,12 @@ int main(int argc, char **argv)
         uint8_t ep[768]; if(!load_lbm_pal6(dir,"ENDPAL.LBM",ep)) memset(ep,0,768);
         fwrite(ep,1,768,fe);
         { static const ishape_t ES[] = { {7,0,0},{8,0,0},{3,9,30},{10,1,133} };   /* chamber + tableau + gate + scroll */
-          static uint8_t esc[320*200]; memset(esc,0,sizeof esc);
+          uint8_t *esc=scratch(320*200,0);
           compose_shapes(dir,"END.SHP",ES,(int)(sizeof ES/sizeof ES[0]),esc,320,200);
-          uint8_t lc[48+256]; build_scene_lc(ep,esc,320*200,lc); fwrite(lc,1,sizeof lc,fe); }
+          uint8_t lc[48+256]; build_scene_lc(ep,esc,320*200,lc); fwrite(lc,1,sizeof lc,fe); free(esc); }
         fputc(EN_NSH,fe); long epre=ftell(fe); int nshipped=0;
         for(int i=0;i<EN_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"END.SHP",i,&w,&h);
-          if(sp&&w>0&&h>0){ if(i==0) for(long k=0;k<(long)w*h;k++) if(sp[k]==0) sp[k]=U6SHAPE_TRANSPARENT;
+          if(sp&&w>0&&h>0){ if(i==0){ long np=(long)w*h; for(long k=0;k<np;k++) if(sp[k]==0) sp[k]=U6SHAPE_TRANSPARENT; }
             be16(fe,(unsigned)w); be16(fe,(unsigned)h); fwrite(sp,1,(size_t)w*h,fe); nshipped++; }
           else { be16(fe,0); be16(fe,0); }
           free(sp); }
@@ -2402,6 +2641,7 @@ int main(int argc, char **argv)
     long o_lowcolor = ftell(f);   /* footprint: front-end/intro art ends here, low-colour starts */
     printf("footprint: core+gameplay %ld KB | front-end/intro art %ld KB (U6WU..U6WV)\n",
            o_frontend/1024, (o_lowcolor-o_frontend)/1024);
+    cv_step("Colour tables");
     /* LOW-COLOUR ST palette + 256->16 LUT (U6WW): appended LAST so older loaders (which stop
      * at EOF) are unaffected, and guarded by a "U6WW" magic so the reader detects desync.
      * [4 "U6WW"][16 x {u8 r,u8 g,u8 b} ST 3-bit levels][256 x u8 lut]. The shifter backend
@@ -2420,12 +2660,17 @@ int main(int argc, char **argv)
       { static uint8_t bpal[2*48], blut[2*256]; uint8_t y0[2]={0,182};
         memcpy(bpal, pal_lvl, 48); memcpy(blut, lut, 256);            /* band 0 = the U6WW map palette */
         memcpy(bpal4, g_lc_pal4, 48);                                 /* band 0 4-bit = the game 4-bit  */
-        build_command_band(&ts, paper, palb, bpal+48, bpal4+48, blut+256);  /* band 1 = command bar (3+4-bit) */
+        memcpy(bpal+48, cb_pal, 48); memcpy(bpal4+48, cb_pal4, 48); memcpy(blut+256, cb_lut, 256);  /* band 1 = command bar (3+4-bit) */
         fwrite("U6WX",1,4,f); fputc(2,f); fwrite(y0,1,2,f); fwrite(bpal,1,2*48,f); fwrite(blut,1,2*256,f); } }
 
     /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up.
      * MUST precede U6WZ — the engine parses WW, WX, WY, WZ, WS in that order. Also fills g_conv4. */
-    build_conv_palettes(f, &ts, paper, palb, pra, prn, prb, prbn, g_conv4, &g_nconv4);
+    cv_step("Portrait palettes");
+    { long prbn=0; uint8_t *prb = slurp_path("refdata/dos/u6/PORTRAIT.B", NULL, &prbn);   /* full set for U6WY conv palettes */
+      if(!prb){ char pbp[1100]; snprintf(pbp,sizeof pbp,"%s/PORTRAIT.B",dir); prb=slurp_path(pbp,NULL,&prbn); }
+      pra = slurp(dir,"PORTRAIT.A",&prn);
+      build_conv_palettes(f, paper, palb, pra, prn, prb, prbn, g_conv4, &g_nconv4);
+      free(pra); free(prb); }
 
     /* COLOUR-CYCLING metadata (U6WZ): which reserved ST-16 slots the engine rotates each tick to
      * animate a U6PAL ramp on 16-colour hardware. The slots are identical in band 0 (the map), which
@@ -2444,13 +2689,12 @@ int main(int argc, char **argv)
       be16(f,(unsigned)g_nconv4); fwrite(g_conv4,1,(size_t)g_nconv4*48,f);
       printf("lowcolor (U6WS): STE 4-bit palettes — game + 2 bands + %d conv slots\n", g_nconv4); }
 
+    cv_step("Books");
     /* BOOK.DAT readable text (U6BK): signs / plaques / tombstones / books / scrolls. A RESIDENT core
      * section (moved out of the front-end block, which the ST FREES with U6FE — that nulled in-game
      * reading). COPYRIGHTED game text, extracted at build time, NEVER committed. Engine indexes by
      * (object quality - 1). [4 "U6BK"][u16 nbook][nbook x [u16 len][bytes]] (\n preserved). */
-    { static char bb[BOOK_MAX][BOOK_LEN]; int nb=extract_books(dir, bb);
-      fwrite("U6BK",1,4,f); be16(f,(unsigned)nb);
-      for(int i=0;i<nb;i++){ int L=(int)strlen(bb[i]); be16(f,(unsigned)L); fwrite(bb[i],1,(size_t)L,f); }
+    { fwrite("U6BK",1,4,f); int nb=extract_books(dir, f);
       printf("books: %d BOOK.DAT entries (U6BK, resident core section)\n", nb); }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
@@ -2467,5 +2711,7 @@ int main(int argc, char **argv)
     printf("wrote %s: start(%d,%d) %d tiles, %d surface objects, %d/256 passable, "
            "+paper(320x200) +%d portraits\n",
            out, startx, starty, NTILES, nsurf, npass, NPORT);
+    shp_flush();
+    free(palb); free(font); free(adat); free(cpix); free(paperd); free(schd); free(scr);
     return 0;
 }

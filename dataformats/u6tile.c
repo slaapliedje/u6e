@@ -35,7 +35,7 @@ static void decode_pblck(const uint8_t *src, int32_t src_avail, uint8_t out[256]
         int disp = src[p] | (src[p + 1] << 8);
         int len  = src[p + 2];
         if (len == 0) break;
-        int x = disp % 160 + (disp >= 1760 ? 160 : 0);
+        int x = (uint16_t)disp % 160u + (disp >= 1760 ? 160 : 0);   /* 16-bit: one divu.w on the 68000 */
         pos += x;
         if (p + 3 + len > src_avail) break;
         for (int k = 0; k < len; k++) {
@@ -55,10 +55,10 @@ void u6tile_decode(const u6tileset_t *ts, int tile, uint8_t out[256])
     if (mt == U6TILE_PBLCK) {
         decode_pblck(ts->bitmaps + base, ts->bitmaps_len - base, out);
     } else {                              /* PLAIN or TRANS: 256-byte bitmap */
-        for (int i = 0; i < 256; i++) {
-            int32_t idx = base + i;
-            out[i] = (idx < ts->bitmaps_len) ? ts->bitmaps[idx] : 0;
-        }
+        int32_t n = ts->bitmaps_len - base; if (n > 256) n = 256;
+        const uint8_t *b = ts->bitmaps + base;
+        for (int i = 0; i < n; i++) out[i] = b[i];
+        for (int i = (int)n; i < 256; i++) out[i] = 0;
     }
 }
 

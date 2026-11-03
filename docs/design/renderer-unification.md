@@ -21,12 +21,13 @@ collapsed into one code path." Previously each target was its own binary linking
 - **`render/render.c`** implements the public `rdr_*` / `scroll_*` interface (what the engine calls)
   as a thin forwarder over one selected backend, chosen once at startup:
   ```
-  EdDI cookie present     -> rdr_be_vcard     (graphics card / extended VDI: fVDI, NVDI)
+  EdDI cookie, 8+ planes  -> rdr_be_vcard     (graphics card / extended VDI: fVDI, NVDI, MagiC)
   else _VDO (platform_detect):  Falcon -> rdr_be_falcon,  TT -> rdr_be_tt,  ST/STE -> rdr_be_st
   ```
   **EdDI-first** because an extended VDI (a card, or NVDI on built-in video under AES/MiNT) means we
   must present cooperatively *through* the VDI, not `Setscreen` the display out from under it. Bare
-  single-TOS video has no EdDI, so we take the direct-hardware path. Selection is lazy + idempotent
+  single-TOS video has no EdDI, so we take the direct-hardware path. So does a desktop under
+  256 colours even with EdDI (line-A `VPLANES` < 8): the VDI path can't show an 8-bit frame there. Selection is lazy + idempotent
   (`rdr_prefer_truecolor` may run before `rdr_init`; both trigger it). `rdr_active_backend()` reports
   the choice for diagnostics.
 - Which backends are compiled in is a per-binary choice via `-DHAVE_RDR_*`; the SAME `render.c`

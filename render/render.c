@@ -5,7 +5,7 @@
  * symbols as a thin forwarder over ONE backend chosen at startup from the hardware detection, so a
  * single binary drives the whole matrix (goals #2 & #3 collapsed into one code path):
  *
- *   EdDI cookie present  -> graphics card / extended VDI (fVDI/NVDI)  -> rdr_be_vcard
+ *   EdDI cookie + 256 colours or more -> graphics card / extended VDI (fVDI/NVDI) -> rdr_be_vcard
  *   else _VDO (platform_detect):  Falcon -> rdr_be_falcon,  TT -> rdr_be_tt,  ST/STE -> rdr_be_st
  *
  * Rationale for EdDI-first: an extended VDI (a card, or NVDI on built-in video under AES/MiNT) means
@@ -21,6 +21,7 @@
 #include "platform.h"
 
 #include <mint/cookie.h>
+#include <mint/linea.h>       /* line-A VPLANES: the desktop's depth, for the EdDI choice */
 
 static const rdr_vtable *g_be;      /* the selected backend (NULL until rdr_select) */
 
@@ -39,7 +40,9 @@ static void rdr_select(void)
 
 #ifdef HAVE_RDR_VCARD
     {   long v;
-        if (Getcookie(C_EdDI, &v) == C_FOUND) { g_be = &rdr_be_vcard; return; }
+        /* the VDI path needs 256 colours or more: it can't show the 8-bit frame on a 16-colour desktop
+         * (MagiC or NVDI on built-in video), so that takes the machine's direct backend below */
+        if (Getcookie(C_EdDI, &v) == C_FOUND) { linea0(); if (VPLANES >= 8) { g_be = &rdr_be_vcard; return; } }
     }
 #endif
 

@@ -68,7 +68,7 @@ AUTO_PRG := c:\\$(notdir $(SELFTEST_PRG))
 # common Hatari invocation: mount build/ as C:, autostart the .PRG
 HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
-.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc
+.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert
 
 all: $(SELFTEST_PRG)
 
@@ -534,8 +534,8 @@ rdemo: $(BUILD)/rdemo.prg
 BENCH_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/platinput.c \
              platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
              engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c \
-             engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c \
-             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6obj.c \
+             engine/save.c engine/combat.c engine/magic.c engine/music.c engine/oplsynth.c engine/equip.c engine/monsters.c \
+             dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6lzw_68k.s dataformats/u6obj.c \
              render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # Hybrid 020/no-FPU build (same as game.prg) + -DBENCH: runs on a stock FPU-less TT.
 $(BUILD)/bench.prg: $(BENCH_SRC)
@@ -782,7 +782,7 @@ GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/pl
             platform/plattime.c platform/platmidi.c platform/platdma.c platform/platpsg.c \
             engine/world.c engine/rng.c engine/converse_vm.c engine/objects.c engine/save.c \
             engine/combat.c engine/magic.c engine/music.c engine/equip.c engine/monsters.c \
-            dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6obj.c \
+            dataformats/u6map.c dataformats/u6actor.c dataformats/u6lzw.c dataformats/u6lzw_68k.s dataformats/u6obj.c \
             render/render.c render/rdr_tt.c render/c2p_asm.s render/gamedemo.c
 # 020-OPTIMIZED, FPU-FREE build (resolves the no-FPU vs -m68020-60 conflict).
 # Compile each source with -m68020-60 (68020+ integer codegen — bitfield ops, 32-bit
@@ -845,6 +845,21 @@ $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch)"
 game-st: $(BUILD)/gamest.prg
+
+# CONVERT.TOS (the first start on the Atari, docs/design/first_boot_convert.md): mksave + nuviesave +
+# mkworld linked into one plain-68000 program, their main()s renamed, behind a progress display. The
+# game hands over to it when U6.PAK is missing (platform/firstrun.h). Runs on every machine of the line.
+CONVERT_TOOLS := mksave nuviesave mkworld
+CONVERT_SRC := tools/convert.c tools/cv_68k.s dataformats/u6lzw.c dataformats/u6lzw_68k.s dataformats/u6lzc.c dataformats/u6lib.c \
+               dataformats/u6pal.c dataformats/u6tile.c dataformats/u6obj.c dataformats/u6shape.c dataformats/u6map.c \
+               engine/combat.c engine/rng.c
+$(BUILD)/CONVERT.TOS: $(CONVERT_SRC) $(foreach t,$(CONVERT_TOOLS),tools/$(t).c) platform/firstrun.h tools/cvhook.h
+	@mkdir -p $(BUILD)/obj_cv
+	@for t in $(CONVERT_TOOLS); do $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -Idataformats -Itools -Iengine \
+	  -Dmain=$${t}_main -c tools/$$t.c -o $(BUILD)/obj_cv/$$t.o || exit 1; done
+	$(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -Iplatform -Idataformats -Itools -Iengine -o $@ \
+	  $(foreach t,$(CONVERT_TOOLS),$(BUILD)/obj_cv/$(t).o) $(CONVERT_SRC) -lm
+convert: $(BUILD)/CONVERT.TOS
 
 # ---- TT single-backend build: the 256-colour TT backend (rdr_tt.c, 8-plane c2p) alone (the unified
 # game.prg also covers the TT). Same data + memory policy as every target: U6.PAK core + the U6FE.PAK

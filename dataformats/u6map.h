@@ -33,6 +33,10 @@ bool u6map_load(u6map_t *m, const uint8_t *map, int32_t map_len,
 
 /* Surface tile index at (x,y), toroidally wrapped. 0..255. */
 uint8_t u6map_surface_tile(const u6map_t *m, int32_t x, int32_t y);
+/* All 1024 tiles of surface row y (wraps), chunk by chunk: the same values as
+ * u6map_surface_tile(m, x, y) for x = 0..1023, without a call per tile. */
+void u6map_surface_row(const u6map_t *m, int32_t y, uint8_t row[U6_SURFACE_TILES]);
+void u6map_surface_row_chunks(const u6map_t *m, int32_t y, uint16_t chunk[U6_SURFACE_CHUNKS]);  /* the chunk numbers along row y */
 
 /* Dungeon-level tile index at (x,y) on level 0..4 (dungeon levels 1..5), wrapped to the 256x256
  * level extent. 0..255. See docs/rules/map_levels.md for the level model. */

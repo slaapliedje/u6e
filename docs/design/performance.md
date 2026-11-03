@@ -868,3 +868,17 @@ measured earlier, so that figure presumably came from a different case. Both use
 
 (Contributed by the u7port session on 2026-10-28, applied and re-verified here: REST.REQ '4' and EGG.REQ '4'
 identical on TT and the 4 MB Falcon with the cached routes; completion-checklist item 17.)
+
+## 2026-11-02 — LZW in hand-asm (`dataformats/u6lzw_68k.s`); ST game start 11.8 → 5.9 s
+
+- **LZW decode** (converter and in-game conversations/portraits): the C loop now copies each string
+  forward from where it was first decoded; the Atari builds run the same loop in 68000 asm (3-byte code
+  read at a bit offset, entry added before the lookup so KwKwK needs no branch, separate loops for the
+  first code after a clear and a full dictionary). ST, the game's 100 LZW files: old C 244 s, new C
+  198 s, asm 68 s. Details and the equivalence checks: first_boot_convert.md §2a.
+- **Game start on a 4 MB ST**, program start to the main loop (Hatari, TOS 1.04): 11.8 → 5.9 s.
+  `npc_base_fc` scanned all 1024 BASETILE entries per actor (2.6 s; now a table); `build_blocked`
+  classified every object's tile four times over eight passes (3.9 s; now a per-tile cache built once
+  and two passes, 1.3 s — this is also the stall when a door opens or a torch is lit); the indoor
+  bitmap was unpacked a byte at a time (1 s; now `memset` per run). FG-INDEX / LS-INDEX full-vs-sparse
+  self-tests in the ST bench: 0.

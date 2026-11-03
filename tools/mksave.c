@@ -26,7 +26,6 @@
 #include "u6lzw.h"
 #include "u6lzc.h"
 
-#define MAXREC 40000
 
 typedef struct {
     uint8_t  raw[8];
@@ -148,9 +147,17 @@ static chunk_t *dest_of(const rec_t *r, int *stats)
     stats[4]++; return &g_surf[((r->y >> 7) & 7) * 8 + ((r->x >> 7) & 7)];
 }
 
-static void distribute_stream(const uint8_t *d, long n, long *pos, int nblocks, rec_t *recs, int *stats)
+/* recs grows to the biggest block seen (a few thousand records, not a fixed 40000: the converter also
+ * runs on a 4 MB Atari) */
+static void distribute_stream(const uint8_t *d, long n, long *pos, int nblocks, rec_t **precs, int *ncap, int *stats)
 {
     for (int b = 0; b < nblocks; b++){
+        int want = *pos + 2 <= n ? (d[*pos] | (d[*pos + 1] << 8)) : 0;
+        if (want > *ncap){
+            rec_t *g = realloc(*precs, sizeof(rec_t) * (size_t)want);
+            if (!g){ printf("mksave: out of memory (block %d, %d records)\n", b, want); exit(2); }
+            *precs = g; *ncap = want; }
+        rec_t *recs = *precs;
         int cnt = parse_block(d, n, pos, recs);
         if (cnt < 0){ printf("mksave: block %d truncated\n", b); exit(2); }
         for (int k = 0; k < cnt; k++){
@@ -173,13 +180,15 @@ int main(int argc, char **argv)
     long sn, dn;
     uint8_t *surf = unlzw(dir, "LZOBJBLK", &sn); if (!surf) return 2;
     uint8_t *dng  = unlzw(dir, "LZDNGBLK", &dn); if (!dng) return 2;
-    rec_t *recs = calloc(MAXREC, sizeof(rec_t));
+    rec_t *recs = NULL; int ncap = 0;
     int stats[5] = {0};
     long pos = 0;
-    distribute_stream(surf, sn, &pos, 64, recs, stats);
+    distribute_stream(surf, sn, &pos, 64, &recs, &ncap, stats);
     if (pos != sn) printf("mksave: LZOBJBLK: %ld trailing bytes after 64 blocks\n", sn - pos);
+    free(surf);
     pos = 0;
-    distribute_stream(dng, dn, &pos, 5, recs, stats);
+    distribute_stream(dng, dn, &pos, 5, &recs, &ncap, stats);
+    free(recs);
     long objlist_size = dn - pos;
     if (objlist_size < 0x1c73){ printf("mksave: objlist too short (%ld)\n", objlist_size); return 2; }   /* every game's reaches past 0x1c72 */
     uint8_t *objlist = dng + pos;
@@ -254,5 +263,11 @@ int main(int argc, char **argv)
         fwrite(hp, 1, 4, f); }
     long total = ftell(f); fclose(f);
     printf("mksave: wrote %s (%ld bytes)\n", out, total);
+    free(dng);                                    /* the converter runs the tools in one process */
+    free(g_inv.buf); free(g_eggs.buf);
+    for (int i = 0; i < 64; i++) free(g_surf[i].buf);
+    for (int i = 0; i < 5; i++) free(g_dng[i].buf);
+    memset(&g_inv, 0, sizeof g_inv); memset(&g_eggs, 0, sizeof g_eggs);
+    memset(g_surf, 0, sizeof g_surf); memset(g_dng, 0, sizeof g_dng);
     return 0;
 }

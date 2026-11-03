@@ -64,6 +64,27 @@ uint8_t u6map_surface_tile(const u6map_t *m, int32_t x, int32_t y)
     return m->chunks[cidx * 64 + wy * 8 + wx];
 }
 
+void u6map_surface_row(const u6map_t *m, int32_t y, uint8_t row[U6_SURFACE_TILES])
+{
+    y &= (U6_SURFACE_TILES - 1);
+    int32_t cy = y >> 3, wy = y & 7;
+    const uint16_t *sc = &m->surface[(cy >> 4) * 8 * 256 + (cy & 15) * 16];  /* superchunk row, chunk row */
+    for (int32_t cx = 0; cx < U6_SURFACE_CHUNKS; cx++) {
+        uint16_t cidx = sc[(cx >> 4) * 256 + (cx & 15)];
+        uint8_t *o = row + cx * 8;
+        if (cidx >= U6_CHUNK_COUNT) { for (int i = 0; i < 8; i++) o[i] = 0; continue; }
+        const uint8_t *c = m->chunks + (int32_t)cidx * 64 + wy * 8;
+        for (int i = 0; i < 8; i++) o[i] = c[i];
+    }
+}
+
+void u6map_surface_row_chunks(const u6map_t *m, int32_t y, uint16_t chunk[U6_SURFACE_CHUNKS])
+{
+    int32_t cy = (y & (U6_SURFACE_TILES - 1)) >> 3;
+    const uint16_t *sc = &m->surface[(cy >> 4) * 8 * 256 + (cy & 15) * 16];  /* superchunk row, chunk row */
+    for (int32_t cx = 0; cx < U6_SURFACE_CHUNKS; cx++) chunk[cx] = sc[(cx >> 4) * 256 + (cx & 15)];
+}
+
 uint8_t u6map_dungeon_tile(const u6map_t *m, int level, int32_t x, int32_t y)
 {
     if (level < 0 || level >= U6_DUNGEON_LEVELS) return 0;

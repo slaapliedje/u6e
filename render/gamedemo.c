@@ -34,6 +34,7 @@
 #include "platpsg.h"           /* M10: YM2149 PSG (plain-ST 3-voice fallback) */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
+#include "firstrun.h"          /* first start: DOS files -> CONVERT.TOS (docs/design/first_boot_convert.md) */
 #include <osbind.h>
 #include <string.h>
 
@@ -2782,8 +2783,18 @@ static int run_menu(void)
 static int npc_base_fc(int atile,int*base)
 {
     if(!g_basetile||atile<=0){ *base=atile; return 0; }
+    /* the bounds for every tile, from one pass over BASETILE (the scan per actor took seconds on
+     * an 8 MHz ST): lo_of[t] = the largest base <= t (-1: none), hi_of[t] = the smallest base > t */
+    static int16_t lo_of[2048], hi_of[2048]; static const uint8_t *made_for;
+    if(made_for!=g_basetile){
+        static uint8_t isbase[2048]; memset(isbase,0,sizeof isbase);
+        for(int o=0;o<1024;o++){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8); if(b>0 && b<2048) isbase[b]=1; }
+        int lo=-1; for(int t=0;t<2048;t++){ if(isbase[t]) lo=t; lo_of[t]=(int16_t)lo; }
+        int hi=2048; for(int t=2047;t>=0;t--){ hi_of[t]=(int16_t)hi; if(isbase[t]) hi=t; }
+        made_for=g_basetile; }
     int lo=-1, hi=2048;
-    for(int o=0;o<1024;o++){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8);
+    if(atile<2048){ lo=lo_of[atile]; hi=hi_of[atile]; }
+    else for(int o=0;o<1024;o++){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8);   /* past the table: scan */
         if(b<=0) continue;
         if(b<=atile && b>lo) lo=b;
         if(b>atile && b<hi) hi=b; }
@@ -3358,6 +3369,24 @@ static int obj_is_lightsight(const wobj_t*o){
     }
     return tile_family_ls(o->tile);
 }
+/* obj_is_fg / obj_is_lightsight depend only on tables that are fixed once the pack is loaded, so
+ * build_blocked reads them from a per-tile (and per frame-animated object kind) cache made on its
+ * first call: rebuilding the indexes on a door or a torch is then cheap on a 68000 too.
+ * bit 0 = foreground, bit 1 = light/sight. */
+static uint8_t g_cls_tile[2048], g_cls_obj[1024]; static int g_cls_ready;
+static void obj_class_init(void)
+{
+    for(int t=0;t<2048;t++){ wobj_t o; memset(&o,0,sizeof o); o.obj_n=-1; o.tile=(uint16_t)t;
+        g_cls_tile[t]=(uint8_t)(obj_is_fg(&o)|(obj_is_lightsight(&o)<<1)); }
+    for(int on=0;on<1024;on++){ wobj_t o; memset(&o,0,sizeof o); o.obj_n=on;
+        g_cls_obj[on]=(uint8_t)(obj_is_fg(&o)|(obj_is_lightsight(&o)<<1)); }
+    g_cls_ready=1;
+}
+static int obj_class(const wobj_t*o){
+    int on=o->obj_n;
+    if(on>=0 && on<1024 && g_objanim[on] && g_basetile) return g_cls_obj[on];
+    int t=o->tile; return (t>=0 && t<2048) ? g_cls_tile[t] : (obj_is_fg(o)|(obj_is_lightsight(o)<<1));
+}
 
 /* Rebuild g_blocked + g_sightblk: per tile, set a bit when an impassable OBJECT
  * (tileflags1 bit1 Impassable | bit2 Wall) sits on it (so world_is_passable stops NPCs/player
@@ -3382,48 +3411,51 @@ static bool force_pass_at(int32_t x, int32_t y)
 static void build_blocked(void)
 {
     g_blocked_epoch++;                                 /* the map changed: walkers search their routes again */
-    for(int32_t i=0;i<(int32_t)sizeof g_blocked;i++){ g_blocked[i]=0; g_sightblk[i]=0; }
-    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
-        int t=o->tile; if(t<0||t>=2048) continue;
-        int32_t idx=(int32_t)o->y*1024+o->x;
-        if(g_tflags1[t]&0x02) g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7));   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
-        if(blocks_sight(t))   g_sightblk[idx>>3]|=(uint8_t)(1u<<(idx&7));
+    if(!g_cls_ready) obj_class_init();
+    memset(g_blocked,0,sizeof g_blocked); memset(g_sightblk,0,sizeof g_sightblk);
+    g_force_n=0; memset(g_force_blk,0,sizeof g_force_blk);
+    /* Spatial bucket indexes (CSR: count -> prefix-sum -> fill) of all live objects, of the
+     * FOREGROUND ones (obj_is_fg; pass 1 of compose_map scans only these) and of the LIGHT/SIGHT
+     * ones (obj_is_lightsight; compute_light/vis scan only these), so a view visits only the
+     * objects in the buckets it overlaps. One pass classifies each object, counts it into all three
+     * and sets its blocking bits; a second fills the indexes in object order. */
+    static uint8_t  cls[MAXWOBJ];                     /* per object: bit 0 fg, bit 1 light/sight, bit 7 alive */
+    static uint16_t bkt[MAXWOBJ];                     /* per object: its bucket */
+    memset(g_obkt_start,0,sizeof g_obkt_start); memset(g_fgbkt_start,0,sizeof g_fgbkt_start);
+    memset(g_lsbkt_start,0,sizeof g_lsbkt_start);
+    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
+        if(!o->alive){ cls[i]=0; continue; }
+        int t=o->tile;
+        if(t<2048){
+            int32_t idx=(int32_t)o->y*1024+o->x;
+            if(g_tflags1[t]&0x02) g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7));   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
+            if(blocks_sight(t))   g_sightblk[idx>>3]|=(uint8_t)(1u<<(idx&7));
+            if(g_tflags3 && g_force_n<FORCE_MAX && (g_tflags3[t]&0x04)){
+                int32_t fb=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[fb>>3]|=(uint8_t)(1u<<(fb&7));
+                g_force_idx[g_force_n++]=idx; }
+        }
+        uint8_t c=(uint8_t)(obj_class(o)|0x80); cls[i]=c;
+        int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); bkt[i]=(uint16_t)b;
+        g_obkt_start[b+1]++;
+        if(c&1) g_fgbkt_start[b+1]++;
+        if(c&2) g_lsbkt_start[b+1]++;
     }
-    g_force_n=0; for(int i=0;i<(int)sizeof g_force_blk;i++) g_force_blk[i]=0;
-    for(int32_t i=0;g_tflags3 && i<g_ow.nobjs && g_force_n<FORCE_MAX;i++){ const wobj_t*o=&g_wobj[i];
-        if(!o->alive || o->tile>=2048 || !(g_tflags3[o->tile]&0x04)) continue;
-        int32_t b=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[b>>3]|=(uint8_t)(1u<<(b&7));
-        g_force_idx[g_force_n++]=(int32_t)o->y*1024+o->x; }
     for(int gap=g_force_n/2;gap>0;gap/=2) for(int i=gap;i<g_force_n;i++){ int32_t v=g_force_idx[i]; int j=i;   /* shell sort */
         while(j>=gap && g_force_idx[j-gap]>v){ g_force_idx[j]=g_force_idx[j-gap]; j-=gap; } g_force_idx[j]=v; }
     for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){    /* energy/force field blocks passage (§5a) */
         int32_t idx=(int32_t)g_fields[i].y*1024+g_fields[i].x;
         g_blocked[idx>>3]|=(uint8_t)(1u<<(idx&7)); }
-    /* spatial bucket index (CSR): count -> prefix-sum -> fill. Lets compose_map visit only the
-     * objects in the buckets overlapping the view instead of scanning all g_ow.nobjs. */
-    for(int b=0;b<=OBKT*OBKT;b++) g_obkt_start[b]=0;
-    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
-        int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_obkt_start[b+1]++; }
-    for(int b=0;b<OBKT*OBKT;b++) g_obkt_start[b+1]=(uint16_t)(g_obkt_start[b+1]+g_obkt_start[b]);
-    { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_obkt_start[b];
-      for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue;
-          int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_obkt_idx[cur[b]++]=(uint16_t)i; } }
-    /* FOREGROUND-only index (same CSR build, filtered by obj_is_fg): pass-1 scans only these. */
-    for(int b=0;b<=OBKT*OBKT;b++) g_fgbkt_start[b]=0;
-    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_fg(o)) continue;
-        int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_fgbkt_start[b+1]++; }
-    for(int b=0;b<OBKT*OBKT;b++) g_fgbkt_start[b+1]=(uint16_t)(g_fgbkt_start[b+1]+g_fgbkt_start[b]);
-    { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_fgbkt_start[b];
-      for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_fg(o)) continue;
-          int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_fgbkt_idx[cur[b]++]=(uint16_t)i; } }
-    /* LIGHT/SIGHT-only index (same CSR build, filtered by obj_is_lightsight): compute_light/vis scan only these. */
-    for(int b=0;b<=OBKT*OBKT;b++) g_lsbkt_start[b]=0;
-    for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_lightsight(o)) continue;
-        int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_lsbkt_start[b+1]++; }
-    for(int b=0;b<OBKT*OBKT;b++) g_lsbkt_start[b+1]=(uint16_t)(g_lsbkt_start[b+1]+g_lsbkt_start[b]);
-    { static uint16_t cur[OBKT*OBKT]; for(int b=0;b<OBKT*OBKT;b++) cur[b]=g_lsbkt_start[b];
-      for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||!obj_is_lightsight(o)) continue;
-          int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); g_lsbkt_idx[cur[b]++]=(uint16_t)i; } }
+    for(int b=0;b<OBKT*OBKT;b++){
+        g_obkt_start[b+1]=(uint16_t)(g_obkt_start[b+1]+g_obkt_start[b]);
+        g_fgbkt_start[b+1]=(uint16_t)(g_fgbkt_start[b+1]+g_fgbkt_start[b]);
+        g_lsbkt_start[b+1]=(uint16_t)(g_lsbkt_start[b+1]+g_lsbkt_start[b]); }
+    {   static uint16_t cur[OBKT*OBKT], curfg[OBKT*OBKT], curls[OBKT*OBKT];
+        memcpy(cur,g_obkt_start,sizeof cur); memcpy(curfg,g_fgbkt_start,sizeof curfg); memcpy(curls,g_lsbkt_start,sizeof curls);
+        for(int32_t i=0;i<g_ow.nobjs;i++){ uint8_t c=cls[i]; if(!c) continue;
+            int b=bkt[i];
+            g_obkt_idx[cur[b]++]=(uint16_t)i;
+            if(c&1) g_fgbkt_idx[curfg[b]++]=(uint16_t)i;
+            if(c&2) g_lsbkt_idx[curls[b]++]=(uint16_t)i; } }
 }
 
 /* substitute an animated tile slot for its current frame (animdata.md). The slot
@@ -10162,9 +10194,80 @@ static void bot_dump_pass(const world_t*w)
     int n=bot_put(0,"@P done"); n=bot_kv(n,"L",w->level); n=bot_kv(n,"span",span); n=bot_kv(n,"forced",g_force_n); bot_flush(n);
 }
 
+/* PACK_NAME: the core pack every target loads (one U6.PAK + U6FE.PAK pair, docs/design/memory_streaming.md;
+ * every game's core pack has this name and the game is told by its magic). -DPACK_NAME names another. */
+#ifndef PACK_NAME
+#define PACK_NAME "U6.PAK"
+#endif
+
+/* FIRST START (docs/design/first_boot_convert.md): no pack yet, but the player's DOS files are in the
+ * folder. Say the files need converting and about how long it takes on this machine, and on a key hand
+ * over to CONVERT.TOS. Runs before anything is allocated, so the game holds nothing but its own image.
+ *   On a single-tasking AES (TOS 1.x-4.x; global[1], the number of applications it can run, is 1):
+ *   shel_write (AES 121) has the shell run CONVERT.TOS once we exit, which frees all of our memory;
+ *   CONVERT.TOS starts the game again the same way when it is done.
+ *   With no AES (AUTO folder), or a multitasking one (MagiC, MiNT's XaAES: global[1] = -1, where
+ *   shel_write starts the program at once, beside us, so it frees nothing): Pexec (GEMDOS 0x4B) it as
+ *   a child, if the RAM left beside us is enough, and boot on when it returns.
+ * Returns 1 to quit now, 0 to boot (the pack is there). Console text: Cconws 0x09, Crawcin 0x07. */
+static int first_start(void)
+{
+    if (plat_fsize_path(PACK_NAME) > 0) return 0;
+    Cconws("\033E\033f");
+    int g = fr_detect_game();
+    if (g == FR_NONE) {
+        Cconws("\r\n No game data here.\r\n\r\n Copy the files of your DOS\r\n Ultima VI, Savage Empire or\r\n"
+               " Martian Dreams to this folder,\r\n then start the game again.\r\n\r\n Press a key.\r\n");
+        Crawcin(); return 1; }
+    if (!fr_exists("CONVERT.TOS")) {
+        Cconws("\r\n CONVERT.TOS is missing from this\r\n folder: it turns your DOS files\r\n"
+               " into the game's data. Copy it\r\n here from the game disk.\r\n\r\n Press a key.\r\n");
+        Crawcin(); return 1; }
+    long est = fr_estimate_s(g, fr_speed());
+    Cconws("\r\n "); Cconws(fr_game_name(g)); Cconws(": first start\r\n\r\n"
+           " Your DOS files must be converted\r\n for the Atari before the first game.\r\n"
+           " This is done once and takes\r\n ");
+    if (est < 45) Cconws("under a minute");
+    else { long m = (est + 30) / 60; char b[4]; int n = 0;   /* to the nearest minute */
+           if (m > 99) m = 99;
+           if (m >= 10) b[n++] = (char)('0' + m / 10);
+           b[n++] = (char)('0' + m % 10); b[n] = 0;
+           Cconws("about "); Cconws(b); Cconws(m == 1 ? " minute" : " minutes"); }
+    Cconws(" on this computer.\r\n\r\n Press a key to convert,\r\n or Esc to quit.\r\n");
+    if ((Crawcin() & 0xFF) == 27) return 1;
+
+    char dir[128], cmd[160], self[160], tail[128];
+    fr_cwd(dir, (int)sizeof dir);
+    strcpy(cmd, dir); strcat(cmd, "CONVERT.TOS");
+    if (fr_appl_init() && fr_aes_global[1] == 1) {
+        /* our own path, so the converter can start us again: what the shell launched (shel_read,
+         * AES 120), made absolute against the current folder when the desktop gave just a name */
+        char t[128]; self[0] = 0;
+        if (!fr_shel_read(self, t) || !self[0]) strcpy(self, "GAME.PRG");
+        if (!strchr(self, ':') && !strchr(self, '\\')) { char nm[40]; strncpy(nm, self, 39); nm[39] = 0;
+            strcpy(self, dir); strcat(self, nm); }
+        int n = (int)strlen(self); if (n > 124) n = 124;
+        tail[0] = (char)n; memcpy(tail + 1, self, (size_t)n); tail[1 + n] = 0;
+        fr_shel_write(0, cmd, tail);
+        fr_appl_exit();
+        Cconws("\r\n Starting CONVERT.TOS...\r\n");
+        return 1;
+    }
+    if (fr_aes_global[0]) fr_appl_exit();       /* a multitasking AES: Pexec below, as with no AES */
+    if ((long)Malloc(-1L) < 1200L * 1024L) {
+        Cconws("\r\n Not enough memory to convert from\r\n here. Run CONVERT.TOS from the\r\n"
+               " desktop, then start the game.\r\n\r\n Press a key.\r\n");
+        Crawcin(); return 1; }
+    strcpy(tail, "\002-c");
+    Pexec(0, cmd, tail, NULL);
+    Cconws("\033E");
+    return plat_fsize_path(PACK_NAME) > 0 ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
-    boot_chdir_to_exe(argc, argv);   /* resolve data relative to GAMEF.PRG (launchers that pass argv[0]) */
+    boot_chdir_to_exe(argc, argv);
+    if (first_start()) return 0;   /* no pack yet: convert the DOS files first (CONVERT.TOS) */   /* resolve data relative to GAMEF.PRG (launchers that pass argv[0]) */
     platform_caps_t caps; platform_detect(&caps);
     Cconws("u6e loading (stage 1: memory)...\r\n");
     if (!plat_mem_init(&caps)) { Cconws("*** memory init failed\r\n"); Crawcin(); return 1; }
@@ -10216,11 +10319,6 @@ int main(int argc, char **argv)
 #endif
 
     int32_t n=0;
-    /* PACK_NAME defaults to the full pack; the ST build (-DPACK_NAME) loads a slim pack (U6ST.PAK,
-     * front-end art omitted) so it fits a real 4 MB ST. See docs/design/palette_lowcolor.md. */
-    #ifndef PACK_NAME
-    #define PACK_NAME "U6.PAK"
-    #endif
 
     /* VIDEO.CFG (M8): the Falcon DEFAULTS to the 16-bit TRUECOLOR present — it skips c2p (present 89 -> 26 ms)
      * and shows the 256-colour palette directly (RGB565: only R/B drop 1 LSB vs the 6-6-6 CLUT — visually the
@@ -10328,7 +10426,10 @@ int main(int argc, char **argv)
         music_stop_all(); rdr_shutdown();
         char cwd[80]; cwd[0]='\0'; Dgetpath(cwd, 0);
         Cconws("\r\n*** Could not load the game data file  "); Cconws(PACK_NAME); Cconws("\r\n");
-        if (!pak) {
+        if (!pak && sz_core > 0) {
+            Cconws("    It is here, but there is not enough free memory to load it.\r\n");
+            Cconws("    Start the game without other programs resident.\r\n");
+        } else if (!pak) {
             Cconws("    It was not found in the working directory:\r\n      ");
             Cconws(cwd[0] ? cwd : "\\"); Cconws("\r\n");
             Cconws("    Open the install folder on the desktop and run the .PRG from there.\r\n");
@@ -10557,7 +10658,8 @@ int main(int argc, char **argv)
         { uint32_t rl=((uint32_t)ap[0]<<24)|((uint32_t)ap[1]<<16)|((uint32_t)ap[2]<<8)|ap[3]; ap+=4;
           const int NI=1024*1024/8; int o=0;
           for(uint32_t r=0; r+3<=rl && o<NI; r+=3){ int cnt=(ap[r]<<8)|ap[r+1]; uint8_t v=ap[r+2];
-              while(cnt-->0 && o<NI) g_indoor[o++]=v; }
+              if(cnt>NI-o) cnt=NI-o;
+              memset(g_indoor+o,v,(size_t)cnt); o+=cnt; }
           ap+=rl;
         }
         /* darkening LUTs (U6WJ): NLEV x 256, palette index -> darker index per light level */
