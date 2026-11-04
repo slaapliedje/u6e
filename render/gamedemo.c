@@ -6206,6 +6206,9 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
             int alt=-1; for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
                 if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && o->obj_n!=84 && o->obj_n!=85){ alt=j; break; } }
             if(alt>=0) idx=alt; }
+        if(idx>=0 && !objworld_can_get(&g_ow,g_wobj[idx].obj_n))      /* the table is no answer when a book lies on it */
+            for(int j=g_ow.nobjs-1;j>=0;j--){ const wobj_t*o=&g_wobj[j];
+                if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && objworld_can_get(&g_ow,o->obj_n)){ idx=j; break; } }
         if(idx<0){ msgcat(0,"Nothing to get there."); }
         else {
             obj_name(g_wobj[idx].tile,nm,sizeof nm);
@@ -8498,8 +8501,10 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='N'){ return push_to(w,dx,dy); }       /* ... then push it one tile */
     if(verb=='T'){ int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
         int id=npc_at(w,tx,ty); if(id>=0) talk(id);
-        else { int oi=objworld_at(&g_ow,tx,ty); int on=oi>=0?g_wobj[oi].obj_n:0;        /* a shrine or a statue talks through its quality (usecode_vm.md §6c) */
-            if(oi>=0 && (on==393||on==397||on==398||on==399)){ g_talk_obj=1; talk(g_wobj[oi].quality); g_talk_obj=0; }
+        else { int oi=-1;                                                               /* a shrine or a statue talks through its quality (usecode_vm.md §6c), whatever lies on it */
+            for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; int on=o->obj_n;
+                if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && (on==393||on==397||on==398||on==399)) oi=j; }
+            if(oi>=0){ g_talk_obj=1; talk(g_wobj[oi].quality); g_talk_obj=0; }
             else msgcat(0,"No-one to talk to."); }
         return 0; }
     return 0;
@@ -8892,6 +8897,29 @@ static int do_save(const world_t *w)
  * top-level records of this z, contained records whose container is kept (x/y zeroed, alive=0,
  * parent re-indexed). Transient decode buffers come from a chip mark/reset region. The pooled pack
  * survives unless `reset_pack`. Returns the object count, or -1 (no memory / bad layout). */
+/* a tile's first record is its top object, and we draw the later over the earlier (objblk.md "Stacks"):
+ * reverse each tile's records among the indices they hold. Containers' links follow. */
+static void objects_stack_order(int32_t nobjs)
+{
+    enum { SO_HASH = 1024, SO_MAX = 32 };
+    plat_mark mk = plat_chip_mark();
+    uint16_t *head = (uint16_t*)plat_alloc_chip((uint32_t)SO_HASH*2u);
+    uint16_t *next = (uint16_t*)plat_alloc_chip((uint32_t)nobjs*2u+2u);
+    uint16_t *perm = (uint16_t*)plat_alloc_chip((uint32_t)nobjs*2u+2u);
+    if(!head || !next || !perm){ plat_chip_reset(mk); return; }
+    for(int b=0;b<SO_HASH;b++) head[b]=0xFFFF;
+    for(int32_t i=nobjs-1;i>=0;i--){ const wobj_t*o=&g_wobj[i]; perm[i]=(uint16_t)i; if(!o->alive) continue;
+        int b=(o->x*31+o->y)&(SO_HASH-1); next[i]=head[b]; head[b]=(uint16_t)i; }
+    for(int b=0;b<SO_HASH;b++) for(int i=head[b];i!=0xFFFF;i=next[i]){
+        uint16_t m[SO_MAX]; int c=0, x=g_wobj[i].x, y=g_wobj[i].y, seen=0;
+        for(int j=head[b];j!=0xFFFF && j<i;j=next[j]) if(g_wobj[j].x==x && g_wobj[j].y==y){ seen=1; break; }
+        if(seen) continue;                                  /* this tile's run began earlier */
+        for(int j=i;j!=0xFFFF && c<SO_MAX;j=next[j]) if(g_wobj[j].x==x && g_wobj[j].y==y) m[c++]=(uint16_t)j;
+        for(int k=0;k<c/2;k++){ perm[m[k]]=m[c-1-k]; perm[m[c-1-k]]=m[k]; } }
+    for(int32_t i=0;i<nobjs;i++) if(perm[i]>i){ wobj_t t=g_wobj[i]; g_wobj[i]=g_wobj[perm[i]]; g_wobj[perm[i]]=t; }
+    for(int32_t i=0;i<nobjs;i++){ wobj_t*o=&g_wobj[i]; if(o->parent!=WOBJ_PARENT_NONE && o->parent<nobjs) o->parent=perm[o->parent]; }
+    plat_chip_reset(mk);
+}
 static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pack)
 {
     for(int i=0;i<8;i++) g_gate_idx[i]=-1; g_gate_hour=-1; g_torch_hour=-1;   /* the level's objects are rebuilt: raise the moongates afresh, relight the NPCs' torches */
@@ -8934,6 +8962,7 @@ static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pa
     plat_chip_reset(mk);
     {   invitem_t keep_inv[OBJ_INV_MAX]; int keep_n = g_ow.ninv;
         if(!reset_pack) memcpy(keep_inv, g_ow.inv, sizeof keep_inv);
+        objects_stack_order(nk);
         objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable);   /* empties the pooled pack */
         if(!reset_pack){ memcpy(g_ow.inv, keep_inv, sizeof keep_inv); g_ow.ninv = keep_n; } }
     memset(g_wtemp, 0, sizeof g_wtemp);                           /* every object now has a record */
@@ -10826,7 +10855,7 @@ int main(int argc, char **argv)
             g_wobj[i].origin=WOBJ_PARENT_NONE;                     /* set when SPILLED (save locator) */
             g_wobj[i].alive=(g_wobj[i].parent==WOBJ_PARENT_NONE);  /* contained: off-map until spilled */
         }
-        objworld_init(&g_ow,g_wobj,nw,gettable); }
+        objects_stack_order(nw); objworld_init(&g_ow,g_wobj,nw,gettable); }
     magic_init();                          /* seed spellbook + reagents (magic_skills.md §4) */
 
     if (!is_core) {   /* full U6 pack: cursor + basetile + anim/lighting/save tail */

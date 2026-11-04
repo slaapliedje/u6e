@@ -15,7 +15,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M6
 >                  region produces a correctly furnished U6 building.
 > - Confidence   : confirmed (record layout + placement); probable (status bits
 >                  beyond "contained").
-> - Last updated : 2026-06-23
+> - Last updated : 2026-11-03
 
 ## 1. Container
 Objects are grouped by SUPERCHUNK (128×128 tiles = 16×16 chunks). There are 69
@@ -98,6 +98,14 @@ basket 191, crate 192, dead body 339 (+ dead animals / mousehole etc.).
 Behavior (docs/rules/usecode_use.md): USE on chest/crate/barrel toggles the
 open/close frame; SEARCH ("Searching here, you find …") moves every DIRECT
 child out of the container onto the container's map tile.
+
+### Stacks: the first record is on top
+Objects on one tile are listed top first: an item on a table comes before the table (table 250 follows
+its item all 47 times on the U6 surface, READ from the user's LZOBJBLK 2026-11-03). Nuvie agrees: its loader's
+`add_obj(obj)` defaults to addOnTop=false, inserting each record at the bottom of the tile's list, and
+it picks the top from the end of the list. The engine draws and looks up objects by rising index, the later
+over the earlier, so at load it reverses each tile's records among the indices they hold. Order
+between tiles is kept: large furniture overlaps by it.
 
 ## 3. From object to graphic
 `tile = BASETILE[obj_n] + frame`, then draw tile from the combined tile set
