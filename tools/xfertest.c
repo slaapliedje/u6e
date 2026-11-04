@@ -107,6 +107,19 @@ int main(void)
     check("U4 ST, real: true values", c.str == 19 && c.dex == 18 && c.intel == 27 && c.magic == 20 && c.exp == 125 && c.level == 2);
     check("U4 ST, real: converted", c.new_str == 15 && c.new_dex == 14 && c.new_int == 19 && c.new_exp == 12 && c.new_level == 1 && c.new_hp == 30);
 
+    /* numbers from saves the DOS games wrote: Ultima IV for a new Mage, Ultima V's Transfer from it */
+    { static const uint8_t iv[] = { 0xc8, 0x00, 0xc8, 0x00, 0x7d, 0x00, 0x13, 0x00, 0x15, 0x00, 0x19, 0x00, 0x14, 0x00 }, kv[] = { 0x32, 0x00, 0x37, 0x00, 0x32, 0x00, 0x32, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+      memset(d, 0, sizeof d); memcpy(d + 0x08, iv, sizeof iv); memcpy(d + 0x14e, kv, sizeof kv);
+      memcpy(d + 0x1c, "Dosa", 4); d[0x2c] = 0x0c; d[0x2d] = 0x00; }
+    check("U4 DOS, real: found", xfer_parse_party_sav(d, sizeof d, &c));
+    check("U4 DOS, real: true values", c.str == 19 && c.dex == 21 && c.intel == 25 && c.magic == 20 && c.level == 2 && c.cls == 0);
+    check("U4 DOS, real: converted", c.new_str == 15 && c.new_dex == 16 && c.new_int == 18 && c.new_exp == 12 && c.new_level == 1 && c.new_hp == 30);
+    { static const uint8_t v[] = { 0x0c, 0x4d, 0x47, 0x14, 0x10, 0x12, 0x12, 0x1e, 0x00, 0x1e, 0x00, 0x0c, 0x00, 0x01, 0x00 };
+      memset(d, 0, sizeof d); memcpy(d + 0x0b, v, sizeof v); memcpy(d + 0x02, "Dosa", 4); }
+    check("U5 DOS, real: found", xfer_parse_saved_gam(d, sizeof d, &c));
+    check("U5 DOS, real: values", c.str == 20 && c.dex == 16 && c.intel == 18 && c.magic == 18 && c.exp == 12 && c.level == 1);
+    check("U5 DOS, real: converted", c.new_str == 20 && c.new_exp == 1 && c.new_level == 1 && c.new_hp == 30);
+
     printf(g_fail ? "\nRESULT: %d FAILURE(S)\n" : "\nRESULT: ALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }

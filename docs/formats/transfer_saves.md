@@ -5,8 +5,11 @@ one. Our implementation is `engine/transfer.c`; the screens are in `render/gamed
 
 > Provenance
 > - Derived from : the original front-ends (DOS U.EXE, ST U.PRG), read for their behaviour, and
->   real ST files: SAVED.GAM from the Ultima V Play disk, and a ROST.BIN written by Ultima IV for
->   a new character. No real DOS save has been tried; those two layouts rest on U.EXE alone.
+>   real files. ST: SAVED.GAM from the Ultima V Play disk, a ROST.BIN written by Ultima IV for a new
+>   character. DOS (2026-11-03, the GOG copies in DOSBox): a PARTY.SAV written by Ultima IV for a new
+>   character, and the SAVED.GAM that Ultima V's own Transfer made from it. Ultima V reads that
+>   PARTY.SAV as this table does. Its SAVED.GAM holds a class letter at +0x0C ('M', 'G' for Mage),
+>   which U6 does not use.
 > - Scope        : U6 only.
 > - Last updated : 2026-11-03
 
