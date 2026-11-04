@@ -113,23 +113,22 @@ def strike(p, aid, name, waits=8):
         except NavError as e: p.log('  to %s: %s' % (name, e)); p.key('space', 'wait')
     else: return None
     p.key('a', 'attack')
-    if dx: p.key('right' if dx > 0 else 'left')
-    if dy: p.key('down' if dy > 0 else 'up')
-    return p.key('ret', 'strike %s' % name)
+    return p.aim_fire(dx, dy, 'strike %s' % name)
 
 def seg_death(p, kw):
     """the Avatar strikes Shamino (3) until he is hurt, then Iolo (4) until he dies (combat.md §3d):
     a struck companion never turns hostile; at 0 HP "Iolo killed!", his body (339, quality 4) lies
     where he stood, he leaves the map but stays in the roster at 0 HP, and karma drops 5; then the
     Avatar picks the body up (the healer segment takes it to Tiberius)"""
+    if p.g.state['foes'] and p.foes(): p.fight()                        # an attack takes its time now: they'd answer
     k0 = p.g.state['karma']; p.meant.add(4)
-    for _ in range(12):
+    for _ in range(40):
         st = strike(p, 3, 'Shamino')
         if st is None: p.issue('death', 'Shamino never came beside the Avatar'); return
         if member(p, 3)['hp'] < member(p, 3)['max']: break
     m3, a3 = member(p, 3), p.actor(3)
     p.log('  Shamino struck: %r, hp %d/%d' % (st['msg'], m3['hp'], m3['max']))
-    if m3['hp'] == m3['max']: p.issue('death', 'Shamino never hurt in 12 blows (%r)' % st['msg'])
+    if m3['hp'] == m3['max']: p.issue('death', 'Shamino never hurt in 40 blows (%r)' % st['msg'])
     if a3 and a3['hostile']: p.issue('death', 'Shamino turned hostile when struck')
     for _ in range(60):
         a = p.actor(4)

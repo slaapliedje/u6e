@@ -464,7 +464,9 @@ static const uint8_t *g_fe_base_lc;
 static int  fe_group_load(uint32_t mask, int depth);
 static void fe_group_free(int depth);
 static uint16_t       g_cyc_phase;          /* rotation phase                          */
-static char           g_msg[160];          /* latest verb result line              */
+static char           g_msg[256];          /* latest verb result line              */
+static int            g_msg_append;        /* while set, msgcat(0,..) adds a line (a foe answers an attack: combat.md §6c) */
+static char           g_atk_prompt[40];    /* "Attack with sword-" */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
 static const char* rest_prompt_text(void);  /* fwd: the R)est prompt line (rest.md §2) */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
@@ -3298,6 +3300,9 @@ static void hostile_step(const world_t*w,int i);     /* combat.md CB2 (defined b
 static int  coward_step(const world_t*w,int i);      /* CB4 coward (defined below) */
 static int  adjacent_hostile(const world_t*w,int x,int y);  /* CB4 (defined below) */
 static void party_attack(int att,int def);                  /* CB4 (defined below) */
+static int companion_shoots(const world_t*w,int i,int x,int y);   /* combat.md §6c */
+static int actor_pick_weapon(int a,int d);
+static void npc_attack(const world_t*w,int att,int wobj,int x,int y,int tx,int ty);
 static void lb_recall(world_t*w,int forget);                /* Lord British's revival: Help, the Avatar's death (defined below) */
 static void enemy_attack(int att,int def);                  /* a hostile's blow on a party member (defined below) */
 static int  ship_aboard(void);                               /* cannons.md: the party is aboard a ship (defined with the vehicle code) */
@@ -3408,8 +3413,11 @@ static void step_npcs(const world_t*w)
                 g_amoved[i]=0; continue; }
             if(g_combat_mode){                          /* CB4: auto-fight an adjacent foe */
                 int tid=adjacent_hostile(w,x,y);
-                if(tid>=0){ int tx=x,ty=y; (void)actor_pos(tid,&tx,&ty);
-                    g_facing[i]= ty<y?0:ty>y?2:tx>x?1:3; party_attack(i,tid); g_amoved[i]=0; continue; } }
+                if(tid>=0){ int tx=x,ty=y, wp=actor_pick_weapon(i,1); (void)actor_pos(tid,&tx,&ty);
+                    g_facing[i]= ty<y?0:ty>y?2:tx>x?1:3;
+                    if(wp && weapon_shoots(wp)) npc_attack(w,i,wp,x,y,tx,ty); else party_attack(i,tid);
+                    g_amoved[i]=0; continue; }
+                if(companion_shoots(w,i,x,y)){ g_amoved[i]=0; continue; } }
             int cx=avx>x?avx-x:x-avx, cy=avy>y?avy-y:y-avy;
             if(cx<=1 && cy<=1){ g_amoved[i]=0; continue; }  /* already alongside */
             dx=avx; dy=avy;
@@ -4990,6 +4998,12 @@ static void draw_border_tiles(void)
 static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
 {
     int cols=w/8, row=0;
+    if(s==g_msg){                                   /* the box keeps the newest lines (DOS scrolls) */
+        int rows=0; const char*q=s;
+        while(*q){ while(*q==' ') q++; if(!*q) break; int n=0,last=-1; for(const char*p=q;*p&&*p!='\n';p++,n++){ if(*p==' ') last=n; if(n>=cols) break; }
+            q+=(n<cols)?n:(last>=0?last:cols); if(*q=='\n') q++; rows++; }
+        while(rows-->lines){ while(*s==' ') s++; int n=0,last=-1; for(const char*p=s;*p&&*p!='\n';p++,n++){ if(*p==' ') last=n; if(n>=cols) break; }
+            s+=(n<cols)?n:(last>=0?last:cols); if(*s=='\n') s++; } }
     while(*s && row<lines){
         while(*s==' ') s++;
         if(!*s) break;
@@ -5140,13 +5154,13 @@ static void draw_conversation(uint8_t col)
             }
             ui_text(PANX+(PANW-ui_textw(g_gamename))/2, ty, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
         }
-        if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);  /* scroll box */
+        if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, g_pending_verb?3:5, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
-            const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-":"Attack-"):g_pending_verb=='L'?"Look-(dir)?":
+            const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?((g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change"))?"Direction-":"Cast-(dir)?"):
                            g_pending_verb=='T'?"Talk-":g_pending_verb=='N'?"To-(dir)?":g_pending_verb=='Q'?"Quit? (y/n)":g_pending_verb=='J'?"(y/n)":"Move-(dir)?";
-            ui_text(PANX+6, 150, p, col);
+            ui_text_wrap(PANX+6, 150, PANW-12, p, 2, col);
         }
     }
 }
@@ -5545,7 +5559,8 @@ static void obj_name(int tile,char*out,int cap)
     out[o]=0;
 }
 
-static int msgcat(int n,const char*s){ while(*s&&n<(int)sizeof g_msg-1) g_msg[n++]=*s++; g_msg[n]=0; return n; }
+static int msgcat(int n,const char*s){ if(!n && g_msg_append && g_msg[0]){ while(g_msg[n]) n++; if(n<(int)sizeof g_msg-1) g_msg[n++]='\n'; }
+    while(*s&&n<(int)sizeof g_msg-1) g_msg[n++]=*s++; g_msg[n]=0; return n; }
 static int msgcat_int(int n,int v);   /* decimal append (defined below) */
 
 /* obj_n -> base tile (LE u16) from the shipped BASETILE; an object's frame is
@@ -6885,11 +6900,26 @@ static int hit_role(int att,int wobj){
     int str=(wobj==4||wobj==34||wobj==39||wobj==44) || (wobj==0 && monster_str_based(actor_objn(att)));
     if(!str) return dex_adj(att);
     int v=g_astr[att]?g_astr[att]:15; if(g_curse[att]) v=(v<=3)?1:v-3; return v; }
-static int monster_melee_max(int att){
-    if(g_aweapon[att]) return weapon_dmg(g_aweapon[att]);    /* armed actor uses its readied weapon */
+static int bare_hands_max(int att){
     mon_base_t mb; if(monster_base(actor_objn(att),&mb)) return mb.dmg;   /* unarmed: the creature table's base damage (combat.md §4, eggs.md §4) */
     return g_astr[att]?(g_astr[att]/2>2?g_astr[att]/2:2):4;  /* unknown type: strength-based melee */ }
-static void enemy_attack(int att,int def){
+static int monster_melee_max(int att){ return g_aweapon[att]?weapon_dmg(g_aweapon[att]):bare_hands_max(att); }   /* armed actor uses its readied weapon */
+/* the max damage of wobj (0 = hands) in att's hands against def: daemons, ghosts and skeletons take half
+ * but from the glass sword, triple crossbow and magic bow (combat.md §6c) */
+static int blow_max(int att,int wobj,int def){
+    int m=wobj?weapon_dmg(wobj):bare_hands_max(att), on=actor_objn(def);
+    if((on==367||on==352||on==368) && wobj!=48 && wobj!=50 && wobj!=54) m=(m+1)/2;
+    return m; }
+/* the last to strike an actor from beside it (interference: combat.md §6c) */
+static uint8_t g_last_striker[U6_MAX_ACTORS];
+static int msg_tail(void);
+static int actor_where(int a,int*x,int*y){ if(a==1 && g_wp){ *x=(int)g_wp->px; *y=(int)g_wp->py; return 1; } return actor_pos(a,x,y); }
+static int beside(int ax,int ay,int bx,int by){ int M=U6_SURFACE_TILES-1, dx=(ax-bx)&M, dy=(ay-by)&M; return (dx<=1||dx==M)&&(dy<=1||dy==M); }
+static void note_striker(int att,int def){ int ax,ay,bx,by; if(actor_where(att,&ax,&ay)&&actor_where(def,&bx,&by)&&beside(ax,ay,bx,by)) g_last_striker[def]=(uint8_t)att; }
+static int weapon_spend(int a,int on,int spare_first);
+static void glass_shatters(int att,int wobj){ if(wobj==48 && weapon_spend(att,48,0)){ int n=msg_tail(); msgcat(n,"Thy sword hath shattered!"); } }
+/* att strikes def with wobj; rolled = the hit roll was made (and hit) by the caller, on a shot */
+static void enemy_strike(int att,int def,int wobj,int rolled){
     if(veh_aboard()){                                        /* the party is in a vessel (cannons.md §2) */
         if(g_veh_kind==412){ ship_struck(att); return; }     /* a ship takes the blow on its hull */
         if(g_veh_kind==423) return;                          /* the balloon cannot be hit */
@@ -6898,8 +6928,9 @@ static void enemy_attack(int att,int def){
         if(nc>0) def=cand[rng_range(&g_crng,nc)]; }
     char an[24]; if(is_party_member(att)) actor_name(att,an,sizeof an); else obj_name(npc_tile(att),an,sizeof an);   /* a charmed companion strikes under its own name (combat.md §7b) */
     if(!an[0]){ an[0]='f'; an[1]='o'; an[2]='e'; an[3]=0; }
-    if(g_aweapon[att]!=48 && !combat_hit(hit_role(att,g_aweapon[att]),dex_adj(def),&g_crng)){ int n=msgcat(0,an); msgcat(n," misses."); return; }   /* §2 */
-    int wm=monster_melee_max(att);
+    if(!rolled && wobj!=48 && !combat_hit(hit_role(att,wobj),dex_adj(def),&g_crng)){ int n=msgcat(0,an); msgcat(n," misses."); return; }   /* §2 */
+    note_striker(att,def);
+    int wm=blow_max(att,wobj,def);
     int dmg=status_dmg(def,combat_damage(wm,g_aac[def],&g_crng));  /* vs armour, then Protection halves it (§5b) */
     if(dmg<=0){ int n=msgcat(0,an); msgcat(n," grazes."); return; }
     int hp=g_ahp[def]; g_ahp[def]=(dmg>=hp)?0:(uint8_t)(hp-dmg);
@@ -6912,18 +6943,26 @@ static void enemy_attack(int att,int def){
     if(g_ahp[def]==0){ n=msgcat(n," kills "); n=msgcat(n,dn); msgcat(n,"!"); }
     else            { n=msgcat(n," hits ");  n=msgcat(n,dn); msgcat(n,"!"); }
     sync_party_hp();
+    glass_shatters(att,wobj);
 }
+static void enemy_attack(int att,int def){ enemy_strike(att,def,g_aweapon[att],0); }
 
 /* one turn for a hostile actor: attack the nearest party member if adjacent, else path
  * one step toward it (around walls). Called from step_npcs. (combat.md CB2) */
+static int missile_reaches(const world_t*w,int x0,int y0,int x1,int y1);
 static void hostile_step(const world_t*w,int i){
     int x=g_actx[i], y=g_acty[i], avx=(int)w->px, avy=(int)w->py, tx,ty,tid;
     if(!nearest_party(w,x,y,&tx,&ty,&tid)){ g_amoved[i]=0; return; }
     int cx=tx>x?tx-x:x-tx, cy=ty>y?ty-y:y-ty;
     if(!g_aflee[i] && !g_storm && (cx>cy?cx:cy)<=5 && has_los(w,x,y,tx,ty) && foe_cast(w,i,tid,tx,ty)){ g_amoved[i]=0; return; }   /* a charge fires (combat.md §7b) */
+    if(!g_aflee[i] && !veh_aboard()){                  /* a weapon that reaches the target from here (combat.md §6c) */
+        int d=combat_dist(cx,cy), wp=actor_pick_weapon(i,d);
+        if(wp && (d>1 || weapon_shoots(wp)) && missile_reaches(w,x,y,tx,ty)){
+            g_facing[i]= ty<y?0 : ty>y?2 : tx>x?1 : 3;
+            npc_attack(w,i,wp,x,y,tx,ty); g_amoved[i]=0; return; } }
     if(!g_aflee[i] && cx<=1 && cy<=1){                 /* adjacent + not fleeing -> attack */
         g_facing[i]= ty<y?0 : ty>y?2 : tx>x?1 : 3;
-        enemy_attack(i,tid); g_amoved[i]=0; return;
+        { int wp=actor_pick_weapon(i,1); enemy_strike(i,tid,wp,0); } g_amoved[i]=0; return;
     }
     int gx=tx, gy=ty;                                  /* assault: head toward the party */
     if(g_aflee[i]){                                    /* CB4: flee -> a goal AWAY from the party */
@@ -7066,12 +7105,13 @@ static int lord_british_actor(void){ for(int a=2;a<160;a++) if(g_atile[a]!=0xfff
 
 /* a party member strikes a foe (CB4 combat mode): like the player's attack — readied weapon
  * vs the foe's armour, removes a slain foe + grants the avatar experience (§3). */
-static void party_attack(int att,int def){
+static void party_strike(int att,int def,int wobj,int rolled){
     char nm[24]; obj_name(npc_tile(def),nm,sizeof nm);
     if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
-    int wobj=g_aweapon[att]?g_aweapon[att]:43, wmax=weapon_dmg(wobj); if(wmax<=0) wmax=4;
-    if(g_aweapon[att]!=48 && !combat_hit(hit_role(att,g_aweapon[att]), dex_adj(def), &g_crng)){   /* §2 */
+    int wmax=blow_max(att,wobj,def);
+    if(!rolled && wobj!=48 && !combat_hit(hit_role(att,wobj), dex_adj(def), &g_crng)){   /* §2 */
         int n=msgcat(0,nm); msgcat(n," evades."); return; }
+    note_striker(att,def);
     int dmg=status_dmg(def,combat_damage(wmax, g_aac[def], &g_crng));
     if(dmg<=0){ int n=msgcat(0,nm); msgcat(n," grazed."); return; }
     int hp=g_ahp[def]?g_ahp[def]:30;
@@ -7081,7 +7121,9 @@ static void party_attack(int att,int def){
         grant_exp(att,gain);   /* the slayer earns the exp (party leveling); gated by training */
     } else { g_ahp[def]=(uint8_t)(hp-dmg); int n=msgcat(0,nm); n=msgcat(n," wounded.");
              if(check_flee(def)) msgcat(n," Flees!"); }
+    glass_shatters(att,wobj);
 }
+static void party_attack(int att,int def){ party_strike(att,def,actor_pick_weapon(att,1),0); }
 
 /* Combat A)ttack (docs/rules/combat.md CB1): melee strike on the actor at (dx,dy) from the
  * avatar. Hit check = avatar dex vs target dex + d30 (§2); damage = a sword roll, max 15,
@@ -7233,13 +7275,29 @@ static void dunguse_tick(const world_t*w)
     if(g_keg_timer>0 && --g_keg_timer==0) keg_explode_all(w);
 }
 /* ---- A)ttack (combat.md §6b): the crosshair, the shot and what it lands on ---------------------- */
-static int attack_range(void){ return ship_aboard()?weapon_range(412):weapon_range(g_avatar_weapon); }
+static int g_atk_list[8], g_atk_n, g_atk_i;                   /* the leader's readied weapons, one crosshair each (§6c) */
+static int g_atk_tried, g_atk_cx, g_atk_cy;                   /* something was attempted; where the last crosshair was */
+static int atk_weapon(void){ return ship_aboard()?412:(g_atk_i<g_atk_n?g_atk_list[g_atk_i]:g_avatar_weapon); }
+static int attack_range(void){ return weapon_range(atk_weapon()); }
 /* the crosshair walks a step, within the weapon's range and the view; returns 1 if it moved */
 static int attack_cursor_move(int dx,int dy){
     int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy, ax=nx<0?-nx:nx, ay=ny<0?-ny:ny, d=ax>ay?ax:ay;
-    if(d>attack_range() || d>VT/2) return 0;
+    if(combat_dist(ax,ay)>attack_range() || d>VT/2) return 0;
     g_tcur_dx=nx; g_tcur_dy=ny; return 1; }
-static void arm_attack(void){ g_pending_verb='A'; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; }
+/* this weapon's prompt, and its crosshair: where the last one was if in range, else on the attacker */
+static void attack_aim(void){
+    int on=atk_weapon(), n=0; const char*t="Attack with "; char nm[24]; nm[0]=0;
+    if(on) obj_name((uint16_t)basetile(on),nm,sizeof nm);
+    const char*u=ship_aboard()?"ship cannons":on?nm:"bare hands";
+    while(*t) g_atk_prompt[n++]=*t++;
+    while(*u && n<(int)sizeof g_atk_prompt-2) g_atk_prompt[n++]=*u++;
+    g_atk_prompt[n++]='-'; g_atk_prompt[n]=0;
+    if(combat_dist(g_atk_cx,g_atk_cy)>attack_range()) g_atk_cx=g_atk_cy=0;
+    g_tcur_dx=g_atk_cx; g_tcur_dy=g_atk_cy; }
+static void arm_attack(void){
+    g_atk_n=0; g_atk_i=0; g_atk_tried=0; g_avatar_weapon=g_aweapon[1];
+    if(!ship_aboard()) for(int sl=0;sl<EQ_NSLOTS && g_atk_n<8;sl++) if(weapon_is(g_aready[1][sl])) g_atk_list[g_atk_n++]=g_aready[1][sl];
+    attack_aim(); g_pending_verb='A'; g_msg[0]=0; g_show_inv=0; }
 /* a broken container (§3b): its contents lie where it stood and the save follows at once — the children's
  * records go on the map, whatever still hangs under it (a fired trap) loses its record, then the holder's
  * own record (childless now) is deleted; the live object is forgotten like a temporary one */
@@ -7282,58 +7340,90 @@ static int obj_hit(const world_t*w,int oi,int dmg){
     obj_break_persist(w,oi);
     return 1;
 }
-/* A)ttack at the tile (dx,dy) from the Avatar: the crosshair's choice, or a click (§6b). Aboard a ship the
- * cannons are the weapon (cannons.md §1). Melee strikes the tile; a missile weapon, or any target beyond
- * reach, shoots: the hit roll first, a miss at a foe scatters the aim a tile, then the missile flies the line
- * and lands where a missile boundary stops it, else on the aimed tile — whoever or whatever is there takes
- * the blow (an object always; a foe met by scattered aim gets a second roll). Returns 1 = a turn spent. */
-static int do_attack(world_t*w,int dx,int dy)
-{
-    int M=U6_SURFACE_TILES-1, ship=(g_veh_kind==412);
-    int wobj=ship?412:g_avatar_weapon, range=weapon_range(wobj), wmax=weapon_dmg(wobj), mis=weapon_missile(wobj);
-    if(wmax<=0) wmax=4;                                           /* unarmed */
-    int ax=dx<0?-dx:dx, ay=dy<0?-dy:dy, dist=ax>ay?ax:ay;
-    if(dist==0) return 0;
-    if(dist>range){ msgcat(0,"Out of range!"); return 0; }
-    int tx=((int)w->px+dx)&M, ty=((int)w->py+dy)&M;
-    int ranged=(wobj!=40 && wobj!=47) && (dist>1 || mis);          /* the morning star and halberd reach, never shoot */
-    int id=npc_at(w,tx,ty), oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
-    { char nm[24]; nm[0]=0;                                        /* what the crosshair rests on */
-      if(id>=0 && is_party_member(id)) actor_name(id,nm,sizeof nm);   /* a companion by its name, as Look does */
-      else if(id>=0) obj_name(npc_tile(id),nm,sizeof nm); else if(oi>=0) obj_name(g_wobj[oi].tile,nm,sizeof nm); else obj_name(world_tile(w,tx,ty),nm,sizeof nm);
-      int n=msgcat(0,nm[0]?nm:"nothing"); msgcat(n,"."); }
-    int atk=ship?30:hit_role(1,g_avatar_weapon), sure=(!ship && g_avatar_weapon==48);   /* §2; the glass sword never misses */
-    int hit=(id>=0) ? (sure || combat_hit(atk,dex_adj(id),&g_crng)) : (oi>=0);
-    if(ranged){
-        if(!hit && id>=0){ tx=(tx+(int)rng_range(&g_crng,3)-1)&M; ty=(ty+(int)rng_range(&g_crng,3)-1)&M; }   /* a miss lands beside */
-        int sx=(int)w->px, sy=(int)w->py, fx=sx, fy=sy;
-        { int ddx=tx-sx, ddy=ty-sy; if(ddx>512) ddx-=1024; if(ddx<-512) ddx+=1024; if(ddy>512) ddy-=1024; if(ddy<-512) ddy+=1024;
-          int adx=ddx<0?-ddx:ddx, ady=ddy<0?-ddy:ddy, stx=ddx<0?-1:1, sty=ddy<0?-1:1, err=adx-ady, cx=sx, cy=sy, steps=0;
-          while(cx!=tx || cy!=ty){ int e2=2*err; if(e2>-ady){ err-=ady; cx=(cx+stx)&M; } if(e2<adx){ err+=adx; cy=(cy+sty)&M; }
-              steps++; if(steps>16) break;
-              fx=cx; fy=cy;
-              if(missile_boundary_at(w,cx,cy)) break;                      /* it stops at the boundary tile */
-              if(mis) fx_show(w,cx,cy,mis,2); }
-          g_fx_last_dist=steps; }
-        if(wobj==412) fx_show(w,fx,fy,TILE_EXPLOSION,6);                   /* the cannonball bursts where it lands */
-        if(mis) fx_clear(w);
-        tx=fx; ty=fy;
-        id=npc_at(w,tx,ty); oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
-        if(!hit) hit=(id>=0) ? (sure || combat_hit(atk,dex_adj(id),&g_crng)) : (oi>=0);
-    }
+/* flies a missile from (sx,sy) at (tx,ty) along the line (§6b), drawn with tile mis in the view if it isn't 0; it
+ * stops ON a missile boundary. (lx,ly) = where it lands */
+static void missile_fly(const world_t*w,int sx,int sy,int tx,int ty,int mis,int*lx,int*ly){
+    int M=U6_SURFACE_TILES-1, fx=sx, fy=sy, ddx=tx-sx, ddy=ty-sy;
+    if(ddx>512) ddx-=1024; if(ddx<-512) ddx+=1024; if(ddy>512) ddy-=1024; if(ddy<-512) ddy+=1024;
+    int adx=ddx<0?-ddx:ddx, ady=ddy<0?-ddy:ddy, stx=ddx<0?-1:1, sty=ddy<0?-1:1, err=adx-ady, cx=sx, cy=sy, steps=0;
+    while(cx!=tx || cy!=ty){ int e2=2*err; if(e2>-ady){ err-=ady; cx=(cx+stx)&M; } if(e2<adx){ err+=adx; cy=(cy+sty)&M; }
+        steps++; if(steps>16) break;
+        fx=cx; fy=cy;
+        if(missile_boundary_at(w,cx,cy)) break;                      /* it stops at the boundary tile */
+        if(mis){ int vx=(cx-(int)w->px)&M, vy=(cy-(int)w->py)&M; if(vx>512) vx-=1024; if(vy>512) vy-=1024;
+            if(vx>=-VT/2&&vx<=VT/2&&vy>=-VT/2&&vy<=VT/2) fx_show(w,cx,cy,mis,2); } }
+    g_fx_last_dist=steps;
+    *lx=fx; *ly=fy; }
+static int missile_reaches(const world_t*w,int x0,int y0,int x1,int y1){ int lx,ly,keep=g_fx_last_dist; missile_fly(w,x0,y0,x1,y1,0,&lx,&ly); g_fx_last_dist=keep; return lx==x1&&ly==y1; }
+static int actor_on(const world_t*w,int x,int y){ if(x==(int)w->px && y==(int)w->py && !veh_aboard()) return 1; return npc_at(w,x,y); }
+/* an attacker's ammunition and spares (§6c): the party's are in the pooled pack, a hatchling's in its kit; a town
+ * NPC's pack isn't in memory, so it never runs out */
+static int item_count(int a,int on);
+static void item_spend(int a,int on,int n);
+static int field_at(int x,int y); static void field_add(int x,int y,uint16_t obj_n,uint8_t kind,uint8_t turns);
+static int spell_sleep_actor(int caster,int id);
+static int ammo_of(int wobj){ return (wobj==41||wobj==54)?55:(wobj==42||wobj==50)?56:0; }
+/* who spoils att's shot: the last to strike it from beside it, if still able, else -1 (§6c) */
+static int interferer(int att,int x,int y){
+    int s=g_last_striker[att], sx,sy; if(s<1||s==att||g_ahp[s]==0||g_asleep[s]||g_paralyze[s]||g_ainvis[s]) return -1;
+    if(g_time_stop && !is_party_member(s)) return -1;
+    return (actor_where(s,&sx,&sy) && beside(sx,sy,x,y)) ? s : -1; }
+/* what a shot uses up, now it has landed on (lx,ly) with actor id there, or -1 (§6c) */
+static void shot_spend(const world_t*w,int att,int wobj,int sx,int sy,int lx,int ly,int id){
+    switch(wobj){
+    case 41: case 54: item_spend(att,55,1); break;
+    case 42: item_spend(att,56,1); break;
+    case 50: item_spend(att,56,3); break;
+    case 36: case 37: case 38: {
+        if(att>=2 && att<160 && !is_party_member(att)) break;
+        if(beside(sx,sy,lx,ly) || !weapon_spend(att,wobj,1) || id>=0) break;
+        int t=world_tile(w,lx,ly);                                 /* it lies there, unless the water takes it */
+        if(((g_tflags1[t]&3)==3 || (t>=252&&t<=255)) && objworld_at(&g_ow,lx,ly)<0) break;
+        { int o=persist_obj_new(wobj,0,lx,ly,0); if(o>=0){ g_wobj[o].owned=0; build_blocked(); } }
+        break; }
+    case 83: if(!(att>=2 && att<160 && !is_party_member(att))) (void)weapon_spend(att,83,1);
+        if(field_at(lx,ly)<0 && !tile_is_water(w,lx,ly)) field_add(lx,ly,317,0,12);
+        break;
+    case 91: if(!(att>=2 && att<160 && !is_party_member(att))) (void)weapon_spend(att,91,1);
+        if(id>=0) (void)spell_sleep_actor(att,id);
+        break;
+    case 79: case 80:
+        if(rng_range(&g_crng,100)==36 && weapon_spend(att,wobj,0)){ int n=msg_tail(); msgcat(n,"A wand has vanished!"); }
+        break;
+    default: break; } }
+/* a bolt of the triple crossbow's fan: the tile beside the target that bolt b (1, 2) lands on (§6c) */
+static void fan_tile(int sx,int sy,int tx,int ty,int b,int*bx,int*by){
+    static const uint8_t F[121]={
+        0x42,0x52,0x52,0x52,0x52,0x62,0x63,0x63,0x63,0x63,0x64, 0x41,0x42,0x52,0x52,0x52,0x62,0x63,0x63,0x63,0x64,0x74,
+        0x41,0x41,0x42,0x52,0x52,0x62,0x63,0x63,0x64,0x74,0x74, 0x41,0x41,0x41,0x42,0x52,0x62,0x63,0x64,0x74,0x74,0x74,
+        0x41,0x41,0x41,0x41,0x42,0x62,0x64,0x74,0x74,0x74,0x74, 0x40,0x40,0x40,0x40,0x40,0x00,0x04,0x04,0x04,0x04,0x04,
+        0x30,0x30,0x30,0x30,0x20,0x26,0x06,0x05,0x05,0x05,0x05, 0x30,0x30,0x30,0x20,0x27,0x26,0x16,0x06,0x05,0x05,0x05,
+        0x30,0x30,0x20,0x27,0x27,0x26,0x16,0x16,0x06,0x05,0x05, 0x30,0x20,0x27,0x27,0x27,0x26,0x16,0x16,0x16,0x06,0x05,
+        0x20,0x27,0x27,0x27,0x27,0x26,0x16,0x16,0x16,0x16,0x06 };
+    static const int8_t DX[8]={0,1,1,1,0,-1,-1,-1}, DY[8]={-1,-1,0,1,1,1,0,-1};
+    int M=U6_SURFACE_TILES-1, ox=(tx-sx)&M, oy=(ty-sy)&M; if(ox>512) ox-=1024; if(oy>512) oy-=1024;
+    if(ox<-5) ox=-5; if(ox>5) ox=5; if(oy<-5) oy=-5; if(oy>5) oy=5;
+    int v=F[(oy+5)*11+ox+5], d=(b==1)?(v>>4):(v&15);
+    *bx=(tx+DX[d])&M; *by=(ty+DY[d])&M; }
+/* the Avatar's blow landing on the actor id or the object oi; hit = the roll came good */
+static void avatar_blow(int id,int oi,int wobj,int ship,int hit,const world_t*w,int tx,int ty){
+    (void)tx; (void)ty;
+    int wmax=wobj?weapon_dmg(wobj):bare_hands_max(1);
     if(id>=0){
+        if(wobj==91 || id==1) return;                         /* Zu Ylem has done all it does in shot_spend */
         char nm[24]; obj_name(npc_tile(id),nm,sizeof nm); if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
         int mate=is_party_member(id); if(mate) actor_name(id,nm,sizeof nm);   /* a companion struck (combat.md §3d) */
-        if(!hit){ int n=msg_tail(); n=msgcat(n,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return 1; }
-        int dmg=status_dmg(id,combat_damage(wmax,g_aac[id],&g_crng));  /* weapon vs armour, then Protection (§5b) */
-        if(ship){ cannon_damage_actor(id,dmg,"Hit ","Killed "); return 1; }   /* the vehicle is the slayer: no experience */
+        if(!hit){ int n=msg_tail(); n=msgcat(n,"Missed "); n=msgcat(n,nm); msgcat(n,"."); return; }
+        note_striker(1,id);
+        int dmg=status_dmg(id,combat_damage(blow_max(1,wobj,id),g_aac[id],&g_crng));  /* weapon vs armour, then Protection (§5b) */
+        if(ship){ cannon_damage_actor(id,dmg,"Hit ","Killed "); return; }   /* the vehicle is the slayer: no experience */
         if(mate){                                             /* a companion takes the blow but never turns on the party */
-            if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); return 1; }
+            if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); glass_shatters(1,wobj); return; }
             int hp=g_ahp[id]; g_ahp[id]=(uint8_t)(dmg>=hp?0:hp-dmg);   /* at 0 it dies at the end of the turn (party_deaths) */
             int n=msg_tail(); if(g_ahp[id]==0){ n=msgcat(n,nm); msgcat(n," killed!"); } else { n=msgcat(n,"Hit "); n=msgcat(n,nm); msgcat(n,"!"); }
-            sync_party_hp(); return 1; }
+            sync_party_hp(); glass_shatters(1,wobj); return; }
         g_hostile[id]=1; g_coward[id]=0; g_alert[id]=1;       /* striking it makes it fight back (CB2); a struck coward turns to ASSAULT; a struck foe knows where you are */
-        if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); return 1; }
+        if(dmg<=0){ int n=msg_tail(); n=msgcat(n,nm); msgcat(n," grazed."); glass_shatters(1,wobj); return; }
         int hp=g_ahp[id]?g_ahp[id]:30;
         if(dmg>=hp){                                          /* killed */
             int gain=kill_exp(id);                       /* §3 exp-award table */
@@ -7345,15 +7435,108 @@ static int do_attack(world_t*w,int dx,int dy)
             int n=msg_tail(); n=msgcat(n,"Hit "); n=msgcat(n,nm); msgcat(n,"!");
             if(check_flee(id)) msgcat(n," It flees!");    /* CB4: wounded below 1/4 HP -> flees */
         }
-        return 1;
+        glass_shatters(1,wobj);
+        return;
     }
     if(oi>=0){
         int hs=other_ship_centre_at(tx,ty);                   /* another ship's centre: its hull (cannons.md §2) */
-        if(hs>=0){ int n=msg_tail(); msgcat(n, ship_obj_hull_hit(hs,combat_damage(wmax,0,&g_crng))?"Ship broke!":"The ship is hit!"); return 1; }
-        (void)obj_hit(w,oi,wmax); return 1;
+        if(hs>=0){ int n=msg_tail(); msgcat(n, ship_obj_hull_hit(hs,combat_damage(wmax,0,&g_crng))?"Ship broke!":"The ship is hit!"); return; }
+        (void)obj_hit(w,oi,wmax);
     }
+}
+/* A)ttack at the tile (dx,dy) from the Avatar with the current weapon: the crosshair's choice, or a click (§6b,
+ * §6c). Aboard a ship the cannons are the weapon (cannons.md §1). Returns 1 = a turn spent. */
+static int do_attack(world_t*w,int dx,int dy)
+{
+    int M=U6_SURFACE_TILES-1, ship=(g_veh_kind==412);
+    int wobj=atk_weapon(), mis=weapon_missile(wobj);
+    int ax=dx<0?-dx:dx, ay=dy<0?-dy:dy, dist=combat_dist(ax,ay), sx=(int)w->px, sy=(int)w->py;
+    int n0=g_atk_i?msg_tail():0;
+    if(!ax&&!ay){ msgcat(n0,"pass."); return 0; }
+    if(dist>weapon_range(wobj)){ msgcat(n0,"Out of range!"); return 0; }
+    if(ammo_of(wobj) && item_count(1,ammo_of(wobj))<=0){ msgcat(n0,ammo_of(wobj)==55?"Out of arrows!":"Out of bolts!"); return 0; }
+    int tx=(sx+dx)&M, ty=(sy+dy)&M;
+    int ranged=(wobj!=40 && wobj!=47) && (dist>1 || weapon_shoots(wobj) || wobj==412);   /* the morning star and halberd reach, never shoot */
+    int id=npc_at(w,tx,ty), oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
+    { char nm[24]; nm[0]=0;                                        /* what the crosshair rests on */
+      if(id>=0 && is_party_member(id)) actor_name(id,nm,sizeof nm);   /* a companion by its name, as Look does */
+      else if(id>=0) obj_name(npc_tile(id),nm,sizeof nm); else if(oi>=0) obj_name(g_wobj[oi].tile,nm,sizeof nm); else obj_name(world_tile(w,tx,ty),nm,sizeof nm);
+      int n=msgcat(n0,nm[0]?nm:"nothing"); msgcat(n,"."); }
+    if(ranged && !ship){ int s=interferer(1,sx,sy);
+        if(s>=0){ char nm[24]; if(is_party_member(s)) actor_name(s,nm,sizeof nm); else obj_name(npc_tile(s),nm,sizeof nm);
+            int n=msg_tail(); n=msgcat(n,nm); msgcat(n," interferes!"); return 1; } }
+    int atk=ship?30:hit_role(1,wobj), sure=(!ship && wobj==48);    /* §2; the glass sword never misses */
+    int hit=(id>=0) ? (sure || combat_hit(atk,dex_adj(id),&g_crng)) : (oi>=0);
+    int bolts=1;
+    if(wobj==50){ bolts=item_count(1,56); if(bolts>3) bolts=3; }
+    if(ranged){
+        if(!hit && id>=0){ tx=(tx+(int)rng_range(&g_crng,3)-1)&M; ty=(ty+(int)rng_range(&g_crng,3)-1)&M; }   /* a miss lands beside */
+        int aimx=tx, aimy=ty, lx, ly;
+        missile_fly(w,sx,sy,aimx,aimy,mis,&lx,&ly);
+        if(wobj==412) fx_show(w,lx,ly,TILE_EXPLOSION,6);               /* the cannonball bursts where it lands */
+        if(mis) fx_clear(w);
+        tx=lx; ty=ly;
+        id=npc_at(w,tx,ty); oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
+        shot_spend(w,1,wobj,sx,sy,tx,ty,id);
+        if(!hit) hit=(id>=0) ? (sure || combat_hit(atk,dex_adj(id),&g_crng)) : (oi>=0);
+        avatar_blow(id,oi,wobj,ship,hit,w,tx,ty);
+        for(int b=1;b<bolts;b++){ int bx,by; fan_tile(sx,sy,aimx,aimy,b,&bx,&by);
+            missile_fly(w,sx,sy,bx,by,mis,&lx,&ly); fx_clear(w);
+            id=npc_at(w,lx,ly); oi=(id<0)?objworld_at(&g_ow,lx,ly):-1;
+            avatar_blow(id,oi,wobj,0,(id>=0)?combat_hit(atk,dex_adj(id),&g_crng):(oi>=0),w,lx,ly); }
+        if(wobj==49){ int a,b; missile_fly(w,tx,ty,sx,sy,mis,&a,&b); fx_clear(w); }   /* the boomerang comes back */
+        return 1;
+    }
+    avatar_blow(id,oi,wobj,ship,hit,w,tx,ty);
     return 1;
 }
+/* one crosshair done: the next weapon's, or the command's time, 10 points as DOS charges (§6c) */
+static void attack_fire(world_t*w,int dx,int dy){
+    g_atk_cx=dx; g_atk_cy=dy;
+    if(do_attack(w,dx,dy)) g_atk_tried=1;
+    if(++g_atk_i<g_atk_n){ attack_aim(); g_next_verb='A'; return; }
+    g_atk_n=0; g_atk_i=0;
+    if(g_atk_tried){ g_atk_tried=0; w->turns++; w->min_pts=g_adex[1]; world_spend(w,10);
+        g_hour=clock_hour(w); g_minutes=clock_minutes(w); g_msg_append=1; step_npcs(w); g_msg_append=0; } }
+/* a foe or fighting companion attacks the tile (tx,ty) from (x,y) with wobj (§6c) */
+static void foe_damage(int att,int def,int dmg,const char*verb);
+static void npc_attack(const world_t*w,int att,int wobj,int x,int y,int tx,int ty){
+    int M=U6_SURFACE_TILES-1, mis=weapon_missile(wobj), ox=(tx-x)&M, oy=(ty-y)&M;
+    if(ox>512) ox-=1024; if(oy>512) oy-=1024;
+    int dist=combat_dist(ox,oy);
+    if(ammo_of(wobj) && item_count(att,ammo_of(wobj))<=0) return;
+    int ranged=(wobj!=40 && wobj!=47) && (dist>1 || weapon_shoots(wobj));
+    if(ranged && interferer(att,x,y)>=0) return;
+    int id=actor_on(w,tx,ty), bolts=1, sure=(wobj==48);
+    if(wobj==50){ bolts=item_count(att,56); if(bolts>3) bolts=3; if(bolts<1) bolts=1; }
+    int hit=(id>=0) && (sure || combat_hit(hit_role(att,wobj),dex_adj(id),&g_crng));
+    if(ranged && !hit){ tx=(tx+(int)rng_range(&g_crng,3)-1)&M; ty=(ty+(int)rng_range(&g_crng,3)-1)&M; }
+    int aimx=tx, aimy=ty;
+    for(int b=0;b<bolts;b++){ int bx=aimx, by=aimy, lx=bx, ly=by;
+        if(b) fan_tile(x,y,aimx,aimy,b,&bx,&by);
+        if(ranged){ missile_fly(w,x,y,bx,by,mis,&lx,&ly); if(mis) fx_clear(w); }
+        int d=actor_on(w,lx,ly);
+        if(ranged && !b) shot_spend(w,att,wobj,x,y,lx,ly,d);
+        if(d<0 || d==att || wobj==91) continue;
+        if(b || !hit){ if(!(sure || combat_hit(hit_role(att,wobj),dex_adj(d),&g_crng))){ if(is_party_member(d)||d==1||is_party_member(att)){
+                char an[24]; if(is_party_member(att)) actor_name(att,an,sizeof an); else obj_name(npc_tile(att),an,sizeof an);
+                int n=msgcat(0,an); msgcat(n," misses."); } continue; } }
+        if(is_party_member(d)||d==1) enemy_strike(att,d,wobj,1);
+        else if(is_party_member(att)) party_strike(att,d,wobj,1);
+        else foe_damage(att,d,status_dmg(d,combat_damage(blow_max(att,wobj,d),g_aac[d],&g_crng))," hits "); }
+    if(ranged && wobj==49){ int a,c; missile_fly(w,tx,ty,x,y,mis,&a,&c); fx_clear(w); } }
+/* in combat, a companion with a weapon that reaches a foe it can see shoots the nearest of them (§6c) */
+static int companion_shoots(const world_t*w,int i,int x,int y){
+    int best=-1, bd=99, M=U6_SURFACE_TILES-1, bx=0, by=0;
+    for(int j=2;j<U6_MAX_ACTORS;j++){ int ax,ay; if(!actor_hostile(j)||is_party_member(j)||!actor_pos(j,&ax,&ay)) continue;
+        int ox=(ax-x)&M, oy=(ay-y)&M; if(ox>512) ox-=1024; if(oy>512) oy-=1024;
+        int d=combat_dist(ox,oy); if(d<bd){ bd=d; best=j; bx=ax; by=ay; } }
+    if(best<0 || bd<2) return 0;
+    int wp=actor_pick_weapon(i,bd);
+    if(!wp || !missile_reaches(w,x,y,bx,by)) return 0;
+    g_facing[i]= by<y?0:by>y?2:bx>x?1:3;
+    npc_attack(w,i,wp,x,y,bx,by);
+    return 1; }
 
 /* ---- MAGIC: spellcasting (docs/rules/magic_skills.md) --------------------- */
 /* reagent bitmask of what the Avatar's inventory (g_ow) currently holds (§2). */
@@ -7457,13 +7640,45 @@ typedef struct { uint16_t obj_n, qty; uint8_t quality, frame, copies, flags; } k
 static kit_t   g_kit[U6_MAX_ACTORS-160][KIT_MAX];
 static uint8_t g_nkit[U6_MAX_ACTORS-160];
 static int summon_alloc(void){
-    for(int i=U6_MAX_ACTORS-2;i>=160;i--) if(i!=250 && g_atile[i]==0xffff){ g_nkit[i-160]=0; return i; }
+    for(int i=U6_MAX_ACTORS-2;i>=160;i--) if(i!=250 && g_atile[i]==0xffff){ g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
+            for(int k=0;k<U6_MAX_ACTORS;k++) if(g_last_striker[k]==i) g_last_striker[k]=0; g_last_striker[i]=0; return i; }
     return -1;
 }
 static void kit_add(int s,int on,int qty,int quality,int frame,int copies,int flags){
     if(s<160 || s>=U6_MAX_ACTORS || g_nkit[s-160]>=KIT_MAX) return;
     kit_t*k=&g_kit[s-160][g_nkit[s-160]++];
     k->obj_n=(uint16_t)on; k->qty=(uint16_t)qty; k->quality=(uint8_t)quality; k->frame=(uint8_t)frame; k->copies=(uint8_t)copies; k->flags=(uint8_t)flags; }
+/* what an attacker carries (combat.md §6c): item_count = how many of on; item_spend uses n up */
+static int item_count(int a,int on){
+    if(a==1||is_party_member(a)) return objworld_count(&g_ow,(uint16_t)on);
+    if(a<160) return 99;
+    int c=0; for(int k=0;k<g_nkit[a-160];k++){ const kit_t*e=&g_kit[a-160][k]; if(e->obj_n==on && !(e->flags&KIT_INCHEST)) c+=(int)e->qty*e->copies; }
+    return c; }
+static void kit_remove(int a,int k){ int n=g_nkit[a-160]; for(int m=k;m<n-1;m++) g_kit[a-160][m]=g_kit[a-160][m+1]; g_nkit[a-160]=(uint8_t)(n-1); }
+static void item_spend(int a,int on,int n){
+    if(a==1||is_party_member(a)){ int c=objworld_count(&g_ow,(uint16_t)on); objworld_consume(&g_ow,(uint16_t)on,n<c?n:c); return; }
+    if(a<160) return;
+    for(int k=0;k<g_nkit[a-160] && n>0;){ kit_t*e=&g_kit[a-160][k]; if(e->obj_n!=on || (e->flags&KIT_INCHEST)){ k++; continue; }
+        if((int)e->qty>n){ e->qty=(uint16_t)(e->qty-n); return; }
+        n-=e->qty; kit_remove(a,k); } }
+/* one wobj leaves: a spare first if spare_first and there is one, else the readied one; returns 1 if one went */
+static int weapon_spend(int a,int on,int spare_first){
+    int party=(a==1||is_party_member(a));
+    if(!party && a<160) return 1;
+    if(spare_first){
+        if(party && objworld_count(&g_ow,(uint16_t)on)>0){ objworld_consume(&g_ow,(uint16_t)on,1); return 1; }
+        if(!party) for(int k=0;k<g_nkit[a-160];k++){ kit_t*e=&g_kit[a-160][k]; if(e->obj_n==on && !(e->flags&(KIT_READY|KIT_INCHEST))){ if(e->copies>1) e->copies--; else kit_remove(a,k); return 1; } } }
+    for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]==on){ (void)equip_unready(g_aready[a],sl);
+        if(!party) for(int k=0;k<g_nkit[a-160];k++){ kit_t*e=&g_kit[a-160][k]; if(e->obj_n==on && (e->flags&KIT_READY)){ if(e->copies>1) e->copies--; else kit_remove(a,k); break; } }
+        equip_fold(g_aready[a],&g_aweapon[a],&g_aac[a]); if(a==1) g_avatar_weapon=g_aweapon[1]; return 1; }
+    return 0; }
+/* §6c: its readied weapon of the most damage that reaches distance d, or 0 for its hands */
+static int actor_pick_weapon(int a,int d){
+    int best=0, bd=0, any=0;
+    for(int sl=0;sl<EQ_NSLOTS;sl++){ int on=g_aready[a][sl]; if(!on) continue; any=1;
+        int m=weapon_dmg(on); if(m>bd && weapon_range(on)>=d){ bd=m; best=on; } }
+    if(!any && g_aweapon[a] && weapon_range(g_aweapon[a])>=d) best=g_aweapon[a];    /* a fold without its items */
+    return best; }
 static int rng_between(int lo,int hi){ return lo+(int)rng_range(&g_egg_rng,hi-lo+1); }
 static const uint8_t KIT_FOOD[3]={129,133,128};             /* meat, ham, bread */
 /* roll a hatchling's weapons, armour and treasure (eggs.md §3c); readies what fits and folds it into
@@ -7496,6 +7711,7 @@ static void hatch_kit(int s,int obj_n){
             if(rng_between(0,3)==0) kit_add(s,275,1,0,rng_between(0,7),1,0); }
         else if(v==88) kit_add(s,88,rng_between(1,30)+rng_between(1,30),0,0,1,0);
         else kit_add(s,v,1,0,0,1,0); }
+    for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[s][sl]=set[sl];
     equip_fold(set,&g_aweapon[s],&g_aac[s]); }
 /* place a creature actor of obj_n at (x,y). mode: 1=allied, 2=hostile. Returns its slot or -1. */
 static int summon_creature(int x,int y,uint16_t obj_n,uint8_t mode,uint8_t life,uint8_t hp){
@@ -7674,6 +7890,7 @@ static int clone_actor(world_t*w,int id){
         g_actx[s]=(uint16_t)x; g_acty[s]=(uint16_t)y; g_actz[s]=0;
         g_ahp[s]=g_ahp[id]; g_amaxhp[s]=g_amaxhp[id]; g_astr[s]=g_astr[id]; g_adex[s]=g_adex[id]; g_aint[s]=g_aint[id];
         g_aweapon[s]=g_aweapon[id]; g_aac[s]=g_aac[id]; g_aflee[s]=0; g_asleep[s]=g_paralyze[s]=g_charm[s]=0;
+        for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[s][sl]=g_aready[id][sl];
         g_summon[s]=(uint8_t)(hostile?2:1); g_summon_life[s]=40;
         g_align_hostile[s]=(uint8_t)(hostile?1:0); g_hostile[s]=0; g_alert[s]=(uint8_t)(hostile?1:0);
         return s;
@@ -8608,7 +8825,7 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
 {
     if(verb=='C'){ return cast_spell(w, g_nparty?g_party[0].actor:1, g_cast_spell, dx, dy); }
     if(verb=='O'){ return orb_gate(w,dx,dy); }        /* the Orb of the Moons: where the red gate opens (moongates.md §3) */
-    if(verb=='A'){ return do_attack(w,dx,dy); }
+    if(verb=='A'){ attack_fire(w,dx,dy); return 1; }
     if(verb=='L'){ do_verb(w,'L',dx,dy); return 0; }
     if(verb=='U'){ return do_verb(w,'U',dx,dy); }   /* recompose: doors, vehicle board/exit move the view */
     if(verb=='G'){ return do_verb(w,'G',dx,dy); }
@@ -10620,6 +10837,7 @@ static void bot_report(const world_t*w)
     n=bot_kv(n,"L",w->level); n=bot_kv(n,"X",(long)w->px); n=bot_kv(n,"Y",(long)w->py);
     n=bot_kv(n,"min",clock_minutes(w)); n=bot_kv(n,"day",day); n=bot_kv(n,"mon",mon); n=bot_kv(n,"yr",yr);
     n=bot_put(n," verb="); { char v[2]={(char)(g_pending_verb?g_pending_verb:'-'),0}; n=bot_put(n,v); }
+    n=bot_kv(n,"cx",g_tcur_dx); n=bot_kv(n,"cy",g_tcur_dy);
     n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
     { int sp=0; for(int s=0;s<SPELL_COUNT;s++) sp+=g_known[s]; n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58)); }
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
@@ -12503,6 +12721,73 @@ int main(int argc, char **argv)
             #undef FS_MSG
         }
     }
+    /* headless ATTACK checks (combat.md §6c): ATTACK.REQ byte picks one */
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("ATTACK.REQ",1,&gl);
+        if(gq && gl>0){ int mode=gq[0], M=U6_SURFACE_TILES-1;
+            /* a clear spot: 13 by 13 tiles with no wall, water, object or actor; the companions stand well off */
+            int X=-1,Y=-1;
+            for(int y=300;y<500 && X<0;y+=3) for(int x=300;x<600 && X<0;x+=3){ int ok=1;
+                for(int j=-6;j<=6&&ok;j++) for(int i=-6;i<=6&&ok;i++){ int tx=x+i, ty=y+j; if(!world_is_passable(&w,tx,ty)||tile_is_water(&w,tx,ty)||missile_boundary_at(&w,tx,ty)||objworld_at(&g_ow,tx,ty)>=0||npc_at(&w,tx,ty)>=0) ok=0; }
+                if(ok){ X=x; Y=y; } }
+            dbg_num("AT spot x=", X); dbg_num("AT spot y=", Y);
+            teleport_party(&w,X,Y); w.px=(uint16_t)X; w.py=(uint16_t)Y; g_atk_cx=g_atk_cy=0;
+            for(int p=0;p<g_nparty;p++){ int a_=g_party[p].actor; if(a_!=1){ g_actx[a_]=(uint16_t)(X-30); g_acty[a_]=(uint16_t)(Y-30+p); } }
+            build_blocked();
+            for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl);
+            equip_refold(1);
+#define AT_MSG(t) do{ Cconws(t); Cconws(": "); Cconws(g_msg); Cconws("\r\n"); g_msg[0]=0; }while(0)
+#define AT_CLR(on) do{ int c_=objworld_count(&g_ow,(on)); if(c_) objworld_consume(&g_ow,(on),c_); }while(0)
+            if(mode=='1'){                                          /* bow: arrows, range, pass, time */
+                AT_CLR(55); (void)equip_ready(g_aready[1],41); equip_refold(1);
+                arm_attack(); Cconws(g_atk_prompt); Cconws("\r\n");
+                int c0=(int)w.clock, m0=(int)w.mp_acc; (void)do_attack(&w,3,0); AT_MSG("no arrows");
+                inv_add_objn(55,5); (void)do_attack(&w,0,0); AT_MSG("own tile"); (void)do_attack(&w,6,0); AT_MSG("6 east"); (void)do_attack(&w,4,3); AT_MSG("(4,3), distance 6");
+                (void)do_attack(&w,3,3); AT_MSG("(3,3), distance 4"); dbg_num("AT arrows after one shot=", objworld_count(&g_ow,55));
+                g_atk_i=0; g_atk_n=0; attack_fire(&w,3,0); g_msg[0]=0; dbg_num("AT arrows=", objworld_count(&g_ow,55));
+                dbg_num("AT clock moved=", (int)w.clock-c0); dbg_num("AT points then=", m0); dbg_num("AT points now=", (int)w.mp_acc); dbg_num("AT dex=", g_adex[1]); }
+            if(mode=='2'){                                          /* thrown daggers */
+                AT_CLR(38); (void)equip_ready(g_aready[1],38); equip_refold(1); inv_add_objn(38,1);
+                (void)do_attack(&w,1,0); AT_MSG("dagger beside"); dbg_num("AT daggers in pack=", objworld_count(&g_ow,38)); dbg_num("AT readied=", has_readied(1,38));
+                (void)do_attack(&w,3,0); AT_MSG("dagger thrown, spare"); dbg_num("AT daggers in pack=", objworld_count(&g_ow,38)); dbg_num("AT readied=", has_readied(1,38));
+                                { int o=obj_idx_at(X+3,Y,38); dbg_num("AT lies there=", o>=0); if(o>=0) dbg_num("AT owned=", g_wobj[o].owned); }
+                int s=summon_creature(X+2,Y,368,2,0,100); dbg_num("AT skeleton=", s); g_alert[s]=0;
+                (void)do_attack(&w,2,0); AT_MSG("dagger at skeleton"); dbg_num("AT readied=", has_readied(1,38)); dbg_num("AT on tile=", obj_idx_at(X+2,Y,38)>=0);
+                dbg_num("AT unarmed now=", g_avatar_weapon==0); }
+            if(mode=='3'){                                          /* interference, half damage, glass */
+                int s=summon_creature(X+1,Y,368,2,0,100); dbg_num("AT skeleton=", s); g_adex[s]=30;
+                dbg_num("AT sword max vs skeleton=", blow_max(1,43,s)); dbg_num("AT magic bow max=", blow_max(1,54,s));
+                (void)equip_ready(g_aready[1],41); equip_refold(1); inv_add_objn(55,5); int a0=objworld_count(&g_ow,55);
+                for(int t=0;t<40 && g_last_striker[1]!=s;t++){ enemy_attack(s,1); g_ahp[1]=g_amaxhp[1]; }
+                dbg_num("AT striker noted=", g_last_striker[1]==s);
+                (void)do_attack(&w,3,0); AT_MSG("shot with it beside"); dbg_num("AT arrows used=", a0-objworld_count(&g_ow,55));
+                g_paralyze[s]=1; (void)do_attack(&w,3,0); AT_MSG("it is paralysed"); dbg_num("AT arrows used=", a0-objworld_count(&g_ow,55)); g_paralyze[s]=0;
+                (void)equip_unready(g_aready[1],0); for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl); (void)equip_ready(g_aready[1],48); equip_refold(1);
+                arm_attack(); (void)do_attack(&w,1,0); AT_MSG("glass sword"); dbg_num("AT glass left=", has_readied(1,48)); }
+            if(mode=='4'){                                          /* a foe's bow */
+                int s=summon_creature(X+4,Y,368,2,200,50); dbg_num("AT foe=", s); g_alert[s]=1; g_hostile[s]=1; g_ainvis[s]=0;
+                for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[s][sl]=0; g_nkit[s-160]=0;
+                (void)equip_ready(g_aready[s],41); equip_fold(g_aready[s],&g_aweapon[s],&g_aac[s]); kit_add(s,41,1,0,0,1,KIT_READY); kit_add(s,55,3,0,0,1,0); kit_add(s,38,1,0,0,2,0);
+                dbg_num("AT picks at 4=", actor_pick_weapon(s,4)); dbg_num("AT picks at 6=", actor_pick_weapon(s,6));
+                int x0=g_actx[s], y0=g_acty[s], hp0=g_ahp[1]+g_ahp[g_party[1].actor];
+                for(int t=0;t<8;t++){ g_msg[0]=0; step_npcs(&w); dbg_num("AT turn x=", g_actx[s]); dbg_num("AT arrows left=", item_count(s,55)); if(g_msg[0]) AT_MSG("foe"); }
+                dbg_num("AT foe stayed=", g_actx[s]==x0 && g_acty[s]==y0); dbg_num("AT party hp lost=", hp0-g_ahp[1]-g_ahp[g_party[1].actor]); }
+            if(mode=='5'){                                          /* two weapons, one command; triple crossbow; oil; Zu Ylem; wand */
+                (void)equip_ready(g_aready[1],43); (void)equip_ready(g_aready[1],38); equip_refold(1); AT_CLR(38);
+                arm_attack(); dbg_num("AT weapons=", g_atk_n); Cconws(g_atk_prompt); Cconws("\r\n"); int c0=(int)w.clock+(int)w.mp_acc*0, m0=(int)w.mp_acc, tu=(int)w.turns;
+                resolve_target(&w,'A',1,0); Cconws("next: "); Cconws(g_atk_prompt); Cconws("\r\n"); dbg_num("AT next verb=", g_next_verb); dbg_num("AT turns during=", (int)w.turns-tu); g_next_verb=0;
+                resolve_target(&w,'A',0,2); AT_MSG("second"); dbg_num("AT turns after=", (int)w.turns-tu); dbg_num("AT next=", g_next_verb); (void)c0; (void)m0;
+                for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl); (void)equip_ready(g_aready[1],50); equip_refold(1); AT_CLR(56); inv_add_objn(56,5);
+                int s=summon_creature(X+4,Y,342,2,0,1), s2=summon_creature(X+4,Y-1,342,2,0,1), s3=summon_creature(X+3,Y,342,2,0,1);
+                dbg_num("AT rats=", s>=0&&s2>=0&&s3>=0); (void)do_attack(&w,4,0); AT_MSG("triple"); dbg_num("AT bolts=", objworld_count(&g_ow,56));
+                objworld_consume(&g_ow,56,1); (void)do_attack(&w,4,0); AT_MSG("triple, one left"); dbg_num("AT bolts=", objworld_count(&g_ow,56)); (void)do_attack(&w,4,0); AT_MSG("no bolts");
+                for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl); (void)equip_ready(g_aready[1],83); equip_refold(1); AT_CLR(83); inv_add_objn(83,1);
+                (void)do_attack(&w,0,3); AT_MSG("oil"); dbg_num("AT flasks=", objworld_count(&g_ow,83)); dbg_num("AT fire there=", field_at(X,Y+3)>=0);
+                for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl); (void)equip_ready(g_aready[1],91); equip_refold(1); AT_CLR(91); inv_add_objn(91,1);
+                int r=summon_creature(X-1,Y,342,2,0,20); g_adex[r]=1; arm_attack(); dbg_num("AT rat hp=", g_ahp[r]); inv_add_objn(91,8); for(int t=0;t<8 && !g_asleep[r];t++){ g_msg[0]=0; (void)do_attack(&w,-1,0); } AT_MSG("Zu Ylem"); dbg_num("AT rat hp=", g_ahp[r]); dbg_num("AT rat asleep=", g_asleep[r]); dbg_num("AT ylem left=", objworld_count(&g_ow,91));
+            }
+            if(mode=='6'){ (void)equip_ready(g_aready[1],79); equip_refold(1);
+                int v=0; for(int t=0;t<600 && has_readied(1,79);t++){ g_msg[0]=0; (void)do_attack(&w,0,-1); v++; if(t%50==0) dbg_num("AT shots=", v); } AT_MSG("wand"); dbg_num("AT wand gone after shots=", v); dbg_num("AT unarmed=", g_avatar_weapon==0); }
+            (void)M; } }
     /* headless THEFT checks (usecode_use.md, Theft): THEFT.REQ byte: '1' unseen, '2' seen then Yes, '3' seen then No */
     {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("THEFT.REQ",1,&gl);
         if(gq && gl>0){ int mode=gq[0], nown=0, ntot=0, it=-1, guard=-1, by=-1;
@@ -12803,7 +13088,7 @@ int main(int argc, char **argv)
             }
             if(mode=='4'){                                          /* A)ttack on objects, the crosshair, the data facts (combat.md §3b, §6b) */
                 int M=U6_SURFACE_TILES-1; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[1][sl]=0;   /* hands free for the two-handed bow */
-                (void)equip_ready(g_aready[1],41); equip_refold(1); dbg_num("CANNON bow readied=", g_avatar_weapon==41);
+                (void)equip_ready(g_aready[1],41); equip_refold(1); inv_add_objn(55,20); dbg_num("CANNON bow readied=", g_avatar_weapon==41);
                 int tx=-1,ty=-1; for(int d=3;d<=5 && tx<0;d++){ int x=(w.px+d)&M, y=w.py; if(world_is_passable(&w,x,y) && npc_at(&w,x,y)<0 && objworld_at(&g_ow,x,y)<0 && !missile_boundary_at(&w,x,y)){ tx=x; ty=y; } }
                 int free_d=tx<0?0:((tx-(int)w.px)&M); dbg_num("CANNON free tile east at=", free_d);
                 if(tx>=0){

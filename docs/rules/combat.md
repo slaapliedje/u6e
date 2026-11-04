@@ -203,8 +203,97 @@ attack also needs a clear line (map_line_hit_check). MVP is MELEE only. The SHIP
   axe 548, dagger 549, bow/magic bow 566 (arrow), crossbows 567 (bolt), boomerang 560, oil
   flask 601, Zu Ylem 612, lightning wand 392, fire wand 393, cannons 399.
 - Ranges (§6): spear 4 and boomerang 5 as the reference's table; Zu Ylem 4, wands 7.
-- Not modelled: the "half damage" creature flag, the triple crossbow's three bolts, thrown
-  weapons landing on the map, ammunition (bows need no arrows), "pass." on the Avatar's own tile.
+- Ammunition, thrown weapons, the half-damage creatures and the rest: §6c.
+
+## 6c. What DOS GAME.EXE 4.5 does (read 2026-11-04)
+DOS is the rule; this replaces §6 and §6b wherever they differ.
+
+**Distance** is not the larger of dx and dy but this table (rows |dx|, columns |dy|; 8 or more either way = 9):
+
+```
+0 1 2 3 4 5 6 7
+1 1 2 3 4 5 6 7
+2 2 2 3 4 5 6 7
+3 3 3 4 5 6 7 7
+4 4 4 5 6 7 7 8
+5 5 5 6 7 7 8 8
+6 6 6 7 7 8 8 8
+7 7 7 7 8 8 8 8
+```
+
+An attack costs **10 movement points**, the player's and anyone else's; a step costs 5.
+
+**Ranges** (anything else 1): morning star 40 and halberd 47 = 2 (a strike, never a shot); dagger 38 and throwing
+axe 37 = 3; sling 33, spear 36, Zu Ylem 91 = 4; flask of oil 83, bow 41, boomerang 49, ship 412 = 5; crossbow 42,
+triple crossbow 50, magic bow 54, wands 79/80 = 7.
+
+**What counts as a weapon:** an item with a row in the damage table of §4, which also has Zu Ylem 91 = 0 and the
+tools 100 = 6, 101, 103, 104, 105, 113, 114, 141 = 4, 109 = 2.
+
+**The player's A)ttack** goes through every readied weapon of the party leader in turn, up to 8, one crosshair each:
+"Attack with sword-" for the first, the same on a new line for the next. With none: "Attack with bare hands-"; aboard
+a ship "Attack with ship cannons-". A later weapon's crosshair stays where the last one was unless that is beyond its
+range, then it goes back to the attacker. A new A)ttack also starts where the last crosshair was, if in range. All of
+this is one turn, and only if something was actually tried.
+- Aimed at the attacker's own tile: `pass.`, no attack.
+- Beyond range: `Out of range!`, the turn isn't spent by that weapon.
+- Bow or magic bow without an arrow (55): `Out of arrows!`; crossbow or triple crossbow without a bolt (56):
+  `Out of bolts!`. No attack.
+
+**One attack** (anyone's: the player, a companion, a foe). In this order:
+1. Out of range: stop. No ammunition: stop (silently for all but the player).
+2. It is a **shot** when the target is beyond one tile, or the weapon is a sling, throwing axe, bow, crossbow,
+   boomerang, flask of oil, triple crossbow, Zu Ylem or wand; never for the morning star or halberd.
+3. **Interference:** a shot isn't fired if the last one to strike the attacker from beside it still stands beside it,
+   alive, awake, not paralysed and not invisible (in Time Stop, only if that one is in the party). The player sees
+   "<name> interferes!". The turn is spent and no ammunition is used. A blow "from beside" is a blow that landed, from
+   within one tile.
+4. Hit roll against the actor on the target (§2). A shot that misses scatters the target by −1..1 each way, and if an
+   actor stands on the new target's line end the roll is made for it instead when the flight ends (as §6b).
+5. A shot flies (§6b) and uses what it uses:
+   - bow, magic bow: 1 arrow; crossbow: 1 bolt; triple crossbow: 3 bolts (all that are left if fewer);
+   - spear, throwing axe, dagger, if the landing tile is beyond one tile from the attacker: one of them, a spare from
+     the pack first, else the readied one. If an actor is on the landing tile, it is gone. Else it lies there free to
+     take, unless the tile is water and impassable, or one of the four tiles 252..255, with nothing there to hold it:
+     then it is gone.
+   - flask of oil: one; unless the landing tile is water, it burns: a fire field there.
+   - Zu Ylem: one; an actor on the landing tile is put to sleep, as by the spell, hit roll or not; no damage.
+   - wands: 1 chance in 100 the wand goes: `A wand has vanished!`.
+   - boomerang: flies back to the attacker afterwards.
+6. Damage on a hit, with the actor on the landing tile as the defender, weapon max as §4 and §3. Against a daemon 367,
+   ghost 352 or skeleton 368, the max is halved rounding up, except with the glass sword, triple crossbow or magic bow.
+7. A hit with the glass sword 48: `Thy sword hath shattered!`, the sword is gone.
+
+**The triple crossbow** fires up to 3 bolts, the number of bolts carried at most: one on the target (after any scatter),
+two on tiles beside it, given by this 11×11 table of the target's offset from the shooter (row dy+5, column dx+5, high
+and low nibble = the two directions, 0 north and clockwise to 7). Offsets beyond 5 are taken as 5 (DOS reads a neighbouring
+row there; the player's crosshair can't reach them).
+
+```
+42 52 52 52 52 62 63 63 63 63 64
+41 42 52 52 52 62 63 63 63 64 74
+41 41 42 52 52 62 63 63 64 74 74
+41 41 41 42 52 62 63 64 74 74 74
+41 41 41 41 42 62 64 74 74 74 74
+40 40 40 40 40 00 04 04 04 04 04
+30 30 30 30 20 26 06 05 05 05 05
+30 30 30 20 27 26 16 06 05 05 05
+30 30 20 27 27 26 16 16 06 05 05
+30 20 27 27 27 26 16 16 16 06 05
+20 27 27 27 27 26 16 16 16 16 06
+```
+
+The first bolt uses the first hit roll; the others each roll against the actor on their own line's end. The crossbow's
+damage is not halved (above).
+
+**A foe or a fighting companion** picks its weapon when it attacks: among its readied weapons, the one with the highest
+damage whose range reaches the target; with none, its bare hands (the creature table's damage; range 1). It attacks
+when the target is in that range with a clear line, else it moves. So a bow foe shoots from up to 5 tiles and, out of
+arrows, stands and does nothing there. A hatchling's arrows and thrown spares are those it was given (eggs.md §3c).
+
+Ours: a town NPC's pack isn't in memory, so it never runs out and doesn't lose what it throws. One person's arrows are
+the party's pooled pack (usecode_vm.md §6f). The order of a member's weapons is by slot, DOS's by carrying order. A
+triple crossbow's bolts fly one after the other. Sounds are not played.
 
 ## 7. Enemy AI (worktype)
 Hostile actors run worktype ASSAULT: each turn, path one step toward the nearest party member
@@ -411,6 +500,9 @@ Captures: game_combat.png (melee kill), game_cb2.png (enemy wounds unarmoured pa
 game_cb3.png (bow kill at range), game_cb3b.png (armoured party shrugs off the slug),
 cb4.png (wounded slug flees south while a gargoyle assaults the party).
 Unit test: `make combattest` (hit/damage distributions + weapon/range/armour tables).
+- `ATTACK.REQ` (§6c): '1' a bow: arrows, the distance table, `pass.`, the time; '2' thrown daggers, spare first, lying
+  free to take, gone on an actor; '3' interference, half damage, the glass sword; '4' a foe's bow: 3 arrows, then it
+  stands; '5' two weapons in one command, the triple crossbow, oil, Zu Ylem; '6' a wand until it vanishes.
 - `FOESPELL.REQ` (§7b, seeded RNG): '1' a mage 3 tiles from the party casts over 30 turns (which
   spells, the party's wounds / conditions); '2' the same under Negate Magic: no cast; '3' a gazer's
   Charm turns a companion against the party until it wears off; '4' a giant spider webs the party;

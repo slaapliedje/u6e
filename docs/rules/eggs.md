@@ -85,6 +85,8 @@ holds until slain) and decides its turns:
 
 ## 3c. What a hatchling carries (2026-11-01; the reference's actor_init, read for understanding)
 
+The readied ones and the ammunition are what it really fights with (combat.md §6c): it runs out.
+
 A creature that hatches is given a kit from its type's row of the reference creature table
 (four lists: innate spells, weapons, armour, treasure). The spells are the charges of
 combat.md §7b. The other three lists are each rolled the same way: the chance starts at 1 in 2

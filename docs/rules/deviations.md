@@ -9,19 +9,19 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 > Provenance
 > - Derived from : the deviation / simplification sections of the rule specs listed below (each of
 >   which cites the reference code it was read against). Nothing new is asserted here.
-> - Last updated : 2026-11-04 (Stones while camping is played, as on the ST)
+> - Last updated : 2026-11-04 (attacks as DOS has them)
 
 ## Combat and creatures
 | Deviation | Where | Status |
 |---|---|---|
-| Not modelled: the "half damage" creature flag, the triple crossbow's three bolts, thrown weapons landing on the map, ammunition (bows need no arrows), "pass." on the Avatar's own tile | combat.md §4/§6 | open |
+| Attacks follow DOS (combat.md §6c), except: a town NPC never runs out of ammunition and keeps what it throws, as its pack isn't in memory; a member's weapons go by slot, not carrying order; the triple crossbow's bolts fly in turn; no sounds | combat.md §6c | accepted |
+| G)et, U)se, D)rop and the other verbs that aren't a walk, a push or an attack spend no time; not yet checked against DOS | movement_turns.md | open |
 | The ship's cannonball bursts where it lands (the reference's ship shot is a plain projectile); another ship's centre loses the rolled damage and "breaks" at 0 without a raft | cannons.md §5 | accepted |
 | NPC ships never fire back: no ship actor and no ship-hatching egg exist in the data | cannons.md §5 | data |
 | Movement types: no passing over / under other actors (mice, dragons), no mouseholes | combat.md §7c | open |
 | Hatched worktypes: the coward's sight range is 5 for every flee code (reference 3 / 8, and a cornered retreater fights back); the stationary strike is a per-neighbour 16/81 chance, not 16 random picks; "toward a point ten tiles off" is one step; the tangle vine never crawls | eggs.md §5 | accepted |
 | Hatching: free actor slots only (an embryo is skipped when none is free); toss-to-free-tile searches 5×5 (the reference tries 3×2 / 2×3 / 4×4 spreads), no grouping by type | eggs.md §5 | accepted |
 | The experience formula's reading of the reference's actor table is ours (table values, evil/chaotic only); the shrine thresholds come from the scripts | combat.md §3 | accepted |
-| Foes fight hand to hand with whatever their kit readied, bows and slings included (the reference's foes shoot them); a hatchling folds its readied items into one weapon (the best) and summed armour | eggs.md §3c | open |
 | A party member brought to 0 HP costs 5 karma whatever the cause (the reference takes it in its blow / spell damage path) | combat.md §3d | accepted |
 | L)ook at an ACTOR shows the terrain under it (the reference names the actor and shows its portrait) | usecode_use.md (Clock and sundial) | open |
 

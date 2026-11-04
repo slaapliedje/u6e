@@ -34,28 +34,46 @@ int weapon_dmg(int obj_n)
     case 47: return 30;  case 48: return 255; case 49: return 8;   case 50: return 12;
     case 54: return 20;  case 78: return 4;   case 79: return 30;  case 80: return 20;
     case 83: return 4;   case 221: return 90; case 412: return 30;
+    case 100: return 6;  case 101: return 4;  case 103: return 4;  case 104: return 4;
+    case 105: return 4;  case 109: return 2;  case 113: return 4;  case 114: return 4;
+    case 141: return 4;   /* tools: combat.md §6c */
     default: return 0;
     }
 }
 
-/* §6 weapon range in tiles (1 = melee/reach). Projectile weapons reach farther. */
+/* §6c weapon range (1 = melee). The morning star and halberd reach 2 without shooting. */
 int weapon_range(int obj_n)
 {
     switch (obj_n){
-    case 41: return 5;   /* bow            */
-    case 42: return 7;   /* crossbow       */
-    case 50: return 7;   /* triple crossbow*/
-    case 54: return 7;   /* magic bow      */
-    case 33: return 4;   /* sling          */
-    case 37: return 3;   /* throwing axe   */
-    case 36: return 4;   /* spear (thrown) */
-    case 49: return 5;   /* boomerang      */
-    case 91: return 4;   /* Zu Ylem        */
-    case 79: return 7;   /* lightning wand */
-    case 80: return 7;   /* fire wand      */
-    case 412: return 5;  /* a ship's cannons (cannons.md §1) */
-    default: return 1;   /* melee          */
+    case 40: case 47: return 2;   /* morning star, halberd */
+    case 37: case 38: return 3;   /* throwing axe, dagger  */
+    case 33: case 36: case 91: return 4;   /* sling, spear, Zu Ylem */
+    case 41: case 49: case 83: case 412: return 5;   /* bow, boomerang, oil, a ship's cannons (cannons.md §1) */
+    case 42: case 50: case 54: case 79: case 80: return 7;   /* crossbows, magic bow, wands */
+    default: return 1;
     }
+}
+
+/* §6c: an item that fights when readied (a row in the damage table, Zu Ylem's being 0) */
+int weapon_is(int obj_n){ return obj_n==91 || weapon_dmg(obj_n)>0; }
+
+/* §6c: never mind the distance, this weapon shoots (the morning star and halberd never do) */
+int weapon_shoots(int obj_n)
+{
+    switch (obj_n){
+    case 33: case 37: case 41: case 42: case 49: case 50: case 79: case 80: case 83: case 91: return 1;
+    default: return 0;
+    }
+}
+
+/* §6c distance: a table, not the larger of dx and dy */
+int combat_dist(int dx,int dy)
+{
+    static const uint8_t T[8][8]={ {0,1,2,3,4,5,6,7},{1,1,2,3,4,5,6,7},{2,2,2,3,4,5,6,7},{3,3,3,4,5,6,7,7},
+                                   {4,4,4,5,6,7,7,8},{5,5,5,6,7,7,8,8},{6,6,6,7,7,8,8,8},{7,7,7,7,8,8,8,8} };
+    if(dx<0) dx=-dx;
+    if(dy<0) dy=-dy;
+    return (dx>=8||dy>=8) ? 9 : T[dx][dy];
 }
 
 /* §6b the tile a weapon throws or shoots (0 = not a missile weapon). */

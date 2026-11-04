@@ -35,6 +35,18 @@ def sections(refdir, npc):
 class Danger(Exception): pass                  # a member is near death with foes about: stop what you are doing
 
 class Player:
+    def aim_fire(self, dx, dy, why):
+        """the armed A)ttack crosshair (it starts where the last one was: combat.md §6c) onto (dx,dy), and fire every readied weapon there"""
+        st = self.g.state
+        for _ in range(12):
+            cx, cy = int(st['cx']), int(st['cy'])
+            if (cx, cy) == (dx, dy): break
+            k = 'right' if cx < dx else 'left' if cx > dx else 'down' if cy < dy else 'up'
+            st = self.key(k)
+        st = self.key('ret', why)
+        while st['verb'] == 'A': st = self.key('ret', why)
+        return st
+
     def __init__(self, game, outdir, refdir, log=print):
         self.g, self.out, self.log, self.ref = game, outdir, log, refdir
         self.nav = Nav(game, log); self.nav.keyfn = lambda k: self.key(k, 'walk')
@@ -241,9 +253,7 @@ class Player:
             if max(abs(dx), abs(dy)) <= 1:
                 self.key('a', 'attack')
                 if self.g.state['verb'] != 'A': self.issue('combat', 'A did not arm Attack- (verb=%r)' % self.g.state['verb']); break
-                if dx: self.key('right' if dx > 0 else 'left')
-                if dy: self.key('down' if dy > 0 else 'up')
-                st = self.key('ret', 'attack %d' % f['id'])
+                st = self.aim_fire(dx, dy, 'attack %d' % f['id'])
                 misses = misses + 1 if 'Missed' in st['msg'] else 0
                 if 'not' in st['msg'].lower() and 'implemented' in st['msg'].lower(): self.issue('combat', 'attack: %r' % st['msg'])
             else:

@@ -41,7 +41,7 @@ u6e keeps one world turn per step (NPCs and the party act once per step, which m
 reference while their dexterities are close to the Avatar's) and charges the clock separately:
 the step's points accumulate and a minute passes per *Avatar dexterity* points (`world_spend`).
 A passed turn (space) ends the current minute. Vehicles spend their own points (wind.md §2) the
-same way; a M)ove push spends 5. Rest keeps explicit ten-minute rest turns (rest.md).
+same way; a M)ove push spends 5, an A)ttack 10 (combat.md §6c). Rest keeps explicit ten-minute rest turns (rest.md).
 Diagonal cost not yet distinguished; terrain impedance is not added yet.
 
 Until 2026-10-30 a step cost a flat **10 minutes** (a placeholder): a day passed in ~144 steps,

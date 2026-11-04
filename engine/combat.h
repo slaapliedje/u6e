@@ -17,7 +17,10 @@ int combat_damage(int weapon_max, int ac, rng_t *r);
 
 /* Static U6 tables (docs/rules/combat.md §4-6), by object number. */
 int weapon_dmg(int obj_n);    /* §4 max damage; 0 if obj_n is not a weapon            */
-int weapon_range(int obj_n);  /* §6 attack range in tiles; 1 = melee, >1 = ranged     */
+int weapon_range(int obj_n);  /* §6c attack range; 1 = melee */
+int weapon_is(int obj_n);     /* §6c: fights when readied */
+int weapon_shoots(int obj_n); /* §6c: shoots at any distance */
+int combat_dist(int dx,int dy);   /* §6c the distance table */
 int weapon_missile(int obj_n);/* §6b the missile tile a weapon shoots; 0 = none        */
 int armour_ac(int obj_n);     /* §5 armour-class contribution of a readied item; 0 if not armour */
 
