@@ -2613,6 +2613,8 @@ int main(int argc, char **argv)
               if(v!=U6SHAPE_TRANSPARENT && VX[k]+x<320) dr[VX[k]+x]=v; } } }
         { int mw=0,mh=0; uint8_t *m0=load_shape(dir,"MONTAGE.SHP",0,&mw,&mh);   /* + a face at (195,118) */
           if(m0){ for(int y=0;y<mh;y++) for(int x=0;x<mw;x++){ int sx=195+x, sy=118+y; if(sx<320&&sy<200) vsc[sy*320+sx]=(m0[y*mw+x]==U6SHAPE_TRANSPARENT)?0:m0[y*mw+x]; } free(m0); } }
+        { int tw=0,th=0; uint8_t *t0=load_shape(dir,"TITLES.SHP",0,&tw,&th);   /* + the logo vel_base draws above it */
+          if(t0){ int tx=(320-tw)/2; if(tx>=0) for(int y=0;y<th&&12+y<80;y++) for(int x=0;x<tw;x++){ uint8_t v=t0[y*tw+x]; if(v!=U6SHAPE_TRANSPARENT) vsc[(12+y)*320+tx+x]=v; } free(t0); } }
         for(int k=0;k<400;k++) vsc[k]=0x48;                     /* weight the parchment ink (0x48) */
         { uint8_t lc[48+256]; build_scene_lc(palb, vsc, 320*200, lc); fwrite(lc,1,sizeof lc,fe); }
         free(vsc);
