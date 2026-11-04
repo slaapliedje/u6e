@@ -24,7 +24,7 @@ is the U6 default RuleSet; Savage Empire (tribal skills) and Martian Dreams
 > - Confidence   : mixed — CONFIRMED (reagent/spellbook obj_n, mana-cost rule),
 >   probable (spell/reagent table), guessed (exact save mana offset, per-spell
 >   numeric effect magnitudes).
-> - Last updated : 2026-07-05
+> - Last updated : 2026-11-03
 
 ---
 
@@ -101,19 +101,29 @@ the **spellbook** (obj_n 57); casting requires the spell be in the book
 (reference: Ultima Codex "Spellbook"). The known spells are the **spell** objects
 (obj_n 58) the spellbook holds, each carrying a spell number in `quality`/`frame`.
 
-**SAVE FINDING (tools/spellprobe, 2026-07-08):** the sample ScummVM save is the
-GAME-START state in Lord British's castle — where LB *hands the Avatar the
-spellbook* — so the Avatar has NOT obtained it yet. Its inventory chunk (145
-records) contains **no spellbook (57), no spell (58), and no reagent (65-72)**
-records for the Avatar (a1 carries only a sword + two items). So the known-spell
-set is **not loadable from this save**; it is modeled (see below), and the
-`quality`/`frame` spell-number encoding stays UNVERIFIED until a spellbook-bearing
-save is available. See §8.
+**What a new game holds (the user's LZOBJBLK and CONVERSE, read 2026-11-03):** the Avatar carries no
+spellbook, spell or reagent. The book lies in Lord British's castle at (300,367), holding spell
+objects of quality 1, 3, 6, 7, 9, 11, 14, 18, 24, 28. Detect Magic, Dispel Magic, Heal, Help, Light,
+Poison and Untrap have numbers in the table; 11, 14 and 28 name no spell and do nothing. Reagents lie
+in containers around the world or are sold. Xiao, Nicodemus, Horance and Rudyom sell books (45-60
+gold, NEW(player, 57, 0, 1)) and mages teach spells: "hands thee a piece of rune-covered parchment" is
+NEW(player, 58, spell number, 1).
 
-**Engine model (until a real spellbook save exists):** a per-caster "known" set.
-The demo Avatar knows the spells whose EFFECTS are implemented (magic_init); the
-menu further intersects with `castable_circle` at cast time. When a save DOES
-carry a spellbook, the loader should read its spell objects into this set.
+**Engine:** one known set for the party (g_known).
+- Taking a book from the map adds the spells it holds.
+- A parchment (58) stays in the pack until the player puts it in the book, as in the reference. M)ove,
+  M again opens the pack, M steps to the next item, Enter puts the item in the book held, readied or
+  not: "The spellbook already has this spell." and "Only spells can go into the spellbook." refuse and
+  keep the item, and with no book it answers "Not possible". M)ove pushes a parchment on the map into a
+  book on the map (usecode_use.md), and taking that book brings its spells. Mages' scripts sell a spell
+  already in the book like any other.
+- Casting needs a book readied by the caster (the Avatar; §6).
+- A save writes the known spells as children of the book, readied or in the pack, as the reference
+  does, and a parchment as a carried spell. On load a spell under a book is known and a carried one is
+  a parchment. With no book held the known spells are written carried, so a dropped book loses nothing:
+  they come back as parchments to put in again.
+- MAGIC.REQ, or a headless scene that skipped the title, seeds the old test stock: every spell but
+  Armageddon, 10 of each reagent, no book or level gate. It is not for play.
 
 **Spell numbering (authentic U6 encoding):** spells are numbered by
 `spell_num = (circle-1) * 16 + index_in_circle` (16 slots per circle, not all
@@ -548,20 +558,40 @@ C)ast, then the caster (default = Avatar) and the spell are chosen; U6 selects a
 spell by its **words of power** (typed syllables) or from the spellbook list. Our
 engine flow:
 
-1. **Select spell.** IMPLEMENTED: C)ast (the 'c'/'C' key or the Cast command-bar
-   icon) opens a MENU listing the caster's known + circle-castable spells,
-   numbered, with the conversation-style "> _" input box. The player types a
-   menu NUMBER or a spell-NAME prefix (render/gamedemo cast_menu_parse); Enter
-   selects. Self/party spells cast immediately; offensive spells arm a direction
+1. **Select spell.** C)ast (the 'c'/'C' key or the Cast command-bar icon) opens the
+   SPELLBOOK PAGE over the party panel (reference: ScummVM Nuvie's spell view, read
+   2026-11-03; art NEWMAGIC.BMP, background.md). With no spell known: "No spells in
+   the spellbook!".
+   - Page: the 144x82 scroll at screen (168,6), the 16-pixel strip under it holding
+     the left and right buttons (tiles 412, 413) at (200,88), (216,88) and the circle
+     as "3RD" at (272,88) over "level" at (264,96).
+   - One circle at a time, known spells in spell order, 8 to a page (10 per circle
+     means a second page). Rows at y = 14 + 8*row: glyph 26 marks the selected row at
+     x=176, the name at x=184, and in a two-digit field at x=288 how many casts the reagents allow: the
+     smallest count among the reagents needed, 1 for a spell that needs none.
+   - Every known spell is listed; one above the caster's reach is refused by the gate.
+   - The selection stays from one cast to the next (the reference keeps it in the book).
+   - Up/Down walk the list; past either end of a page they act as Left/Right. Right
+     goes to page 2, then the next circle with spells; Left to page 1, then the
+     previous circle with spells, on its second page if it has one. Enter casts the
+     selection, Esc cancels. Mouse: a click on a row selects and casts it, on a button
+     acts as Left/Right, elsewhere cancels. (The reference also casts at a clicked map
+     tile; ours cancels.)
+   - The message scroll shows `Cast-`. WORDS OF POWER: a letter types that rune's syllable
+     (a = An, m = Mani, up to 4, shown after it: `Cast-In Mani`; Backspace removes one). Enter with syllables typed casts
+     the spell of those words: In Mani is i, m. Words of no spell: "That spell is not in
+     thy spellbook!".
+   Self/party spells cast immediately; offensive spells arm a direction
    ("Cast X where?") resolved by the existing verb→direction flow; Enter there aims at the
    caster's own tile (2026-11-01; only Dispel Magic acts on it, §5b). Host tests:
    pass spell_num directly. (Combat-mode toggle moved off 'c' to 'b' + the
    Combat command-bar icon.)
-2. **Gate checks**, in order, each with its own failure message:
+2. **Gate checks**, in order, each with its own failure message. Before the page opens: a spellbook
+   readied → else "No spellbook is readied."; a spell in it → else "No spells in the spellbook!". At the cast:
    - spell known (in spellbook)          → else "That spell is not in thy spellbook!"
-   - `circle(spell) <= castable_circle`   → else "Thou art not experienced enough."
-   - all required reagents present        → else "No reagents."
+   - `circle(spell) <= caster's level`    → else "Your level is not high enough."
    - `current_mana >= mana_cost`          → else "Not enough magic points."
+   - all required reagents present        → else "No Reagents."
 3. **Target** if the spell needs one (direction/tile/actor), reusing the verb→
    direction prompt already in gamedemo (do_verb pattern).
 4. **Consume**: subtract one of each reagent from inventory; `current_mana -=
@@ -658,8 +688,8 @@ with the new words; host suites + make check pass.
   "unknown" → fall back to max). Validated on TT: patching the Avatar's 0x13f1 to 12
   makes the ztats show **MP 12/30** (current, not the 30 max). At a fresh game start
   everyone is rested, so the raw bytes read full (Avatar 30/30, companions at int/2).
-- **Circle-access formula** (§3): `int/4` is a first guess; verify against a
-  high-Intelligence caster.
+- **Circle access** (§3): RESOLVED — the spell's circle against the caster's level (the reference's
+  Magic::cast and GAME.EXE's "Your level is not high enough."); the old `int/4` guess is gone.
 - **Spellbook / known-spells** (§4): RESOLVED (loader implemented; encoding CONFIRMED
   by reading Nuvie `Magic::spellbook_has_spell`). Known spells = **spell objects (obj 58)
   in the spellbook (obj 57), matched by `quality` = U6 spell_num**; a spell of

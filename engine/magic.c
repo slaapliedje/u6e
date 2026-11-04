@@ -104,14 +104,6 @@ int magic_mana_cost(int spell)
     return g_spells[spell].circle;
 }
 
-int magic_castable_circle(int intelligence)
-{
-    int c = intelligence / 4;         /* magic_skills.md §3 first cut */
-    if (c < 1) c = 1;                 /* everyone can attempt circle 1 */
-    if (c > 8) c = 8;
-    return c;
-}
-
 int magic_max_mana(int intelligence, int is_avatar)
 {
     if (intelligence < 0) intelligence = 0;
@@ -147,14 +139,39 @@ int magic_spell_num(int spell)
     return (circle - 1) * 16 + idx;
 }
 
-cast_result_t magic_check(int spell, int known, int intelligence,
+int magic_find_words(const char *letters)
+{
+    if (!letters || !letters[0]) return -1;
+    for (int s = 0; s < SPELL_COUNT; s++) {
+        const char *w = g_spells[s].words, *t = letters;
+        for (;;) {
+            char c = *t; if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+            if (!c || c != *w) break;
+            t++;
+            while (*w && *w != ' ') w++;
+            if (*w) w++;
+        }
+        if (!*t && !*w) return s;
+    }
+    return -1;
+}
+
+const char *magic_syllable(int letter)
+{
+    static const char *const S[26] = { "An", "Bet", "Corp", "Des", "Ex", "Flam", "Grav", "Hur", "In", "Jux", "Kal", "Lor", "Mani",
+                                       "Nox", "Ort", "Por", "Quas", "Rel", "Sanct", "Tym", "Uus", "Vas", "Wis", "Xen", "Ylem", "Zu" };
+    if (letter >= 'A' && letter <= 'Z') letter += 32;
+    return (letter >= 'a' && letter <= 'z') ? S[letter - 'a'] : "";
+}
+
+cast_result_t magic_check(int spell, int known, int level,
                           uint8_t have_reagents, int current_mana)
 {
     if (spell < 0 || spell >= SPELL_COUNT) return CAST_BADSPELL;
     const spell_t *sp = &g_spells[spell];
     if (!known)                                   return CAST_UNKNOWN;
-    if (sp->circle > magic_castable_circle(intelligence)) return CAST_LOWLEVEL;
-    if ((have_reagents & sp->reagents) != sp->reagents)   return CAST_NOREAGENTS;
+    if (sp->circle > level)                       return CAST_LOWLEVEL;
     if (current_mana < sp->circle)                return CAST_NOMANA;
+    if ((have_reagents & sp->reagents) != sp->reagents)   return CAST_NOREAGENTS;
     return CAST_OK;
 }

@@ -2757,6 +2757,13 @@ int main(int argc, char **argv)
      * (object quality - 1). [4 "U6BK"][u16 nbook][nbook x [u16 len][bytes]] (\n preserved). */
     { fwrite("U6BK",1,4,f); int nb=extract_books(dir, f);
       printf("books: %d BOOK.DAT entries (U6BK, resident core section)\n", nb); }
+    /* the spellbook page (U6WN, background.md), resident: [4 "U6WN"][144*82 indices]; only U6 has one */
+    { char np[512]; snprintf(np,sizeof np,"%s/NEWMAGIC.BMP",dir); FILE *t=fopen(np,"rb");
+      if(t){ fclose(t); long nn; uint8_t *nc=slurp(dir,"NEWMAGIC.BMP",&nn);
+        int32_t nu=u6lzw_unpacked_size(nc,(int32_t)nn); uint8_t *nd=malloc((size_t)nu);
+        u6lzw_decompress(nc,(int32_t)nn,nd,nu); free(nc);
+        if((nd[0]|(nd[1]<<8))==144 && (nd[2]|(nd[3]<<8))==82){ fwrite("U6WN",1,4,f); fwrite(nd+4,1,144*82,f); }
+        free(nd); } }
     fclose(f);
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",

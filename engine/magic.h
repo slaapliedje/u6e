@@ -53,9 +53,6 @@ typedef enum {
 /* circle == mana cost; 0 if spell is out of range. */
 int  magic_mana_cost(int spell);
 
-/* Highest circle castable at this Intelligence (magic_skills.md §3, first cut). */
-int  magic_castable_circle(int intelligence);
-
 /* Maximum magic points from Intelligence (magic_skills.md §3): the Avatar gets
  * 2x Intelligence, a magic-using companion gets Intelligence/2. is_avatar!=0
  * selects the Avatar formula. */
@@ -70,13 +67,20 @@ int  magic_find(const char *name);
 /* Authentic U6 spell number (circle-1)*16 + index_in_circle, for save interop. */
 int  magic_spell_num(int spell);
 
+/* Dense spell index whose words of power are these first letters ("im" = IN MANI, either case),
+ * or -1. Does not ask whether the spell is known. */
+int  magic_find_words(const char *letters);
+
+/* The rune's syllable for a letter a..z ("Mani" for m), or "" for anything else. */
+const char *magic_syllable(int letter);
+
 /* The spell's name ("Heal"), or "Unknown" out of range (Detect Magic names a staff's charge). */
 const char *magic_spell_name(int spell);
 
 /* The full gate check (pure). `known` = 1 if the spell is in the caster's book;
  * `have_reagents` = bitmask of reagents the caster HAS at least one of (bit i =>
  * obj_n 65+i present). Returns CAST_OK or the first failing precondition. */
-cast_result_t magic_check(int spell, int known, int intelligence,
+cast_result_t magic_check(int spell, int known, int level,
                           uint8_t have_reagents, int current_mana);
 
 #endif

@@ -64,3 +64,9 @@ as the UI background in the host preview.
 ## Implemented by
 - `tools/bmpdump.c` (decode/validate), `tools/uipreview.c` (UI background)
 - engine runtime: load once at startup as the static background (TODO on-target)
+
+## NEWMAGIC.BMP, the spellbook page
+The same U6Bmp container: 144×82 indices against U6PAL, in both the DOS and ST data. A scroll
+drawn at (168,6) in place of the party panel (docs/rules/magic_skills.md §6). The first 8 columns
+lie over the right edge of the map window. mkworld ships it decoded in U6.PAK as
+`[4 "U6WN"][11808 pixels]`, after U6BK; a game without the file has no section.

@@ -96,21 +96,30 @@ int main(void)
     CHECK(magic_max_mana(18, 0) == 9,  "companion int 18 -> 9 max mana (int/2)");
     CHECK(magic_max_mana(30, 1) == 60, "Avatar int 30 -> 60 max mana");
 
-    printf("== castable circle by intelligence ==\n");
-    CHECK(magic_castable_circle(15) == 3, "int 15 -> circles up to 3");
-    CHECK(magic_castable_circle(30) == 7, "int 30 -> circles up to 7");
-    CHECK(magic_castable_circle(3)  == 1, "low int still allows circle 1");
 
     printf("== gate-check ordering (Heal: Gi+SS, cost 1, circle 1) ==\n");
     uint8_t all = 0xFF;                 /* has every reagent */
     CHECK(magic_check(heal, 1, 15, all, 5) == CAST_OK,          "all preconditions met -> OK");
     CHECK(magic_check(heal, 0, 15, all, 5) == CAST_UNKNOWN,     "unknown spell refused first");
-    /* Fireball is circle 3; at int 8 castable_circle==2 -> too low */
+    /* Fireball is circle 3: level 2 is too low, level 3 is enough */
     int fb = spell_by_name("Fireball");
-    CHECK(magic_check(fb, 1, 8, all, 8) == CAST_LOWLEVEL,       "circle over level -> LOWLEVEL");
+    CHECK(magic_check(fb, 1, 2, all, 8) == CAST_LOWLEVEL,       "circle over level -> LOWLEVEL");
+    CHECK(magic_check(fb, 1, 3, all, 8) == CAST_OK,             "circle at level -> OK");
     CHECK(magic_check(heal, 1, 15, R_SA, 5) == CAST_NOREAGENTS, "missing Gi/SS -> NOREAGENTS");
     CHECK(magic_check(heal, 1, 15, all, 0) == CAST_NOMANA,      "0 mana -> NOMANA");
     CHECK(magic_check(999, 1, 15, all, 5) == CAST_BADSPELL,     "bad index -> BADSPELL");
+    CHECK(magic_check(heal, 1, 15, R_SA, 0) == CAST_NOMANA,     "no mana named before no reagents");
+
+    printf("== words of power ==\n");
+    CHECK(magic_find_words("im") == heal,                       "i, m = In Mani = Heal");
+    CHECK(magic_find_words("IM") == heal,                       "either case");
+    CHECK(magic_find_words("ajo") == spell_by_name("Dispel Magic"), "a, j, o = An Jux Ort = Dispel Magic");
+    CHECK(magic_find_words("i") < 0 && magic_find_words("imx") < 0 && magic_find_words("") < 0, "a part or too much is no spell");
+    { int ok = 1; for (int s = 0; s < SPELL_COUNT; s++) { char t[8]; int n = 0; const char *w = g_spells[s].words;
+          for (t[n++] = (char)(*w + 32); (w = strchr(w, ' ')) != 0 && n < 7; ) t[n++] = (char)(*++w + 32);
+          t[n] = 0; if (magic_find_words(t) != s) ok = 0; }
+      CHECK(ok, "every spell's words find that spell, none shared"); }
+    CHECK(!strcmp(magic_syllable('m'), "Mani") && !strcmp(magic_syllable('Z'), "Zu") && !magic_syllable('1')[0], "syllables");
 
     printf("== consume exactly once (reagents + mana) ==\n");
     /* inventory: 2 ginseng (68), 2 spider silk (71), 1 sulfurous ash (72) */

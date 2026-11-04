@@ -192,8 +192,11 @@ static uint8_t        g_adead[U6_MAX_ACTORS];  /* 1 = slain and flagged dead (ob
 static uint8_t        g_alcohol;               /* drinks consumed (objlist 0x1c17): >3 staggers the Avatar, -1 per hour */
 static int            g_cast_spell=-1;       /* the spell the armed C)ast verb will cast       */
 static int            g_casting=0;           /* 1 = the C)ast spell-selection menu is open      */
-static uint8_t        g_castlist[SPELL_COUNT];/* castable spell indices, in menu (1-based) order */
-static int            g_ncast=0;             /* number of spells in g_castlist                  */
+static int            g_menu_ran=0;          /* the title menu ran: this is play, not a scene */
+static int            g_magic_demo=0;        /* the test stock (MAGIC.REQ, §4): no book or level gate */
+static int            g_cast_sel=-1;         /* the selected spell (dense index); stays between casts */
+static int            g_cast_undraw=0;       /* the page was closed: its strip over the map comes off */
+static const uint8_t *g_spell_page;          /* NEWMAGIC.BMP, 144x82 (U6WN); 0 in a game without one */
 static int            g_savestate;            /* 1 = world built from a (ScummVM) save state */
 static uint8_t       *g_savetmpl;             /* template ScummVM save (SAVE.000), patched on save */
 static int32_t        g_savetmpl_cap;         /* its buffer capacity (file size + SAVETMPL_HEADROOM) */
@@ -478,6 +481,7 @@ static int            g_tcur_dx, g_tcur_dy;/* the crosshair's offset from the Av
 static uint16_t       g_fx_tile; static int g_fx_x, g_fx_y;
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
 static int            g_use_pack;                 /* U)se armed on a carried item (U pressed twice) */
+static int            g_move_pack;                /* M)ove armed on a carried item (M pressed twice) */
 static int            g_travel_tx, g_travel_ty, g_travel_level;  /* the click-to-travel destination tile (+ level: a transition ends it) */
 static int            g_show_inv;          /* 1 = inventory list shown in the panel */
 static int            g_menu_journey;      /* "Journey Onward" chosen -> resume SAVED.000 at boot if present */
@@ -4956,6 +4960,14 @@ static void blit_tile(int sx,int sy,int tile,int transp)
  * on the OUTER RING of the 11x11 window (MapWindow::drawBorder), TRANSPARENT so
  * the terrain rendered underneath shows through the burn-mark gaps — a torn page
  * laid over the map, not a frame around it. Corners at the ring; edges between. */
+#define SPELL_X 168                             /* the spellbook page (magic_skills.md §6) */
+#define SPELL_Y 6
+#define SPELL_W 144
+#define SPELL_H 82
+static void spell_page_blit(int w)              /* its first w columns: a map redraw must not cut the page */
+{
+    if(g_spell_page) for(int y=0;y<SPELL_H;y++) memcpy(ROW(SPELL_Y+y)+SPELL_X, g_spell_page+(int32_t)y*SPELL_W, (size_t)w);
+}
 static void draw_border_tiles(void)
 {
     int x1=MAPX+(VT-1)*16, y1=MAPY+(VT-1)*16;       /* 160: last ring column/row */
@@ -4965,6 +4977,7 @@ static void draw_border_tiles(void)
         blit_tile(px,MAPY,433,1); blit_tile(px,y1,436,1);   /* top / bottom rows */
         blit_tile(MAPX,py,438,1); blit_tile(x1,py,439,1);   /* left / right cols */
     }
+    if(g_casting) spell_page_blit(PANX-SPELL_X);
 }
 
 /* word-wrap `s` into a box [x..x+w) from y, up to `lines` rows of font text */
@@ -5000,25 +5013,53 @@ static void draw_party_roster(uint8_t col);
 static void draw_char_view(uint8_t col);
 static void draw_sky(void);
 
+static int spell_circle_list(int circle, uint8_t *out)   /* the known spells of a circle, in order */
+{
+    int n=0;
+    for(int s=0;s<SPELL_COUNT;s++) if(g_known[s] && g_spells[s].circle==circle) out[n++]=(uint8_t)s;
+    return n;
+}
+static int spell_cast_count(int s)              /* how many casts the reagents allow */
+{
+    int low=-1;
+    for(int b=0;b<REAG_COUNT;b++) if(g_spells[s].reagents&(1<<b)){
+        int c=objworld_count(&g_ow,(uint16_t)magic_reagent_objn(b)); if(low<0||c<low) low=c; }
+    return low<0?1:low;
+}
+static int spell_circle_has(int from, int step) /* the nearest circle with known spells, or 0 */
+{
+    uint8_t l[SPELL_COUNT];
+    for(int c=from+step;c>=1&&c<=8;c+=step) if(spell_circle_list(c,l)) return c;
+    return 0;
+}
+static void draw_spell_page(uint8_t col)
+{
+    static const char ORD[8][4]={"1ST","2ND","3RD","4TH","5TH","6TH","7TH","8TH"};
+    uint8_t l[SPELL_COUNT]; int c=g_spells[g_cast_sel].circle, n=spell_circle_list(c,l), pos=0;
+    for(int i=0;i<n;i++) if(l[i]==g_cast_sel) pos=i;
+    spell_page_blit(SPELL_W);
+    for(int i=pos&~7, row=0; i<n && row<8; i++,row++){
+        int y=SPELL_Y+8+row*8, cnt=spell_cast_count(l[i]);
+        if(l[i]==g_cast_sel) ui_text(SPELL_X+8,y,"\x1a",col);
+        ui_text(SPELL_X+16,y,g_spells[l[i]].name,col);
+        char d[4]; int t=0; if(cnt>99) cnt=99;
+        if(cnt>=10) d[t++]=(char)('0'+cnt/10);
+        d[t++]=(char)('0'+cnt%10); d[t]=0;
+        ui_text(SPELL_X+136-t*8,y,d,col);
+    }
+    int y=SPELL_Y+SPELL_H;
+    if(pos>=8 || spell_circle_has(c,-1)) blit_tile(SPELL_X+32,y,412,1);
+    if((pos<8 && n>8) || spell_circle_has(c,1)) blit_tile(SPELL_X+48,y,413,1);
+    ui_text(SPELL_X+104,y,ORD[c-1],col);
+    ui_text(SPELL_X+96,y+8,"level",col);
+}
 static void draw_conversation(uint8_t col)
 {
     int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
     restore_panel();                               /* clean papyrus before text */
-    if(g_casting){                                 /* C)ast spell-selection menu (magic_skills.md §6) */
-        ui_text(PANX+6, 20, g_enchant_mode?"Enchant with:":"Cast which spell?", col);
-        for(int i=0;i<g_ncast && i<11;i++){        /* numbered list of castable spells */
-            char ln[26]; int t=0, num=i+1;
-            if(num>=10) ln[t++]=(char)('0'+num/10);
-            ln[t++]=(char)('0'+num%10); ln[t++]=')'; ln[t++]=' ';
-            const char*nm=g_spells[g_castlist[i]].name;
-            for(int k=0;nm[k]&&t<24;k++) ln[t++]=nm[k];
-            ln[t]=0;
-            ui_text(PANX+10, 36+i*12, ln, col);
-        }
-        char line[24]; int t=0; line[t++]='>'; line[t++]=' ';   /* the typed selection box */
-        for(int k=0;k<g_inlen && t<21;k++) line[t++]=g_inbuf[k];
-        line[t++]='_'; line[t]=0;
-        ui_text(PANX+6, 36+(g_ncast<11?g_ncast:11)*12+6, line, col);
+    if(g_casting){                                 /* C)ast: the spellbook page (magic_skills.md §6) */
+        draw_spell_page(col);
+        if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
         if(g_gamename){                            /* SE/MD core: draw the actor's own CFAC portrait (slot actor-1) */
             int fi=g_talk_actor-1;
@@ -5295,6 +5336,7 @@ static int readied_count(int on)                      /* the party's readied thi
     int c=0; for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=1 && a<U6_MAX_ACTORS) c+=has_readied(a,on); }
     return c;
 }
+static void spell_learn(int q);
 static void sync_inv_in(void)
 {
     for(int i=0;i<1024;i++) g_cg.player_obj[i]=0;
@@ -6220,6 +6262,8 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
             }
             else if(objworld_get(&g_ow,idx)){
                 build_blocked();                                 /* a chest or other blocking thing no longer stands there */
+                if(g_wobj[idx].obj_n==57) for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*c=&g_wobj[j];   /* the book's spells come with it (§4) */
+                    if(!c->alive && c->parent==(uint16_t)idx && c->obj_n==58) spell_learn(c->quality); }
                 if(g_wobj[idx].obj_n==73){ int fr=(int)g_wobj[idx].tile-basetile(73);          /* a dug-up moonstone: its gate is gone (moongates.md §4) */
                     if(fr>=0&&fr<8){ moonstone_set(fr,0,0,0); moongates_update(w); } }
                 n=msgcat(0,"You get ");
@@ -6281,6 +6325,35 @@ static void drop_prompt(void)
     if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) g_inv_sel=0;
     char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
     int n=msgcat(0,"Drop the "); n=msgcat(n,dn); msgcat(n,"? (D=next, dir=here)");
+}
+/* a spell number (quality of object 58) joins the known set; 255 = every spell (§4) */
+static void spell_learn(int q){
+    for(int s=0;s<SPELL_COUNT;s++) if(q==255 || magic_spell_num(s)==q) g_known[s]=1;
+}
+/* does the known set hold spell number q already? (255: every spell) */
+static int spell_known(int q){
+    for(int s=0;s<SPELL_COUNT;s++) if(q==255 ? !g_known[s] : (magic_spell_num(s)==q && g_known[s])) return q!=255;
+    return q==255;
+}
+/* ---- M)ove from the pack: a spell into the spellbook held, readied or not (magic_skills.md §4) ---- */
+static void move_prompt(void)
+{
+    if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) g_inv_sel=0;
+    char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
+    int n=msgcat(0,"Move the "); n=msgcat(n,dn); msgcat(n,"? (M=next, Enter=move)");
+}
+static int book_readied(void){ for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==57) return 1; return 0; }
+static void move_pack_item(void)
+{
+    if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) return;
+    int on=g_ow.inv[g_inv_sel].obj_n, q=g_ow.inv[g_inv_sel].quality;
+    if(objworld_count(&g_ow,57)<=0 && !book_readied()){ msgcat(0,"Not possible"); return; }
+    if(on!=58){ msgcat(0,"Only spells can go into the spellbook."); return; }
+    if(spell_known(q)){ msgcat(0,"The spellbook already has this spell."); return; }
+    spell_learn(q);
+    if(g_ow.inv[g_inv_sel].qty>1) g_ow.inv[g_inv_sel].qty--;
+    else { for(int k=g_inv_sel;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; }
+    msgcat(0,"The spell goes into the spellbook.");
 }
 static void arm_drop(void)          /* start a D)rop: open the pack, arm the verb, select the first item */
 {
@@ -6376,7 +6449,7 @@ static int equip_take_off(int a, int slot)
 static void draw_inventory(uint8_t col)
 {
     ui_text(PANX+(PANW-ui_textw("Inventory"))/2, 16, "Inventory", col);
-    int armed=(g_pending_verb=='D' || g_pending_verb=='E' || (g_pending_verb=='U' && g_use_pack));
+    int armed=(g_pending_verb=='D' || g_pending_verb=='E' || (g_pending_verb=='U' && g_use_pack) || (g_pending_verb=='M' && g_move_pack));
     int first=0;
     if(armed && g_ow.ninv>INV_ROWS){ first=g_inv_sel-INV_ROWS/2; if(first>g_ow.ninv-INV_ROWS) first=g_ow.ninv-INV_ROWS; if(first<0) first=0; }
     if(g_ow.ninv==0) ui_text(PANX+8, 28, "(nothing)", col);
@@ -6575,6 +6648,7 @@ static void present_frame(void)
       rdr_pcursor_invalidate();                           /* the full c2p erases any planar cursor */
       rdr_present_rect(0,0,LW,LH);                         /* full 1:1 c2p of g_back (inner map stale), no Vsync */
       rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
+      rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       vsync_pump(); return; }
@@ -6590,6 +6664,7 @@ static void present_map(void)
 #ifdef HAVE_RDR_ST
   if(g_native_planar){                                    /* shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
       rdr_pcursor_hide(); rdr_ppresent();                 /* restore under old cursor, then redraw the map */
+      rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       return; }
@@ -7935,14 +8010,14 @@ static int tile_is_magical(int t){
     for(unsigned i=0;i<sizeof mt/sizeof mt[0];i++) if(mt[i]==(uint16_t)t) return 1;
     return 0; }
 static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
-    int intel = g_aint[caster]?g_aint[caster]:15;
+    int level = g_magic_demo ? 8 : (g_alevel[caster]>0?g_alevel[caster]:1);
     if(g_storm && !g_free_cast){ msgcat(0,"No magic at this time!"); return 0; }   /* the magical storm (§5f); a staff charge ignores it */
     cast_result_t rr = magic_check(spell, spell>=0&&spell<SPELL_COUNT?g_known[spell]:0,
-                                   intel, reagent_mask(), g_amana[caster]);
+                                   level, reagent_mask(), g_amana[caster]);
     if(g_free_cast && spell>=0 && spell<SPELL_COUNT) rr=CAST_OK;   /* a staff charge: no spellbook, mana or reagent check (usecode_use.md) */
     if(rr!=CAST_OK){
         msgcat(0, rr==CAST_UNKNOWN  ?"That spell is not in thy spellbook!" :
-                  rr==CAST_LOWLEVEL ?"Thou art not experienced enough." :
+                  rr==CAST_LOWLEVEL ?"Your level is not high enough." :
                   rr==CAST_NOREAGENTS?"No Reagents." :
                   rr==CAST_NOMANA   ?"Not enough magic points." : "Nothing happens.");
         return 0;
@@ -8238,7 +8313,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     } else if(!strcmp(nm,"Enchant")){                                   /* a charge for the staff (§5f) */
         if(objworld_count(&g_ow,78)<=0){ msgcat(0,"No effect"); applied=0; }
         else if(g_enchant_pick>=0){ int sp=g_enchant_pick; g_enchant_pick=-1; if(!enchant_commit(sp)) applied=0; }
-        else { open_cast_menu(); if(g_casting) g_enchant_mode=1; applied=0; }   /* Enchant is spent when the charge is chosen (cast_menu_submit) */
+        else { open_cast_menu(); if(g_casting){ g_enchant_mode=1; msgcat(0,"Enchant with:"); } applied=0; }   /* Enchant is spent when the charge is chosen (cast_menu_submit) */
     } else if(!strcmp(nm,"Wind Change")){                               /* "Direction-" (§5f) */
         if(!dx&&!dy){ msgcat(0,"Direction-"); applied=0; }
         else { g_wind=dir8_of(dx,dy); g_wind_timer=1+(int)rng_range(&g_wind_rng,30); int n=msgcat(0,dir_name(dx,dy)); msgcat(n,"."); }
@@ -8251,19 +8326,12 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
     g_free_cast=0;
     return recompose;
 }
-/* Seed the Avatar's spellbook + a starter reagent stock at world load (§4). The
- * Avatar knows every spell whose circle its Intelligence can reach; U6 begins the
- * game with reagents in the pack, so we stock 10 of each (we ship no save data). */
-static void magic_seed_items(void);
-static void magic_init(void){
-    /* the Avatar knows the spells whose EFFECTS we implement (the menu lists only
-     * spells that actually do something; circle-gating still hides too-high ones). */
-    /* every spell's effect is implemented (§5f); Armageddon is castable only from a real spellbook (spell 112 / all). */
+/* a new game knows nothing: the book lies in the castle (§4) */
+static void magic_init(void){ memset(g_known,0,sizeof g_known); }
+/* the test stock for scenes and the bot (MAGIC.REQ, §4): every spell but Armageddon + 10 of each reagent; never in play.
+ * (guarded: never duplicates what the pack already holds) */
+static void magic_demo_seed(void){
     for(int s=0;s<SPELL_COUNT;s++) g_known[s]=(uint8_t)(strcmp(g_spells[s].name,"Armageddon")!=0);
-    magic_seed_items();
-}
-/* the starter stock + spellbook (guarded: never duplicates what the pack already holds) */
-static void magic_seed_items(void){
     /* reagents seed ONLY for a game that has them (g_wko.reagent_base != 0). U6 => 65 (== magic_reagent_objn,
      * byte-identical); SE/MD => 0, so this loop is skipped and they don't get spurious U6 reagents (magic_init
      * runs before the is_core gate). */
@@ -8273,9 +8341,6 @@ static void magic_seed_items(void){
         g_ow.inv[g_ow.ninv].obj_n=on; g_ow.inv[g_ow.ninv].tile=basetile(on);
         g_ow.inv[g_ow.ninv].qty=10; g_ow.inv[g_ow.ninv].quality=0; g_ow.ninv++;
     }
-    /* the spellbook itself (obj_n 57, magic_skills.md §4): U6 begins the game with Lord British
-     * handing the Avatar the spellbook, so carry it as an inventory item (the fresh save ships
-     * none — magic_skills.md §8). Guarded so it is not duplicated on reload. */
     if(g_wko.spellbook && g_ow.ninv<OBJ_INV_MAX && objworld_count(&g_ow,g_wko.spellbook)==0){
         uint16_t sb=g_wko.spellbook;                       /* U6 57; SE/MD 0 => no U6 spellbook seeded */
         g_ow.inv[g_ow.ninv].obj_n=sb; g_ow.inv[g_ow.ninv].tile=basetile(sb);
@@ -8302,36 +8367,43 @@ static int spell_needs_target(int spell){
            !strcmp(n,"Flame Wind")||!strcmp(n,"Poison Wind")||!strcmp(n,"Energy Wind")||!strcmp(n,"Death Wind")||
            !strcmp(n,"Hail Storm")||!strcmp(n,"Replicate")||!strcmp(n,"Web")||!strcmp(n,"Chain Bolt")||!strcmp(n,"Resurrect");
 }
-/* open the C)ast menu: collect the Avatar's known + circle-castable spells (§4). */
+/* open the spellbook page on the selection (the first known spell if it has gone; §6) */
 static void open_cast_menu(void){
     if(g_storm){ msgcat(0,"No magic at this time!"); return; }   /* the magical storm (Negate Magic / the cloak; §5f) */
-    int maxc=magic_castable_circle(g_aint[1]?g_aint[1]:15);
-    g_ncast=0;
-    for(int s=0;s<SPELL_COUNT && g_ncast<SPELL_COUNT;s++)
-        if(g_known[s] && g_spells[s].circle<=maxc) g_castlist[g_ncast++]=(uint8_t)s;
-    g_casting=1; g_inlen=0; g_inbuf[0]=0; g_show_inv=0; g_msg[0]=0; g_pending_verb=0;
+    if(!g_magic_demo && !book_readied()){ msgcat(0,"No spellbook is readied."); return; }
+    if(g_cast_sel<0 || !g_known[g_cast_sel]){
+        g_cast_sel=-1;
+        for(int s=0;s<SPELL_COUNT;s++) if(g_known[s]){ g_cast_sel=s; break; }
+        if(g_cast_sel<0){ msgcat(0,"No spells in the spellbook!"); return; } }
+    g_casting=1; g_inlen=0; g_inbuf[0]=0; g_show_inv=0; g_pending_verb=0; msgcat(0,"Cast-");
 }
-static void close_cast_menu(void){ g_casting=0; g_enchant_mode=0; g_inlen=0; g_inbuf[0]=0; }
-/* map the typed selection (a 1-based menu number, or a spell-name prefix) to a
- * dense spell index, or -1. Pure — no side effects. */
-static int cast_menu_parse(const char*s){
-    if(!s||!s[0]) return -1;
-    int allnum=1; for(const char*p=s;*p;p++) if(*p<'0'||*p>'9'){ allnum=0; break; }
-    if(allnum){ int n=0; for(const char*p=s;*p;p++) n=n*10+(*p-'0');
-        return (n>=1&&n<=g_ncast)?g_castlist[n-1]:-1; }
-    for(int i=0;i<g_ncast;i++){ const char*nm=g_spells[g_castlist[i]].name; int k=0;
-        while(s[k]&&nm[k]){ char a=s[k],b=nm[k];
-            if(a>='A'&&a<='Z')a+=32; if(b>='A'&&b<='Z')b+=32; if(a!=b) break; k++; }
-        if(!s[k]) return g_castlist[i];   /* the typed text is a prefix of this name */
-    }
-    return -1;
+static void close_cast_menu(void){ g_casting=0; g_enchant_mode=0; g_inlen=0; g_inbuf[0]=0; g_cast_undraw=1; }
+/* the left and right moves of §6: page 2 of this circle, or the next circle with spells */
+static void spell_page_move(int right){
+    uint8_t l[SPELL_COUNT]; int c=g_spells[g_cast_sel].circle, n=spell_circle_list(c,l), pos=0;
+    for(int i=0;i<n;i++) if(l[i]==g_cast_sel) pos=i;
+    if(right){
+        if(pos<8 && n>8) g_cast_sel=l[8];
+        else if((c=spell_circle_has(c,1))!=0){ spell_circle_list(c,l); g_cast_sel=l[0]; }
+    } else if(pos>=8) g_cast_sel=l[0];
+    else if((c=spell_circle_has(c,-1))!=0){ n=spell_circle_list(c,l); g_cast_sel=l[n>8?8:0]; }
 }
-/* commit the typed selection: cast a self/party spell now, or arm a direction for
- * a targeted spell (the existing "(dir)?" flow resolves it). Returns 1 to recompose. */
+static void spell_page_step(int down){          /* up / down; past a page's end they move as above */
+    uint8_t l[SPELL_COUNT]; int n=spell_circle_list(g_spells[g_cast_sel].circle,l), pos=0;
+    for(int i=0;i<n;i++) if(l[i]==g_cast_sel) pos=i;
+    if(down){ if(pos==7||pos==n-1) spell_page_move(1); else g_cast_sel=l[pos+1]; }
+    else { if(pos==0||pos==8) spell_page_move(0); else g_cast_sel=l[pos-1]; }
+}
+static void spell_words_show(void){             /* the typed words of power in the message scroll */
+    int n=msgcat(0,g_enchant_mode?"Enchant with:":"Cast-");
+    for(int k=0;k<g_inlen;k++){ n=msgcat(n,magic_syllable(g_inbuf[k])); n=msgcat(n," "); }
+}
+/* cast the typed words, or the selection with none typed: a self/party spell now, or arm a direction
+ * for a targeted spell (the existing "(dir)?" flow resolves it). Returns 1 to recompose. */
 static int cast_menu_submit(world_t*w){
-    int spell=cast_menu_parse(g_inbuf), ench=g_enchant_mode;
+    int spell=g_inlen?magic_find_words(g_inbuf):g_cast_sel, ench=g_enchant_mode;
     close_cast_menu();
-    if(spell<0){ msgcat(0,"No such spell."); return 0; }
+    if(spell<0 || !g_known[spell]){ msgcat(0,"That spell is not in thy spellbook!"); return 0; }
     if(ench){ int ei=magic_find("Enchant");                /* Enchant's second menu: the charge; Enchant's own cost is spent now (§5f) */
         if(enchant_commit(spell) && ei>=0) magic_spend(g_nparty?g_party[0].actor:1, ei); return 0; }
     if(spell_needs_target(spell)){
@@ -8428,7 +8500,7 @@ static int wobj_raise(int i,int above)
 /* "Move-": pick the actor, else the topmost object, on the tile (dx,dy) from the Avatar; arms "To-" */
 static __attribute__((noinline)) int push_select(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-    g_push_idx=-1; g_push_act=-1;
+    g_push_idx=-1; g_push_act=-1; g_move_pack=0;
     if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(0,"Out of range!"); return 0; }   /* the original's Move takes a direction: the thing beside the party */
     int id=npc_at(w,tx,ty); char nm[40];
     if(id>=0){ int on=actor_objn(id);
@@ -8792,10 +8864,12 @@ static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only)
             continue; }
         if(on == 223 && ((b[5] >> 2) & 0x3f) == 1){ g_keg_carried = 1; continue; }   /* a lit keg: the carried fuse, not a pack item */
         if(on == 88){ int q = (b[7] << 8) | b[6]; g_cg.gold += q; continue; }   /* coins -> the gold pool */
-        if(on == 58){                                         /* a spell in the spellbook -> known */
-            int q = b[7];
-            for(int sp = 0; sp < SPELL_COUNT; sp++) if(q == 255 || magic_spell_num(sp) == q) g_known[sp] = 1;
-            continue; }
+        if(on == 58 && !direct){                              /* a spell in the spellbook -> known; a carried one is a parchment */
+            const uint8_t *hb = rec + ((((((b[2] >> 2) | ((b[3] & 0xf) << 6)) & 0x3f) << 10) | (b[1] | ((b[2] & 3) << 8))))*8;
+            if((hb[4] | ((hb[5] & 3) << 8)) == 57){
+                int q = b[7];
+                for(int sp = 0; sp < SPELL_COUNT; sp++) if(q == 255 || magic_spell_num(sp) == q) g_known[sp] = 1;
+                continue; } }
         { invitem_t it; it.obj_n = (uint16_t)on; it.tile = (uint16_t)(basetile(on) + ((b[5] & 0xfc) >> 2));
           if(is_stackable(on)){ int q = (b[7] << 8) | b[6]; it.qty = (uint16_t)(q ? q : 1); it.quality = 0; }
           else { it.qty = b[6] ? b[6] : 1; it.quality = b[7]; }
@@ -8819,11 +8893,11 @@ static int build_party_records(uint8_t *out)
         if(!g_pooled[a]) continue;
         for(int sl = 0; sl < EQ_NSLOTS && nr < PARTY_REC_MAX; sl++) if(g_aready[a][sl]){
             int fr = 0, q = 0; if(g_aready[a][sl] == 90 && g_torch_fuel[a]){ fr = 1; q = g_torch_fuel[a]; }   /* a lit torch: frame 1 + fuel (usecode_use.md) */
+            if(g_aready[a][sl] == 57 && book < 0) book = nr;      /* the readied book holds the spells */
             sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], fr, q, 0); } }
     if(g_keg_carried && nr < PARTY_REC_MAX) sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 223, 1, 1, 0);   /* a lit keg in the pack: frame 1 (usecode_use.md) */
     for(int k = 0; k < g_ow.ninv && nr < PARTY_REC_MAX; k++){ const invitem_t *it = &g_ow.inv[k];
         int on = it->obj_n, fr = (int)it->tile - basetile(on); if(fr < 0 || fr > 63) fr = 0;
-        if(on == 58) continue;                                /* spells are written from the known set */
         if(g_wko.spellbook && on == g_wko.spellbook && book < 0){ book = nr;
             sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, on, fr, 0, 0); continue; }
         if(is_stackable(on)){ int q = it->qty > 65535 ? 65535 : it->qty;
@@ -8833,9 +8907,10 @@ static int build_party_records(uint8_t *out)
                 sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, on, fr, 0, it->quality); } }
     if(g_cg.gold > 0 && nr < PARTY_REC_MAX){ int q = g_cg.gold > 65535 ? 65535 : g_cg.gold;
         sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 88, 0, q & 0xff, q >> 8); }
-    if(book >= 0) for(int sp = 0; sp < SPELL_COUNT && nr < PARTY_REC_MAX; sp++) if(g_known[sp]){
+    for(int sp = 0; sp < SPELL_COUNT && nr < PARTY_REC_MAX; sp++) if(g_known[sp]){
         int q = magic_spell_num(sp); if(q < 0) continue;      /* contents of the book: link = its index */
-        sav_encode_record(out + 8*nr++, 0x09, book & 0x3ff, (book >> 10) & 0x3f, 0, 58, 0, 0, q); }
+        if(book >= 0) sav_encode_record(out + 8*nr++, 0x09, book & 0x3ff, (book >> 10) & 0x3f, 0, 58, 0, 0, q);
+        else sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 58, 0, 0, q); }   /* no book held: carried, so a dropped book loses nothing (§4) */
     return nr;
 }
 
@@ -9349,8 +9424,9 @@ static int load_game(world_t *w)
 
     /* 4) pooled pack + readied gear + gold + spellbook, from the actor-inventory super-chunk;
      *    conversation state (talk flags / quest / Gargish) from the objlist */
+    memset(g_known,0,sizeof g_known);
     pool_from_inventory(d, n, ol);
-    magic_seed_items();
+    if(g_magic_demo) magic_demo_seed();
     talk_state_from_save(d, ol);
     wind_from_save(d, ol); g_mp_acc = 0;
 
@@ -10364,6 +10440,7 @@ static void bot_report(const world_t*w)
     n=bot_kv(n,"min",clock_minutes(w)); n=bot_kv(n,"day",day); n=bot_kv(n,"mon",mon); n=bot_kv(n,"yr",yr);
     n=bot_put(n," verb="); { char v[2]={(char)(g_pending_verb?g_pending_verb:'-'),0}; n=bot_put(n,v); }
     n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
+    { int sp=0; for(int s=0;s<SPELL_COUNT;s++) sp+=g_known[s]; n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58)); }
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
     n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",g_cg.gold); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
@@ -10633,6 +10710,7 @@ int main(int argc, char **argv)
                                                                        g_intro_logos=(c=='L'); if(c=='L') g_intro_start=0; run_intro(); }   /* explicit intro capture ('0'..'9' = start scene, 'L' = logos + all) */
             void*creq=plat_load_file("CHARGEN.REQ",1,&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');
             void*mreq=plat_load_file("MENU.REQ",1,&ml);
+            if(mreq) g_menu_ran=1;
             if(mreq){ if(!ireq && !creq){ g_intro_logos=1; run_intro(); }   /* interactive boot: logos + the (skippable) intro FIRST */
                       run_menu(); }                    /* then the title/main menu (authentic boot order) */
         }
@@ -11025,6 +11103,9 @@ int main(int argc, char **argv)
                     if(i<BOOK_MAX){ g_book[i]=(const char*)q; g_booklen[i]=L; } q+=L; }
                 ap=q;
             }
+            /* the spellbook page (U6WN): [4 "U6WN"][144*82 indices], pointer into the pak */
+            if(ap+4+SPELL_W*SPELL_H<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='N'){
+                g_spell_page=ap+4; ap+=4+SPELL_W*SPELL_H; }
         }
     }
     } else {   /* core pack (SE/MD): stub the U6-only cursor/basetile/anim/lighting/save tail */
@@ -11176,8 +11257,8 @@ int main(int argc, char **argv)
                 if(g_savetmpl_len<=0){ g_savetmpl=NULL; g_savetmpl_len=0; } } } }
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n");
-        else { pool_from_inventory(g_savetmpl, g_savetmpl_len, g_objlist_off);   /* the party's real pack (§6) */
-               magic_seed_items();
+        else { if(!g_load_book_present) memset(g_known,0,sizeof g_known);
+               pool_from_inventory(g_savetmpl, g_savetmpl_len, g_objlist_off);   /* the party's real pack (§6) */
                talk_state_from_save(g_savetmpl, g_objlist_off);                 /* what NPCs already told us */
                wind_from_save(g_savetmpl, g_objlist_off);                       /* the wind (wind.md §1) */
                date_from_save(g_savetmpl, g_objlist_off);                       /* the game date (moongates.md §1) */
@@ -11210,6 +11291,10 @@ int main(int argc, char **argv)
      * here and play begins. INTRO.REQ plays the cutscene directly (headless capture of
      * Phase 2 without navigating the menu). (shapes.md; Phase 1/2.) */
     apply_chargen();   /* if a character was created, it becomes the Avatar (name/stats) for play */
+    {   int32_t rl=0;   /* the test stock (§4): MAGIC.REQ, or a headless scene that skipped the title and is no bot */
+        { const uint8_t*sq=(const uint8_t*)plat_load_file("PARCH.REQ",1,&rl);   /* test: the mage of byte 0 beside the party, gold to buy from them */
+          if(sq && rl>0 && sq[0]<U6_MAX_ACTORS){ g_actx[sq[0]]=(uint16_t)(w.px+1); g_acty[sq[0]]=(uint16_t)w.py; g_actz[sq[0]]=(uint8_t)w.level; g_cg.gold+=400; } }
+        if(plat_load_file("MAGIC.REQ",1,&rl) || (!g_menu_ran && !plat_load_file("BOT.REQ",1,&rl))){ g_magic_demo=1; magic_demo_seed(); } }
 
     /* headless NEW-GAME verification: if NEWGAME.BIN is staged, print the assembled new-game
      * state to the console (--conout 2) so a capture can assert the created character was
@@ -13275,7 +13360,7 @@ int main(int argc, char **argv)
                 int av=1, intel=g_aint[av]?g_aint[av]:15;
                 dbg_num("avatar int      =", g_aint[av]);
                 dbg_num("mana max        =", g_amaxmana[av]);
-                dbg_num("castable circle =", magic_castable_circle(intel));
+                dbg_num("level           =", g_alevel[av]);
                 dbg_num("reagent mask    =", reagent_mask());               /* 0xff = all 8 seeded */
                 /* gate: an 8th-circle spell the Avatar can't reach is refused (non-zero result) */
                 int mk=magic_find("Mass Kill");
@@ -13304,13 +13389,8 @@ int main(int argc, char **argv)
                 dbg_num("mana post-fb    =", g_amana[av]);
             } else if(mode==17){                          /* MAGIC UI: the C)ast spell-selection menu */
                 open_cast_menu();                          /* build the castable-spell list + open the menu */
-                dbg_num("castable spells =", g_ncast);      /* 6 at Int 15 (Great Heal circle 4 is gated out) */
-                for(int i=0;i<g_ncast;i++){ Cconws("  "); Cconws(g_spells[g_castlist[i]].name); Cconws("\r\n"); }
-                dbg_num("parse '3' ->idx =", cast_menu_parse("3"));         /* the 3rd listed spell */
-                dbg_num("parse 'fire'->  =", cast_menu_parse("fire"));      /* name-prefix -> Fireball */
-                dbg_num("Great Heal knownbut gated (in list=0?) =",
-                        (g_known[magic_find("Great Heal")] && cast_menu_parse("Great Heal")<0)?1:0);
-                g_inbuf[0]='3'; g_inbuf[1]=0; g_inlen=1;    /* partial typed selection, shown in the box */
+                dbg_num("selected spell  =", g_cast_sel);
+                dbg_num("words 'im' ->idx=", magic_find_words("im"));       /* In Mani -> Heal */
                 /* leave g_casting=1 so the captured frame shows the live menu */
             } else if(mode==18){                          /* MAGIC: Create Food + Unlock Magic (magic_skills.md §5) */
                 int av=1;
@@ -13333,7 +13413,7 @@ int main(int argc, char **argv)
                 }
             } else if(mode==19){                          /* MAGIC: field-tile layer (magic_skills.md §5a) */
                 int av=1; g_aint[av]=24;                     /* raise Int so circle 4-5 field spells are castable */
-                dbg_num("castable circle =", magic_castable_circle(g_aint[av]));  /* 6 */
+                dbg_num("level           =", g_alevel[av]);
                 /* a slug 1 tile east, to burn in a Fire Field */
                 g_atile[slot]=(uint16_t)bt; g_abase[slot]=(uint16_t)bt; g_atpd[slot]=0; g_facing[slot]=2;
                 g_actx[slot]=(uint16_t)((w.px+1)&(U6_SURFACE_TILES-1)); g_acty[slot]=(uint16_t)(w.py&(U6_SURFACE_TILES-1));
@@ -14064,10 +14144,15 @@ int main(int argc, char **argv)
                     { int n=msgcat(0,"Mantra: "); msgcat(n,g_inbuf); } redraw=1; }
             } else if (g_casting) {                  /* choosing a spell in the C)ast menu */
                 if      (a==0x0d) { if(cast_menu_submit(&w)){ compose_map(&w); draw_border_tiles(); } redraw=1; }  /* Enter: select */
-                else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } redraw=1; }                              /* Bksp */
-                else if (a==0x1b) { close_cast_menu(); redraw=1; }                                               /* Esc: cancel */
-                else if (a>=0x20 && a<0x7f && g_inlen<CVM_INPUT-1) {                                             /* a char/digit */
-                    g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0; redraw=1;
+                else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; spell_words_show(); } redraw=1; }         /* Bksp */
+                else if (a==0x1b) { close_cast_menu(); g_msg[0]=0; redraw=1; }                                   /* Esc: cancel */
+                else if (((a>='a'&&a<='z')||(a>='A'&&a<='Z')) && g_inlen<4) {                                    /* a rune's syllable */
+                    g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0; spell_words_show(); redraw=1;
+                } else { int sc=(key>>8)&0xFF;
+                    if      (sc==0x48) { spell_page_step(0); redraw=1; }
+                    else if (sc==0x50) { spell_page_step(1); redraw=1; }
+                    else if (sc==0x4B) { spell_page_move(0); redraw=1; }
+                    else if (sc==0x4D) { spell_page_move(1); redraw=1; }
                 }
             } else {
                 plat_input_t in = plat_input_map(key);
@@ -14126,9 +14211,15 @@ int main(int argc, char **argv)
                           g_pending_verb=(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_tcur_dx=g_tcur_dy=0; }   /* 2 = the orb asks "Where:" (its crosshair starts on the Avatar), 3 = a potion asks "On whom:", 4 = the staff's targeted charge */
                         g_show_inv=0; g_use_pack=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='M' && (a=='m'||a=='M') && !(dx||dy) && g_ow.ninv>0){
+                        if(!g_move_pack){ g_move_pack=1; g_show_inv=1; g_inv_sel=0; }   /* M again -> move a carried item */
+                        else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;                        /* ... M once more -> next item */
+                        move_prompt(); redraw=1; }
+                    else if (g_pending_verb=='M' && g_move_pack && a==0x0d && !(dx||dy)){
+                        move_pack_item(); g_pending_verb=0; g_move_pack=0; g_show_inv=0; redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0; redraw=1; }
-                    else if (a==0x1b) { g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
+                    else if (a==0x1b) { g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_move_pack=0; g_show_inv=0; g_msg[0]=0; redraw=1; }   /* cancel */
                 }
                 else if (((key>>8)&0xFF)==0x3B) { music_cycle_pref(); msgcat(0, music_pref_label()); redraw=1; }  /* F1: music source */
                 else if (a=='a'||a=='A') { arm_attack(); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }  /* A)ttack: the crosshair (combat.md §6b) */
@@ -14155,7 +14246,7 @@ int main(int argc, char **argv)
                 else if (in==IN_QUIT) { g_show_inv=0; msgcat(0,"Anything since your last save will be lost."); g_pending_verb='Q'; redraw=1; }   /* Esc quits, but asks */
                 else if (in==IN_TALK) { g_pending_verb='T'; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0;   /* T)alk-: the crosshair picks anyone in view, as the original (a trainer advances thy level) */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                else if (a=='m'||a=='M') { g_pending_verb='M'; g_msg[0]=0; g_show_inv=0; redraw=1; }    /* M)ove-(dir)? (usecode_use.md) */
+                else if (a=='m'||a=='M') { g_pending_verb='M'; g_move_pack=0; g_msg[0]=0; g_show_inv=0; redraw=1; }    /* M)ove-(dir)? (usecode_use.md) */
                 else if (dx||dy) {                   /* walk (or steer the vehicle) */
                     if (g_talking||g_show_inv||g_msg[0]) {   /* closing a panel needs a full present */
                         end_talk(); g_show_inv=0; g_msg[0]=0; redraw=1; }
@@ -14164,7 +14255,17 @@ int main(int argc, char **argv)
                 }
             }
         }
-        if (click) {                                 /* mouse: command bar / map */
+        if (click && g_casting) {             /* the spellbook page: a row casts, a button turns, elsewhere cancels */
+            int rx=g_mx-SPELL_X, ry=g_my-SPELL_Y;
+            uint8_t l[SPELL_COUNT]; int n=spell_circle_list(g_spells[g_cast_sel].circle,l), pos=0;
+            for(int i=0;i<n;i++) if(l[i]==g_cast_sel) pos=i;
+            int row=(ry-8)>>3, i=(pos&~7)+row;
+            if(ry>=SPELL_H && ry<SPELL_H+16 && rx>=32 && rx<64) spell_page_move(rx>=48);
+            else if(rx>=16 && rx<136 && ry>=8 && row<8 && i<n){ g_cast_sel=l[i]; g_inlen=0; g_inbuf[0]=0;
+                if(cast_menu_submit(&w)){ compose_map(&w); draw_border_tiles(); } }
+            else { close_cast_menu(); g_msg[0]=0; }
+            redraw=1;
+        } else if (click) {                          /* mouse: command bar / map */
             if (g_my>=CMDY && g_my<CMDY+16 && g_mx>=CMDX && g_mx<CMDX+NCMD*16) {
                 int icon=(g_mx-CMDX)/16, v=cmd_verb(icon);   /* select a command */
                 if (icon==9){ g_combat_mode=!g_combat_mode; g_pending_verb=0; g_show_inv=0;  /* Combat icon toggles combat */
@@ -14174,7 +14275,7 @@ int main(int argc, char **argv)
                 else if (v=='C'){ open_cast_menu(); }        /* Cast icon opens the spell menu */
                 else if (v=='D'){ g_msg[0]=0; arm_drop(); }  /* Drop icon: open the pack + arm the drop */
                 else if (v=='A'){ arm_attack(); }           /* Attack icon: the crosshair */
-                else if (v){ g_pending_verb=v; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; }
+                else if (v){ g_pending_verb=v; g_move_pack=0; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; }
                 else  { msgcat(0,"Not yet implemented."); g_pending_verb=0; g_show_inv=0; }
                 redraw=1;
             } else if (g_show_status) {               /* a click while viewing a character -> back to the roster */
@@ -14250,6 +14351,9 @@ int main(int argc, char **argv)
         /* Present the smallest region that changed: panel/cursor changes need the full
          * doubled present; a clean walk or the animation tick only need the map window
          * (~half the c2p). (docs/design/performance.md) */
+        if (g_cast_undraw){ g_cast_undraw=0;             /* the page's strip over the map comes off */
+            for(int y=SPELL_Y;y<SPELL_Y+SPELL_H;y++) memcpy(ROW(y)+SPELL_X, g_paper+(int32_t)y*LW+SPELL_X, (size_t)(PANX-SPELL_X));
+            compose_map(&w); draw_border_tiles(); redraw=1; }
         if (redraw){ draw_conversation(ink); draw_status(&w,ink); draw_command_bar(15); }
         /* Exactly ONE Vsync per loop iteration paces the frame. present_frame() (full
          * doubled present) Vsyncs internally, so don't Vsync again after it — the old code
