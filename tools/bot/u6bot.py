@@ -67,6 +67,7 @@ class Game:
                 '--harddrive', self.hd, '--fast-boot', 'on', '--fast-forward', 'on' if fast else 'off',
                 '--sound', 'off', '--statusbar', 'off', '--drive-led', 'off', '--confirm-quit', 'off',
                 '--natfeats', 'on', '--conout', '2', '--screenshot-dir', self.out, '--cmd-fifo', self.fifo]
+        args += os.environ.get('BOT_HATARI_ARGS', '').split()    # e.g. --trace psg_write, into console.log
         if avi: args += ['--avirecord', '--avi-vcodec', 'png', '--avi-file', os.path.join(self.out, 'run.avi')]
         self.log = open(log or os.path.join(self.out, 'console.log'), 'w')
         self.p = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)

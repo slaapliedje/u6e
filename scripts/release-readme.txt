@@ -34,6 +34,10 @@ TRANSFER A CHARACTER
   the game folder, where you can copy SAVED.GAM (Ultima V), ROST.BIN
   (Ultima IV, ST) or PARTY.SAV (Ultima IV, DOS).
 
+SOUND
+  Ctrl-Z turns the sound off and on, as in the original. F1 picks the
+  music source.
+
 SAVED GAMES
   S saves and Ctrl-R restores. Each opens a page of 8 slots: Up, Down or
   1-8 pick one, Enter acts, Esc cancels. Journey Onward resumes the slot

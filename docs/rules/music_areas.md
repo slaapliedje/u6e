@@ -27,6 +27,9 @@ own (docs/formats/st_music.md §5). With the player's `U.PRG` in the game folder
 music source, the default where there is no DMA sound; `MIDI.CFG` byte `5`. Without `U.PRG` the source is
 left out of the F1 cycle and the automatic choice falls back to the DOS songs on the chip.
 
+From the same program, for every music source: Stones while camping and at a midnight moongate, and Ctrl-Z
+for sound on/off (st_music.md §5, moongates.md §2c).
+
 ## 1. System (GROUP-based, faithful to the original)
 U6 does NOT map screen position to a specific song. It sorts its songs into GROUPS and, when the game
 CONTEXT changes, plays a track from the group that context calls for. The wandering group holds several
@@ -97,7 +100,7 @@ pick never destabilises a test.
       music manager on end-of-song).
 - [x] Confirmed from the reference (2026-10-28): the gargoyle group is MAP LEVEL 5, not a surface
       region; every vehicle the party sits inside (ship, skiff, raft, balloon) is `boat`; the horse is
-      not. The reference leaves "Stones while camping" as its own FIXME (not implemented there either).
+      not. The reference leaves "Stones while camping" as its own FIXME; the ST plays it, and so do we (§0).
 - [ ] Scripted/usecode music cues (events, specific NPCs) — route through the "forced song" path.
 
 ## 7. Status

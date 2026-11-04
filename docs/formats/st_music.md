@@ -126,7 +126,18 @@ The program holds a table from song number to tune. Song numbers are MIDI.DAT's 
 GAME.PRG asks for: gargoyle lands (level 5) 11; surface, a random one of 8, 1, 5, 10; dungeon 9;
 then in order of priority aboard a ship or skiff 6, in combat 7. That is the same choice the reference
 makes (docs/rules/music_areas.md). Probable, read but not run in the emulator: combat and the vehicle.
-It also asks for 8 from one command handler, not yet identified (possibly camping).
+It also asks for 8 (Stones) in two places, read in GAME.PRG and in DOS GAME.EXE 4.5, the same in both, and not run in either:
+- **R)est**, at the key, before any refusal: the tune plays through the camp; when the command is over the
+  area's song is chosen again, so a refused rest changes the surface tune too.
+- **A blue moongate** entered in the first ten minutes after midnight (moongates.md §2c).
+
+**Ctrl-Z** is the "Sound on/off" command. Off stops the music; on chooses the area's song again. It starts on
+at every run. DOS has the same key and its song routine tests the switch, so R)est stays silent with the sound
+off. The ST's routine doesn't test it, so there R)est would start the tune and leave it playing; we follow DOS.
+
+Song 13 is in the table too, as tune 0: five spell cases (numbers 2, 3, 18, 19, 20 of that switch, not yet
+tied to spell names) call a routine that asks for it and doesn't go back. DOS has no such request: its song
+routine is called only with the songs above. We don't play it, and it isn't confirmed by a run.
 
 ## 6. Validation
 `tools/sttest.c` has a synthetic check that needs no game data (`make sttest`). Given U.PRG and a log of

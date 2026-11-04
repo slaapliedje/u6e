@@ -1,6 +1,7 @@
 # Known deviations from the reference (U6)
 
-Games: Ultima VI. One register of every place u6e knowingly differs from the original as
+Games: Ultima VI. The rules follow the DOS release (GAME.EXE 4.5), decided 2026-11-04; where it hasn't been read yet
+the reference is ScummVM/Nuvie. One register of every place u6e knowingly differs from the original as
 reimplemented by ScummVM/Nuvie — so nothing is lost across sessions. Each entry names the spec
 section that holds the detail. "Accepted" = a deliberate simplification or a better-than-original
 call; "open" = worth closing later; "data" = unreachable in the user's own data.
@@ -8,7 +9,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 > Provenance
 > - Derived from : the deviation / simplification sections of the rule specs listed below (each of
 >   which cites the reference code it was read against). Nothing new is asserted here.
-> - Last updated : 2026-11-03 (title menu)
+> - Last updated : 2026-11-04 (Stones while camping is played, as on the ST)
 
 ## Combat and creatures
 | Deviation | Where | Status |
@@ -71,7 +72,6 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | The vanish slot (objlist 0x1c13) is OUR encoding `obj_n \| frame<<10` — the reference's `+1023+frame` does not round-trip | magic_skills.md §5f, objlist.md | accepted |
 | L)ook prints no weights, weapon or armour lines after the name (the reference's look_obj does) | usecode_use.md (Clock and sundial) | open |
 | A plural marker (`\s`) reaches the screen in some conversation lines ("gold piece\s short") | usecode_vm.md | open |
-| Music: "Stones while camping" is a FIXME in the reference too; not played | music_areas.md §6 | accepted |
 | Host tool tools/tilestrip renders tile n+1 for tile n (off by one) | — | open (tool) |
 
 ## Saved games

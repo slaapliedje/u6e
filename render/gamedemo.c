@@ -732,6 +732,7 @@ static void intro_caption_page(int gp);           /* fwd: parchment + page gp (d
  * pumped, so the hardware just re-looped the primed ring. XBIOS Vsync (#37). */
 static void vsync_pump(void){ Vsync(); plat_dma_music_pump(); }
 static void music_cycle_pref(void);        /* fwd: F1 music-source cycle (music manager) */
+static void music_stones(void); static void music_resume_area(int level); static void music_update_area(int level);   /* fwd: R)est and the midnight gate (st_music.md §5) */
 static const char *music_pref_label(void); /* fwd: its label */
 
 /* set the scene palette scaled by num/8 (0=black .. 8=full) — for fade in/out. */
@@ -8718,7 +8719,7 @@ static void rest_finish(world_t*w)
                 n=msgcat(n,g_party[p].name); n=msgcat(n," has healed. "); } }
         rest_pose(p,a,0); }
     if(can_heal) g_rest_counter=12;
-    sync_party_hp(); g_resting=0; g_rest_turns=0; build_blocked(); (void)w;
+    sync_party_hp(); g_resting=0; g_rest_turns=0; build_blocked(); music_resume_area(w->level);
 }
 /* one rest turn: a mealtime line, the sleep lines, then an hour's worth of world turns six at a time */
 static void rest_tick(world_t*w)
@@ -8750,11 +8751,11 @@ static int rest_key(world_t*w,int a)
     if(!g_rest_stage) return 0;                                                   /* no prompt armed */
     if(a>='0'&&a<='9'){ if(g_rest_len<2){ g_rest_buf[g_rest_len++]=(char)a; g_rest_buf[g_rest_len]=0; } return 1; }
     if(a==0x08){ if(g_rest_len) g_rest_buf[--g_rest_len]=0; return 1; }
-    if(a==0x1b){ g_pending_verb=0; g_rest_stage=0; g_msg[0]=0; return 1; }
+    if(a==0x1b){ g_pending_verb=0; g_rest_stage=0; g_msg[0]=0; music_resume_area(w->level); return 1; }
     if(a!=0x0d) return 1;
     int v=0; for(int k=0;k<g_rest_len;k++) v=v*10+(g_rest_buf[k]-'0');
     if(g_rest_stage==1){
-        if(v==0){ g_pending_verb=0; g_rest_stage=0; return 1; }                   /* 0 / nothing: never mind */
+        if(v==0){ g_pending_verb=0; g_rest_stage=0; music_resume_area(w->level); return 1; }   /* 0 / nothing: never mind */
         g_rest_hours=v;
         if(g_nparty>1){ g_rest_stage=2; g_rest_len=0; g_rest_buf[0]=0; return 1; }
         rest_start(w,g_rest_hours,-1); return 1; }
@@ -8767,12 +8768,13 @@ static int rest_key(world_t*w,int a)
 static int do_rest(world_t *w)
 {
     if(g_resting) return 0;
-    { const char*r=rest_refusal(w); if(r){ int n=msgcat(0,"Rest"); msgcat(n,r); return 1; } }
+    music_stones();                                         /* the ST's camp tune, from the key on: st_music.md §5 */
+    { const char*r=rest_refusal(w); if(r){ int n=msgcat(0,"Rest"); msgcat(n,r); music_resume_area(w->level); return 1; } }
     if(ship_aboard()){                                      /* cannons.md §2: resting aboard a ship repairs the hull */
         wobj_t*c=&g_wobj[g_veh_o[0]]; int h=(int)c->qty+5; if(h>100) h=100; c->qty=(uint16_t)h;
         if(c->dirty!=WOBJ_DIRTY_DROPPED) c->dirty=WOBJ_DIRTY_STATE;
         w->clock += 5; g_hour=clock_hour(w); g_minutes=clock_minutes(w);
-        int n=msgcat(0,"Hull Strength: "); n=msgcat_int(n,h); msgcat(n,"%"); return 1; }
+        int n=msgcat(0,"Hull Strength: "); n=msgcat_int(n,h); msgcat(n,"%"); music_resume_area(w->level); return 1; }
     g_pending_verb='R'; g_rest_stage=1; g_rest_len=0; g_rest_buf[0]=0; g_rest_hours=0; g_rest_guard=-1; msgcat(0,"Rest");
     return 1;
 }
@@ -10059,11 +10061,12 @@ static void music_play_st(int tune){
     st_start(&g_st, tune); g_st_on=1; g_music_active=5;
     plat_timer_start(music_isr_tick, g_st_hz);
 }
+static int g_sound_off;     /* Ctrl-Z (st_music.md §5): the current song is remembered, nothing plays */
 /* play song `base` (e.g. "BRIT") through the runtime-selected backend */
 static void music_play_song(const char *base){
     music_stop_all();
     { int i=0; while(base[i] && base[i]!='.' && i<15){ g_music_cur[i]=base[i]; i++; } g_music_cur[i]=0; }
-    if(!g_music_cur[0]) return;
+    if(!g_music_cur[0] || g_sound_off) return;
     /* resolve the backend: explicit preference wins; auto = DMA if present, else the ST tunes, else PSG (MIDI is opt-in). */
     int st = g_st_song ? st_tune_for(g_music_cur) : -1;
     g_music_gm = (g_music_pref==4);
@@ -10210,6 +10213,17 @@ static void music_update_area(int level){
         g_music_group = g;
         music_play_song(music_group_pick(g));
     }
+}
+/* the area's song, chosen afresh (after the Stones, as the ST does: st_music.md §5) */
+static void music_resume_area(int level){ g_music_group=-1; music_update_area(level); }
+static void music_stones(void){ if(!g_music_forced) music_play_song("STONES"); }
+/* Ctrl-Z: sound off and on */
+static void music_sound_toggle(int level){
+    g_sound_off=!g_sound_off;
+    if(g_sound_off) music_stop_all();
+    else if(g_music_forced){ char b[16]; int i=0; while(g_music_cur[i]){ b[i]=g_music_cur[i]; i++; } b[i]=0; music_play_song(b); }
+    else music_resume_area(level);
+    msgcat(0,g_sound_off?"Sound off":"Sound on");
 }
 
 /* Make the working directory the folder GAMEF.PRG itself lives in, so every
@@ -14339,6 +14353,7 @@ int main(int argc, char **argv)
                 else if (a=='i'||a=='I') { g_show_inv=!g_show_inv; g_msg[0]=0; redraw=1; }
                 else if (a=='s'||a=='S'||a==0x12) { g_show_inv=0; g_pending_verb=0;   /* S)ave, Ctrl-R: the slot page (save_load.md §2b) */
                     save_index_load(); g_save_menu=(a==0x12)?2:1; g_save_copy=0; save_detail(); redraw=1; }
+                else if (a==0x1a) { g_show_inv=0; music_sound_toggle(w.level); redraw=1; }             /* Ctrl-Z: sound (st_music.md §5) */
                 else if (a=='r'||a=='R') { g_show_inv=0; do_rest(&w);                /* R)est: restore HP+mana */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='>' || a=='<') {          /* descend/ascend a map level (map_levels.md). '>' also
