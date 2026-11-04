@@ -21,6 +21,12 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M10 (audio: music)
 > - Last updated : 2026-10-28 (boat + gargoyle wired; READ Nuvie `core/party.cpp` update_music /
 >   set_in_vehicle for the trigger order — re-expressed)
 
+## 0. The ST release's own tunes (2026-11-03)
+The ST release asks for the same 12 songs in the same situations, and plays each as one of 7 tunes of its
+own (docs/formats/st_music.md §5). With the player's `U.PRG` in the game folder or `ST\\`, those tunes are a
+music source, the default where there is no DMA sound; `MIDI.CFG` byte `5`. Without `U.PRG` the source is
+left out of the F1 cycle and the automatic choice falls back to the DOS songs on the chip.
+
 ## 1. System (GROUP-based, faithful to the original)
 U6 does NOT map screen position to a specific song. It sorts its songs into GROUPS and, when the game
 CONTEXT changes, plays a track from the group that context calls for. The wandering group holds several

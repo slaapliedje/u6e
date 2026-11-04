@@ -27,9 +27,10 @@ The whole game is playable from the intro to the ending:
   - resting, food and healers;
   - joining and leaving the party.
 - **Saving:** S)ave writes a ScummVM/Nuvie-format save, so a save can be loaded in either engine.
-- **Music:** the original songs, played through the YM2149 sound chip on any Atari, a Roland MT-32
-  or General MIDI module on the MIDI port, or pre-rendered AdLib audio through STE/TT/Falcon DMA
-  sound. F1 cycles through the sources.
+- **Music:** the DOS songs, played through the YM2149 sound chip on any Atari, a Roland MT-32 or
+  General MIDI module on the MIDI port, or pre-rendered AdLib audio through STE/TT/Falcon DMA sound.
+  With `U.PRG` from your ST disks in the game folder or a folder named `ST`, the ST release's own YM
+  tunes too, the default without DMA sound. F1 cycles through the sources.
 
 Speed (idle frame rate, measured in Hatari): about **13 fps on a stock TT** and **11 fps on a
 stock Falcon**, both with no Fast RAM.

@@ -17,5 +17,7 @@ void plat_psg_init(void);                          /* silence + set the mixer (n
 void plat_psg_voice(int v, int midinote, int vol); /* voice 0..2 -> midinote, vol 0..15    */
 void plat_psg_voice_off(int v);                    /* silence voice v                      */
 void plat_psg_silence(void);                       /* all three voices off                 */
+void plat_psg_write(int reg, int val);             /* raw register write (interrupt level) */
+int  plat_psg_read(int reg);                       /* raw register read (interrupt level)  */
 
 #endif /* U6E_PLATPSG_H */

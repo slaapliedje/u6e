@@ -8,7 +8,14 @@
  */
 #include "platinput.h"
 #include <osbind.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <mint/linea.h>   /* GCURX/GCURY/MOUSE_BT line-A globals */
+
+static uint8_t s_conterm;
+static long conterm_click_off(void){ volatile uint8_t *c=(volatile uint8_t*)0x484; s_conterm=*c; *c=(uint8_t)(s_conterm&~1); return 0; }
+static long conterm_put_back(void){ *(volatile uint8_t*)0x484=s_conterm; return 0; }
+static void conterm_restore(void){ Supexec(conterm_put_back); }
 
 void plat_input_init(void)
 {
@@ -18,6 +25,10 @@ void plat_input_init(void)
      * double-fires (reported on real HW). ~300 ms initial means a tap = one event,
      * while deliberately HOLDING an arrow (>300 ms) still auto-walks (~60 ms/step). */
     Kbrate(15, 3);
+    /* The key click goes through the sound chip, over the music: TOS's conterm ($484) bit 0 off while
+     * we run, as the original ST game does. Supexec (XBIOS 38) reaches it; atexit puts it back. */
+    Supexec(conterm_click_off);
+    atexit(conterm_restore);
 }
 
 int plat_input_raw(void)

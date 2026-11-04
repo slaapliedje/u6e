@@ -42,6 +42,8 @@ static uint8_t g_tone_off = 0x07;   /* R7 tone-disable bits: 1 = voice muted    
  * so they write the registers directly; plat_psg_init / plat_psg_silence run in main (user)
  * context and go through Supexec (XBIOS 38). */
 static void psg_write(int reg, int val){ *PSG_SEL = (uint8_t)reg; *PSG_WR = (uint8_t)val; }
+void plat_psg_write(int reg, int val){ psg_write(reg, val); }
+int  plat_psg_read(int reg){ *PSG_SEL = (uint8_t)reg; return *PSG_SEL; }
 
 /* R7 = port dir + noise off (bits3-5) + current tone-disable mask */
 static void psg_mixer(void){ psg_write(7, PORT_DIR | 0x38 | g_tone_off); }

@@ -33,6 +33,7 @@
 #include "platmidi.h"          /* M10: MIDI OUT */
 #include "platdma.h"           /* M10: STE/TT/Falcon 8-bit DMA sound (pre-rendered PCM streaming) */
 #include "platpsg.h"           /* M10: YM2149 PSG (plain-ST 3-voice fallback) */
+#include "sttune.h"            /* the ST release's own YM music, from the player's U.PRG */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
 #include "firstrun.h"          /* first start: DOS files -> CONVERT.TOS (docs/design/first_boot_convert.md) */
@@ -9942,7 +9943,11 @@ static const music_backend_t g_psg_be = { psg_be_program, psg_be_note_on, psg_be
  * one tick (which drives whichever backend is live), then — for MIDI only — push a bounded
  * burst of queued MIDI to the ACIA. Runs at interrupt level: everything it calls is integer
  * + ISR-safe (no TOS). 52 bytes/tick ~= the 31250-baud MIDI budget per 60 Hz tick. */
+static st_player_t g_st;        /* the ST release's tracker (docs/formats/st_music.md) */
+static int g_st_on, g_st_hz;
+static const uint8_t *g_st_song;   /* 0 = no U.PRG to take it from */
 static void music_isr_tick(void){
+    if(g_st_on) st_tick(&g_st);
     if(g_music_on) music_seq_tick(&g_music, 1);
     if(g_music_be_kind == 1) plat_midi_drain(52);
 }
@@ -9979,11 +9984,12 @@ static int mus_parse_map(const uint8_t *dat, int32_t len, int idx, music_map_t *
  * One song, three possible sinks chosen at runtime from the machine + a user preference:
  *   MIDI  -> MIDI OUT (BASE.M + MIDI.DAT), any Atari + an external synth (MT-32)
  *   DMA   -> 8-bit DMA sound (BASE.PCM, host pre-rendered), STE / TT / Falcon
- *   PSG   -> YM2149 3-voice square (BASE.M re-voiced), any Atari — the plain-ST default
+ *   PSG   -> YM2149 3-voice square (BASE.M re-voiced), any Atari
+ *   ST    -> the ST release's own YM tunes, when the player's U.PRG is here — the plain-ST default then
  * The engine calls music_play_song(base); it never picks a backend itself. */
-static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI (MT-32), 2 DMA, 3 PSG, 4 MIDI (General MIDI) */
+static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI (MT-32), 2 DMA, 3 PSG, 4 MIDI (General MIDI), 5 ST tunes */
 static int  g_music_dma_ok;     /* 8-bit DMA sound present (STE/MegaSTE/TT/Falcon) */
-static int  g_music_active;     /* backend chosen for the current song: 1 MIDI 2 DMA 3 PSG */
+static int  g_music_active;     /* backend chosen for the current song: 1 MIDI 2 DMA 3 PSG 5 ST */
 static char g_music_cur[16];    /* current song base name ("" = none)             */
 static int      g_music_group = -1;  /* current context music group (-1 = none); see music_area_group */
 static uint32_t g_music_rng;         /* LCG state for the random wandering-track pick  */
@@ -10035,6 +10041,7 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
 static void music_stop_all(void){
     plat_timer_stop();
     g_music_on = 0;
+    if(g_st_on){ g_st_on = 0; plat_psg_silence(); }
     if(g_music_be_kind == 1){          /* MIDI OUT was live */
         for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
         plat_midi_all_off();
@@ -10047,22 +10054,30 @@ static void music_stop_all(void){
     plat_dma_music_stop();             /* stop DMA (no-op if not playing) */
 }
 
+/* the ST tunes run from the original's vertical blank: 50 or 60 Hz, with the display (st_music.md §1) */
+static void music_play_st(int tune){
+    st_start(&g_st, tune); g_st_on=1; g_music_active=5;
+    plat_timer_start(music_isr_tick, g_st_hz);
+}
 /* play song `base` (e.g. "BRIT") through the runtime-selected backend */
 static void music_play_song(const char *base){
     music_stop_all();
     { int i=0; while(base[i] && base[i]!='.' && i<15){ g_music_cur[i]=base[i]; i++; } g_music_cur[i]=0; }
     if(!g_music_cur[0]) return;
-    /* resolve the backend: explicit preference wins; auto = DMA if present, else PSG (MIDI is opt-in). */
+    /* resolve the backend: explicit preference wins; auto = DMA if present, else the ST tunes, else PSG (MIDI is opt-in). */
+    int st = g_st_song ? st_tune_for(g_music_cur) : -1;
     g_music_gm = (g_music_pref==4);
     int use = (g_music_pref==1 || g_music_pref==4) ? 1 :   /* MIDI (MT-32 map / GM-translated) */
               (g_music_pref==3) ? 3 :               /* PSG  */
-                                  (g_music_dma_ok?2:3);   /* DMA-pref or auto: DMA if present, else PSG */
+              (g_music_pref==5) ? 5 :               /* ST tunes */
+                                  (g_music_dma_ok?2:5);   /* DMA-pref or auto: DMA if present, else the ST tunes */
     char nm[20];
     if(use==2){                                     /* DMA: needs a host-pre-rendered BASE.PCM */
         music_name(nm, g_music_cur, ".PCM");
         if(plat_dma_music_start(nm)){ g_music_active=2; return; }
-        use = 3;                                     /* PCM absent (e.g. compact install) -> chiptune, not silence */
+        use = 5;                                     /* PCM absent (e.g. compact install) -> chiptune, not silence */
     }
+    if(use==5){ if(st>=0){ music_play_st(st); return; } use = 3; }
     if(use==1){ g_music_active=1; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_midi_be, 1, 1); }
     else       { g_music_active=3; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_psg_be, 2, 0); }  /* PSG */
 }
@@ -10078,29 +10093,30 @@ static void fe_music(const char *base){
     music_play_song(base);
 }
 
-/* set the backend preference at runtime (0 auto / 1 MIDI MT-32 / 2 DMA / 3 PSG / 4 MIDI GM) and
+/* set the backend preference at runtime (0 auto / 1 MIDI MT-32 / 2 DMA / 3 PSG / 4 MIDI GM / 5 ST tunes) and
  * re-cue the current song. The MIDI.CFG byte is the boot default (authentic: the original chose the
  * synth in config, not in-game); F1 on the title menu / in game cycles it live and writes it back. */
 static void music_set_pref(int pref){
-    if(pref<0 || pref>4) pref=0;
+    if(pref<0 || pref>5) pref=0;
     if(pref == g_music_pref) return;
     g_music_pref = pref;
     if(g_music_cur[0]){ char b[16]; int i=0; while(g_music_cur[i]){ b[i]=g_music_cur[i]; i++; } b[i]=0; music_play_song(b); }
 }
-static int music_active_backend(void){ return g_music_active; }   /* 1 MIDI 2 DMA 3 PSG */
-/* Persist the preference: MIDI.CFG = one byte '0'..'4' in the game folder (GEMDOS Fcreate 0x3C /
+static int music_active_backend(void){ return g_music_active; }   /* 1 MIDI 2 DMA 3 PSG 5 ST */
+/* Persist the preference: MIDI.CFG = one byte '0'..'5' in the game folder (GEMDOS Fcreate 0x3C /
  * Fwrite 0x40 via the platform layer). '0' reads back as auto. */
 static void music_save_pref(void){
     plat_file f = plat_fcreate("MIDI.CFG");
     if(f != PLAT_BADFILE){ char b=(char)('0'+g_music_pref); plat_fwrite(f,&b,1); plat_fclose(f); }
 }
 /* F1: step to the next music source — auto -> MIDI (MT-32) -> MIDI (General MIDI) -> DMA (only
- * where the hardware has it) -> PSG -> auto — re-cue the song on it and save the choice. */
+ * where the hardware has it) -> PSG -> ST tunes (with a U.PRG) -> auto — re-cue the song on it and save the choice. */
 static void music_cycle_pref(void){
     int p = g_music_pref;
-    for(int guard=0; guard<6; guard++){
-        p = (p==0)?1 : (p==1)?4 : (p==4)?2 : (p==2)?3 : 0;
+    for(int guard=0; guard<7; guard++){
+        p = (p==0)?1 : (p==1)?4 : (p==4)?2 : (p==2)?3 : (p==3)?5 : 0;
         if(p==2 && !g_music_dma_ok) continue;              /* no DMA sound on this machine */
+        if(p==5 && !g_st_song) continue;                   /* no U.PRG */
         break; }
     music_set_pref(p);
     music_save_pref();
@@ -10112,11 +10128,13 @@ static const char *music_pref_label(void){
         case 4:  return "Music: MIDI out (General MIDI)";
         case 2:  return "Music: DMA sound (AdLib render)";
         case 3:  return "Music: PSG chiptune";
-        default: return g_music_active==2 ? "Music: automatic (DMA sound)" : "Music: automatic (PSG chiptune)"; }
+        case 5:  return "Music: the ST release's tunes";
+        default: return g_music_active==2 ? "Music: automatic (DMA sound)" :
+                        g_music_active==5 ? "Music: automatic (ST tunes)" : "Music: automatic (PSG chiptune)"; }
 }
 
 /* detect DMA + read the backend preference from MIDI.CFG (byte0 '1'=MIDI MT-32, '2'=DMA, '3'=PSG,
- * '4'=MIDI General MIDI; absent/other => auto: DMA if present, else PSG). MIDI stays opt-in since
+ * '4'=MIDI General MIDI, '5'=ST tunes; absent/other => auto: DMA if present, else ST tunes, else PSG). MIDI stays opt-in since
  * most players have no synth; the owner selects it (F1 cycles + saves). Also silence the PSG so a
  * leftover tone doesn't drone at boot. */
 static void music_manager_init(void){
@@ -10128,7 +10146,19 @@ static void music_manager_init(void){
     for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
     int32_t cl=0; void *c=plat_load_file("MIDI.CFG", 1, &cl);
     char b = (c && cl>0) ? ((const char*)c)[0] : 0;
-    g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : (b=='4')?4 : 0;
+    g_music_pref = (b=='1')?1 : (b=='2')?2 : (b=='3')?3 : (b=='4')?4 : (b=='5')?5 : 0;
+    /* the ST release's song, from the player's own U.PRG in the game folder or ST\\ (st_music.md) */
+    {   plat_mark m0=plat_chip_mark(); uint8_t *sb=(uint8_t*)plat_alloc_chip(ST_SONG_CAP);
+        int32_t sn=0, found=0;
+        if(sb){ plat_mark m1=plat_chip_mark();
+            const uint8_t *img=(const uint8_t*)plat_load_file("U.PRG",0,&sn);
+            if(!img) img=(const uint8_t*)plat_load_file("ST\\U.PRG",0,&sn);
+            if(img) found=st_song_find(img,sn,sb,ST_SONG_CAP);
+            plat_chip_reset(m1); }
+        if(found>0 && st_init(&g_st,sb,plat_psg_write,plat_psg_read)){ g_st_song=sb;
+            uint32_t t0=plat_ticks_200hz(); for(int i=0;i<16;i++) plat_wait_vbl();   /* 64 ticks at 50 Hz, 53 at 60 */
+            g_st_hz = plat_ticks_200hz()-t0 > 58 ? 50 : 60; }
+        else { plat_chip_reset(m0); if(g_music_pref==5) g_music_pref=0; } }
 }
 
 /* ---- per-area music: pick the song GROUP for the current game context, switch on change ----

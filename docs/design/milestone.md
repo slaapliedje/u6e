@@ -1346,7 +1346,9 @@ Acceptance
 
 ---
 
-## M10 — Audio: music (HEADLINE FEATURE — "fixes" the silent ST port)
+## M10 — Audio: music (HEADLINE FEATURE)
+(Correction 2026-11-03: the ST port is not silent. It has its own YM2149 tunes, and no MIDI or sound
+effects: docs/formats/st_music.md. "Silent" and "omitted" below are this milestone's original, wrong premise.)
 Status: [x] DONE (U6 core) 2026-07-18 — acceptance criteria 1–3 met + validated; the song-assignment
         polish is closed (`make musictest` sequences all 12 `.M` clean; the group model has no
         town/overworld distinction, matching U6/Nuvie). Criterion 4 (reuse for Savage/Martian) is
