@@ -34,6 +34,20 @@ TRANSFER A CHARACTER
   the game folder, where you can copy SAVED.GAM (Ultima V), ROST.BIN
   (Ultima IV, ST) or PARTY.SAV (Ultima IV, DOS).
 
+SAVED GAMES
+  S saves and Ctrl-R restores. Each opens a page of 8 slots: Up, Down or
+  1-8 pick one, Enter acts, Esc cancels. Journey Onward resumes the slot
+  you used last. Each slot keeps its two previous saves too (in Restore,
+  Left and Right pick them), so one bad save need not cost you the game.
+
+MAGIC
+  As in the original, you begin with no spellbook and no reagents. Look
+  around Lord British's castle for a book, Get it, and E)quip it: C)ast
+  asks for a readied book. Reagents are found or bought, and your level
+  limits the circles you can cast. Mages sell spells as parchments. Put
+  one in your book yourself: press M twice, M again until it is selected,
+  then Return.
+
 MUSIC
   The YM2149 sound chip plays the original songs by default. F1 cycles
   through the sources: automatic, Roland MT-32 or General MIDI on the

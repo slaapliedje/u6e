@@ -64,11 +64,34 @@ back on load; the trailer is date-stamped for ScummVM's load menu.
 
 ## 2. Entry points
 
-- **Ctrl-R** in play: restore SAVED.000 ("Game restored." / "No saved game (SAVED.000).").
-- **Journey Onward** at the main menu: resumes SAVED.000 when it exists; a character-creation
+- **Ctrl-R** in play: the slot page, then "Game restored." / "No saved game." (§2b).
+- **Journey Onward** at the main menu: resumes the slot last used when it exists; a character-creation
   run always starts fresh (g_cc_done wins).
 - The original had no in-game verb for this (DOS U6 restored from its boot menu); Ctrl-R is
   our mapping, chosen not to collide with R)est.
+
+## 2b. Slots and older copies (2026-11-03)
+The original has one save (`savegame\\objlist`...). Ours has 8 slots, listed in deviations.md.
+
+| file | what |
+|---|---|
+| `SAVED.000`..`SAVED.007` | slots 1-8 (ScummVM's format and its slot numbers) |
+| `SAVED.B0n`, `SAVED.C0n` | the slot's last and next-to-last saves |
+| `SAVED.TMP` | a save being written |
+| `SAVES.DAT` | `[u8 last slot used][8 slots x 3 copies x 32-byte NUL-ended label]` |
+
+A label is `name\ndate time`, the game's date and clock. A slot with a file and no label shows as
+"Saved game", as a `SAVED.000` from before slots does. A missing or short `SAVES.DAT` is an empty index.
+
+**Writing** never touches what exists until the new save is whole: write `SAVED.TMP` (GEMDOS Fcreate
+0x3C, Fwrite 0x40); if that fails, delete the slot's oldest copy and try once more; if that fails, delete the
+TMP (Fdelete 0x41), say "Disk full. Not saved." and stop. Then Fdelete `C0n`, Frename (0x56) `B0n` to `C0n`,
+`00n` to `B0n`, TMP to `00n`, and write the index.
+
+**S)ave and Ctrl-R** open a page on the spellbook's scroll at the same place: one row per slot, the
+cursor on the slot last used. Up, Down or a digit 1-8 picks; Enter acts; Esc cancels. In Restore, Left and Right pick
+the copy: the save, or older copy 1 or 2. Mouse: a row picks and acts; elsewhere cancels. Saving over a
+slot asks nothing: the older copy is there. Journey Onward resumes the slot last used.
 
 ## 3. Known limits (v1, symmetric with do_save)
 

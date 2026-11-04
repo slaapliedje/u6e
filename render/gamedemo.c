@@ -192,6 +192,7 @@ static uint8_t        g_adead[U6_MAX_ACTORS];  /* 1 = slain and flagged dead (ob
 static uint8_t        g_alcohol;               /* drinks consumed (objlist 0x1c17): >3 staggers the Avatar, -1 per hour */
 static int            g_cast_spell=-1;       /* the spell the armed C)ast verb will cast       */
 static int            g_casting=0;           /* 1 = the C)ast spell-selection menu is open      */
+static int            g_save_menu=0;         /* the slot page: 1 = S)ave, 2 = restore (save_load.md §2b) */
 static int            g_menu_ran=0;          /* the title menu ran: this is play, not a scene */
 static int            g_magic_demo=0;        /* the test stock (MAGIC.REQ, §4): no book or level gate */
 static int            g_cast_sel=-1;         /* the selected spell (dense index); stays between casts */
@@ -4977,7 +4978,7 @@ static void draw_border_tiles(void)
         blit_tile(px,MAPY,433,1); blit_tile(px,y1,436,1);   /* top / bottom rows */
         blit_tile(MAPX,py,438,1); blit_tile(x1,py,439,1);   /* left / right cols */
     }
-    if(g_casting) spell_page_blit(PANX-SPELL_X);
+    if(g_casting||g_save_menu) spell_page_blit(PANX-SPELL_X);
 }
 
 /* word-wrap `s` into a box [x..x+w) from y, up to `lines` rows of font text */
@@ -5053,11 +5054,46 @@ static void draw_spell_page(uint8_t col)
     ui_text(SPELL_X+104,y,ORD[c-1],col);
     ui_text(SPELL_X+96,y+8,"level",col);
 }
+/* ---- saved-game slots (save_load.md §2b) ---- */
+#define SAVE_SLOTS 8
+#define SAVE_COPIES 3
+#define SAVE_LABEL 32
+static uint8_t g_save_idx[1+SAVE_SLOTS*SAVE_COPIES*SAVE_LABEL];   /* SAVES.DAT */
+static int g_save_slot=0, g_save_copy=0;                 /* the slot and copy in use / under the cursor */
+static const char SAVE_INDEX[]="SAVES.DAT";
+static void save_path(char*p,int slot,int copy){
+    static const char H[3]={'0','B','C'}; memcpy(p,"SAVED.",6); p[6]=H[copy]; p[7]='0'; p[8]=(char)('0'+slot); p[9]=0; }
+static char *save_label(int slot,int copy){ return (char*)g_save_idx+1+(slot*SAVE_COPIES+copy)*SAVE_LABEL; }
+static void save_index_load(void){
+    memset(g_save_idx,0,sizeof g_save_idx);
+    if(plat_load_into(SAVE_INDEX,g_save_idx,(int32_t)sizeof g_save_idx)!=(int32_t)sizeof g_save_idx || g_save_idx[0]>=SAVE_SLOTS)
+        memset(g_save_idx,0,sizeof g_save_idx);
+    for(int s=0;s<SAVE_SLOTS;s++) for(int c=0;c<SAVE_COPIES;c++) save_label(s,c)[SAVE_LABEL-1]=0; }
+static int save_exists(int slot,int copy){ char p[12]; save_path(p,slot,copy); return plat_fsize_path(p)>0; }
+static void save_detail(void){                           /* the cursor's slot, in the message scroll */
+    int n=msgcat(0,g_save_menu==1?"Save to which slot?\n":"Restore which slot?\n");
+    if(!save_exists(g_save_slot,g_save_copy)){ msgcat(n,g_save_copy?"No older copy.":"Empty."); return; }
+    if(g_save_copy){ n=msgcat(n,g_save_copy==1?"Older copy 1\n":"Older copy 2\n"); }
+    char*l=save_label(g_save_slot,g_save_copy); msgcat(n,l[0]?l:"Saved game"); }
+static void draw_save_page(uint8_t col)
+{
+    spell_page_blit(SPELL_W);
+    for(int s=0;s<SAVE_SLOTS;s++){ int y=SPELL_Y+8+s*8, on=save_exists(s,0); char r[14]; int t=0;
+        if(s==g_save_slot) ui_text(SPELL_X+8,y,"\x1a",col);
+        r[t++]=(char)('1'+s); r[t++]=' ';
+        const char*l=on?save_label(s,0):"-"; if(on && !l[0]) l="Saved game";
+        for(int k=0;l[k] && l[k]!='\n' && t<13;k++) r[t++]=l[k];
+        r[t]=0; ui_text(SPELL_X+16,y,r,col); }
+    ui_text(SPELL_X+16,SPELL_Y+SPELL_H+4,g_save_menu==1?"Save game":"Restore game",col);
+}
 static void draw_conversation(uint8_t col)
 {
     int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
     restore_panel();                               /* clean papyrus before text */
-    if(g_casting){                                 /* C)ast: the spellbook page (magic_skills.md §6) */
+    if(g_save_menu){                               /* the slot page (save_load.md §2b) */
+        draw_save_page(col);
+        if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
+    } else if(g_casting){                          /* C)ast: the spellbook page (magic_skills.md §6) */
         draw_spell_page(col);
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
@@ -8914,6 +8950,30 @@ static int build_party_records(uint8_t *out)
     return nr;
 }
 
+/* the file, safely (save_load.md §2b): the old copies move only once the new save is whole */
+static int save_commit(const world_t *w, const uint8_t *d, int32_t n, const uint8_t *party, int np)
+{
+    static const char TMP[]="SAVED.TMP"; char a[12], b[12]; int s=g_save_slot; int32_t wl=0;
+    int rc=sav_write_rebuilt(TMP, d, n, party, np, g_pooled, U6_MAX_ACTORS, &wl);
+    if(rc!=0){ save_path(a,s,2); plat_fdelete(a);       /* full? the oldest copy goes, once */
+        rc=sav_write_rebuilt(TMP, d, n, party, np, g_pooled, U6_MAX_ACTORS, &wl); }
+    if(rc!=0){ plat_fdelete(TMP); msgcat(0,"Disk full. Not saved."); return 0; }
+    save_index_load();
+    save_path(a,s,2); plat_fdelete(a);
+    for(int c=SAVE_COPIES-1;c>0;c--){ save_path(a,s,c-1); save_path(b,s,c);
+        if(plat_fsize_path(a)>0) (void)plat_frename(a,b);
+        memcpy(save_label(s,c),save_label(s,c-1),SAVE_LABEL); }
+    save_path(a,s,0);
+    if(plat_frename(TMP,a)<0){ msgcat(0,"Save failed."); return 0; }
+    {   char*l=save_label(s,0); int t=0, dd,mm,yy, mod=clock_minutes(w); cur_date(w,&dd,&mm,&yy);
+        const char*nm=g_avatar_name[0]?g_avatar_name:"Avatar"; for(int k=0;nm[k] && k<8;k++) l[t++]=nm[k];
+        l[t++]='\n'; t=put2(l,t,mm); l[t++]='-'; l[t++]=(char)('0'+dd/10); l[t++]=(char)('0'+dd%10); l[t++]='-';
+        l[t++]=(char)('0'+(yy/1000)%10); l[t++]=(char)('0'+(yy/100)%10); l[t++]=(char)('0'+(yy/10)%10); l[t++]=(char)('0'+yy%10);
+        l[t++]=' '; t=put2(l,t,(mod/60)%24); l[t++]=':'; l[t++]=(char)('0'+(mod%60)/10); l[t++]=(char)('0'+(mod%60)%10); l[t]=0; }
+    g_save_idx[0]=(uint8_t)s;
+    {   plat_file f=plat_fcreate(SAVE_INDEX); if(f!=PLAT_BADFILE){ (void)plat_fwrite(f,g_save_idx,(int32_t)sizeof g_save_idx); plat_fclose(f); } }
+    msgcat(0,"Game saved."); return 1;
+}
 static int do_save(const world_t *w)
 {
     if(!g_savetmpl || g_objlist_off<0){ msgcat(0,"No save template (SAVE.000)."); return 0; }
@@ -8960,9 +9020,8 @@ static int do_save(const world_t *w)
       sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
     /* the FILE: every chunk minus the pooled actors' records + the party's inventory rebuilt from
      * the live model (§6) — consumption, spent gold and received items persist */
-    {   static uint8_t party[PARTY_REC_MAX * 8]; int np = build_party_records(party); int32_t wl = 0;
-        if(sav_write_rebuilt("SAVED.000", d, n, party, np, g_pooled, U6_MAX_ACTORS, &wl)==0){ msgcat(0,"Game saved."); return 1; } }
-    msgcat(0,"Save failed."); return 0;
+    {   static uint8_t party[PARTY_REC_MAX * 8]; int np = build_party_records(party);
+        return save_commit(w, d, n, party, np); }
 }
 
 /* ---- per-level object working set (map_levels.md §4b) -----------------------------------
@@ -9357,8 +9416,9 @@ static int step_triggers(world_t *w)
 static int load_game(world_t *w)
 {
     plat_mark mk = plat_chip_mark();
-    int32_t n = 0; uint8_t *d = (uint8_t*)plat_load_file("SAVED.000", 0, &n);
-    if(!d){ plat_chip_reset(mk); msgcat(0,"No saved game (SAVED.000)."); return 0; }
+    char lp[12]; save_path(lp,g_save_slot,g_save_copy);
+    int32_t n = 0; uint8_t *d = (uint8_t*)plat_load_file(lp, 0, &n);
+    if(!d){ plat_chip_reset(mk); msgcat(0,plat_fsize_path(lp)>0?"Not enough memory to restore.":"No saved game."); return 0; }
     int32_t ol = sav_objlist_off(d, n), so = sav_surface_off(d, n), se = sav_surface_end(d, n);
     int32_t ive = sav_inv_end(d, n);
     if(ol < 0 || so < 0 || se <= so || ive < 0){ plat_chip_reset(mk); msgcat(0,"Save file is damaged."); return 0; }
@@ -12790,7 +12850,8 @@ int main(int argc, char **argv)
 
     /* "Journey Onward" resumes the last save when one exists (a chargen run starts FRESH —
      * g_cc_done wins). Headless LOAD.REQ: save -> move away -> restore -> print the round-trip. */
-    if(g_menu_journey && !g_cc_done && plat_fsize_path("SAVED.000")>0) (void)load_game(&w);
+    save_index_load(); g_save_slot=g_save_idx[0]; g_save_copy=0;   /* the slot last used (save_load.md §2b) */
+    if(g_menu_journey && !g_cc_done && save_exists(g_save_slot,0)) (void)load_game(&w);
     eggs_update(&w,1);                                             /* the eggs around the start (like the original's load) */
     {   int32_t ll=0; uint8_t*lq=(uint8_t*)plat_load_file("LOAD.REQ",1,&ll);
         if(lq && ll>0 && (lq[0]=='2'||lq[0]=='3')){
@@ -14111,7 +14172,7 @@ int main(int argc, char **argv)
         /* During gameplay (NOT text entry), drain any backlog to the NEWEST key so a
          * held arrow doesn't queue up behind a slow compose and lag the avatar. Text
          * entry (conversation / cast menu) keeps every keystroke. */
-        if (key && !g_await_input && !g_casting && !g_mantra) {
+        if (key && !g_await_input && !g_casting && !g_save_menu && !g_mantra) {
             int k2, guard=0; while ((k2=plat_input_raw()) && ++guard<64){ key=k2; g_bot_keys++; }
         }
         int redraw=0;
@@ -14142,6 +14203,19 @@ int main(int argc, char **argv)
                 else if (a==0x1b) { g_mantra=0; g_msg[0]=0; redraw=1; }
                 else if (a>=0x20 && a<0x7f && g_inlen<CVM_INPUT-1) { g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0;
                     { int n=msgcat(0,"Mantra: "); msgcat(n,g_inbuf); } redraw=1; }
+            } else if (g_save_menu) {                /* the slot page (save_load.md §2b) */
+                int sc=(key>>8)&0xFF, act=0;
+                if      (a==0x0d) act=1;
+                else if (a==0x1b) { g_save_menu=0; g_save_copy=0; g_cast_undraw=1; g_msg[0]=0; }
+                else if (sc==0x48) { g_save_slot=(g_save_slot+SAVE_SLOTS-1)%SAVE_SLOTS; g_save_copy=0; save_detail(); }
+                else if (sc==0x50) { g_save_slot=(g_save_slot+1)%SAVE_SLOTS; g_save_copy=0; save_detail(); }
+                else if (a>='1' && a<'1'+SAVE_SLOTS) { g_save_slot=a-'1'; g_save_copy=0; save_detail(); }
+                else if (g_save_menu==2 && sc==0x4D) { g_save_copy=(g_save_copy+1)%SAVE_COPIES; save_detail(); }
+                else if (g_save_menu==2 && sc==0x4B) { g_save_copy=(g_save_copy+SAVE_COPIES-1)%SAVE_COPIES; save_detail(); }
+                if(act){ int m=g_save_menu; g_save_menu=0; g_cast_undraw=1;
+                    if(m==1){ g_save_copy=0; (void)do_save(&w); }
+                    else { if(load_game(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } g_save_copy=0; } }
+                redraw=1;
             } else if (g_casting) {                  /* choosing a spell in the C)ast menu */
                 if      (a==0x0d) { if(cast_menu_submit(&w)){ compose_map(&w); draw_border_tiles(); } redraw=1; }  /* Enter: select */
                 else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; spell_words_show(); } redraw=1; }         /* Bksp */
@@ -14233,9 +14307,8 @@ int main(int argc, char **argv)
                 else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; redraw=1; }
                 else if (a==' ') { g_show_inv=0; if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* pass a turn (a raft/balloon drifts) */
                 else if (a=='i'||a=='I') { g_show_inv=!g_show_inv; g_msg[0]=0; redraw=1; }
-                else if (a=='s'||a=='S') { g_show_inv=0; do_save(&w); redraw=1; }  /* write SAVED.000 */
-                else if (a==0x12) { if(load_game(&w)){                              /* Ctrl-R: restore SAVED.000 */
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
+                else if (a=='s'||a=='S'||a==0x12) { g_show_inv=0; g_pending_verb=0;   /* S)ave, Ctrl-R: the slot page (save_load.md §2b) */
+                    save_index_load(); g_save_menu=(a==0x12)?2:1; g_save_copy=0; save_detail(); redraw=1; }
                 else if (a=='r'||a=='R') { g_show_inv=0; do_rest(&w);                /* R)est: restore HP+mana */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='>' || a=='<') {          /* descend/ascend a map level (map_levels.md). '>' also
@@ -14255,7 +14328,14 @@ int main(int argc, char **argv)
                 }
             }
         }
-        if (click && g_casting) {             /* the spellbook page: a row casts, a button turns, elsewhere cancels */
+        if (click && g_save_menu) {                  /* the slot page: a row acts, elsewhere cancels */
+            int rx=g_mx-SPELL_X, ry=g_my-SPELL_Y, row=(ry-8)>>3, m=g_save_menu;
+            g_save_menu=0; g_cast_undraw=1; g_msg[0]=0;
+            if(rx>=8 && rx<136 && ry>=8 && row<SAVE_SLOTS){ g_save_slot=row; g_save_copy=0;
+                if(m==1) (void)do_save(&w);
+                else if(load_game(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } }
+            redraw=1;
+        } else if (click && g_casting) {             /* the spellbook page: a row casts, a button turns, elsewhere cancels */
             int rx=g_mx-SPELL_X, ry=g_my-SPELL_Y;
             uint8_t l[SPELL_COUNT]; int n=spell_circle_list(g_spells[g_cast_sel].circle,l), pos=0;
             for(int i=0;i<n;i++) if(l[i]==g_cast_sel) pos=i;
@@ -14280,7 +14360,7 @@ int main(int argc, char **argv)
                 redraw=1;
             } else if (g_show_status) {               /* a click while viewing a character -> back to the roster */
                 g_show_status=0; redraw=1;
-            } else if (!g_talking && !g_casting && !g_show_inv &&
+            } else if (!g_talking && !g_casting && !g_save_menu && !g_show_inv &&
                        g_mx>=PANX && g_my>=26 && g_my<26+g_nparty*16) {   /* click a roster member -> their status (authentic U6) */
                 int row=(g_my-26)/16;
                 if (row>=0 && row<g_nparty){ g_status_actor=g_party[row].actor;
@@ -14309,7 +14389,7 @@ int main(int argc, char **argv)
             if (t-g_gw_tick>=GW_TICKS) { g_gw_tick=t; gw_tick(&w); compose_map(&w); draw_border_tiles(); if(g_gw==4) gw_fade_blend(); redraw=1; } }
         if (g_resting) { uint32_t t=plat_ticks_200hz();                               /* the camp: a rest turn per 1/8 s (rest.md §3) */
             if (t-g_rest_tick>=REST_TURN_TICKS) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
-        if (g_travel_active && !key && !g_talking && !g_show_inv && !g_casting && !g_pending_verb) {
+        if (g_travel_active && !key && !g_talking && !g_show_inv && !g_casting && !g_save_menu && !g_pending_verb) {
             if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;   /* arrived */
             else { int sx,sy;
                 if ((g_mover=-1, npc_pathstep(&w,(int)w.px,(int)w.py,g_travel_tx,g_travel_ty,-1,-1,&sx,&sy))

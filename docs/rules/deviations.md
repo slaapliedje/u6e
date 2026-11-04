@@ -74,6 +74,11 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | Music: "Stones while camping" is a FIXME in the reference too; not played | music_areas.md §6 | accepted |
 | Host tool tools/tilestrip renders tile n+1 for tile n (off by one) | — | open (tool) |
 
+## Saved games
+| Deviation | Where | Status |
+|---|---|---|
+| 8 slots with two older copies each, and a slot page on S)ave and Ctrl-R. The original keeps one save and asks "Save game?" | save_load.md §2b | accepted |
+
 ## Title menu
 | Deviation | Where | Status |
 |---|---|---|

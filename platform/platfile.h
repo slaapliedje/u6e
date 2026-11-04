@@ -30,6 +30,8 @@ int32_t   plat_fread(plat_file f, void *dst, int32_t len);
 int32_t   plat_fwrite(plat_file f, const void *src, int32_t len);
 int32_t   plat_fseek(plat_file f, int32_t off, int whence);
 int32_t   plat_fsize(plat_file f);   /* size in bytes; restores position */
+int32_t   plat_fdelete(const char *path);                  /* GEMDOS Fdelete 0x41: 0 or a negative error */
+int32_t   plat_frename(const char *from, const char *to);  /* GEMDOS Frename 0x56: 0 or a negative error */
 uint32_t  plat_drvmap(void);         /* the drives present: bit 0 = A, bit 1 = B, ... (BIOS Drvmap 0x0A) */
 
 /* Open path, allocate (fast ? plat_alloc_fast : plat_alloc_chip), read it all,

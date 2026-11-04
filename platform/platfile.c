@@ -111,6 +111,9 @@ void *plat_load_file(const char *path, bool fast, int32_t *out_len)
     return buf;
 }
 
+int32_t plat_fdelete(const char *path){ return (int32_t)Fdelete(path); }
+int32_t plat_frename(const char *from, const char *to){ return (int32_t)Frename(0, from, to); }
+
 uint32_t plat_drvmap(void)
 {
     return (uint32_t)Drvmap();
