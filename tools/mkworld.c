@@ -2072,7 +2072,7 @@ int main(int argc, char **argv)
         be16(f, contained ? 0 : objs[i].y);       /* contained: x/y meaningless until spilled */
         be16(f, (unsigned)tile); be16(f, objs[i].obj_n);
         be16(f, q16);
-        be16(f, stackable[objs[i].obj_n] ? 0 : objs[i].quality);   /* KEY ID on locks/keys (consumed by qty16 on stackables) */
+        be16(f, (unsigned)(objs[i].status & 1) << 8 | (stackable[objs[i].obj_n] ? 0 : objs[i].quality));   /* KEY ID on locks/keys (consumed by qty16 on stackables) */
         be16(f, objs[i].parent); }
     printf("objects: %d shipped (%d contained in containers; %d stackable types)\n",
            (int)nobj, ncontained, nstack);

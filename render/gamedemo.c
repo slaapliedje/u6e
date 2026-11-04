@@ -3028,7 +3028,7 @@ static void init_npcs(void)
 /* ---- a conversation's WORKTYPE on a live NPC (docs/rules/usecode_vm.md §6b) -------------------- */
 #define WT_MOTIONLESS_FORCED 0x7f                  /* a hatchling's embryo code 0 ("nothing"), kept as a force (0 = unforced; eggs.md §3b) */
 static int wt_is_combat(int wt){ return wt==0x99||wt==0x9b||wt==0x08||(wt>=0x03&&wt<=0x06); }
-static int wt_is_flee(int wt){ return wt==0x9a||wt==0x07||wt==0x09; }   /* mousing, combat-retreat, flee (the script's timid handler) */
+static int wt_is_flee(int wt){ return wt==0x9a||wt==0x07||wt==0x09||wt==0x13; }   /* mousing, combat-retreat, flee (the script's timid handler) */
 /* force worktype `wt` on NPC i: anchored where it stands, until its schedule entry changes */
 static void wt_apply(int i,int wt)
 {
@@ -3347,6 +3347,7 @@ static const world_t *g_wp;                                 /* the live world, f
  * members follow the Avatar; each routes around walls via npc_pathstep and turns to
  * FACE the step. Turn-based: called when the game clock advances. */
 static void wind_tick(int level);                      /* wind.md (defined with the status line below) */
+static void arrest_step(const world_t*w,int i);
 static void step_npcs(const world_t*w)
 {
     if(g_time_stop){ g_time_stop--; return; }         /* Time Stop (magic_skills.md §5f): nothing but the Avatar moves */
@@ -3389,6 +3390,7 @@ static void step_npcs(const world_t*w)
             if(g_summon[i]==1){ ally_step(w,i); continue; }       /* allied: hunt hostiles */
             /* g_summon[i]==2 (hostile summon) falls through to the assault path below */
         }
+        if(g_wt_force[i]==0x12){ arrest_step(w,i); continue; }    /* the guard coming for a thief (usecode_use.md) */
         if(g_temp[i] && g_wt_force[i] && !is_party_member(i) && !g_ally[i] && hatched_step(w,i)) continue;   /* a hatched creature's own worktype (eggs.md §3b) */
         if(g_ally[i] && !is_party_member(i)){ ally_step(w,i); continue; }   /* a charmed / confused foe fights for the party (magic_skills.md §5b) */
         if(g_coward[i] && !is_party_member(i) && coward_step(w,i)) continue;         /* coward flees the party on sight (before any assault: a fleeing evil creature runs) */
@@ -5143,7 +5145,7 @@ static void draw_conversation(uint8_t col)
             const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?(ship_aboard()?"Attack with ship cannons-":"Attack-"):g_pending_verb=='L'?"Look-(dir)?":
                            g_pending_verb=='G'?"Get-(dir)?":g_pending_verb=='U'?"Use-(dir)?":
                            g_pending_verb=='C'?((g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change"))?"Direction-":"Cast-(dir)?"):
-                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'?"To-(dir)?":g_pending_verb=='Q'?"Quit? (y/n)":"Move-(dir)?";
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'?"To-(dir)?":g_pending_verb=='Q'?"Quit? (y/n)":g_pending_verb=='J'?"(y/n)":"Move-(dir)?";
             ui_text(PANX+6, 150, p, col);
         }
     }
@@ -5788,6 +5790,7 @@ static int take_gold(int idx){
     int t=g_cg.gold+(int)q; g_cg.gold=(t>0x7fffffff)?0x7fffffff:t;
     if(g_gd==&gamedef_u6) obj_destroy(idx); else { g_wobj[idx].alive=0; g_wobj[idx].dirty=1; }
     return 1; }
+static int theft_counts(const world_t*w,int idx); static void theft_done(world_t*w,int idx);   /* usecode_use.md (Theft) */
 /* run a verb ('L'/'G'/'U') against the tile (dx,dy) from the avatar. */
 /* --- readable text: books / signs / plaques / tombstones (docs/formats/strings.md) --------- */
 /* readable object numbers: BOOK 151, SCROLL 152, TOMBSTONE 255, GRAVE 266, SIGN 332, SIGN_ARROW 333. */
@@ -6081,7 +6084,7 @@ static int use_pack_item(world_t*w,int on)
         o->obj_n=423; o->tile=(uint16_t)(basetile(423)+3); o->qty=1; o->quality=0;
         o->x=(uint16_t)tx; o->y=(uint16_t)ty; o->parent=WOBJ_PARENT_NONE;
         o->origin=(uint16_t)(0x8000|420);                      /* dropped FROM the carried balloon record (retyped on save) */
-        o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;
+        o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED; o->owned=0;
         objworld_consume(&g_ow,420,1);
         build_blocked(); msgcat(0,"Done!"); return 1; }
     if(on==78){                                                /* the staff: fires one of its charges (usecode_use.md) */
@@ -6116,7 +6119,7 @@ static int use_pack_item(world_t*w,int on)
         else for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==WOBJ_PARENT_NONE){ slot=j; break; }
         if(slot<0){ msgcat(0,"Cannot be buried here!"); return 0; }
         wobj_t*o=&g_wobj[slot]; o->obj_n=73; o->tile=g_ow.inv[sidx].tile; o->qty=1; o->quality=g_ow.inv[sidx].quality;
-        o->x=w->px; o->y=w->py; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;
+        o->x=w->px; o->y=w->py; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED; o->owned=0;
         for(int k=sidx;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;
         if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
         build_blocked(); moonstone_set(fr,(int)w->px,(int)w->py,w->level); moongates_update(w);
@@ -6294,6 +6297,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         else {
             obj_name(g_wobj[idx].tile,nm,sizeof nm);
             uint16_t q=g_wobj[idx].qty; if(!q) q=1;
+            int stolen=theft_counts(w,idx);                       /* before the taking moves anything */
             if(take_gold(idx)){
                 n=msgcat(0,"You get "); n=msgcat_int(n,q);
                 if(g_gd==&gamedef_u6){ n=msgcat(n," "); n=msgcat(n,nm); msgcat(n,"."); } else msgcat(n," gold.");   /* "You get 30 gold coin." as for any stack */
@@ -6311,6 +6315,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
                 n=msgcat(n,nm); msgcat(n,"."); recompose=1;
             }
             else { n=msgcat(0,"You cannot move the "); n=msgcat(n,nm); msgcat(n,"."); }
+            if(stolen && !g_wobj[idx].alive) theft_done(w,idx);
         }
     } else if(verb=='D'){                                        /* D)rop the selected inventory item onto (tx,ty) */
         if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to drop."); }
@@ -6327,7 +6332,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
                     wobj_t*o=&g_wobj[slot];
                     o->obj_n=g_ow.inv[s].obj_n; o->tile=g_ow.inv[s].tile; o->qty=g_ow.inv[s].qty; o->quality=g_ow.inv[s].quality;
                     o->x=(uint16_t)tx; o->y=(uint16_t)ty; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE;
-                    o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED;      /* on the map now -> its carried record is relocated on save */
+                    o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED; o->owned=0;      /* on the map now -> its carried record is relocated on save */
                     for(int k=s;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;   /* remove from inventory */
                     if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
                     build_blocked();                             /* new on-map object -> rebuild buckets/blocking */
@@ -7591,7 +7596,7 @@ static void hatch_object(int x,int y,int obj_n,int quality)
     wobj_t*o=&g_wobj[slot];
     o->obj_n=(uint16_t)obj_n; o->tile=(uint16_t)basetile(obj_n); o->qty=1; o->quality=(uint8_t)quality;
     o->x=(uint16_t)x; o->y=(uint16_t)y; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE;
-    o->alive=1; o->dirty=0;                                        /* temporary: never written back */
+    o->alive=1; o->dirty=0; o->owned=0;                            /* temporary: never written back */
 }
 static void eggs_update(const world_t *w, int teleport)
 {
@@ -9091,7 +9096,7 @@ static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pa
                 o->x      = contained ? 0 : tmp[i].x;
                 o->y      = contained ? 0 : tmp[i].y;
                 o->qty    = tmp[i].quantity;
-                o->quality= tmp[i].quality;
+                o->quality= tmp[i].quality; o->owned=(uint8_t)!(tmp[i].status&1);
                 o->parent = np; o->origin = WOBJ_PARENT_NONE;
                 o->alive  = (uint8_t)!contained;
                 o->dirty  = 0; }
@@ -9235,6 +9240,72 @@ static void companion_revive(world_t*w,int id){
     for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
         if(o->alive && o->quality==(uint8_t)id && (o->obj_n==339||o->obj_n==340||o->obj_n==341||o->obj_n==338)){ obj_destroy(j); break; } }
     resurrect_actor(w,id,(int)w->px,(int)w->py); }
+/* ---- theft (usecode_use.md, Theft) ------------------------------------------------------------- */
+static int g_arrest_guard=-1;
+static int obj_in_tree(int j,int idx){ int p=g_wobj[j].parent, g=0; while(p!=WOBJ_PARENT_NONE && g++<16){ if(p==idx) return 1; p=g_wobj[p].parent; } return 0; }
+static int theft_counts(const world_t*w,int idx){
+    if(g_gd!=&gamedef_u6 || w->level!=0) return 0;
+    if(g_wobj[idx].owned) return 1;
+    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].owned && g_wobj[j].parent!=WOBJ_PARENT_NONE && obj_in_tree(j,idx)) return 1;
+    return 0; }
+static int theft_neutral(int i){ return g_atile[i]!=0xffff && !is_party_member(i) && g_ahp[i]>0 && !actor_hostile(i) && (int)g_actz[i]==g_cur_level; }
+static void theft_alarm(const world_t*w){
+    g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);
+    for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y; if(!theft_neutral(i) || !actor_pos(i,&x,&y)) continue;
+        int dx=x>(int)w->px?x-(int)w->px:(int)w->px-x, dy=y>(int)w->py?y-(int)w->py:(int)w->py-y, d=dx>dy?dx:dy;
+        if(actor_objn(i)==382){ if(d<32) wt_apply(i,0x12); continue; }
+        int wt=npc_live_worktype(i);
+        if(wt==0||wt==0x0e||wt==WT_U6_SLEEP||g_asleep[i]||g_paralyze[i]||d>=6) continue;
+        if(wt<0x80) wt_apply(i,0x13); else if(wt>0x86) wt_apply(i,0x9b); } }
+static void theft_done(world_t*w,int idx){
+    g_wobj[idx].owned=0;
+    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].owned && g_wobj[j].parent!=WOBJ_PARENT_NONE && obj_in_tree(j,idx)) g_wobj[j].owned=0;
+    g_cg.karma=(int16_t)(g_cg.karma>1?g_cg.karma-1:0);
+    int seen=0;
+    for(int i=2;i<224 && !seen;i++){ int x,y; if(!theft_neutral(i) || !actor_pos(i,&x,&y)) continue;
+        if(g_asleep[i] || npc_live_worktype(i)==WT_U6_SLEEP) continue;
+        int dx=x>(int)w->px?x-(int)w->px:(int)w->px-x, dy=y>(int)w->py?y-(int)w->py:(int)w->py-y;
+        if(dx<5 && dy<5 && has_los(w,x,y,(int)w->px,(int)w->py)) seen=1; }
+    int n=(int)strlen(g_msg);
+    if(seen){ msgcat(n,"\n\"Stop Thief!!!\""); theft_alarm(w); } else msgcat(n,"\nStealing!!!");
+}
+/* a guard under arrest orders walks to the nearest party member; beside one, the question */
+static void arrest_step(const world_t*w,int i){
+    int x=g_actx[i], y=g_acty[i], tx,ty,tid; g_amoved[i]=0;
+    if(g_pending_verb=='J' || !nearest_party(w,x,y,&tx,&ty,&tid)) return;
+    int dx=tx>x?tx-x:x-tx, dy=ty>y?ty-y:y-ty;
+    if(dx>=50||dy>=50) return;
+    if(dx>1||dy>1){ (void)hatched_step_toward(w,i,tx,ty); return; }
+    g_wt_force[i]=0x81;
+    if(!(g_cg.talk_flags[5]&0x80)) return;                        /* before Lord British's word, no scene */
+    g_arrest_guard=i; g_pending_verb='J'; g_show_inv=0;
+    msgcat(0,"\"Thou art under arrest!\"\n\"Wilt thou come quietly?\"");
+}
+static void arrest_yes(world_t*w){
+    if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
+    else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
+    (void)travel_to(w,231,186,0);
+    while(g_hour!=8){ w->clock+=60; g_hour=clock_hour(w); g_minutes=clock_minutes(w); }
+    objworld_consume(&g_ow,63,objworld_count(&g_ow,63));          /* the lockpicks are gone */
+    for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==64 && g_ow.inv[k].quality==9){   /* the cell's key goes into the chest */
+        if(g_ow.inv[k].qty>1) g_ow.inv[k].qty--; else { for(int m=k;m<g_ow.ninv-1;m++) g_ow.inv[m]=g_ow.inv[m+1]; g_ow.ninv--; }
+        { int c=obj_idx_at(235,183,177), t=persist_obj_new(64,0,235,183,9); if(t>=0 && c>=0){ g_wobj[t].alive=0; g_wobj[t].parent=(uint16_t)c; } }
+        break; }
+    if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
+    { int d=obj_idx_at(231,184,300); if(d>=0){ g_wobj[d].tile=(uint16_t)(basetile(300)+9); if(g_wobj[d].dirty!=WOBJ_DIRTY_DROPPED) g_wobj[d].dirty=WOBJ_DIRTY_STATE; } }
+    for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y;
+        if(g_wt_force[i]==0x12||g_wt_force[i]==0x13||g_wt_force[i]==0x9b||i==g_arrest_guard) wt_force_clear(i);
+        if(is_party_member(i) || g_atile[i]==0xffff || (int)g_actz[i]!=g_cur_level) continue;
+        if(!actor_hostile(i) && npc_dest(i,&x,&y) && npc_at(w,x,y)<0){ g_actx[i]=(uint16_t)x; g_acty[i]=(uint16_t)y; } }
+    sync_party_hp(); build_blocked(); moongates_update(w); music_resume_area(w->level);
+    msgcat(0,"The guard strikes thee unconscious!\nThou dost awaken to...");   /* the box holds five lines */
+}
+static void arrest_no(world_t*w){
+    msgcat(0,"\"Then defend thyself, rogue!\"");
+    theft_alarm(w);
+    if(g_arrest_guard>=2) g_wt_force[g_arrest_guard]=0x12;
+    for(int i=2;i<U6_MAX_ACTORS;i++) if(g_wt_force[i]==0x12){ g_wt_force[i]=0; wt_apply(i,0x08); g_align_hostile[i]=1; }
+}
 /* Lord British's revival (combat.md §3d, magic_skills.md §5d Help): off any vehicle, to the throne room
  * on the surface, the dead stand up, everyone healed, the clock on to his throne hours; forget = the
  * hunters forget the party (the Avatar's death, not Help) */
@@ -11039,6 +11110,7 @@ int main(int argc, char **argv)
             g_wobj[i].x=(uint16_t)((o[0]<<8)|o[1]); g_wobj[i].y=(uint16_t)((o[2]<<8)|o[3]);
             g_wobj[i].tile=(uint16_t)((o[4]<<8)|o[5]); g_wobj[i].obj_n=(uint16_t)((o[6]<<8)|o[7]);
             g_wobj[i].qty=(uint16_t)((o[8]<<8)|o[9]); g_wobj[i].quality=o[11];  /* key id on locks/keys */
+            g_wobj[i].owned=(uint8_t)!(o[10]&1);                   /* usecode_use.md (Theft) */
             g_wobj[i].parent=(uint16_t)((o[12]<<8)|o[13]);
             g_wobj[i].origin=WOBJ_PARENT_NONE;                     /* set when SPILLED (save locator) */
             g_wobj[i].alive=(g_wobj[i].parent==WOBJ_PARENT_NONE);  /* contained: off-map until spilled */
@@ -12431,6 +12503,36 @@ int main(int argc, char **argv)
             #undef FS_MSG
         }
     }
+    /* headless THEFT checks (usecode_use.md, Theft): THEFT.REQ byte: '1' unseen, '2' seen then Yes, '3' seen then No */
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("THEFT.REQ",1,&gl);
+        if(gq && gl>0){ int mode=gq[0], nown=0, ntot=0, it=-1, guard=-1, by=-1;
+            for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive) continue; ntot++; if(!o->owned) continue; nown++;
+                if(it<0 && objworld_can_get(&g_ow,o->obj_n) && o->obj_n!=88) { int near=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y; if(g_atile[i]!=0xffff && (int)g_actz[i]==w.level && actor_pos(i,&x,&y) && (x>(int)o->x?x-(int)o->x:(int)o->x-x)<12 && (y>(int)o->y?y-(int)o->y:(int)o->y-y)<12) near=1; } if(!near) it=j; } }
+            for(int i=2;i<U6_MAX_ACTORS;i++) if(g_atile[i]!=0xffff && (int)g_actz[i]==0 && !is_party_member(i)){ if(guard<0 && actor_objn(i)==382) guard=i; else if(by<0 && actor_objn(i)!=382 && !actor_hostile(i) && npc_live_worktype(i)>0x86 && npc_live_worktype(i)!=WT_U6_SLEEP) by=i; }
+            if(guard<0){ for(int i=U6_MAX_ACTORS-1;i>=2;i--) if(g_atile[i]==0xffff){ guard=i; break; }   /* no guard stands yet (they hatch): make one */
+                g_abase[guard]=g_atile[guard]=(uint16_t)basetile(382); g_ahp[guard]=30; g_amaxhp[guard]=30; g_actz[guard]=0; g_atpd[guard]=4; }
+            { int bk=obj_idx_at(300,367,57); dbg_num("TH castle book owned=", bk>=0?g_wobj[bk].owned:-1); }
+            dbg_num("TH objects=", ntot); dbg_num("TH owned=", nown); dbg_num("TH item obj=", it>=0?g_wobj[it].obj_n:-1); dbg_num("TH guard=", guard); dbg_num("TH bystander=", by);
+            if(it>=0){ int ox=g_wobj[it].x, oy=g_wobj[it].y, k0=g_cg.karma;
+                teleport_party(&w,ox-1,oy); w.px=(uint16_t)(ox-1); w.py=(uint16_t)oy;
+                if(mode=='2'||mode=='3'){ g_actx[by]=(uint16_t)(ox-1); g_acty[by]=(uint16_t)(oy+2); g_actx[guard]=(uint16_t)(ox-6); g_acty[guard]=(uint16_t)oy; build_blocked(); g_cg.talk_flags[5]|=0x80; }
+                (void)do_verb(&w,'G',1,0);
+                Cconws(g_msg); Cconws("\r\n");
+                if(mode=='4'){ int on=g_wobj[it].obj_n, s_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==on) s_=k;      /* dropped: free again, over a save and a load */
+                    g_inv_sel=s_; (void)do_verb(&w,'D',1,0); Cconws(g_msg); Cconws("\r\n");
+                    int d_=obj_idx_at(ox,oy,on); dbg_num("TH dropped owned=", d_>=0?g_wobj[d_].owned:-1);
+                    do_save(&w); dbg_num("TH loaded=", load_game(&w)); d_=obj_idx_at(ox,oy,on); dbg_num("TH reloaded owned=", d_>=0?g_wobj[d_].owned:-1); }
+                if(mode=='5'){ g_actx[guard]=(uint16_t)(ox-2); g_acty[guard]=(uint16_t)oy; g_cg.talk_flags[5]|=0x80; wt_apply(guard,0x12); }
+                dbg_num("TH karma lost=", k0-g_cg.karma); dbg_num("TH item taken=", !g_wobj[it].alive); dbg_num("TH item now free=", !g_wobj[it].owned);
+                if(mode=='2'||mode=='3'){ dbg_num("TH guard worktype=", g_wt_force[guard]); dbg_num("TH bystander worktype=", g_wt_force[by]);
+                    int t=0; for(;t<40 && g_pending_verb!='J';t++) step_npcs(&w);
+                    dbg_num("TH guard turns to arrive=", t); Cconws(g_msg); Cconws("\r\n");
+                    if(g_pending_verb=='J'){ inv_add_objn(63,3); g_pending_verb=0;
+                        if(mode=='2') arrest_yes(&w); else arrest_no(&w);
+                        g_arrest_guard=-1; Cconws(g_msg); Cconws("\r\n");
+                        dbg_num("TH x=", (int)w.px); dbg_num("TH y=", (int)w.py); dbg_num("TH hour=", g_hour); dbg_num("TH lockpicks=", objworld_count(&g_ow,63));
+                        dbg_num("TH door frame=", ({ int d_=obj_idx_at(231,184,300); d_>=0?(int)g_wobj[d_].tile-basetile(300):-1; }));
+                        dbg_num("TH guard hostile=", actor_hostile(guard)); dbg_num("TH karma lost=", k0-g_cg.karma); } } } } }
     /* headless MOONGATE checks (moongates.md §6): MOONGATE.REQ byte = mode. */
     {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("MOONGATE.REQ",1,&gl);
         if(gq && gl>0){ int mode=gq[0];
@@ -14303,7 +14405,10 @@ int main(int argc, char **argv)
                 } else if (g_show_status) { g_show_status=0; redraw=1; }  /* any other key returns (then still acts) */
                 if (g_talking && !g_await_input) { end_talk(); redraw=1; }   /* a finished conversation stays up until the next key, which then still acts */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
-                    if (g_pending_verb=='Q'){ g_pending_verb=0; g_msg[0]=0; redraw=1; if(a=='y'||a=='Y') break; }   /* Esc's question: any other key stays */
+                    if (g_pending_verb=='J'){ if(a=='y'||a=='Y'||a=='n'||a=='N'){ g_pending_verb=0;   /* "Wilt thou come quietly?" */
+                            if(a=='y'||a=='Y') arrest_yes(&w); else arrest_no(&w);
+                            g_arrest_guard=-1; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
+                    else if (g_pending_verb=='Q'){ g_pending_verb=0; g_msg[0]=0; redraw=1; if(a=='y'||a=='Y') break; }   /* Esc's question: any other key stays */
                     else if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the T)alk crosshair walks the map window */

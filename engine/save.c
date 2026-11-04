@@ -331,7 +331,7 @@ int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, i
         int loc = r[0] & 0x18;
         if (loc != 0x10 && loc != 0x08) continue;      /* readied records stay with their wearer */
         int direct; if (rec_holder(d, it.base, it.cnt, r, in_party, nact, &direct) < 0) continue;
-        r[0] = (uint8_t)(r[0] & ~0x18);                /* location -> on the map */
+        r[0] = (uint8_t)((r[0] & ~0x18) | 0x01);       /* location -> on the map, free to take again */
         r[1] = (uint8_t)(x & 0xff);
         r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
         r[3] = (uint8_t)(((y >> 6) & 0x0f) | ((z & 0x0f) << 4));

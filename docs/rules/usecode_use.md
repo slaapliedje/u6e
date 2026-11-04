@@ -571,3 +571,34 @@ hourly decrement, not a bug.
 ## SECRET DOORS / PASSTHROUGHS / FIRE DEVICES / TORCHES / POWDER KEGS + small handlers +
 ## M)OVE pushing + STAFF / VORTEX CUBE / WHITE POTION / HOLY FLAMES / NPC TORCHES + CLOCK / SUNDIAL +
 ## REFERENCE LEVERS / CRANKS / FOOD + PERSISTENT CREATED OBJECTS done)
+
+## Theft (read in DOS GAME.EXE 4.5, 2026-11-04; not run in DOS)
+**What counts.** Bit 0 of an object's status byte means "free to take". After a successful G)et on the **surface**
+(level 0), if the object or anything inside it has the bit clear:
+1. The bit is set on the object and everything inside it, so the same thing is only ever stolen once.
+2. Karma −1.
+3. If any actor 1..223 is neutral (alignment bits 0), awake, within 4 tiles of the Avatar on both axes and in view,
+   "Stop Thief!!!" is printed and the **alarm** runs. Otherwise "Stealing!!!" is printed.
+
+An object dropped from the pack is free to take again, and so is what moves into a dead member's body.
+
+**The alarm.** Karma −5 more. For each actor 0..255 that exists, stands on this level, is alive, not in the party and
+neutral:
+- A guard (type 382) closer than 32 tiles to the Avatar takes worktype **0x12**, arrest.
+- Anyone else closer than 6 tiles who has a worktype other than 0 or 0x0E, isn't paralyzed or asleep, and is
+  not flagged as a non-reacting type:
+  - worktype below 0x80: **0x13**, runs from the party.
+  - worktype 0x80..0x86: unchanged.
+  - worktype above 0x86: **0x9B**, attacks the party (a type-392 actor first goes back to its normal shape).
+
+**Arrest (0x12).** Each turn the guard walks toward the nearest party member within 50 tiles. Beside one:
+- If Lord British's talk flag bit 0x80 is clear, the guard just stops (worktype 0x81): no scene.
+- Else: `"Thou art under arrest!"`, `"Wilt thou come quietly?"`, Y or N. The guard stops (0x81) either way, first.
+- **Y:** "Yes", "The guard strikes thee unconscious!", "Thou dost awaken to...". Off any vehicle, the party goes to
+  **(231,186)** on the surface and the clock runs an hour at a time until **08:00**. Every member loses all
+  **lockpicks** (63). A **key of quality 9** (64) goes into the container (177) at (235,183). The object 300 at
+  (231,184) is set to frame 9. The NPCs are re-placed by schedule and the area's song is chosen again.
+- **N:** "No", `"Then defend thyself, rogue!"`, the alarm runs again (karma −5), and this guard and every guard
+  under 0x12 become worktype 0x08 and alignment 0x20 (hostile).
+
+Our message box holds five lines, so we leave out the echoed Yes / No and the blank lines between these messages.

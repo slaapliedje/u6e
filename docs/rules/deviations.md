@@ -52,7 +52,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 ## Objects, use, movement
 | Deviation | Where | Status |
 |---|---|---|
-| Theft is not modelled: G)et on the surface of something not marked free to take costs nothing (the reference: 1 karma and "Stealing!!!", or "Stop Thief!!!" when an awake neutral townsperson stands within 5 — 5 karma more, and the guards come to arrest: the Yew jail or a fight) | usecode_use.md | open |
+| Theft follows DOS (usecode_use.md, Theft), except: our alignment keeps only "hostile", so a good-aligned townsperson counts as neutral; a sleeping NPC is one under the sleep worktype; the type-392 shape change and one per-actor flag of the alarm are left out; the alarm has no sound effect | usecode_use.md | accepted |
 | M)ove: no dark-tile refusal, no pusher→target missile-boundary line test (the wall under the thing only); push range = adjacent; a temp holder takes the pushed record out of the save; up to 64 records travel per push | usecode_use.md (M)ove) | accepted |
 | The staff is used from the pack (the original's "Not readied." gate dropped) | usecode_use.md (Staff) | accepted |
 | The secret-door reveal prints the reference's search line but not its name line before it (the hidden frame's run-filled look name "sign" is unverified) | usecode_use.md (Clock and sundial) | open |
