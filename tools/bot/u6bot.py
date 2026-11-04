@@ -15,7 +15,7 @@ SC.update({c: v for c, v in zip('zxcvbnm', range(0x2c, 0x33))})
 SC.update({c: v for c, v in zip('1234567890', range(0x02, 0x0c))})
 SC.update({' ': 0x39, ',': 0x33, '.': 0x34, '/': 0x35, '-': 0x0c, "'": 0x28, ';': 0x27})
 SHIFTED = {'<': ',', '>': '.', '?': '/', '!': '1', '"': "'", ':': ';'}
-K = dict(ret=0x1c, esc=0x01, bksp=0x0e, up=0x48, down=0x50, left=0x4b, right=0x4d,
+K = dict(ctrl=0x1d, ret=0x1c, esc=0x01, bksp=0x0e, up=0x48, down=0x50, left=0x4b, right=0x4d,
          f1=0x3b, f2=0x3c, f3=0x3d, f4=0x3e, f5=0x3f, space=0x39, shift=0x2a)
 DIRS = {(0, -1): 'up', (0, 1): 'down', (-1, 0): 'left', (1, 0): 'right'}
 
@@ -57,10 +57,13 @@ class Game:
         if machine == 'falcon':
             mach = ['--machine', 'falcon', '--memsize', '4', '--ttram', '0', '--dsp', 'none',
                     '--tos', '/usr/share/hatari/TOSv4.04.img', '--auto', 'C:\\GAMEF.PRG']
+        elif machine == 'st':
+            mach = ['--machine', 'st', '--memsize', '4',
+                    '--tos', '/usr/share/hatari/TOS v1.04 (1989)(Atari)(US)[Rainbow TOS][Mega ST].img', '--auto', 'C:\\GAMEST.PRG']
         else:
             mach = ['--machine', 'tt', '--memsize', '4', '--ttram', '0',
                     '--tos', '/usr/share/hatari/TOS v3.06 (1991)(Atari)(GB)[TT].img', '--auto', 'C:\\GAME.PRG']
-        args = ['stdbuf', '-oL', 'hatari'] + mach + ['--monitor', 'vga', '--drive-a', 'off', '--drive-b', 'off',
+        args = ['stdbuf', '-oL', 'hatari'] + mach + ['--monitor', 'rgb' if machine == 'st' else 'vga', '--drive-a', 'off', '--drive-b', 'off',
                 '--harddrive', self.hd, '--fast-boot', 'on', '--fast-forward', 'on' if fast else 'off',
                 '--sound', 'off', '--statusbar', 'off', '--drive-led', 'off', '--confirm-quit', 'off',
                 '--natfeats', 'on', '--conout', '2', '--screenshot-dir', self.out, '--cmd-fifo', self.fifo]
@@ -100,13 +103,15 @@ class Game:
         # read while a writer holds it open
         with open(self.fifo, 'w') as f: f.write(s + '\n')
 
-    def key(self, code, timeout=60, shift=False):
+    def key(self, code, timeout=60, shift=False, ctrl=False):
         """press one key and wait for the report that covers it; the console lines printed in
         between (dumps) are kept in self.got"""
         if isinstance(code, str): code = K[code] if code in K else SC[code]
         if shift: self.cmd('hatari-event keydown 0x%02x' % K['shift']); time.sleep(0.02)
+        if ctrl: self.cmd('hatari-event keydown 0x%02x' % K['ctrl']); time.sleep(0.02)
         self.cmd('hatari-event keypress 0x%02x' % code)   # hex: a lone digit is taken as that character, and '08' is not octal
         if shift: time.sleep(0.02); self.cmd('hatari-event keyup 0x%02x' % K['shift'])
+        if ctrl: time.sleep(0.02); self.cmd('hatari-event keyup 0x%02x' % K['ctrl'])
         self.keys += 1
         want, self.got = self.keys, []
         for s in self.lines(timeout):

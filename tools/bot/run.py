@@ -164,7 +164,7 @@ def seg_help(p, kw):
     k0 = p.g.state['karma']
     st = p.key('c', 'cast')
     if not st['cast']: p.issue('help', 'C did not open the spell prompt'); p.idle(); return
-    st = p.g.type('help'); p.check('cast help')
+    st = p.g.type('kl'); p.check('cast help')
     for _ in range(40):
         if not p.g.state['busy']: break
         p.key('space', 'recall')
@@ -495,16 +495,89 @@ def seg_paid(p, kw):
     if m4['hp'] == 0: p.issue('paid', 'Iolo still dead after paying')
     p.meant.clear()
 
-SEGS = dict(castle=seg_castle, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
+def seg_book(p, kw):
+    """a new game's magic with the real rules (magic_skills.md §4, §6): no book, then the castle's book off
+    its table, readied, its spells cast, kept over a save and a load. Run alone: main leaves MAGIC.REQ out"""
+    st = p.g.state
+    if st['spells']: p.issue('book', 'a new game knows %d spells' % st['spells'])
+    st = p.key('c', 'cast')
+    if st['cast'] or 'No spellbook is readied' not in st['msg']: p.issue('book', 'C with no book: cast=%s %r' % (st['cast'], st['msg'])); p.idle()
+    st = p.walk(300, 367, adj=True)
+    d = (300 - st['X'], 367 - st['Y'])
+    p.g.shot('table.png')
+    p.key('g', 'get'); st = p.key(VDIR[d], 'get the book')
+    p.log('  got: %r, spells %d' % (st['msg'], st['spells']))
+    if st['spells'] != 7: p.issue('book', 'the book gave %d spells, not 7 (%r)' % (st['spells'], st['msg']))
+    st = p.key('c', 'cast')
+    if st['cast'] or 'No spellbook is readied' not in st['msg']: p.issue('book', 'C with the book in the pack: cast=%s %r' % (st['cast'], st['msg'])); p.idle()
+    st = p.key('e', 'equip')
+    for _ in range(40):
+        if 'spell' in st['msg'].lower(): break
+        st = p.key('e', 'next')
+    p.key('1', 'ready it'); p.idle()
+    st = p.g.state
+    if not st['book']: p.issue('book', 'the book is not readied (%r)' % st['msg'])
+    st = p.key('c', 'cast')
+    if not st['cast']: p.issue('book', 'C with the book readied: %r' % st['msg']); p.idle(); return
+    st = p.g.type('vfh')                                               # Explosion: not in this book
+    p.log('  explosion: %r' % st['msg'])
+    if 'not in thy spellbook' not in st['msg']: p.issue('book', 'a spell not in the book: %r' % st['msg'])
+    p.key('c', 'cast'); st = p.g.type('im')                            # Heal: needs reagents nobody holds
+    p.log('  heal: %r' % st['msg'])
+    if 'No Reagents' not in st['msg']: p.issue('book', 'Heal with no reagents: %r' % st['msg'])
+    p.key('s', 'the slot page'); st = p.key('ret', 'save'); p.log('  save: %r' % st['msg'])
+    if st['verb'] == 'Q' or 'saved' not in st['msg'].lower(): p.issue('book', 'save: %r' % st['msg'])
+    p.g.shot('book.png')
+
+def seg_parchment(p, kw):
+    """the real rules of a bought spell (magic_skills.md §4): it waits in the pack until M M Enter puts it in the
+    book, a known one stays out, and a parchment outlasts a save and a load. Run alone with PARCH.REQ = Xiao"""
+    st = p.walk(300, 367, adj=True); d = (300 - st['X'], 367 - st['Y'])
+    p.key('g', 'get'); st = p.key(VDIR[d], 'get the book'); before = st['spells']
+    st = p.key('e', 'equip')
+    for _ in range(40):
+        if 'spell' in st['msg'].lower(): break
+        st = p.key('e', 'next')
+    p.key('1', 'ready it'); p.idle()
+    out = p.talk_to(36, ['spells', '1', '3', 'y', 'spells', '2', '1', 'y', 'bye'], name='Xiao', yes=True)
+    for w, r in out or []: p.log('  %r -> %r' % (w, r[-200:]))
+    st = p.g.state; p.log('  bought: parch %d spells %d gold %s' % (st['parch'], st['spells'], st.get('gold')))
+    if st['parch'] < 2: p.issue('parchment', 'bought 2 parchments, the pack holds %d' % st['parch']); return
+    if st['spells'] != before: p.issue('parchment', 'a parchment joined the book by itself: %d -> %d' % (before, st['spells']))
+    def into_book(skip=0):
+        p.key('m', 'move'); st = p.key('m', 'the pack')
+        for _ in range(40):
+            if 'Move the spell?' in st['msg']: break
+            st = p.key('m', 'next')
+        for _ in range(skip): st = p.key('m', 'the next spell')
+        time.sleep(0.5); p.g.shot('movepack.png')
+        return p.key('ret', 'into the book')
+    st = into_book(); p.log('  Light: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))     # the castle's book has it
+    if 'already has' not in st['msg'] or st['spells'] != before or st['parch'] != 2: p.issue('parchment', 'a known spell: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))
+    st = into_book(1); p.log('  Infravision: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))
+    if st['spells'] != before + 1 or st['parch'] != 1: p.issue('parchment', 'moved in: spells %d parch %d %r' % (st['spells'], st['parch'], st['msg']))
+    p.key('s', 'the slot page'); st = p.key('ret', 'save'); p.log('  save: %r' % st['msg'])
+    p.g.key('r', ctrl=True); st = p.key('ret', 'restore'); p.log('  restore: %r spells %d parch %d book %d' % (st['msg'], st['spells'], st['parch'], st['book']))
+    if st['spells'] != before + 1 or st['parch'] != 1 or not st['book']: p.issue('parchment', 'after a load: spells %d parch %d book %d' % (st['spells'], st['parch'], st['book']))
+    st = into_book(); p.log('  Light again: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))
+    if 'already has' not in st['msg'] or st['parch'] != 1: p.issue('parchment', 'a known spell after the load: %r parch %d' % (st['msg'], st['parch']))
+    st = p.key('m', 'move'); st = p.key('esc', 'cancel')
+    if st['verb']: p.issue('parchment', 'Esc left verb %r' % st['verb'])
+
+SEGS = dict(castle=seg_castle, book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
 
 def main():
-    hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or list(SEGS)
+    hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or [s for s in SEGS if s not in ('book', 'parchment')]
     os.makedirs(out, exist_ok=True)
     logf = open(os.path.join(out, 'run.log'), 'a')
     def log(s):
         line = '%s %s' % (time.strftime('%H:%M:%S'), s); print(line, flush=True); logf.write(line + '\n'); logf.flush()
     kw = keywords(REF)
-    g = Game(hd, out); p = Player(g, out, REF, log)
+    demo = os.path.join(hd, 'MAGIC.REQ')                               # the test stock, but for the segments of the real rules
+    if segs in (['book'], ['bookload'], ['parchment']):
+        if os.path.exists(demo): os.unlink(demo)
+    else: open(demo, 'w').write('1')
+    g = Game(hd, out, machine=os.environ.get('BOT_MACHINE', 'falcon')); p = Player(g, out, REF, log)
     t0 = time.time()
     try:
         for s in segs:

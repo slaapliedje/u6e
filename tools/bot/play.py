@@ -329,7 +329,7 @@ class Player:
             if not [m for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac]: break
             st = self.key('c', 'cast')
             if not st['cast']: self.idle(); break
-            st = self.g.type('heal'); self.check('cast heal')
+            st = self.g.type('im'); self.check('cast heal')
             if 'success' not in st['msg'].lower(): self.log('  heal: %r' % st['msg']); self.idle(); break
             n += 1
         if n: self.log('  healed x%d: party %s' % (n, ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in self.g.state['party'])))
@@ -364,7 +364,7 @@ class Player:
         u = ((d[0] > 0) - (d[0] < 0), (d[1] > 0) - (d[1] < 0))
         st = self.key('c', 'cast')
         if not st['cast']: self.idle(); return False
-        st = self.g.type('dispel magic'); self.check('cast dispel magic')
+        st = self.g.type('ajo'); self.check('cast dispel magic')
         if 'where' not in st['msg'].lower(): self.log('  dispel magic: %r' % st['msg']); self.idle(); return False
         st = self.key(VDIR[u] if u != (0, 0) else 'ret', 'dispel on %d' % i)
         if st['verb'] == 'C': self.issue('cure', 'Cast Dispel Magic still armed after aiming (%r)' % st['msg']); self.idle()
