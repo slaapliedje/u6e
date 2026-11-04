@@ -472,6 +472,7 @@ static int            g_fx_on;             /* one-tile overlay drawn over everyt
 #define TILE_TARGET_CURSOR 365               /* the A)ttack crosshair (combat.md §6b) */
 /* the moongate walk (moongates.md §2b): phases 0 none, 1 walking in, 2 a member dissolving on the gate,
  * 3 the change of place, 4 a red gate's view dissolving into the new one, 5 the companions falling in */
+static int            g_gw_stones;          /* the midnight gate: the Stones tune on arrival (moongates.md §2c) */
 static int            g_gw, g_gw_gate, g_gw_gx, g_gw_gy, g_gw_tx, g_gw_ty, g_gw_tz, g_gw_red, g_gw_ticks, g_gw_hold;
 static uint32_t       g_gw_tick;
 static int            g_gw_ghost_tile, g_gw_ghost_x, g_gw_ghost_y, g_gw_ghost_lvl;   /* the dissolving member's sprite */
@@ -6520,8 +6521,8 @@ static int sky_sun_tile(int hh){ if(hh<5||hh>19) return 0; return g_eclipse?363:
 static int sky_moons(int day,int hh,int*tile,int*pos)        /* the visible moons (0..2); none during an eclipse */
 {   if(g_eclipse) return 0;
     int n=0, pt,pf; moon_phases(day,&pt,&pf); int pa=moon_pos_t(day,hh), pb=moon_pos_f(day,hh);
-    if(pa>=5&&pa<=19){ tile[n]=pt?584+8-pt:584; pos[n++]=pa-5; }
-    if(pb>=5&&pb<=19){ tile[n]=pf?584+8-pf:584; pos[n++]=pb-5; }
+    if(pa<15){ tile[n]=pt?584+8-pt:584; pos[n++]=14-pa; }
+    if(pb<15){ tile[n]=pf?584+8-pf:584; pos[n++]=14-pb; }
     return n; }
 static void draw_sky(void)
 {
@@ -9157,9 +9158,11 @@ static void moon_phases(int day,int*pt,int*pf)
 {   int x=day-1; if(x<0) x=0;
     *pt=((8*x+7)/14)&7;                             /* round((day-1)/1.75) mod 8 */
     { int b=(x%9)-1; *pf=b>=0?b:0; } }              /* max(0, (day-1) mod round(1.1667*8) - 1) */
-static int moon_pos_t(int day,int hour){ int pt,pf; moon_phases(day,&pt,&pf); return (hour+1+3*pt)%24; }
-static int moon_pos_f(int day,int hour){ int pt,pf; moon_phases(day,&pt,&pf); int v=hour-1+3*pf; return v<0?255:(v%24); }
-static int moon_visible(int day,int hour){ int a=moon_pos_t(day,hour), b=moon_pos_f(day,hour); return (a>=5&&a<=19)||(b>=5&&b<=19); }
+static int moon_stone_t(int day){ int pt,pf; moon_phases(day,&pt,&pf); return (8-pt)&7; }   /* moongates.md §2c */
+static int moon_stone_f(int day){ int pt,pf; moon_phases(day,&pt,&pf); return (8-pf)&7; }
+static int moon_pos_t(int day,int hour){ int v=3*moon_stone_t(day)+18-hour; return v<0?v+256:v%24; }
+static int moon_pos_f(int day,int hour){ int v=3*moon_stone_f(day)+20-hour; return v<0?v+256:v%24; }
+static int moon_visible(int day,int hour){ return moon_pos_t(day,hour)<15 || moon_pos_f(day,hour)<15; }
 static int moonstone_get(int i,int*x,int*y,int*z)
 {   if(!g_savetmpl||g_objlist_off<0||i<0||i>7) return 0;
     const uint8_t*e=g_savetmpl+g_objlist_off+0x1c1b+i*6; *x=e[0]|(e[1]<<8); *y=e[2]|(e[3]<<8); *z=e[4]|(e[5]<<8); return 1; }
@@ -9368,6 +9371,8 @@ static void gw_tick(world_t*w)
             teleport_party(w,(int)w->px,(int)w->py); g_gw=0; g_gw_fade=-1; return; }
         for(int p=1;p<g_nparty && p<8;p++){ int a=g_party[p].actor; g_gw_hx[p]=g_actx[a]; g_gw_hy[p]=g_acty[a]; g_actz[a]=0xff; }   /* seated by teleport_party; shown one by one */
         msgcat(0,"You step through the moongate.");
+        if(g_gw_stones){ g_gw_stones=0; music_update_area(w->level); music_stones(); }   /* it stays until the area next changes */
+        else music_resume_area(w->level);
         g_gw=(g_gw_fade>=0)?4:5; return; }
     if(g_gw==4){ g_gw_fade+=2; if(g_gw_fade>=16){ g_gw_fade=-1; g_gw=5; } return; }
     if(g_gw==5){ for(int p=1;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(g_gw_hidden[p]){ g_actz[a]=(uint8_t)w->level; g_actx[a]=g_gw_hx[p]; g_acty[a]=g_gw_hy[p]; g_gw_hidden[p]=0; return; } }
@@ -9379,13 +9384,14 @@ static int enter_moongate(world_t*w,int idx)
     if(g->obj_n==84){
         if(objworld_count(&g_ow,87)<=0){ msgcat(0,"You forgot the Orb of the Moons!"); return 1; }
         int q=g->quality; if(q<26 && (RED_GATE[q][0]||RED_GATE[q][1])){ x=RED_GATE[q][0]; y=RED_GATE[q][1]; z=RED_GATE[q][2]; }
+    } else if(g_hour==0 && g_minutes<10){                    /* the Stones, just after midnight (§2c) */
+        x=24; y=29; z=1; g_gw_stones=1;
     } else {
-        int pt,pf; moon_phases(day,&pt,&pf);
-        int at=moon_pos_t(day,g_hour)-12, af=moon_pos_f(day,g_hour)-12; if(at<0) at=-at; if(af<0) af=-af;
-        int ph=(at<af)?pt:pf, mx,my,mz;                      /* the moon nearer the zenith decides */
-        if(ph>=1 && moonstone_get(8-ph,&mx,&my,&mz) && (mx||my)){ x=mx; y=my; z=mz; }
+        int pa=moon_pos_t(day,g_hour), pb=moon_pos_f(day,g_hour), at=pa-7, af=pb-7; if(at<0) at=-at; if(af<0) af=-af;
+        int tram=(at!=af)?(at<af):((g_minutes%60<30)==(pa<pb)), mx,my,mz;   /* the moon nearer 7 decides */
+        if(moonstone_get(tram?moon_stone_t(day):moon_stone_f(day),&mx,&my,&mz) && (mx||my||mz)){ x=mx; y=my; z=mz; }
     }
-    if(x<0){ msgcat(0,"The moongate leads nowhere."); return 1; }
+    if(x<0) return 1;                                             /* no stone there: nothing happens (§2c) */
     gw_start(w,idx,x,y,z); return 1;                              /* the party walks in one by one (§2b) */
 }
 /* the orb's answer to "Where:": a red gate at (dx,dy) whose quality is the orb position (§3) */
@@ -12443,6 +12449,18 @@ int main(int argc, char **argv)
                     Cconws(g_msg); Cconws("\r\n");
                     dbg_num("MG level=", w.level); dbg_num("MG x=", (int)w.px); dbg_num("MG y=", (int)w.py);
                     dbg_num("MG expected x=", RED_GATE[q][0]); dbg_num("MG expected y=", RED_GATE[q][1]); dbg_num("MG expected z=", RED_GATE[q][2]); }
+            }
+            if(mode=='7'){                                                /* the midnight gate (§2c) */
+                g_day0=5; g_month0=7; g_year0=161; g_start_min=5; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+                dbg_num("MG hour=", g_hour); dbg_num("MG minute=", g_minutes);
+                int sx,sy,sz; (void)moonstone_get(0,&sx,&sy,&sz);
+                teleport_party(&w,(sx-1)&(U6_SURFACE_TILES-1),sy); moongates_update(&w);
+                dbg_num("MG gate present=", obj_idx_at(sx,sy,85)>=0);
+                w.px=(uint16_t)sx; w.py=(uint16_t)sy; (void)step_triggers(&w);
+                while(g_gw) gw_tick(&w);
+                Cconws(g_msg); Cconws("\r\nMG song="); Cconws(g_music_cur); Cconws("\r\n");
+                dbg_num("MG level=", w.level); dbg_num("MG x=", (int)w.px); dbg_num("MG y=", (int)w.py);
+                dbg_num("MG passable=", world_is_passable(&w,(int)w.px,(int)w.py));
             }
             if(mode=='2' || mode=='5'){
                 g_day0=5; g_month0=7; g_year0=161; g_start_min=12*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);

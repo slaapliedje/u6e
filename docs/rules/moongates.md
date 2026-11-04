@@ -17,9 +17,9 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
 > - References   : docs/formats/objlist.md (0x1bf3 clock/date, 0x1c1b moonstones), tileflag.md.
 > - Tools        : none
 > - Validated by  : MOONGATE.REQ headless hook (§6) on emulated TT + stock 4 MB Falcon.
-> - Confidence   : confirmed for §1-§4 against the reference; the moon formulas are the
->   reference's own (it marks them "may be wrong") — probable for the original.
-> - Last updated : 2026-10-31
+> - Confidence   : confirmed for §1-§4 against the reference; §2c overrides the reference's moon formulas (it
+>   marks them "may be wrong") with what DOS GAME.EXE does — confirmed by reading it.
+> - Last updated : 2026-11-04 (§2c: the moons as DOS has them)
 
 ## 1. The two moons and the game date
 
@@ -29,7 +29,7 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
   month and year advance as it passes midnight and are written back by S)ave.
 - **Trammel** phase = round((day − 1) / 1.75) mod 8 (integer: ((8·(day−1) + 7) / 14) mod 8).
   **Felucca** phase = max(0, (day − 1) mod 9 − 1) (the reference's round(1.1667 · 8) = 9).
-- Sky position: Trammel `posT = (hour + 1 + 3·phaseT) mod 24`, Felucca
+- Sky position (the reference's; DOS's is in §2c): Trammel `posT = (hour + 1 + 3·phaseT) mod 24`, Felucca
   `posF = (hour − 1 + 3·phaseF) mod 24` (at hour 0 with phase 0 the reference's byte wraps to
   255 — mirrored). A moon is **visible** when its position is 5..19.
 
@@ -41,11 +41,29 @@ bury/dig, the game date), /engine save.c (date write-back), docs/rules/magic_ski
 - Every hour (and after any travel, level change or load) the gates are refreshed: while a
   moon is visible, a temporary gate object stands on every buried moonstone of the current
   level; when none is visible, the gates the engine raised vanish. Gates are never saved.
-- **Entering** a blue gate (stepping onto its tile; not from a vehicle): the moon nearer to
+- **Entering** a blue gate (stepping onto its tile; not from a vehicle; DOS's choice is in §2c): the moon nearer to
   the zenith decides — `|posT − 12| < |posF − 12|` → Trammel, else Felucca — and the party is
   carried to the moonstone of phase **8 − winning phase** (phases 1..7 → stones 7..1; phase 0
   or a dug-up stone → the gate leads nowhere and the party stays). "You step through the
   moongate."
+
+## 2c. What DOS GAME.EXE 4.5 does (read 2026-11-04; the ST's GAME.PRG is the same)
+DOS is the rule here. This replaces the moon formulas of §1 and the choice in §2 wherever they differ.
+- **Stone number per day:** Trammel `(8 − phaseT) mod 8`, Felucca `(8 − phaseF) mod 8`, with the phases of §1.
+  The program has this as a table of 28 pairs; the formulas give every entry.
+- **Moon position:** Trammel `(3·stoneT + 18 − hour) mod 24`, Felucca `(3·stoneF + 20 − hour) mod 24`. A negative
+  value stays as its byte (251..255), which is off the sky: with stone 0, Trammel from hour 19 and Felucca from
+  hour 21.
+- A moon is up at position **0..14**, drawn that many steps across the sky. The gates stand while either is up.
+- **Entering a blue gate:**
+  1. At **hour 0, minute under 10**, the moons don't count: the party goes to **(24,29) on level 1** and the Stones
+     tune starts, staying until the music next changes.
+  2. Otherwise the moon nearer position **7** decides, on a tie Trammel if `(minute < 30) == (posT < posF)`, else
+     Felucca. The party goes to that moon's stone (stone 0 included).
+  3. A stone not in the ground leaves the party where it is, with no message.
+- After any moongate trip, red gates too, the area's song is chosen afresh.
+
+Checked by hooks `'2'` and `'7'` (§6) in our build. DOS itself was read, not run.
 
 ## 2b. Entering: the walk (2026-10-27; the reference's Party::walk / TimedPartyMove)
 Stepping onto a gate (blue or red, the checks of §2 / §3 passed) does not teleport at once:
@@ -122,7 +140,8 @@ visible), stand by moonstone 1 (935,262) → the gate object appears; step throu
 `'6'` = the red gate of '1' held mid-dissolve of the view (level 8 of 16) for a frame; `'3'` moonstone: bury
 a carried stone on grass → table entry = the Avatar's tile and a stone on the map; G)et it →
 entry cleared; `'4'` date: advance the clock 50 hours → day 6 09:00 (from 7-04 08:00),
-S)ave → objlist bytes day/month/year.
+S)ave → objlist bytes day/month/year; `'7'` midnight: as `'2'` at hour 0 minute 5, step through → (24,29) on
+level 1, song STONES printed.
 
 ## Status
 VERIFIED 2026-10-27 (the walk added the same day: '1' takes 50 walk steps to the gargoyle world, '2' 28
