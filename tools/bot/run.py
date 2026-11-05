@@ -608,10 +608,38 @@ def seg_panel(p, kw):
     time.sleep(0.3); p.g.shot('party.png')
     st = p.key('s', 'save page'); st = p.key('ret', 'save'); p.log('  save %r' % st['msg'])
 
-SEGS = dict(castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
+def seg_usekit(p, kw):
+    """U)se in two steps (usecode_use.md): needs USEKIT.REQ in the drive folder"""
+    st = p.use_pack(63, 'lock'); p.log('  pick asks: %r verb %r' % (st['msg'], st.get('pend')))
+    st = p.key('right', 'crosshair'); st = p.key('ret', 'on the door'); p.log('  pick: %r' % st['msg'])
+    if 'door' not in st['msg']: p.issue('usekit', 'pick: %r' % st['msg'])
+    st = p.use_pack(103, 'pick'); p.log('  dig: %r' % st['msg'])
+    if 'Not readied' not in st['msg']: p.issue('usekit', 'dig: %r' % st['msg'])
+    st = p.use_pack(154, 'telescope'); st = p.key('right', 'east'); p.log('  telescope: %r' % st['msg'])
+    if 'Done' not in st['msg']: p.issue('usekit', 'telescope: %r' % st['msg'])
+    st = p.use_pack(154, 'telescope'); st = p.key('f1' if 0 else 'ret', 'nowhere'); p.log('  telescope: %r' % st['msg'])
+    if 'nowhere' not in st['msg']: p.issue('usekit', 'telescope nowhere: %r' % st['msg'])
+    st = p.key('u'); st = p.key('left'); st = p.key('ret', 'fountain'); p.log('  fountain: %r' % st['msg'])
+    st = p.g.char('y'); p.log('  wish: %r' % st['msg'])
+    st = p.g.type('Food'); p.log('  wished: %r' % st['msg'])
+    if 'Failed' not in st['msg'] and 'food' not in st['msg']: p.issue('usekit', 'wish: %r' % st['msg'])
+    st = p.key('u'); st = p.key('left'); st = p.key('ret'); st = p.g.char('n'); p.log('  no wish: %r' % st['msg'])
+    st = p.use_pack(155, 'crystal'); p.log('  ball: %r' % st['msg'])
+    if 'degrees' in st['msg']:
+        st = p.g.type('200n'); p.log('  ball bad: %r' % st['msg'])
+    st = p.use_pack(97, 'gargish') or p.use_pack(97); p.log('  vocabulary: %r' % st['msg'])
+    st = p.key('d')
+    for _ in range(80):
+        if 'bread' in st['msg']: break
+        st = p.key('d')
+    st = p.key('down'); st = p.key('ret', 'where'); p.log('  how many: %r' % st['msg'])
+    st = p.g.type('2'); p.log('  dropped: %r' % st['msg'])
+    if 'bread' not in st['msg']: p.issue('usekit', 'drop: %r' % st['msg'])
+
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
 
 def main():
-    hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or [s for s in SEGS if s not in ('book', 'parchment')]
+    hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or [s for s in SEGS if s not in ('book', 'parchment', 'usekit')]
     os.makedirs(out, exist_ok=True)
     logf = open(os.path.join(out, 'run.log'), 'a')
     def log(s):

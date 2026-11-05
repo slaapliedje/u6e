@@ -9,7 +9,7 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 > Provenance
 > - Derived from : the deviation / simplification sections of the rule specs listed below (each of
 >   which cites the reference code it was read against). Nothing new is asserted here.
-> - Last updated : 2026-11-04 (L)ook and the verb cursor as DOS has them)
+> - Last updated : 2026-11-05 (U)se, T)alk, Ready, D)rop as DOS has them)
 
 ## Combat and creatures
 | Deviation | Where | Status |
@@ -46,14 +46,14 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 | L)ook follows DOS (usecode_use.md), except: the type-430 horse's rider and a body's true type are not told apart; a book's text opens on the book page, not in the scroll; G)et's weight limit weighs the pooled pack against the whole party, as CANCARRY does | usecode_use.md | open |
 | Theft follows DOS (usecode_use.md, Theft), except: our alignment keeps only "hostile", so a good-aligned townsperson counts as neutral; a sleeping NPC is one under the sleep worktype; the type-392 shape change and one per-actor flag of the alarm are left out; the alarm has no sound effect | usecode_use.md | accepted |
 | M)ove: no dark-tile refusal, no pusher→target missile-boundary line test (the wall under the thing only); push range = adjacent; a temp holder takes the pushed record out of the save; up to 64 records travel per push | usecode_use.md (M)ove) | accepted |
-| The staff is used from the pack (the original's "Not readied." gate dropped) | usecode_use.md (Staff) | accepted |
 | Levers: a quality-0 actuator does nothing (the reference would match every quality-0 doorway — none exist in the data) | usecode_use.md (Levers) | data |
-| Pull-chains ring a bell the reference animates with a sound; we have neither (the turn passes silently) | usecode_use.md (Levers) | accepted |
 | Vehicles: a ship still sails in calm at the base cost (the reference deducts nothing in calm); diagonal moves use the 8-direction cost with four sprite facings; the wind timer counts turns | wind.md §6 | accepted |
 | No "high air" balloon (nothing in U6 is high air); the aloft balloon uses the inflated frame 3 | wind.md §6 | accepted |
 | Moongate walk-in: the vanish is an ordered dither of the sprite (the reference fades random pixels of the whole window); the ST planar path switches the view at once; the red gate appears without the vanish; a failed level load keeps the party where it was | moongates.md §5 | accepted |
-| R)est: the horse refusal precedes the vehicle one (same outcome); no pathfinding to the circle; the mealtime is paced per rest turn; the "in town" scan takes every map tile within 5; the guard is a shape only — nobody attacks the camp | rest.md §5 | accepted |
+| R)est: the horse refusal precedes the vehicle one (same outcome); no pathfinding to the circle; the mealtime is paced per rest turn; the "in town" scan takes every map tile within 5 | rest.md §5 | accepted |
 | Worktype save: a saved faint is not restored (other saved codes come back from the schedule) | usecode_vm.md §6b | accepted |
+
+| U)se follows DOS (usecode_use.md, U)se as DOS has it), except: a gem, potion, moonstone or the like must be carried to be used; moonstones count anywhere in the pack rather than inside the cube, as carried things have no containers; a horse carries the whole party, not one member; `How many?` comes after the location, not before; our bell tone is by ear; `The %s stole some gold!` belongs to worktype 0x97, which nothing in the data has | usecode_use.md | accepted |
 
 ## Save, text, tools
 | Deviation | Where | Status |

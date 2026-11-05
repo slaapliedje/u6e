@@ -9,7 +9,7 @@ RuleSet "use" overrides.
 > - References   : Nuvie U6UseCode::use_door / use_switch / object-type table.
 > - Test hooks   : on-target `make m5` (use a door → it opens, tile changes).
 > - Confidence   : confirmed (doors); others scoped below as TODO.
-> - Last updated : 2026-10-28
+> - Last updated : 2026-11-05
 
 ## Dispatch model (IMPORTANT — not a bytecode file)
 Unlike NPC conversations (CONVERSE.A/.B bytecode → our converse_vm), U6 OBJECT
@@ -546,6 +546,64 @@ sulfurous ash`.
 **Other verbs' words.** `Get-` prints what it took and nothing more. `Not possible` (tileflags2 bit 3 and the
 Get-forbidden things) and `The total is too heavy.` are the refusals; `Drop-` echoes and asks `Location: `, then
 `Not possible` where it cannot land.
+
+## U)se as DOS has it (read in DOS GAME.EXE 4.5, 2026-11-05)
+Where this section differs from the older sections above, this one is the rule. DOS has one switch of 85 types; a type that isn't in it is `Not usable`. Anything not carried must be within one tile (`Out of range!`).
+
+**Doors (297-300), frames 0-3 open, 4-7 closed, 8-11 locked, 12-15 magically locked.** Plain U)se: open `closed!`; closed: its trap fires, else `opened!`; locked `locked`; magic `magically locked!`.
+
+**Chests (98), frames 0 open, 1 closed, 2 locked, 3 magic.** Open `closed!`; closed: trap, else `opened!`, then it's searched; else `No effect`. **Barrel, crate (186, 192):** closed opens; open says `Not usable`; both then search. Neither closes again.
+
+**Keys (64), lock picks (63).** U)se asks `On ` with the crosshair. Nothing there: `nothing`. Too far: `Out of range!`. Not a door or chest: `No effect`. A lock pick first has a d30 < (45-dexterity)/2 chance of `Key broke.`: sound 13, one gone. Then a key works only if it and the lock have the same non-zero quality, a pick only if the lock's quality is 0, else `No effect`.
+- Door: open `Can't (Un)lock an opened door`; closed `locked!`; locked `unlocked!`; magic `magically locked!`.
+- Chest: closed `locked!`; locked `unlocked!`; else `No effect`.
+
+**Fire (122 candle, 145 candelabra, 164 fireplace, 206 brazier, 253 campfire):** `<word> is lit.` or `<word> is doused.`, with those words whatever the tile is called. Frame bit 0 is lit. A brazier with frame bit 1 is `Not usable`.
+
+**Secret door (334):** toggles frame bit 0, says nothing. **Bell, pull chain (236, 419):** every bell in view swings through 4 frames over 16 steps, then one tone (speaker PWM of 16000 steps; ours is sound id 23, tuned by ear). **Rubber ducky:** sound_effects.md.
+
+**Food:** 95, 96, 128-133, 135, 180, 184, 209, 210, 265: `You eat the food.`, one gone. Drink: 115-117: `You drink it.`, one gone, drunkenness +1.
+
+**Well (233), cow (428), churn (181), beehive (182).** All look in the acting member's pack. No bucket (178): `You need a bucket.` Over the limit (strength x 20 < carried + 32, in 0.1 stones): `The bucket of water is too heavy for you.` or `...milk...`. Else bucket out, full one in (179, 180), `Done`. Churn: no milk `You need some milk.`, else milk out, butter (96) and bucket in, `Done`. Beehive: no jar (183) `You need a honey jar.`, else the jar becomes 184, `Done`.
+
+**Fishing pole (264):** water on one of the 8 tiles around, else `You need to stand next to water.` One in 5, and once an hour: over the limit (carried + 5) `Got it, but can't carry it.`, else `Got it!` and a fish (265). Otherwise `Didn't get a fish.`
+
+**Fountain (234):** `Make a wish?`, Y: `Wish for: ` (8 letters). Food, Mutton, Wine, Fruit or Meat (any case): one in 5 `You got food` and a portion of meat (129), or `You got food, but you can't carry it.` over the limit (carried + 2); otherwise `Failed`. Anything else: `No effect`. Another key ends it.
+
+**Pick, shovel (103, 104):** must be readied, else `Not readied.` `Direction:`, a direction key, else `nowhere.` On the surface at (707,835), with no hole there: a hole (308) of quality 19, `You dig a hole.` On levels 1-4 on map tiles 108-111: one in 32 a fountain, `You find a water fountain.`; else one in 10 a gold nugget (89), `You find a gold nugget.`; else `Failed`. Anywhere else `No effect`.
+
+**Balloon plans (270):** needs a silk bag (421), basket (422), cauldron (147) and rope (284) among the party's things; says `Missing a mammoth silk bag.`, `Missing a balloon basket.`, `Missing a cauldron.`, `Missing a rope.` for each missing. All there: they're used up, the balloon (420) lies at the party's feet, `Done!`.
+**Balloon (420):** surface or gargoyle world, else `Not usable`. It inflates (423, frame 3) on the first free of the 8 tiles around, `Done!`; none free: it inflates underfoot, `No room!`.
+
+**Gargish vocabulary (97):** `You study the scroll!`; the party knows Gargish from then on.
+
+**Crystal ball (155):** d30 < (45-intelligence)/2 hurts the user d10 and ends it. Otherwise `Enter degrees followed by N, S, E or W.`, `At latitude=`, 3 characters, digits and N or S, in range 44N to 80S; then `longitude=` 37W to 88E, E or W. A bad answer resets the field to 0 and ends it. Then the Wizard Eye's view, at x = longitude x 8 + 304, y = latitude x 8 + 360, divided by 4 below the surface.
+
+**Telescope (154):** from where it lies (or who holds it): `Direction-`, a direction key, else `nowhere.`; the view flies that way up to 40 tiles or until solid rock (map tile 252 on); `Done`.
+
+**Silver horn (313):** a silver serpent about already: `Not now!`. Otherwise three tries of up to 8 random spots each on the edge of the view; a spot needs itself and the tiles W, S, SW, E and N free. Each gives one serpent (413), chaotic, assaulting. `Silver snakes are generated!`, or `None generated!`.
+
+**Staff (78):** must be readied, else `Not readied.` No charge: `No effect`. `With <the spell's words>`, then the spell, without mana or reagents. **Vortex cube (62):** see Staff and cube; No effect: `No effect`. The Codex must be at (923,851), within 5 tiles.
+
+**Horse (430):** by the acting member: Sherry `Sherry says: "Eeek!!! I'm afraid of horses!"`, Beh Lem `BehLem says: "Horses are for food!"`, already riding `You're already on a horse!`. A town's horse (actor under 224): `Not boardable!`.
+
+**Lever:** closing onto something: `can't close the portcullis.`, and the rest of its gates stay as they are. A new portcullis has frame 3 where the doorway's frame has bit 1, else frame 1. **Passthrough:** only closing can be refused by an actor (`Not now!`). **Crank:** a closed bridge that can't move says `Can't close the drawbridge.` or `Can't open the drawbridge.`
+
+**Food and drink in the pack** work the same as on the map. Things that also work where they lie: fan, pole, sextant, runes, orb, cube, balloon; readied-only ones still say `Not readied.` A readied thing is used by picking its slot on the status display.
+
+### Other verbs
+- **T)alk (order as DOS checks):** a party member off screen `Not on screen.`; solo `Not in solo mode.`; asleep, paralyzed, dead, evil, chaotic, or under worktypes 0x07, 0x12, 0x13, 0x9b `No response`; yourself `Talking to yourself?`; a temporary actor other than 373, a guard (382) or 363, which share scripts 102, 103 and 104, `Funny, no response.` DOS checks no line of sight here.
+- **Ready:** `Ready-<name>`, then `Can't be readied!`, `No place to put!`, or `Too heavy!` when what's readied, this included, weighs over strength x 10 (0.1 stones). **Unready:** `Unready-<name>`.
+- **L)ook** at a locked chest: `It's locked.` instead of the search.
+- **D)rop** or **M)ove to a member,** of more than one of a stackable thing: `How many? `. Enter means all; 0, a non-number or too many means none (`How many? 0`). DOS asks before the location, we ask after it: the pack selection has no confirming key.
+- **D)rop further than one tile** of 83, 92, 155, 123, 115-120, 183, 184, 275, 161, 417: sound 15, `It broke!`. A mirror (123) stays with frame 2, type 417 with frame 1, the rest are gone.
+- **M)ove to a member** over their limit (strength x 20 < carried + the thing): `Can't carry!`.
+
+### Also heard or seen
+- **A blow that wounds a neutral person** (410, 384, 381, 387, 385, 376, 382, 383, 409, 386, 378, 380, 377, 379) struck by a party member: `%s yells for help!`, then the same alarm as a witnessed theft (5 karma, guards, others within 6).
+- **Slime (375), wounded and alive:** up to 8 tries of a random spot within 1; on the first free one a copy with its hit points, `Slime divides!`.
+- **Passage:** the invisible object 416 at (923,872) stops a party not on a quest: `"Thou art not upon a Sacred Quest!\nPassage denied!"`.
+- **Shamino** (actor 3, in the party, alive, within 6 tiles of the Avatar): stepping onto a cave or hole of quality 1-20: `Shamino says, "This is the dungeon Deceit."`: names by quality: Deceit, Despise, Destard, Wrong, Covetous, Shame, Hythloth, GSA, Control, Passion, Diligence, Tomb of Kings, Ant Mound, Swamp Cave, Spider Cave, Cyclops Cave, Heftimus Cave, Heroes' Hole, Pirate Cave, Buccaneer's Cave; `dungeon ` before 1-7, `shrine of ` before 9-11. An evil or chaotic creature hatching: three chances in 4 of `Shamino says, "I hear something to the %s!"`, at most once a turn.
 
 ## Created and destroyed objects persist (2026-10-28)
 

@@ -50,12 +50,15 @@ Aboard a **ship** the command is the hull repair of cannons.md §2 (no prompts).
   other member lies down (drawn as a body, object 339 frame 0) and sleeps.
 - **The sleep**: the clock runs `hours` × 6 turns of ten minutes (one turn per 1/8 s of wall
   time); the world ticks as usual (NPC schedules, torches, poison, mana regeneration), the
-  party does not move. The reference notes "chance for random enemies to attack" as its own
-  FIXME — nobody ambushes the camp in u6e either.
+  party does not move.
+- **Someone comes (DOS GAME.EXE 4.5, read 2026-11-05):** on turns whose number has bits 0 and 2 clear, one chance in 64 of a
+  band: one type of 351, 358, 342 or 353, d8 of them, each on a free spot on the edge of the view (8 tries each), evil and
+  assaulting. If any arrived the rest ends there, with no healing: with a guard, `You hear something!`; with none, the
+  party wakes asleep.
 
 ## 4. Waking
 - The campfire goes out (frame 0) and stays as a burnt campfire.
-- Healing happens only if the **rest counter** is 0. Then, for each member in party order
+- Healing happens only after a rest of 4 hours or more that nobody broke, if the **rest counter** is 0. Then, for each member in party order
   `s`: if the member slept (not the guard) and `s` < the number of members that had food,
   the deficit `d = max − hp` (a deficit of 1 counts as 2) heals by `d/2 + rand(0..d/2−1)`:
   `<name> has healed.` (the reference's `s < fed` is by index, not by who ate — kept).
@@ -78,7 +81,6 @@ Aboard a **ship** the command is the hull repair of cannons.md §2 (no prompts).
 - "Not in solo mode!" never fires (no solo mode).
 - No pathfinding to the circle; the mealtime is paced per rest turn instead of per 500 ms.
 - The "in town" scan takes every map tile within 5, not only the currently visible ones.
-- The guard's lookout worktype is a shape only: nobody attacks the camp.
 
 ## 6. Test hook
 `REST.REQ` byte modes (seeded RNG):
