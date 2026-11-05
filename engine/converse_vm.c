@@ -298,7 +298,7 @@ static void print_text(cvm_t*vm,const uint8_t*s,int n){
             num[p]=0; outs(vm,num); continue; }
         if(c=='\\'||c=='/'){ int show=(c=='/')?(last==1):(last!=1); i++;   /* plural / singular letters (§6e) */
             while(i<n&&s[i]>='a'&&s[i]<='z'){ if(show) outc(vm,(char)s[i]); i++; } continue; }
-        if(c=='@'){ i++; continue; }
+        if(c=='@'){ if(vm->g->kw_mark) outc(vm,'\x01'); i++; continue; }   /* a keyword follows: the game may colour it */
         if(c==0x0a){ outc(vm,' '); i++; continue; }
         outc(vm,c); i++;
     }

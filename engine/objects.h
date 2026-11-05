@@ -34,7 +34,7 @@ typedef struct {
 #define WOBJ_DIRTY_DROPPED 2      /* placed on the map from the pack: its record is a CARRIED one (relocate it) */
 #define WOBJ_DIRTY_DESTROYED 3   /* gone for good: its record is deleted at reconcile (cannons.md §4) */
 #define WOBJ_DIRTY_NEW     4      /* created during play and KEPT: no record yet, one is appended at reconcile (save_load.md §5 step 0b) */
-typedef struct { uint16_t obj_n, tile, qty; uint8_t quality; } invitem_t;
+typedef struct { uint16_t obj_n, tile, qty; uint8_t quality, owner; } invitem_t;   /* owner: the actor who carries it (0 reads as 1) */
 
 typedef struct {
     wobj_t        *objs;      /* borrowed, mutable (alive toggled on get)      */
@@ -42,6 +42,8 @@ typedef struct {
     const uint8_t *gettable;  /* [1024] by obj_n, 1 = pick-up-able             */
     invitem_t      inv[OBJ_INV_MAX];
     int            ninv;
+    uint8_t        add_owner;     /* who a taken thing goes to (0 = whoever, as a test has it) */
+    const uint8_t *away;          /* [256] if set: what someone who left the party carries does not count */
 } objworld_t;
 
 void objworld_init(objworld_t *o, wobj_t *objs, int nobjs, const uint8_t *gettable);

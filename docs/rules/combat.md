@@ -341,8 +341,9 @@ monsters.c monster_movetype), applied to each path step and wander step:
   that is not a shoreline tile 16..47) with no object on it.
 - **low water** — skiff 414, raft 415: any Wet tile with no object on it.
 - **none** — the tangle vine pod 365 never moves.
-No U6 type uses the reference's "high air" (map boundaries only). Not modelled: passing over
-or under other actors (mice, dragons), the mouse's mouseholes. Shallow water is wadeable by
+No U6 type uses the reference's "high air" (map boundaries only). From DOS's tile test (15d7:000f): rot worms (360) burrow, entering only ground with tileflags2 bit 3 and no object on it; a
+mouse (354) also enters a tile holding its hole (213, 282, 310); anyone may share a tile with a bird, mouse, insects, rabbit or
+corpser (356, 354, 343, 359, 357), unless it is of that same type. Shallow water is wadeable by
 walkers (the terrain passability says so); only deep water tells a bird from a rat.
 
 ## 7b. Foes casting spells (2026-10-27)
@@ -507,3 +508,28 @@ Unit test: `make combattest` (hit/damage distributions + weapon/range/armour tab
   spells, the party's wounds / conditions); '2' the same under Negate Magic: no cast; '3' a gazer's
   Charm turns a companion against the party until it wears off; '4' a giant spider webs the party;
   '5' a daemon goes invisible; '6' a wisp teleports beside the Avatar; '7' a dragon's Summon.
+
+## 8. Combat modes, Solo and COMMAND (2026-11-04)
+
+> Provenance: the U6 manual's "Begin/Break Off Combat" and keyboard list; READING GAME.EXE 4.5 (the status display, the
+> scheduler at $1ab7d, the worktype switch at $19c75 and its routines). Re-expressed, no code transcribed.
+
+Each actor has a combat mode byte, objlist 0x12f1, saved: 2 COMMAND, 3 FRONT, 4 REAR, 5 FLANK, 6 BERSERK, 7 RETREAT,
+8 ASSAULT. A new game: the Avatar COMMAND, Dupre and Shamino FRONT, Iolo REAR, anyone who joins ASSAULT. In combat a member's
+worktype is its mode. The inventory display shows a companion's mode beside the buttons; the fifth button steps it,
+wrapping from ASSAULT to COMMAND. The leader has no button.
+
+What a mode does in combat, when a foe is within 8 tiles of the leader; with none, the member follows as usual:
+- A foe in reach of a readied weapon or beside it is attacked (10 points), whatever the mode but RETREAT.
+- FRONT holds a place abreast of the leader, across the way to the nearest foe. REAR holds two tiles behind the leader the
+  same way. FLANK makes for a place two tiles to the foe's side. ASSAULT goes for the nearest foe, BERSERK for the one with
+  the most health. RETREAT runs from them and does not fight.
+- COMMAND: the member gets a turn at the keys after the leader's action, one for each COMMAND member, in roster order: the
+  view moves to it and the keys are its own. A commanded action does not pay the others' time again.
+
+Solo: keys 1-8 play that member of the roster alone; the others wait; 0 returns (`Solo mode`, `Party mode`). Refused
+aboard and in combat. In Solo: `Not in solo mode!` at T)alk, ladders and holes, R)est (`-Not in solo mode!`); `Not in solo
+mode.` at mounting; `You must be in party mode to enter.` at a moongate. A save, a load or a fall ends it.
+
+(Engine: whoever is played takes actor slot 1 and the Avatar its slot, since everything reads slot 1 as "the one at
+(px,py)"; they swap back before a save.)

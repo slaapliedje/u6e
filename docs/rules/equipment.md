@@ -67,19 +67,40 @@ As combat.md CB3b, now recomputed whenever an actor's readied set changes:
 - `g_aweapon[a]` = the readied item with the LARGEST `weapon_dmg` (0 = unarmed);
 - `g_aac[a]` = Σ `armour_ac(obj_n)` over all readied items.
 
-## 5. u6e UI mapping (OUR design — the original used a per-member paper-doll)
+## 5. The status display, as DOS has it (2026-11-04)
 
-u6e keeps the party pack as ONE pooled list (established deviation). Equipment therefore:
+> Provenance: the U6 manual's "party display", "inventory display" and keyboard list; READING GAME.EXE 4.5's display
+> routines (d25:0..1738) for the layout in screen pixels. Re-expressed, no code transcribed.
 
-- Each actor's READIED set is per-actor (8 slots, §1), initialised from the pack (§6).
-- **E)quip** (key E; the original had no top-level verb — readying lived in the inventory screen;
-  E is free in our dispatcher) opens the pack list in EQUIP mode: ↑/↓ select an item,
-  **1..5 readies it to that party member** (roster order), Esc closes. Success prints
-  "<name> readies the <item>."; failures: "Thou canst not ready that!", "<name>'s hands are full.",
-  "<slot> is already worn."
-- The **character status view** (click a roster member) lists that member's readied items;
-  pressing the item's digit UNREADIES it back to the pack.
-- Readying consumes one from the pooled stack (qty-1, row removed at 0); unreadying returns one.
+Each party member **carries its own things**: a pack row has an owner (the record's owner on load, on save). A thing
+got goes to the one played. The gold alone stays one purse, the leader's, and is drawn in its pack.
+
+**Party display** (the default): the sky and the roster, five rows; `+` / `-` or the arrows at (168,24), (168,96) scroll a
+longer one. Health in red below 10, green if poisoned. A click on a figure opens that member's inventory, on the name its
+portrait. `F1-F8` show the Nth member's portrait, `F10` returns here, `*` flips portrait and inventory, `+` / `-` step
+through members. `Tab` puts the crosshair in the display (arrows move it, Enter selects), and again back on the map. Esc from
+there also returns it. The display stays up through verbs and walking. (`F9`, not a DOS key, is the music source, F1 in the
+menus.)
+
+**Inventory** (all at x,y): the name centred on the top row; the figure, tiles 368-371, at (192,32); eight slots with the empty
+ring (tile 410): head (200,16), neck (176,24), weapon hand (224,24), first ring (176,40), body (224,40), other hand (176,56),
+second ring (224,56), feet (200,64); the member's sprite at (272,16); the pack, four across and three down from (248,32),
+an arrow glyph at column 8 of text rows 3 and 8 when more lies that way; `E:n/ms` (readied weight / strength) and `I:n/ms`
+(all carried / twice strength, stones) on text row 9; the buttons along y=88: previous (176; tile 387, not for the first),
+party (192; 384), portrait (208; 385), next (224; 388, not for the last), and for a companion the combat mode (240; 391) with its
+name to the right on text row 11. A selected thing with no verb armed is readied, or taken off; a verb armed acts on it
+(L)ook, U)se, D)rop then its "Location: ", M)ove).
+
+**Portrait and stats:** name on the top row; the portrait at (176,16); from column 10: `STR:n`, `DEX:n`, `INT:n` on rows 2-4,
+`Magic` and `n/m` on 6-7, `Health` and `n/m` on 8-9, `Lev/Exp` and `n/m` on 10-11; the same buttons, the third with tile 386.
+
+**M)ove** of a carried thing: `To `, a crosshair: another of the party takes the stack (`To Dupre.`, 5 points), `To yourself.`,
+`To nobody.`, or `Only within the party!`. A parchment goes straight into the book (§4 of magic_skills.md).
+
+**Weight:** G)et refuses at `The total is too heavy.` when what the leader carries plus the thing passes 2 stones per point of
+strength. Reagents are the caster's own. Keys, scripts and the rest still look through the whole party.
+
+**E)quip** (key E, not DOS, kept): the pack in order, E steps, 1-5 readies on that member.
 
 ## 6. Pack + save representation
 

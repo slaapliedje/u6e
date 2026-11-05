@@ -21,6 +21,7 @@ is the U6 default RuleSet; Savage Empire (tribal skills) and Martian Dreams
 >   LOOK names (§2, CONFIRMED). Spell table cross-checked between two references
 >   (probable). Mana model + casting effects NOT YET validated in-engine
 >   (implementation pending); marked accordingly.
+> - 2026-11-04: names, words and reagents checked against GAME.EXE 4.5's own tables; every spell now agrees with it (Lock, Mass Invis; Sleep Field, Poison Field, Mass Dispel and Explosion's reagents changed).
 > - Confidence   : mixed — CONFIRMED (reagent/spellbook obj_n, mana-cost rule),
 >   probable (spell/reagent table), guessed (exact save mana offset, per-spell
 >   numeric effect magnitudes).
@@ -172,9 +173,9 @@ verified per-spell as implemented (status starts unimplemented `·`).
 |-----|--------------|---------------|-----------------|------------------|
 | 0 | Curse          | AN SANCT      | SA Ni Ga        | debuff target |
 | 1 | Dispel Field   | AN GRAV       | BP SA           | remove a field tile |
-| 2 | Fireball       | POR FLA       | SA BP           | ranged fire damage |
+| 2 | Fireball       | POR FLAM      | SA BP           | ranged fire damage |
 | 3 | Great Light    | VAS LOR       | SA Ma           | large light radius |
-| 4 | Magic Lock     | AN POR        | SA BM Ga        | magically lock door/chest |
+| 4 | Lock     | AN POR        | SA BM Ga        | magically lock door/chest |
 | 5 | Mass Awaken    | AN VAS ZU     | Gi Ga           | wake sleeping party |
 | 6 | Mass Sleep     | VAS ZU        | Gi Ni SS        | sleep foes in area |
 | 7 | Peer           | VAS WIS YLEM  | Ni Ma           | show area map |
@@ -185,21 +186,21 @@ verified per-spell as implemented (status starts unimplemented `·`).
 | idx | spell        | words         | reagents        | effect (planned) |
 |-----|--------------|---------------|-----------------|------------------|
 | 0 | Animate        | ORT YLEM      | SA Ma BM        | animate object |
-| 1 | Conjure        | KAI XEN       | SS Ma           | summon creature ally |
-| 2 | Disable        | AN VAN MANI   | Ni SS Ma        | disable target |
+| 1 | Conjure        | KAL XEN       | SS Ma           | summon creature ally |
+| 2 | Disable        | AN VAS MANI   | Ni SS Ma        | disable target |
 | 3 | Fire Field     | IN FLAM GRAV  | BP SA SS        | create fire field |
 | 4 | Great Heal     | VAS MANI      | Gi SS Ma        | large HP restore |
 | 5 | Locate         | IN WIS        | Ni              | sextant position |
-| 6 | Mass Dispel    | VAS AN JUX ORT| Ga Gi           | dispel fields in area |
-| 7 | Poison Field   | IN NOX GRAV   | Ni SS BP        | create poison field |
-| 8 | Sleep Field    | IN ZU GRAV    | Gi SS BP        | create sleep field |
+| 6 | Mass Dispel    | VAS AN JUX ORT| Ni SS BP | dispel fields in area |
+| 7 | Poison Field   | IN NOX GRAV   | Gi SS BP | create poison field |
+| 8 | Sleep Field    | IN ZU GRAV    | Ga Gi | create sleep field |
 | 9 | Wind Change    | REL HUR       | SA BM           | set the wind's direction |
 
 ### Circle 5 (cost 5)
 | idx | spell        | words         | reagents           | effect (planned) |
 |-----|--------------|---------------|--------------------|------------------|
 | 0 | Energy Field   | IN SANCT GRAV | Ma SS BP           | create energy field |
-| 1 | Explosion      | VAS POL FLAM  | Ma SA BP           | area fire damage |
+| 1 | Explosion      | VAS POR FLAM  | Ma SA BP BM        | area fire damage |
 | 2 | Insect Swarm   | KAL BET XEN   | BM SS SA           | summon insects |
 | 3 | Invisibility   | SANCT LOR     | Ni BM              | make target invisible |
 | 4 | Lightning      | ORT GRAV      | BP Ma SA           | ranged lightning damage |
@@ -233,7 +234,7 @@ verified per-spell as implemented (status starts unimplemented `·`).
 | 4 | Gate Travel    | VAS REL POR   | SA BP Ma                | moongate travel |
 | 5 | Kill           | IN CORP       | BP Ni SA                | high single-target damage |
 | 6 | Mass Curse     | VAS AN SANCT  | SA Ni Ga Ma             | curse area |
-| 7 | Mass Invisibility | VAS SANCT LOR | Ma Ni BM BP          | party invisibility |
+| 7 | Mass Invis | VAS SANCT LOR | Ma Ni BM BP          | party invisibility |
 | 8 | Wing Strike    | KAL ORT XEN   | BM SS Ma SA             | knock down flyers |
 | 9 | Wizard Eye     | POR ORT WIS   | BM Ni Ma SA BP SS       | remote view (flying eye) |
 
@@ -468,7 +469,7 @@ A set of information + remote-action spells that reuse existing engine systems:
   remote view rather than a full-res flying eye (which would need decoupling the
   compose_map camera + lighting/LOS from the Avatar — deferred as a bigger lift).
 - **Invisibility** (circle 3) sets a per-actor invisibility timer `g_ainvis[]`
-  (aimed actor, else self); **Mass Invisibility** (circle 7) does the whole party.
+  (aimed actor, else self); **Mass Invis** (circle 7) does the whole party.
   compose_map skips drawing invisible actors; the timer decays each turn.
 - **Reveal** (circle 5) clears `g_ainvis[]` for every actor within 5 tiles.
   Validated on TT (MAGIC.BIN): Invisibility on an adjacent NPC → ainvis=60 (it
@@ -515,7 +516,7 @@ struck by its own spell. A party member reduced to 0 HP dies as combat.md §3d s
 | Trap (2) | aim a door / chest: adds a trap (child 337) unless it has one: "Success" / "No effect" |
 | Untrap (2) | removes the trap: "Success" / "No effect" |
 | Vanish (2) | aim an object whose tile carries tileflags3 bit3: it is removed from the map and REMEMBERED (objlist 0x1c13: obj_n | frame<<10 — see objlist.md on the reference's undecodable frame encoding) for Reappear: "Success"; else "No effect" |
-| Magic Lock (3) | a CLOSED door (frame 4-7) → +8 "magically locked!"; an open one: "Can't (Un)lock an opened door"; a chest frame 1 / 2 → 3 "magically locked!"; else "No effect" |
+| Lock (3) | a CLOSED door (frame 4-7) → +8 "magically locked!"; an open one: "Can't (Un)lock an opened door"; a chest frame 1 / 2 → 3 "magically locked!"; else "No effect" |
 | Repel Undead (3) | every creature within 5 of the caster that the table marks repellable (ghosts, skeletons, daemons) and that loses the §5b contest FLEES (the reference's timid worktype): "Success" |
 | Animate (4) | aim a READIABLE object (equipment.md §3): it becomes an allied creature of its own type on its tile (a temporary ally, §5c): "Success"; else "No effect" |
 | Disable (4) | aim an actor; it loses the contest or "Failed"; damage = its hp − 1 (it survives at 1 HP: "critical!") |
@@ -551,6 +552,44 @@ its holder, and Untrap deletes it (2026-10-28). Webs are saved too; fields and R
 copies stay temporary, as the reference flags them.
 **The vanished object** is saved (objlist 0x1c13) and reloaded; the timers 1 / 13 / 14 / 15 are
 saved in the 0x1c03 timer block.
+
+## 6a. Casting as DOS has it (2026-11-04; overrides the rest of §6 and §5 where they differ)
+
+> Provenance: READING GAME.EXE 4.5 (notes in ~/src/u6e-re/REVERSE.md, "DOS Cast"): the Cast routine, the spell
+> dispatch and the routines it calls. Re-expressed, no code transcribed.
+
+- The lines are the spell's name, its words in quotes (`Light`, `"In Lor"`), then what comes of it. Choosing nothing
+  prints `nothing`.
+- The checks, in order: `Your level is not high enough.`, `Not enough magic points.`, `No Reagents.`. Then the reagents,
+  the mana and the time (10 + 3 x circle) are spent **before** the spell does anything: a spell with nothing to work on
+  or a cancelled crosshair gets none of it back.
+- A click on the map while the page is open casts the chosen spell at that tile.
+- A spell's target is a crosshair (Enter or a click; Esc answers `nothing`), starting on the caster, the very tile under
+  it, not a direction:
+  - `On whom: `, then the name or `nothing` and `No effect`: Disable, Sleep, Magic Arrow, Fireball, Lightning, Chain Bolt,
+    Poison, Invisibility, Dispel Magic, Harm, Heal, Curse, Protection, Great Heal, Paralyze, Charm, Clone, Kill, Resurrect,
+    Pickpocket, Seance. The caster's own tile is the caster: Heal and Great Heal take whoever the crosshair is on.
+  - `On what: `: Douse, Vanish, Dispel Field, Animate, Replicate, Ignite, Detect Magic, Detect Trap, Trap, Unlock Magic,
+    Untrap, Lock, Telekinesis.
+  - `Location: `: Reappear, the Mass spells (Protect and Invis too: everyone in the area, not the party), Explosion, the
+    four Fields, the four Winds, Web, Hail Storm.
+  - `Direction-`: Wind Change; an arrow answers at once.
+  - Something in the way of the line to the tile: `Blocked!`. Range is the window.
+- No target: Create Food, Light, Great Light, Infravision, Locate, Peer, X-ray, Wizard Eye, Repel Undead, Reveal, Confuse,
+  Fear, Slime, Tremor, Wing Strike, Conjure, Summon, Insect Swarm, Negate Magic, Time Stop, Eclipse, Help, Armageddon.
+- An area spell strikes everyone in it, the caster and the party too (Mass Kill as well).
+- Harm: a save, 1-10. Magic Arrow: (Int/2 + 30 - target Dex)/2 against 1-30, 1-10. Fireball: no save, 1-20, doubled or
+  none by creature. Heal 1-30, Great Heal to full, `No effect` on the dead.
+- Each field spell makes one field on one tile: fire 317, poison 318, sleep 320, Energy Field the protection field 319.
+- Conjure: one creature, 4 chances in 16 a troll (371), 3 a giant rat (342), 3 a spider (361), 3 a giant bat (344), 3 a
+  snake (358); Insect Swarm: eight insects (343); Summon: one daemon (367), which fails its save and turns on the caster
+  with `Hostile daemon summoned.` Each lands on a free tile within 5 of the caster, eight tries.
+- Telekinesis: a crank or lever works from afar; a weightless thing `Not Possible`; anything else asks `Direction-` and
+  moves one tile.
+- Gate Travel: `To phase `, a stone's number 1-8, Enter: to where that moonstone lies; a stone that lies nowhere does nothing.
+- Wizard Eye: the view flies with a wizard eye (object 52), 40 moves at most, until Esc or rock (tile 252 up). `Done`.
+- Maximum mana by what the actor is: the Avatar (410) 2 x Int, a mage (378) Int, a swashbuckler (377) or musician (386)
+  Int/2, anyone else none.
 
 ## 6. Casting flow (engine algorithm)
 
@@ -646,7 +685,7 @@ print NOTHING of their own; the exceptions and the words we now use:
 | Detect Magic | `It's a <kind> potion.` (potions by frame: awaken, cure, heal, poison, sleep, protection, invisibility, xray vision, unknown) · `It's magical.` (a magical TILE) · `It shows a charge of <spell>.` (a staff) · `It's not magical.` · no object: No effect | "Thou sensest N magical auras." |
 | X-ray, Wizard Eye | `Done` | flavour |
 | Invisibility | Success / No effect | "Thou fadest from sight." |
-| Mass Invisibility, Reveal | Success | flavour |
+| Mass Invis, Reveal | Success | flavour |
 | Disable | Failed (the hit message otherwise) | "Success" |
 | Pickpocket | the item's name, then Success / No effect / `can't carry!` | "<item>. Success" |
 | Tremor | Success · Wing Strike: `No foes.` | same |
@@ -673,8 +712,8 @@ with the new words; host suites + make check pass.
   targeting (deviations.md), and for the spells that would need the cursor on a FRIEND:
   Heal / Great Heal land on the most-wounded living party member (the caster when nobody is
   hurt); Protection and Mass Protect shield the whole party; Invisibility hides the caster or
-  the first actor in an aimed direction; Mass Invisibility hides the party.
-- **Detect Magic** aims a direction (the first object along it, 5 tiles), like Magic Lock. It
+  the first actor in an aimed direction; Mass Invis hides the party.
+- **Detect Magic** aims a direction (the first object along it, 5 tiles), like Lock. It
   was missing from the aimed spells, so from the C)ast menu it could never reach an object
   (found 2026-10-31 while reviewing the targets against the reference).
 
@@ -738,7 +777,7 @@ with the new words; host suites + make check pass.
   end, poison's slow damage and its persistence; '7' Dispel Magic clears every condition
   (Success) and then finds nothing (No effect); aimed at the caster's own tile it cures the
   poisoned caster, while Kill aimed there asks for a direction (2026-11-01, TT).
-- `SPELLS.REQ` (§5f, seeded RNG): '1' Douse/Ignite a brazier, Ignite a keg; '2' Magic Lock + Unlock
+- `SPELLS.REQ` (§5f, seeded RNG): '1' Douse/Ignite a brazier, Ignite a keg; '2' Lock + Unlock
   Magic + Detect Magic on a spawned door and chest; '3' Trap, Detect Trap, Untrap, then a trapped chest
   opened; '4' Vanish + Reappear (and the save round-trip of 0x1c13) and Replicate; '5' Lightning,
   Disable, Chain Bolt on three gargoyles; '6' Explosion over a gargoyle + keg; Flame Wind's five cells;
@@ -749,7 +788,7 @@ with the new words; host suites + make check pass.
 
 ## 10. Status
 §5f VERIFIED 2026-10-27 (SPELLS.REQ 1-c, seeded RNG, identical logs on emulated TT and the stock 4 MB Falcon):
-Douse / Ignite toggle a brazier and light a keg; Magic Lock puts a door at frame 13 and a chest at 3, USE refuses, Unlock
+Douse / Ignite toggle a brazier and light a keg; Lock puts a door at frame 13 and a chest at 3, USE refuses, Unlock
 Magic reverses both, an open door is refused; Trap / Detect Trap / Untrap on a spawned chest, the trap fires on opening
 (Bomb! hurt the whole party), the save's own trapped chest at (293,351) is sensed, untrapped and its record deleted on
 save (6 → 5 traps); Vanish removes a chair and the slot survives a save/load, Reappear / Replicate put it back and copy

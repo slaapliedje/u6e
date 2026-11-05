@@ -475,6 +475,77 @@ ScummVM's hatches it again.
   the party by the sundial at 15:00 for the frame (shadow tile 333). `'2'` the same spot at
   22:00 (plain dial 861) for the frame. `'3'` by the clock at 10:00 for the frame.
 
+
+## L)ook and the verb cursor as DOS has them (2026-11-04)
+
+> Provenance: READING GAME.EXE 4.5 (disassembly stays in ~/src/u6e-re, notes in its REVERSE.md, "DOS Look"):
+> the Look routine, its helpers, the verb dispatch, Get, Drop, Move and Use. Re-expressed, no code transcribed.
+> This section overrides the older notes above where they disagree.
+
+**The cursor.** T)alk, L)ook, G)et, D)rop, M)ove and U)se all arm one crosshair on the map, starting on the
+leader. The arrows walk it anywhere in the map window, Enter or a click acts on the tile under it, Esc cancels. The
+prompt is the verb's name and a dash: `Look-`, `Get-`, `Move-`, `Use-`, `Talk-`; D)rop's second prompt is
+`Location: `. Choosing nothing answers `nothing` after the dash (`Get-nothing`).
+
+**Range.** Look and Talk reach anything in the window. Get, Move and Use take what is within one tile of the
+leader, diagonals too, else a blank line and `Out of range!`. What the cursor names is echoed after the dash with
+its count or article: `Get-a sword`, `Use-a door`.
+
+**L)ook prints**, after `Thou dost see `:
+- **A tile with no object, or only a hidden one:** the map tile's article and name and `.`, then within one tile
+  of the leader a blank line and `Searching here, you find nothing.`
+- **An actor, a shrine (393) or a statue (397-399):** its name, no period. A party member has no article. A
+  creature's name is its current type's look name (a body under a Polymorph-like change reads as its true type).
+  Then the portrait view, below. Nothing is searched.
+- **Anything else:** the count, or the article, then the name, then
+  1. `. It weighs N.M stones` (`. They weigh` for a stack); N.M is the weight in tenths, the object's own plus all
+     it holds. A weight of 0 or of 25.5 stones or more is not printed.
+  2. the damage if the object has one: `. It can do 8 points of damage` when no weight was printed, else `, can do …`
+     when an absorb follows, else ` and can do …`.
+  3. the armour value if it has one: ` and can absorb 3 points of damage`. Singular `point` for 1.
+  4. then one of: a book's text (`:` and the text, see below); a spellbook's page (below); the time (`The time is
+     8:00 A.M.` after a blank line, no period before it); or `.`
+  5. then, unless a book's text was read, the search below.
+
+The plural comes from the count: the name's `\s` part prints unless the count is 1, its `/` part only then. These
+objects have a count and always print it, 1 included: gold (88), torches (90), 63, 77, 55, 56, reagents 65-72, 337,
+128, 129, 83, 335, 89, 91, 92.
+
+**Damage and armour** are the tables combat already uses (combat.md); object damage of an unlisted type is none.
+
+**Books.** 151 book, 61 Book of Circles, 152 scroll, 270 balloon plans and 59 Codex read when carried or within one
+tile; 332 and 333 signs, 143 decorative shield, 254 cross and 255 tombstone from any distance. All only if their
+quality is not 0, which is the text's number (BOOK.DAT entry quality-1). Every such object on the tile reads in
+turn. A readable object out of range is an ordinary look, and is then searched only if in range.
+
+**The search** runs only within one tile of the leader, on a non-actor, unless tileflags2 bit 3 is set on its tile
+(the same "Not possible" flag that stops G)et) or it is a spellbook. It prints a blank line and
+`Searching here, you find `, then:
+- secret door (334): on a hidden frame (even) `a secret door`, and the door shows; on a shown one `nothing`.
+- a thing with tileflags3 bit 4 is searched through to the first object under it that lacks the bit.
+- a closed chest (98), crate (192) or barrel (186), or a spellbook: `nothing`.
+- anything else: each thing it holds, except charges (336) and effects (337), comes out onto its tile and is listed
+  `a, b and c`, each with its count or article. Holding nothing: `nothing`. It ends in `.`
+
+**The spellbook page.** L)ook at a spellbook holding spells, carried or within one tile, opens the spell page; a
+key other than Enter closes it. Enter on a spell prints `Name-In Lor`, then `Ingredients:` and each reagent on its
+own line with a leading space (`None` if it needs none). The words print with a capital and lower case letters per
+syllable. The reagents read `mandrake root, nightshade, black pearl, blood moss, spider silk, garlic, ginseng,
+sulfurous ash`.
+
+**The portrait view** fills the panel above the scroll box, and the scroll stays visible:
+- whose: a shrine or statue shows the portrait of its quality (the one it talks through). An actor below 224 shows
+  its own. An actor of 224 or more shows one only if its type is 373 (portrait 192), 382 (193) or 363 (194).
+- the caption, centred below it: the actor's conversation name if thy party has talk flags for it (any bit set), or
+  if it is a party member; otherwise its look name. A shrine or statue's caption is its look name.
+- anything readied: the doll beside the portrait (or centred if there is no portrait).
+- no portrait and nothing readied: no view at all.
+- a key closes it. Looking costs no time.
+
+**Other verbs' words.** `Get-` prints what it took and nothing more. `Not possible` (tileflags2 bit 3 and the
+Get-forbidden things) and `The total is too heavy.` are the refusals; `Drop-` echoes and asks `Location: `, then
+`Not possible` where it cannot land.
+
 ## Created and destroyed objects persist (2026-10-28)
 
 > Provenance: READING ScummVM/Nuvie `actors/u6_actor.cpp` die + `u6_actor_types.h` (dead_obj_n /

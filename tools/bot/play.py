@@ -12,6 +12,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 SKIP_WORDS = {'join', 'leav', 'bye'}          # the sweep must not reshape the party; bye ends it
 
+def got(msg):
+    """did G)et take it? (the echo alone, usecode_use.md)"""
+    return 'Get-' in msg and not any(w in msg for w in ('Get-nothing', 'Not possible', 'Out of range', 'too heavy'))
+
 def keywords(refdir):
     exe = os.path.join(ROOT, 'build', 'convkw')
     if not os.path.exists(exe): subprocess.run(['make', '-C', ROOT, 'convkw'], check=True, capture_output=True)
@@ -91,7 +95,21 @@ class Player:
 
 
     def key(self, k, what=''):
-        st = self.g.key(k); self.check(what or str(k)); return st
+        st = self.g.key(k)
+        while st.get('more'): st = self.g.key('space')                   # the scroll's next page takes a key
+        self.check(what or str(k)); return st
+
+    def aim_at(self, aid, what=''):
+        """the spell's crosshair onto a party member, and Enter (magic_skills.md §6a)"""
+        x, y = self.nav.pos(); a = self.actor(aid) if aid != 1 else None
+        if a:
+            for _ in range(abs(a['x'] - x)): self.key('right' if a['x'] > x else 'left', what)
+            for _ in range(abs(a['y'] - y)): self.key('down' if a['y'] > y else 'up', what)
+        return self.key('ret', what)
+
+    def at(self, d, what=''):
+        """an armed verb's crosshair: a step that way and Enter"""
+        self.key(d, what); return self.key('ret', what)
 
     def idle(self):
         """leave any text entry or armed verb (Esc is safe there; in plain play it arms the quit question)"""
@@ -279,9 +297,9 @@ class Player:
         objs, _ = self.g.objects(); x, y = self.nav.pos(); took = False
         for o in objs:
             if o['obj'] != 98 or o['i'] not in self.looted or abs(o['x'] - x) + abs(o['y'] - y) != 1: continue
-            self.key('g'); st = self.key(VDIR[(o['x'] - x, o['y'] - y)], 'get the chest')
+            self.key('g'); st = self.at(VDIR[(o['x'] - x, o['y'] - y)], 'get the chest')
             self.log('  a looted chest in the way at (%d,%d): %r' % (o['x'], o['y'], st['msg']))
-            took = took or 'You get' in st['msg']
+            took = took or got(st['msg'])
         if took: self.nav.refresh()
         return took
 
@@ -319,27 +337,30 @@ class Player:
             if abs(o['x'] - x) + abs(o['y'] - y) != 1: skip.add(o['i']); continue
             d = VDIR[(o['x'] - x, o['y'] - y)]
             if o['obj'] in self.HOLDERS:
-                used.add(o['i']); self.looted.add(o['i']); self.key('u'); st = self.key(d, 'search %d' % o['obj'])
+                used.add(o['i']); self.looted.add(o['i']); self.key('u' if o['obj'] in (98, 192, 186) else 'l'); st = self.at(d, 'search %d' % o['obj'])
                 if 'nothing' in st['msg'].lower(): skip.add(o['i'])
             elif not self.wanted(o):                          # not worth its weight: leave it, and what lies under it
                 skip.add(o['i'])
             else:
-                self.key('g'); st = self.key(d, 'get %d' % o['obj'])
-                if 'You get' in st['msg']: took.append(st['msg'].split('You get', 1)[1].strip(' .'))
+                self.key('g'); st = self.at(d, 'get %d' % o['obj'])
+                if got(st['msg']): took.append(st['msg'].split('Get-', 1)[1].split('\n')[0].strip(' .'))
                 else: skip.add(o['i']); self.log('  get %s: %r' % (o['name'], st['msg']))
         gained = self.g.state.get('gold', 0) - g0
         if took: self.log('  looted: %s (gold %+d)' % (', '.join(took)[:400], gained))
         return gained
 
     def heal_up(self, frac=0.6, tries=8):
-        """C)ast Heal while a member is below frac of max HP (it lands on the most wounded,
-        magic_skills.md §5h); stops when a cast does not succeed (mana, reagents)"""
+        """C)ast Heal on the most wounded while a member is below frac of max HP (magic_skills.md §6a);
+        stops when a cast does not succeed (mana, reagents)"""
         n = 0
         for _ in range(tries):
-            if not [m for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac]: break
+            hurt = [m for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac]
+            if not hurt: break
+            worst = min(hurt, key=lambda m: m['hp'] / m['max'])['id']
             st = self.key('c', 'cast')
             if not st['cast']: self.idle(); break
             st = self.g.type('im'); self.check('cast heal')
+            st = self.aim_at(worst, 'heal') if st.get('verb') else st
             if 'success' not in st['msg'].lower(): self.log('  heal: %r' % st['msg']); self.idle(); break
             n += 1
         if n: self.log('  healed x%d: party %s' % (n, ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in self.g.state['party'])))
@@ -364,19 +385,15 @@ class Player:
         return self.poisoned()
 
     def dispel(self, i):
-        """C)ast Dispel Magic on member i: Enter for the Avatar's own tile, else the direction that
-        reaches them (orthogonally in line, within 5: the first actor along it, magic_skills.md §5b); True if they
-        are cured"""
+        """C)ast Dispel Magic on member i, the crosshair on them (magic_skills.md §6a); True if they are cured"""
         a = self.actor(i) if i != 1 else None; x, y = self.nav.pos()
         if i != 1 and not a: return False
-        d = (a['x'] - x, a['y'] - y) if a else (0, 0)
-        if max(abs(d[0]), abs(d[1])) > 5 or (d[0] and d[1]): return False   # the keys aim only orthogonally
-        u = ((d[0] > 0) - (d[0] < 0), (d[1] > 0) - (d[1] < 0))
+        if a and max(abs(a['x'] - x), abs(a['y'] - y)) > 5: return False
         st = self.key('c', 'cast')
         if not st['cast']: self.idle(); return False
         st = self.g.type('ajo'); self.check('cast dispel magic')
-        if 'where' not in st['msg'].lower(): self.log('  dispel magic: %r' % st['msg']); self.idle(); return False
-        st = self.key(VDIR[u] if u != (0, 0) else 'ret', 'dispel on %d' % i)
+        if not st.get('verb'): self.log('  dispel magic: %r' % st['msg']); self.idle(); return False
+        st = self.aim_at(i, 'dispel on %d' % i)
         if st['verb'] == 'C': self.issue('cure', 'Cast Dispel Magic still armed after aiming (%r)' % st['msg']); self.idle()
         ok = i not in self.poisoned()
         self.log('  dispel magic on %d: %r%s' % (i, st['msg'][-50:], '' if ok else ' (still poisoned)'))

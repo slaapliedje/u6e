@@ -64,7 +64,7 @@ class Nav:
     def pos(self): return self.g.state['X'], self.g.state['Y']
 
     def open_door(self, x, y, d):
-        st = self.keyfn('u'); st = self.keyfn(d)
+        st = self.keyfn('u'); st = self.keyfn(d); st = self.keyfn('ret')
         self.log('  door (%d,%d): %s' % (x, y, st['msg']))
         fr = self.doors.get((x, y))
         m = st['msg'].lower()

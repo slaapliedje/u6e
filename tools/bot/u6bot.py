@@ -15,12 +15,12 @@ SC.update({c: v for c, v in zip('zxcvbnm', range(0x2c, 0x33))})
 SC.update({c: v for c, v in zip('1234567890', range(0x02, 0x0c))})
 SC.update({' ': 0x39, ',': 0x33, '.': 0x34, '/': 0x35, '-': 0x0c, "'": 0x28, ';': 0x27})
 SHIFTED = {'<': ',', '>': '.', '?': '/', '!': '1', '"': "'", ':': ';'}
-K = dict(ctrl=0x1d, ret=0x1c, esc=0x01, bksp=0x0e, up=0x48, down=0x50, left=0x4b, right=0x4d,
-         f1=0x3b, f2=0x3c, f3=0x3d, f4=0x3e, f5=0x3f, space=0x39, shift=0x2a)
+K = dict(ctrl=0x1d, ret=0x1c, esc=0x01, bksp=0x0e, tab=0x0f, up=0x48, down=0x50, left=0x4b, right=0x4d,
+         f1=0x3b, f2=0x3c, f3=0x3d, f4=0x3e, f5=0x3f, f10=0x44, space=0x39, shift=0x2a)
 DIRS = {(0, -1): 'up', (0, 1): 'down', (-1, 0): 'left', (1, 0): 'right'}
 
 def parse_state(line):
-    body = line[3:]
+    body = line[3:].replace('\x01', '')
     tail = {}
     for tag in (' typed=', ' conv=', ' msg='):            # free-text fields come last, in this order
         i = body.rfind(tag)

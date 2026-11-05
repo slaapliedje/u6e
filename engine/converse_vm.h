@@ -36,6 +36,7 @@ typedef struct {
     int      mutations;        /* count of state-changing ops (for tests)      */
     uint8_t  avatar_sex;       /* var 0x10: 0=male 1=female                     */
     uint8_t  knows_gargish;    /* var 0x15: 1 = player understands Gargish      */
+    uint8_t  kw_mark;          /* 1 = print byte 1 before a keyword (the game colours it) */
     uint8_t  on_quest;         /* var 0x1A: 1 = on a sacred quest               */
     int16_t  avatar_hp;        /* var 0x19: avatar health                       */
     uint8_t  wounded[256];     /* HP below max: WOUNDED reads it (usecode_vm.md §6f)            */

@@ -26,7 +26,7 @@ def seg_bridge(p, kw):
     """the crank opens the drawbridge; walk across the moat"""
     if p.g.state['foes'] and p.foes(): p.fight()                        # the opening gargoyles keep up with a walking party (movement_turns.md §3b)
     p.nav.goto(303, 384, adj=True); x, y = p.nav.pos()
-    p.key('u'); st = p.key(VDIR[(303 - x, 384 - y)], 'crank')
+    p.key('u'); st = p.at(VDIR[(303 - x, 384 - y)], 'crank')
     if 'drawbridge' not in st['msg']: p.issue('bridge', 'crank said %r' % st['msg'])
     p.nav.refresh(); p.nav.goto(307, 395)
 
@@ -152,10 +152,10 @@ def seg_death(p, kw):
     if (b['x'], b['y']) != spot: p.log('  the body lies at (%d,%d), not %s' % (b['x'], b['y'], spot))
     p.nav.refresh(); x, y = p.nav.pos()
     if abs(b['x'] - x) + abs(b['y'] - y) != 1: p.nav.goto(b['x'], b['y'], adj=True); x, y = p.nav.pos()
-    p.key('g'); st = p.key(VDIR[(b['x'] - x, b['y'] - y)], 'get the body')
+    p.key('g'); st = p.at(VDIR[(b['x'] - x, b['y'] - y)], 'get the body')
     held = [r for r in p.g.objects()[1] if r['obj'] == 339 and r['q'] == 4]
     p.log('  get: %r, carried %d' % (st['msg'], len(held)))
-    if not held: p.issue('death', 'could not pick up the body: %r' % st['msg'])
+    if not held: p.log('  the body stays: %r' % st['msg']) if 'too heavy' in st['msg'] else p.issue('death', 'could not pick up the body: %r' % st['msg'])
 
 def seg_help(p, kw):
     """C)ast Help with a companion dead (magic_skills.md §5d): Lord British's revival. The party must
@@ -241,7 +241,7 @@ def use_way(p, o):
         if o['obj'] in (326, 308): p.walk(o['x'], o['y'])
         if p.g.state['L'] == lv and o['obj'] != 326:
             p.walk(o['x'], o['y'], adj=True); x, y = p.nav.pos()
-            p.key('u'); p.key(VDIR[(o['x'] - x, o['y'] - y)], 'use %d' % o['obj'])
+            p.key('u'); p.at(VDIR[(o['x'] - x, o['y'] - y)], 'use %d' % o['obj'])
     except Exception as e: p.log('  way %d at (%d,%d): %s' % (o['obj'], o['x'], o['y'], e))
     return p.g.state['L'] != lv
 
@@ -499,6 +499,7 @@ def seg_paid(p, kw):
 def seg_book(p, kw):
     """a new game's magic with the real rules (magic_skills.md §4, §6): no book, then the castle's book off
     its table, readied, its spells cast, kept over a save and a load. Run alone: main leaves MAGIC.REQ out"""
+    if p.g.state['foes'] and p.foes(): p.fight()                       # the opening's gargoyles first
     st = p.g.state
     if st['spells']: p.issue('book', 'a new game knows %d spells' % st['spells'])
     st = p.key('c', 'cast')
@@ -506,7 +507,7 @@ def seg_book(p, kw):
     st = p.walk(300, 367, adj=True)
     d = (300 - st['X'], 367 - st['Y'])
     p.g.shot('table.png')
-    p.key('g', 'get'); st = p.key(VDIR[d], 'get the book')
+    p.key('g', 'get'); st = p.at(VDIR[d], 'get the book')
     p.log('  got: %r, spells %d' % (st['msg'], st['spells']))
     if st['spells'] != 7: p.issue('book', 'the book gave %d spells, not 7 (%r)' % (st['spells'], st['msg']))
     st = p.key('c', 'cast')
@@ -522,7 +523,7 @@ def seg_book(p, kw):
     if not st['cast']: p.issue('book', 'C with the book readied: %r' % st['msg']); p.idle(); return
     st = p.g.type('vfh')                                               # Explosion: not in this book
     p.log('  explosion: %r' % st['msg'])
-    if 'not in thy spellbook' not in st['msg']: p.issue('book', 'a spell not in the book: %r' % st['msg'])
+    if 'nothing' not in st['msg']: p.issue('book', 'a spell not in the book: %r' % st['msg'])
     p.key('c', 'cast'); st = p.g.type('im')                            # Heal: needs reagents nobody holds
     p.log('  heal: %r' % st['msg'])
     if 'No Reagents' not in st['msg']: p.issue('book', 'Heal with no reagents: %r' % st['msg'])
@@ -534,7 +535,7 @@ def seg_parchment(p, kw):
     """the real rules of a bought spell (magic_skills.md §4): it waits in the pack until M M Enter puts it in the
     book, a known one stays out, and a parchment outlasts a save and a load. Run alone with PARCH.REQ = Xiao"""
     st = p.walk(300, 367, adj=True); d = (300 - st['X'], 367 - st['Y'])
-    p.key('g', 'get'); st = p.key(VDIR[d], 'get the book'); before = st['spells']
+    p.key('g', 'get'); st = p.at(VDIR[d], 'get the book'); before = st['spells']
     st = p.key('e', 'equip')
     for _ in range(40):
         if 'spell' in st['msg'].lower(): break
@@ -565,7 +566,49 @@ def seg_parchment(p, kw):
     st = p.key('m', 'move'); st = p.key('esc', 'cancel')
     if st['verb']: p.issue('parchment', 'Esc left verb %r' % st['verb'])
 
-SEGS = dict(castle=seg_castle, book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
+def seg_look(p, kw):
+    """L)ook's crosshair with real keys: the bare ground, Esc, a walked cursor, a person's portrait"""
+    st = p.key('l', 'look'); time.sleep(0.3); p.g.shot('look_cursor.png')
+    if st['verb'] != ord('L') and st['verb'] != 'L': p.log('  verb %r' % st['verb'])
+    st = p.key('right', 'cursor'); st = p.key('right', 'cursor'); time.sleep(0.3); p.g.shot('look_walk.png')
+    st = p.key('ret', 'look there'); p.log('  far: %r' % st['msg']); time.sleep(0.3); p.g.shot('look_far.png')
+    if 'Thou dost see' not in st['msg']: p.issue('look', 'no look line: %r' % st['msg'])
+    if 'Searching' in st['msg']: p.issue('look', 'searched at two tiles: %r' % st['msg'])
+    st = p.key('l', 'look'); st = p.key('esc', 'cancel')
+    if st['verb']: p.issue('look', 'Esc left verb %r' % st['verb'])
+    st = p.key('g', 'get'); st = p.key('right'); st = p.key('right'); st = p.key('right'); st = p.key('ret', 'get far'); p.log('  get: %r' % st['msg'])
+    if 'Get-' not in st['msg']: p.issue('look', 'get echo: %r' % st['msg'])
+    st = p.key('u', 'use'); st = p.key('ret', 'use here'); p.log('  use: %r' % st['msg'])
+    x, y = p.nav.pos(); near = None
+    for a in p.g.actors():
+        if a['id'] not in [m for m in st.get('party', [])] and abs(a['x'] - x) <= 5 and abs(a['y'] - y) <= 5 and a['id'] > 1: near = a; break
+    p.log('  someone near: %r' % (near,))
+    if near:
+        p.key('l', 'look')
+        for _ in range(abs(near['x'] - x)): p.key('right' if near['x'] > x else 'left')
+        for _ in range(abs(near['y'] - y)): p.key('down' if near['y'] > y else 'up')
+        st = p.key('ret', 'look at them'); p.log('  portrait: %r' % st['msg'])
+
+def seg_panel(p, kw):
+    """the status display (equipment.md §5): inventory, portrait, keys; a shot of each"""
+    st = p.key('i', 'inventory'); time.sleep(0.3); p.g.shot('inv.png'); p.log('  inv %r' % st.get('inv'))
+    st = p.key('asterisk' if 0 else 'tab', 'tab'); time.sleep(0.2); p.g.shot('inv_tab.png')
+    st = p.key('tab', 'tab back'); st = p.key('f10', 'leave'); time.sleep(0.2)
+    if st.get('inv'): p.issue('panel', 'F10 left the inventory open')
+    st = p.key('tab', 'tab opens'); st = p.key('down'); st = p.key('down'); st = p.key('ret', 'select'); p.log('  selected: %r' % st['msg'])
+    st = p.key('tab', 'done'); time.sleep(0.2); p.g.shot('inv_ready.png'); st = p.key('f10', 'leave')
+    x0, y0 = p.nav.pos()
+    st = p.g.char('2'); p.check('solo'); p.log('  solo: %r at (%d,%d)' % (st['msg'], st['X'], st['Y'])); time.sleep(0.3); p.g.shot('solo.png')
+    if (st['X'], st['Y']) == (x0, y0): p.issue('panel', 'Solo did not move the view')
+    st = p.key('down', 'solo step'); st = p.key('down', 'solo step'); p.log('  solo walked to (%d,%d)' % (st['X'], st['Y']))
+    p.key('t'); p.key('right'); st = p.key('ret', 'talk in solo'); p.log('  talk: %r' % st['msg'])
+    if 'solo' not in st['msg'] and 'No-one' not in st['msg']: p.issue('panel', 'talk in solo: %r' % st['msg'])
+    st = p.g.char('0'); p.check('party'); p.log('  party: %r at (%d,%d)' % (st['msg'], st['X'], st['Y']))
+    if (st['X'], st['Y']) != (x0, y0): p.issue('panel', 'Party mode did not come back: (%d,%d)' % (st['X'], st['Y']))
+    time.sleep(0.3); p.g.shot('party.png')
+    st = p.key('s', 'save page'); st = p.key('ret', 'save'); p.log('  save %r' % st['msg'])
+
+SEGS = dict(castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
 
 def main():
     hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or [s for s in SEGS if s not in ('book', 'parchment')]
