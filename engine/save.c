@@ -798,7 +798,7 @@ int32_t sav_insert_child(uint8_t *d, int32_t n, int32_t cap, int32_t cpos, int p
     int cnt = le16(d + cpos); if (parent_k < 0 || parent_k >= cnt || cnt >= 8191) return -1;
     int32_t at = cpos + 2 + (int32_t)cnt * 8; if (at > n) return -1;
     int32_t nn = grow_at(d, n, cap, at, 8); if (nn < 0) return -1;
-    sav_encode_record(d + at, 0x08, 0, 0, 0, obj_n, frame, qty, quality);
+    sav_encode_record(d + at, 0x09, 0, 0, 0, obj_n, frame, qty, quality);
     rec_set_link(d + at, parent_k);
     d[cpos] = (uint8_t)((cnt + 1) & 0xff); d[cpos+1] = (uint8_t)(((cnt + 1) >> 8) & 0xff);
     return nn;

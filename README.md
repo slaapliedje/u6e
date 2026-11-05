@@ -59,6 +59,9 @@ The release zip holds the programs and `CONVERT.TOS`, and no game data.
 1. Make a folder on your hard drive or CF card, with about 13 MB free.
 2. Copy every file from your DOS `ULTIMA6` folder into it, then the program for your machine (see
    the table above) and `CONVERT.TOS`.
+   Or, for Ultima VI from the Atari ST floppies: copy every file from all the disks, with their
+   `SAVEGAME` folder, to a folder named `ST` inside it. The ST's own colours and YM music then
+   come with it, and the DOS version's music does not.
 3. Run the program from the desktop. The first time, it offers to convert your files and says how
    long that takes: about 3 minutes on an 8 MHz ST, under a minute on a stock TT or Falcon. It then
    starts the game ([docs/design/first_boot_convert.md](docs/design/first_boot_convert.md)).
@@ -110,14 +113,15 @@ The original's keys: arrow keys walk. The first letter of each command starts it
 
 - A)ttack, C)ast, T)alk, L)ook, G)et, D)rop, U)se, M)ove (push), E)quip, R)est, I)nventory, S)ave;
 - B toggles combat mode.
+- Ctrl-R opens the saved games, Ctrl-X turns the DOS sound effects on and off, F1 changes the music source.
 
 Commands that need a direction or target take the arrow keys (or a crosshair, then Enter). Esc
 cancels; with nothing to cancel, it asks whether to quit. The mouse works on the command bar, the party roster and the map.
 
 ## Known issues
 
-- Where u6e knowingly behaves differently from the original (for example, theft is not punished
-  yet), the difference is listed in [docs/rules/deviations.md](docs/rules/deviations.md).
+- Where u6e knowingly behaves differently from the original (for example, a summoned creature
+  does not stay once the party leaves), the difference is listed in [docs/rules/deviations.md](docs/rules/deviations.md).
 - The Savage Empire and Martian Dreams boot and can be walked, but are not playable yet.
 - Transfer a Character has been tried with real ST and DOS saves from Ultima IV and V, made by
   the games themselves, but only with new characters: a veteran's high level, or the all-zero

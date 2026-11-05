@@ -18,7 +18,7 @@ int main(int argc,char**argv){
     uint8_t*d=malloc(n); if(fread(d,1,n,f)!=(size_t)n) return 2; fclose(f);
 
     uint32_t map_len=be32(d+4), chunks_len=be32(d+8), ntiles=be32(d+12);
-    const uint8_t *tileset=d+24+map_len+chunks_len;
+    const uint8_t *tileset=d+26+map_len+chunks_len;          /* the header: 24 bytes + the start minute (U6WH) */
     const uint8_t *pal=tileset+(long)ntiles*256;            /* 768 bytes RGB6 */
 
     int ntile=argc-3, scale=4, tw=16*scale;

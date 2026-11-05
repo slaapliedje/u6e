@@ -538,7 +538,8 @@ sulfurous ash`.
   its own. An actor of 224 or more shows one only if its type is 373 (portrait 192), 382 (193) or 363 (194).
 - the caption, centred below it: the actor's conversation name if thy party has talk flags for it (any bit set), or
   if it is a party member; otherwise its look name. A shrine or statue's caption is its look name.
-- anything readied: the doll beside the portrait (or centred if there is no portrait).
+- anything readied, types 336 and 337 not counting: the status display's figure and things at (0xC0,0x28), the portrait
+  at (0xF8,0x18). With no portrait the figure goes at (0xE0,0x28). Nothing readied: the portrait at (0xD8,0x18).
 - no portrait and nothing readied: no view at all.
 - a key closes it. Looking costs no time.
 

@@ -39,6 +39,11 @@ static inline int fr_exists(const char *name)
     return ok;
 }
 
+/* the ST release instead, its files in a folder named ST (docs/formats/st_data.md) */
+static const char *const FR_CORE_ST[] = { "ST\\MAP", "ST\\CHUNKS", "ST\\MAPTILES.EGA", "ST\\OBJTILES.EGA", "ST\\TILEINDX.EGA", "ST\\MASKTYPE.EGA", "ST\\TILEFLAG",
+    "ST\\BASETILE", "ST\\ANIMDATA", "ST\\SCHEDULE", "ST\\U.PRG", "ST\\GAME.PRG", "ST\\END.PRG", "ST\\SAVEGAME\\OBJLIST", "ST\\LOOK.LZD", "ST\\U6.CH", "ST\\PAPER.BMP", 0 };
+static inline int fr_is_st(void) { return !fr_exists("MAPTILES.VGA") && fr_exists("ST\\MAPTILES.EGA"); }
+
 /* which game's DOS files are here: the game's own .EXE tells Savage Empire and Martian Dreams
  * apart (mksave sniffs the same way); Ultima VI by its map plus U6.CH */
 static inline int fr_detect_game(void)
@@ -46,6 +51,7 @@ static inline int fr_detect_game(void)
     if (fr_exists("SAVAGE.EXE"))  return FR_SE;
     if (fr_exists("MARTIAN.EXE")) return FR_MD;
     if (fr_exists("MAP") && fr_exists("U6.CH")) return FR_U6;
+    if (fr_is_st()) return FR_U6;
     return FR_NONE;
 }
 
@@ -57,6 +63,7 @@ static inline const char *fr_game_name(int g)
 /* the missing core files, as a NULL-terminated list in out[] (up to cap-1 entries); returns the count */
 static inline int fr_missing(int g, const char **out, int cap)
 {
+    if (fr_is_st()) { int m = 0; for (int i = 0; FR_CORE_ST[i]; i++) if (!fr_exists(FR_CORE_ST[i]) && m < cap - 1) out[m++] = FR_CORE_ST[i]; out[m] = 0; return m; }
     const char *const *lists[2] = { FR_CORE_COMMON, g == FR_SE ? FR_CORE_SE : g == FR_MD ? FR_CORE_MD : FR_CORE_U6 };
     int n = 0;
     for (int l = 0; l < 2; l++)
@@ -67,7 +74,7 @@ static inline int fr_missing(int g, const char **out, int cap)
 }
 
 /* free disk space the outputs need, in KB: the packs + SAVE.000 + the temporary object files */
-static inline long fr_need_kb(int g) { return g == FR_U6 ? 3500 : g == FR_SE ? 1500 : 1700; }
+static inline long fr_need_kb(int g) { return g == FR_U6 ? (fr_is_st() ? 6500 : 3500) : g == FR_SE ? 1500 : 1700; }
 
 static long fr_read_hz200(void) { return *(volatile long *)0x4BAL; }
 static inline long fr_ticks(void) { return Supexec(fr_read_hz200); }

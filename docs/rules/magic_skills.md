@@ -110,19 +110,15 @@ in containers around the world or are sold. Xiao, Nicodemus, Horance and Rudyom 
 gold, NEW(player, 57, 0, 1)) and mages teach spells: "hands thee a piece of rune-covered parchment" is
 NEW(player, 58, spell number, 1).
 
-**Engine:** one known set for the party (g_known).
-- Taking a book from the map adds the spells it holds.
+**Engine:** each book has its own spells, as in DOS (2026-11-04): the page shows the books the one played has readied, both hands joined.
+- Taking a book from the map takes the spells it holds; a dropped book leaves with them; a save writes each one's under it.
 - A parchment (58) stays in the pack until the player puts it in the book, as in the reference. M)ove,
-  M again opens the pack, M steps to the next item, Enter puts the item in the book held, readied or
-  not: "The spellbook already has this spell." and "Only spells can go into the spellbook." refuse and
+  M again opens the pack, M steps to the next item, Enter puts the item in the book the leader has readied, or else the first it
+  carries: "The spellbook already has this spell." and "Only spells can go into the spellbook." refuse and
   keep the item, and with no book it answers "Not possible". M)ove pushes a parchment on the map into a
   book on the map (usecode_use.md), and taking that book brings its spells. Mages' scripts sell a spell
   already in the book like any other.
 - Casting needs a book readied by the caster (the Avatar; §6).
-- A save writes the known spells as children of the book, readied or in the pack, as the reference
-  does, and a parchment as a carried spell. On load a spell under a book is known and a carried one is
-  a parchment. With no book held the known spells are written carried, so a dropped book loses nothing:
-  they come back as parchments to put in again.
 - MAGIC.REQ, or a headless scene that skipped the title, seeds the old test stock: every spell but
   Armageddon, 10 of each reagent, no book or level gate. It is not for play.
 

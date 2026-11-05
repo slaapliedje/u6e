@@ -28,6 +28,7 @@
 int mksave_main(int, char **);
 int nuviesave_main(int, char **);
 int mkworld_main(int, char **);
+int st2dos_main(int, char **);
 
 /* ---- screen: BIOS console output, VT-52 positioning, 40 columns (ST low resolution) ---- */
 static void put(const char *s) { while (*s) Bconout(2, (unsigned char)*s++); }
@@ -54,7 +55,7 @@ static void wait_key(void)
 /* ---- progress: each stage's share of the run, as its time in tenths of a second on an 8 MHz ST ---- */
 typedef struct { const char *label; int weight; } stage_t;
 static const stage_t STAGES_U6[] = {
-    { "Save template", 79 }, { "Object lists", 4 }, { "Map and objects", 22 }, { "Tiles", 130 },
+    { "ST files", 150 }, { "Save template", 79 }, { "Object lists", 4 }, { "Map and objects", 22 }, { "Tiles", 130 },
     { "Indoor map", 189 }, { "World tables", 79 }, { "Main menu", 19 }, { "Intro scenes", 95 },
     { "Scroll", 5 }, { "Intro: TV", 46 }, { "Intro: moongate", 26 }, { "Portraits", 16 },
     { "Intro text", 62 }, { "Gypsy", 70 }, { "Woods", 27 }, { "Storm", 54 }, { "Stones", 32 },
@@ -155,7 +156,7 @@ int main(int argc, char **argv)
     Bconout(2, 27); Bconout(2, 'f');                /* cursor off */
     int g = fr_detect_game();
     if (g == FR_NONE)
-        return fail("No DOS game files here. Copy", "\r\n your DOS Ultima VI, Savage Empire\r\n or Martian Dreams files to this\r\n folder first.");
+        return fail("No game files here. Copy your", "\r\n DOS Ultima VI, Savage Empire or\r\n Martian Dreams files to this folder,\r\n or your ST Ultima VI disks to a\r\n folder named ST here, first.");
     at(1, 1); put(fr_game_name(g)); put(": converting");
     at(2, 1); put("the DOS files. This is done once.");
 
@@ -190,21 +191,23 @@ int main(int argc, char **argv)
     g_stdout = Fdup(1);                             /* Fdup 0x45: keep handle 1 to put back */
     if (!freopen("CONVERT.LOG", "w", stdout)) return fail("Cannot write CONVERT.LOG.", NULL);
     setvbuf(stdout, NULL, _IOFBF, 4096);
-    g_stages = g == FR_U6 ? STAGES_U6 : STAGES_SEMD;
+    g_stages = g == FR_U6 ? (fr_is_st() ? STAGES_U6 : STAGES_U6 + 1) : STAGES_SEMD;
     for (int i = 0; g_stages[i].label; i++) g_total += g_stages[i].weight;
     g_est_s = fr_estimate_s(g, fr_speed());
     g_t0 = fr_ticks();
     at(15, 1); put("Messages: CONVERT.LOG");
 
     if (g != FR_U6) setenv("MKWORLD_GAME", g == FR_SE ? "savage" : "martian", 1);
-    int rc;
+    int rc, st = fr_is_st();
+    char *src = st ? "STTMP" : ".";
+    if (st) { cv_step("ST files"); char *a[] = { "st2dos", "ST", "STTMP", 0 }; rc = st2dos_main(3, a); if (rc) exit(rc); }
     cv_step("Save template");
-    { char *a[] = { "mksave", ".", "SAVE.000", 0 }; rc = mksave_main(3, a); }
+    { char *a[] = { "mksave", src, "SAVE.000", 0 }; rc = mksave_main(3, a); }
     if (rc) exit(rc);
     cv_step("Object lists");
     { char *a[] = { "nuviesave", "SAVE.000", "CV_OBB.TMP", "CV_OBL.TMP", "CV_INV.TMP", 0 }; rc = nuviesave_main(5, a); }
     if (rc) exit(rc);
-    if (g == FR_U6) { char *a[] = { "mkworld", ".", "U6.TMP", "0", "0", "CV_OBB.TMP", "CV_OBL.TMP", "CV_INV.TMP", 0 }; rc = mkworld_main(8, a); }
+    if (g == FR_U6) { char *a[] = { "mkworld", src, "U6.TMP", "0", "0", "CV_OBB.TMP", "CV_OBL.TMP", "CV_INV.TMP", 0 }; rc = mkworld_main(8, a); }
     else            { char *a[] = { "mkworld", ".", "U6.TMP", "0", "0", "CV_OBL.TMP", 0 }; rc = mkworld_main(6, a); }
     if (rc) exit(rc);
     fflush(stdout);
@@ -212,6 +215,11 @@ int main(int argc, char **argv)
     Fdelete("U6.PAK");
     if (Frename(0, "U6.TMP", "U6.PAK") != 0) { g_label = "Renaming U6.TMP"; exit(2); }
     Fdelete("CV_OBB.TMP"); Fdelete("CV_OBL.TMP"); Fdelete("CV_INV.TMP");
+    if (st) { static const char *const KEEP[] = { "CONVERSE.A", "CONVERSE.B", "PORTRAIT.A", "PORTRAIT.B", 0 };   /* the game reads these itself */
+        for (int i = 0; KEEP[i]; i++) { char from[32]; strcpy(from, "STTMP\\"); strcat(from, KEEP[i]); Fdelete(KEEP[i]); Frename(0, from, KEEP[i]); }
+        static _DTA d; _DTA *o = Fgetdta(); Fsetdta(&d);                      /* the DOS-shaped files were only for this */
+        while (Fsfirst("STTMP\\*.*", 0) == 0) { char f[32]; strcpy(f, "STTMP\\"); strcat(f, d.dta_name); if (Fdelete(f) != 0) break; }
+        Fsetdta(o); Ddelete("STTMP"); }
     {   long fh = Fcreate("MENU.REQ", 0);               /* Fcreate 0x3C: boot to the intro and title menu */
         if (fh >= 0) { Fwrite((short)fh, 1, "1"); Fclose((short)fh); } }
     g_finished = 1;

@@ -9,7 +9,8 @@
  *   16  u32 nobjs              (world objects, 14 bytes each: u16 x,y,tile,obj_n,qty16,quality,parent)
  *   20  u16 startX
  *   22  u16 startY
- *   24  MAP | CHUNKS | tileset(ntiles*256) | palette(768) | passable(256)
+ *   24  u16 start minute of the day
+ *   26  MAP | CHUNKS | tileset(ntiles*256) | palette(768) | passable(256)
  *       | objects(nobjs * {u16 x, y, tile, obj_n, qty16, parent})  (all big-endian;
  *         parent = index of the containing object or 0xFFFF; contained x/y = 0)
  *       | font(2048: U6.CH, 256 glyphs x 8 bytes, 8x8 MSB-left, index=ASCII)
@@ -672,6 +673,10 @@ static void write_ublk(const char *dir, FILE *fe)
     long n=0; uint8_t *d=slurp_path(path,NULL,&n);
     fputc(2,fe);
     for(int k=0;k<2;k++){
+        { char tb[1024]; snprintf(tb,sizeof tb,"%s/%s",dir,k?"TV.TBL":"GYPSY.TBL");      /* the ST release's own tables (st_data.md) */
+          long tn=0; uint8_t *t=slurp_path(tb,NULL,&tn);
+          if(t && tn==UBLK[k].len){ be16(fe,(unsigned)tn); fwrite(t,1,(size_t)tn,fe); free(t); printf("intro data: %s block from %s\n",UBLK[k].name,tb); continue; }
+          free(t); }
         long o=d?find_ublk(d,n,&UBLK[k]):-1;
         if(o<0){ be16(fe,0); printf("intro data: %s block not found in U.EXE -> left out\n",UBLK[k].name); continue; }
         be16(fe,(unsigned)UBLK[k].len); fwrite(d+o,1,(size_t)UBLK[k].len,fe);
@@ -2285,9 +2290,11 @@ int main(int argc, char **argv)
         "Vellum", "Font", "Logos", "Scroll", "Ending", "Pointer" };
     #define FE_SEC(id) do { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; \
                             cv_step(fe_label[(id)]); fe_cur=(id); fe_sec_off[fe_cur]=_p; if(fe_cur+1>fe_nsec) fe_nsec=fe_cur+1; } while(0)
+    long fepn=0; char fep[1024]; snprintf(fep,sizeof fep,"%s/FEPAL",dir); uint8_t *fepal=slurp_path(fep,NULL,&fepn);          /* the ST release's: the front end's own colours (st_data.md) */
+    if(!fepal||fepn!=768){ free(fepal); fepal=malloc(768); if(fepal) memcpy(fepal,palb,768); }
     if(slim){ fwrite("NOFE",1,4,f);
         fe = fopen(fe_path,"wb");
-        if(fe){ fwrite(FEPACK_MAGIC,1,4,fe); fwrite(palb,1,768,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
+        if(fe){ fwrite(FEPACK_MAGIC,1,4,fe); fwrite(fepal,1,768,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
                 fe_dir_pos=ftell(fe); fputc(FES_N,fe); for(int i=0;i<FES_N*FEPACK_DIR_ENT;i++) fputc(0,fe);   /* placeholder dir */
                 printf("front-end/intro art -> %s (sectioned: %d sections + base palette + ST 16 + font)\n", fe_path, (int)FES_N); }
         else  { fe = f; printf("WARN: cannot open %s; front-end inline\n", fe_path); } }
@@ -2314,7 +2321,7 @@ int main(int argc, char **argv)
         static const uint8_t RAMP[]={14,33,34,35,36};   /* mirror gamedemo MENU_RAMP */
         for(unsigned r=0;r<sizeof RAMP/sizeof*RAMP;r++)  /* up-weight the ramp so it keeps distinct slots */
             for(int k=0;k<600 && np<NCOMB;k++) comb[np++]=RAMP[r];
-        build_scene_lc(palb, comb, np, lc); free(comb);
+        build_scene_lc(fepal, comb, np, lc); free(comb);
         fwrite(lc,1,sizeof lc,fe); }
       printf("front-end: menu %dx%d, title %dx%d (+per-scene title 16)\n", mw,mh,tw,th);
       free(menu); free(title); }
@@ -2616,7 +2623,7 @@ int main(int argc, char **argv)
         { int tw=0,th=0; uint8_t *t0=load_shape(dir,"TITLES.SHP",0,&tw,&th);   /* + the logo vel_base draws above it */
           if(t0){ int tx=(320-tw)/2; if(tx>=0) for(int y=0;y<th&&12+y<80;y++) for(int x=0;x<tw;x++){ uint8_t v=t0[y*tw+x]; if(v!=U6SHAPE_TRANSPARENT) vsc[(12+y)*320+tx+x]=v; } free(t0); } }
         for(int k=0;k<400;k++) vsc[k]=0x48;                     /* weight the parchment ink (0x48) */
-        { uint8_t lc[48+256]; build_scene_lc(palb, vsc, 320*200, lc); fwrite(lc,1,sizeof lc,fe); }
+        { uint8_t lc[48+256]; build_scene_lc(fepal, vsc, 320*200, lc); fwrite(lc,1,sizeof lc,fe); }
         free(vsc);
         fputc(5,fe);
         for(int k=0;k<5;k++){ be16(fe,(unsigned)vw[k]); be16(fe,(unsigned)vh[k]);
@@ -2780,6 +2787,6 @@ int main(int argc, char **argv)
            "+paper(320x200) +%d portraits\n",
            out, startx, starty, NTILES, nsurf, npass, NPORT);
     shp_flush();
-    free(palb); free(font); free(adat); free(cpix); free(paperd); free(schd); free(scr);
+    free(fepal); free(palb); free(font); free(adat); free(cpix); free(paperd); free(schd); free(scr);
     return 0;
 }

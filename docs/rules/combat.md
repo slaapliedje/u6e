@@ -164,6 +164,18 @@ flag; only companions' blows and spells left them).
   Dupre back, exp 1000 → 500 at karma 50, combat mode off, the readied item in the pack, Lord British
   at (307,348). Identical on the emulated TT and the stock 4 MB Falcon.
 
+## 3e. What some creatures' blows do (DOS GAME.EXE 4.5, read 2026-11-05)
+After a blow lands on an actor that lives through it:
+- **Corpser (357):** `%s dragged under!`. The victim takes no action and can't be attacked. Each of its turns, a d30 under its
+  strength frees it (`regurgitated!`); otherwise `ARGH!` and d15 damage. Death and the party's death clear it.
+- **Acid slug (364):** `A slug dissolves %s's %s!`: a random one of what it carries or has readied, of types 2-5, 7, 10-13, 15,
+  19-22, 35, 38, 43, 113, 114 (metal arms and armour).
+- **Gremlin (353):** `%s has been robbed!`: a random one of types 128-133, 135, 209-211 (food).
+- **Types 342, 345, 358, 360, 361, 375, 413, 426:** one chance in four of `%s poisoned!`.
+
+DOS reads this from a table of creature classes, keeping a bit for the poison. Only party members' things are taken here: a town
+NPC's pack isn't in memory.
+
 ## 4. Weapon damage table (weapon_dmg_tbl, obj_n → max dmg)
 sling 33=6, club 34=8, main gauche 35=8, spear 36=10, throwing axe 37=10, dagger 38=6,
 mace 39=15, morning star 40=15, bow 41=10, crossbow 42=12, sword 43=15, two-h hammer 44=20,

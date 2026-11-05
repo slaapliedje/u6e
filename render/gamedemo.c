@@ -164,6 +164,8 @@ static uint8_t        g_alert[U6_MAX_ACTORS];    /* aggro-on-sight latch: 1 once
 /* MAGIC status effects (docs/rules/magic_skills.md §5b): per-actor condition timers. */
 static uint8_t        g_poison[U6_MAX_ACTORS];   /* turns of poison damage-over-time    */
 static uint8_t        g_paralyze[U6_MAX_ACTORS]; /* turns paralyzed (skips its turn)     */
+static uint8_t        g_dragged[U6_MAX_ACTORS];  /* under a corpser: no action until it lets go (combat.md §3e) */
+static int dragged_turn(int a);
 static uint8_t        g_protect[U6_MAX_ACTORS];  /* turns of Protection (halves damage)  */
 static uint8_t        g_curse[U6_MAX_ACTORS];    /* turns cursed (attacks at a penalty)  */
 static uint8_t        g_charm[U6_MAX_ACTORS];    /* charmed (a flag; ends by the §5b roll): fights for the party */
@@ -188,7 +190,13 @@ static int            status_dmg(int def,int dmg){ return g_protect[def]?(dmg+1)
 /* MAGIC (docs/rules/magic_skills.md): per-actor magic points (max = Intelligence);
  * g_known marks the spells the Avatar has in the spellbook. */
 static uint8_t        g_amana[U6_MAX_ACTORS], g_amaxmana[U6_MAX_ACTORS];
-static uint8_t        g_known[SPELL_COUNT];
+static uint8_t        g_known[SPELL_COUNT];    /* what the page shows: the books the one played has readied (magic_skills.md §4) */
+#define BOOK_SETS 8
+static uint8_t        g_bookset[BOOK_SETS][16], g_bookused[BOOK_SETS];   /* each spellbook's spells, by spell number; a pack row's quality = set+1 */
+static uint8_t        g_abook[U6_MAX_ACTORS][2]; /* the sets of the books an actor has readied, set+1 */
+static int book_new(void){ for(int i=0;i<BOOK_SETS;i++) if(!g_bookused[i]){ g_bookused[i]=1; for(int k=0;k<16;k++) g_bookset[i][k]=0; return i+1; } return BOOK_SETS; }
+static void book_add(int set,int q){ if(set<1||set>BOOK_SETS) return; if(q==255){ for(int k=0;k<16;k++) g_bookset[set-1][k]=0xff; } else if(q>=0&&q<128) g_bookset[set-1][q>>3]|=(uint8_t)(1<<(q&7)); }
+static int book_has(int set,int q){ return set>=1&&set<=BOOK_SETS&&q>=0&&q<128&&(g_bookset[set-1][q>>3]&(1<<(q&7))); }
 static uint8_t        g_spell_light_turns=0; /* Light/Great Light: remaining lit turns       */
 static uint8_t        g_spell_light_rad=0;   /* the boosted avatar-globe radius while lit     */
 static uint8_t        g_xray_turns=0;        /* X-ray (§5e): see-through-walls turns remaining */
@@ -3408,8 +3416,15 @@ static void sfx_play(int id,int arg)
         { int n=id==3?30:id==18?20:id==19?40:30; arg=id==19?arg/4:(int)((long)arg*5/16);   /* DOS's speaker synth runs a phase at 20 kHz: 65536 steps a cycle */
           for(int i=0;i<n;i++){ int v=13-i*13/n; int p=arg>=20?125000/arg:0; if(p>4095)p=4095; SFX_REG(4,p&0xff); SFX_REG(5,(p>>8)&0x0f); SFX_REG(10,v); sfx_wait(); } } break;
     case 4: for(int i=0;i<8;i++){ sfx_tone(sfx_rand(100,10000)); sfx_wait(); } break;
-    case 5: { int b=2000-arg*16; for(int i=0;i<40;i++){ if(sfx_rand(0,3)==0) sfx_tone(sfx_rand(0,200)+b-100); else sfx_tone(0); sfx_wait(); } } break;
+    case 5: { int b=2000-arg*16; for(int i=0;i<4;i++){ if(sfx_rand(0,3)==0) sfx_tone(sfx_rand(0,200)+b-100); else sfx_tone(0); sfx_wait(); } } break;
+    case 7: if(arg<0){ for(int i=0;i<8;i++){ sfx_tone(sfx_rand(800,3000)); sfx_wait(); } } else for(int i=0;i<6;i++){ if(arg>19 && sfx_rand(0,7)==0) sfx_tone(sfx_rand(0,40)+arg); else sfx_tone(0); sfx_wait(); } break;
     case 8: for(int i=0;i<40;i++){ sfx_tone(sfx_rand(19,200)); sfx_wait(); } break;
+    case 10: for(int i=0;i<8;i++){ sfx_tone(sfx_rand(600,7000)); sfx_wait(); } break;
+    case 11: for(int i=0;i<20;i++){ sfx_tone(sfx_rand(600,4800)); sfx_wait(); } break;
+    case 16: { int b=1000-arg*8; for(int i=0;i<4;i++){ if(sfx_rand(0,1)&&b>20) sfx_tone(sfx_rand(20,b)); else sfx_tone(0); sfx_wait(); } } break;
+    case 17: sfx_sweep(400,750,150); break;
+    case 21: for(int i=0;i<50;i++){ sfx_tone((int)((10000L-64*i)*5/16)); sfx_wait(); sfx_wait(); sfx_wait(); } sfx_sweep(2500,0,200); break;
+    case 22: sfx_sweep(5000,8000,100); break;
     case 9: sfx_sweep(1200,2000,40); break;
     case 12: case 13: sfx_sweep(800,2000,50); break;
     case 14: sfx_tone(2000); sfx_wait(); sfx_wait(); break;
@@ -3428,7 +3443,7 @@ static void slot_swap(world_t*w,int m)
     ACTOR_SWAP(g_ahp); ACTOR_SWAP(g_astr); ACTOR_SWAP(g_adex); ACTOR_SWAP(g_aint); ACTOR_SWAP(g_aweapon); ACTOR_SWAP(g_aready);
     ACTOR_SWAP(g_aac); ACTOR_SWAP(g_torch_fuel); ACTOR_SWAP(g_amaxhp); ACTOR_SWAP(g_aflee); ACTOR_SWAP(g_cmode); ACTOR_SWAP(g_aexp); ACTOR_SWAP(g_alevel);
     ACTOR_SWAP(g_poison); ACTOR_SWAP(g_paralyze); ACTOR_SWAP(g_protect); ACTOR_SWAP(g_curse); ACTOR_SWAP(g_charm); ACTOR_SWAP(g_ally);
-    ACTOR_SWAP(g_amana); ACTOR_SWAP(g_amaxmana); ACTOR_SWAP(g_ainvis); ACTOR_SWAP(g_adead); ACTOR_SWAP(g_asleep);
+    ACTOR_SWAP(g_abook); ACTOR_SWAP(g_amana); ACTOR_SWAP(g_amaxmana); ACTOR_SWAP(g_ainvis); ACTOR_SWAP(g_adead); ACTOR_SWAP(g_asleep);
     { int mi=0; for(int p=0;p<g_nparty;p++) if(g_party[p].actor==m) mi=p;
       char t[16]; memcpy(t,g_party[0].name,16); memcpy(g_party[0].name,g_party[mi].name,16); memcpy(g_party[mi].name,t,16);
       int h=g_party[0].hp; g_party[0].hp=g_party[mi].hp; g_party[mi].hp=h; }
@@ -3583,6 +3598,7 @@ static void step_npcs(const world_t*w)
         if(g_resting && is_party_member(i)){ g_amoved[i]=0; continue; }   /* the camp: nobody follows or fights (rest.md §3) */
         if(g_asleep[i]){ g_asleep[i]--; g_amoved[i]=0; continue; }  /* sleep: skip the turn (§5a/§5b) */
         if(g_paralyze[i]){ g_paralyze[i]--; g_amoved[i]=0; continue; }  /* paralyze: skip the turn (§5b) */
+        if(dragged_turn(i)){ g_amoved[i]=0; continue; }           /* under a corpser (combat.md §3e) */
         if(g_summon[i]){                                          /* summoned creature: lifetime + allied AI (§5c) */
             if(g_summon_life[i]<=1){ g_atile[i]=0xffff; g_summon[i]=0;   /* lifetime expired: vanish */
                 g_align_hostile[i]=g_hostile[i]=g_alert[i]=0; g_amoved[i]=0; continue; }
@@ -5562,7 +5578,9 @@ static int readied_count(int on)                      /* the party's readied thi
     int c=0; for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=1 && a<U6_MAX_ACTORS) c+=has_readied(a,on); }
     return c;
 }
-static void spell_learn(int q);
+static void known_from(int s1,int s2);
+static void known_refresh(void);
+static int book_from_children(int idx);
 static void sync_inv_in(void)
 {
     for(int i=0;i<1024;i++) g_cg.player_obj[i]=0;
@@ -5799,6 +5817,7 @@ static int use_object_inner(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
     if(instrument_effect(o)){ g_instr=instrument_effect(o); g_next_verb='I'; return 0; }
+    if(o==169){ msgcat(0,"Squeak!"); sfx_play(22,0); return 1; }          /* the rubber ducky */
     if(o==334){ int fr=(int)g_wobj[idx].tile-basetile(334);              /* secret door (usecode_use.md): 0/2 hidden, 1/3 open */
         if(fr==1||fr==3){ g_wobj[idx].tile--; msgcat(0,"You close the secret door."); }
         else { g_wobj[idx].tile++; msgcat(0,"You open the secret door."); }
@@ -6274,7 +6293,9 @@ static int use_churn(void)
     objworld_consume(&g_ow,180,1); inv_add_objn(178,1); inv_add_objn(96,1); msgcat(0,"Done"); return 1;
 }
 static int use_pack_item(world_t*w,int on)
-{   g_verb_pts=5;   if(instrument_effect(on)){ g_instr=instrument_effect(on); g_next_verb='I'; g_verb_pts=5; return 0; }   if(on==212){ g_wind=(g_wind==WIND_CALM)?0:((g_wind+1)&7); g_wind_timer=1+rng_range(&g_wind_rng,30);
+{   g_verb_pts=5;   if(instrument_effect(on)){ g_instr=instrument_effect(on); g_next_verb='I'; g_verb_pts=5; return 0; }
+    if(on==169){ msgcat(0,"Squeak!"); sfx_play(22,0); return 1; }
+    if(on==212){ g_wind=(g_wind==WIND_CALM)?0:((g_wind+1)&7); g_wind_timer=1+rng_range(&g_wind_rng,30);
         msgcat(0,"You feel a breeze."); return 1; }
     if(on==420){
         if(w->level>0){ msgcat(0,"Not usable here."); return 1; }
@@ -6572,7 +6593,8 @@ static int do_look(world_t*w,int dx,int dy)
             if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && o->quality && (look_book_far(o->obj_n)||look_book_near(o->obj_n))) look_read(o->quality); }
         return 1; }
     int r=-1;
-    if(on==57 && near){ for(int s_=0;s_<SPELL_COUNT;s_++) if(g_known[s_]){ msgcat(n,"."); open_book_page(); return 1; } }
+    if(on==57 && near){ int s1=g_magic_demo?0:book_from_children(idx); known_from(s1,0); if(s1>=1&&s1<=BOOK_SETS) g_bookused[s1-1]=0;
+        for(int s_=0;s_<SPELL_COUNT;s_++) if(g_known[s_]){ msgcat(n,"."); open_book_page(); return 1; } known_refresh(); }
     if(on==159||on==235) r=look_time(n,on);
     if(r>=0) n=r; else n=msgcat(n,".");
     return near?look_search(idx,n):0;
@@ -6583,7 +6605,7 @@ static void look_pack_item(const invitem_t*it)
     n=look_thing(n,on,it->tile,it->qty,&count);
     n=look_details(n,on,count,obj_weight10(on,look_counted(on)?it->qty:1));
     if((look_book_far(on)||look_book_near(on)) && it->quality){ msgcat(n,":"); look_read(it->quality); return; }
-    if(on==57){ for(int s_=0;s_<SPELL_COUNT;s_++) if(g_known[s_]){ msgcat(n,"."); open_book_page(); return; } }
+    if(on==57){ known_from(it->quality,0); for(int s_=0;s_<SPELL_COUNT;s_++) if(g_known[s_]){ msgcat(n,"."); open_book_page(); return; } known_refresh(); }
     { int r=(on==159||on==235)?look_time(n,on):-1; if(r<0) msgcat(n,"."); }
 }
 /* the objects U)se does something with; the rest are "Not usable" */
@@ -6592,6 +6614,7 @@ static int use_usable(int on){
     for(unsigned i=0;i<sizeof u/sizeof*u;i++) if(u[i]==on) return 1;
     return 0; }
 static int do_verb_at(world_t*w,int verb,int dx,int dy);
+static int book_from_children(int idx){ int set=book_new(); for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*c=&g_wobj[j]; if(!c->alive && c->parent==(uint16_t)idx && c->obj_n==58) book_add(set,c->quality); } return set; }
 static int32_t actor_carried(int a);
 static int missile_reaches(const world_t*w,int x0,int y0,int x1,int y1);
 /* the verb's echo first, as DOS: "Use-a door", and what comes of it on the lines after */
@@ -6639,10 +6662,10 @@ static int do_verb_at(world_t*w,int verb,int dx,int dy)
                 g_verb_pts=3;
                 recompose=1;
             }
+            else if(g_wobj[idx].obj_n==57 && (g_wobj[idx].quality=(uint8_t)book_from_children(idx),objworld_get(&g_ow,idx))){ build_blocked(); g_verb_pts=3; recompose=1; }   /* the book's spells come with it (§4) */
             else if(objworld_get(&g_ow,idx)){
                 build_blocked();                                 /* a chest or other blocking thing no longer stands there */
-                if(g_wobj[idx].obj_n==57) for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*c=&g_wobj[j];   /* the book's spells come with it (§4) */
-                    if(!c->alive && c->parent==(uint16_t)idx && c->obj_n==58) spell_learn(c->quality); }
+                
                 if(g_wobj[idx].obj_n==73){ int fr=(int)g_wobj[idx].tile-basetile(73);          /* a dug-up moonstone: its gate is gone (moongates.md §4) */
                     if(fr>=0&&fr<8){ moonstone_set(fr,0,0,0); moongates_update(w); } }
                 g_verb_pts=3; recompose=1;
@@ -6666,6 +6689,9 @@ static int do_verb_at(world_t*w,int verb,int dx,int dy)
                     o->obj_n=g_ow.inv[s].obj_n; o->tile=g_ow.inv[s].tile; o->qty=g_ow.inv[s].qty; o->quality=g_ow.inv[s].quality;
                     o->x=(uint16_t)tx; o->y=(uint16_t)ty; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE;
                     o->alive=1; o->dirty=WOBJ_DIRTY_DROPPED; o->owned=0;      /* on the map now -> its carried record is relocated on save */
+                    if(o->obj_n==57){ int st=o->quality; o->quality=0;        /* a book takes its spells with it (magic_skills.md §4) */
+                        for(int sp=0;sp<SPELL_COUNT;sp++){ int q=magic_spell_num(sp); if(!book_has(st,q)) continue; int ci=persist_obj_new(58,0,tx,ty,q); if(ci>=0){ g_wobj[ci].alive=0; g_wobj[ci].parent=(uint16_t)slot; } }
+                        if(st>=1&&st<=BOOK_SETS) g_bookused[st-1]=0; }
                     for(int k=s;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;   /* remove from inventory */
                     if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
                     build_blocked();                             /* new on-map object -> rebuild buckets/blocking */
@@ -6709,14 +6735,14 @@ static void drop_prompt(void)
     int n=msgcat(0,"Drop-"); n=msgcat(n,dn); msgcat(n,"\nLocation: ");
 }
 /* a spell number (quality of object 58) joins the known set; 255 = every spell (§4) */
-static void spell_learn(int q){
-    for(int s=0;s<SPELL_COUNT;s++) if(q==255 || magic_spell_num(s)==q) g_known[s]=1;
-}
+/* the page's spells: one set, or the books the one played has readied (DOS joins both hands') */
+static void known_from(int s1,int s2){ if(g_magic_demo) return; for(int s=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s); g_known[s]=(uint8_t)(book_has(s1,q)||book_has(s2,q)); } }
+static void known_refresh(void){ known_from(g_abook[1][0],g_abook[1][1]); }
+/* a parchment goes into the leader's readied book, else the first it carries */
+static int book_target(void){ if(g_abook[1][0]) return g_abook[1][0]; if(g_abook[1][1]) return g_abook[1][1];
+    for(int pass=0;pass<2;pass++) for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n==57 && (pass||(g_ow.inv[r].owner?g_ow.inv[r].owner:1)==1)){ if(!g_ow.inv[r].quality) g_ow.inv[r].quality=(uint8_t)book_new(); return g_ow.inv[r].quality; }
+    return 0; }
 /* does the known set hold spell number q already? (255: every spell) */
-static int spell_known(int q){
-    for(int s=0;s<SPELL_COUNT;s++) if(q==255 ? !g_known[s] : (magic_spell_num(s)==q && g_known[s])) return q!=255;
-    return q==255;
-}
 /* ---- M)ove from the pack: a spell into the spellbook held, readied or not (magic_skills.md §4) ---- */
 static void move_prompt(void)
 {
@@ -6730,9 +6756,9 @@ static void move_pack_item(void)
     if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) return;
     int on=g_ow.inv[g_inv_sel].obj_n, q=g_ow.inv[g_inv_sel].quality;
     if(on!=58){ char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn); int n=msgcat(0,"Move-"); msgcat(n,dn); g_next_verb='W'; g_tcur_dx=g_tcur_dy=0; return; }   /* "To ": another of the party */
-    if(objworld_count(&g_ow,57)<=0 && !book_readied()){ msgcat(0,"Not possible"); return; }
-    if(spell_known(q)){ msgcat(0,"The spellbook already has this spell."); return; }
-    spell_learn(q);
+    { int set=book_target(); if(!set){ msgcat(0,"Not possible"); return; }
+      if(book_has(set,q)){ msgcat(0,"The spellbook already has this spell."); return; }
+      book_add(set,q); known_refresh(); }
     if(g_ow.inv[g_inv_sel].qty>1) g_ow.inv[g_inv_sel].qty--;
     else { for(int k=g_inv_sel;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; }
     msgcat(0,"The spell goes into the spellbook."); g_verb_pts=5;
@@ -6801,7 +6827,9 @@ static void equip_to_member(int pi)
     int a=g_party[pi].actor; if(a<0||a>=U6_MAX_ACTORS) return;
     int on=g_ow.inv[g_inv_sel].obj_n;
     char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
+    int bset=g_ow.inv[g_inv_sel].quality;
     int r=equip_ready(g_aready[a], on);
+    if(on==57 && r>=0) g_abook[a][r==EQ_ARM2?1:0]=(uint8_t)bset;
     if(r==EQUIP_ENOTREADIABLE){ msgcat(0,"Thou canst not ready that!"); return; }
     if(r==EQUIP_EFULL){ int n=msgcat(0,g_party[pi].name); msgcat(n," cannot wear more of those."); return; }
     pack_row_take(g_inv_sel,1);                        /* one leaves its carrier's pack */
@@ -6816,6 +6844,7 @@ static int equip_take_off(int a, int slot)
     if(slot>=0 && slot<EQ_NSLOTS && g_aready[a][slot]==76){ msgcat(0,"Magical energy prevents you from removing the amulet."); return 1; }   /* equipment.md §8 */
     int on=equip_unready(g_aready[a], slot);
     if(!on) return 0;
+    if(on==57){ int i2=slot==EQ_ARM2?1:0, st=g_abook[a][i2]; g_abook[a][i2]=0; g_cg.player_objq[57]=(uint8_t)st; g_add_to=a; inv_add_objn(57,1); g_add_to=1; g_cg.player_objq[57]=0; equip_refold(a); return 1; }
     ready_fx_off(a,on);
     if(on==90 && g_torch_fuel[a]){ g_torch_fuel[a]=0; equip_refold(a); msgcat(0,"A torch burned out."); return 1; }   /* a lit torch taken off is used up (usecode_use.md) */
     g_add_to=a; inv_add_objn(on,1); g_add_to=1;
@@ -6941,15 +6970,18 @@ static void draw_panel_buttons(int inv)
         ui_text(0x100+(56-ui_textw(cm[m-2]))/2,PTXT_Y(11),cm[m-2],C_BLACK); } }
 static void iv_weight(int x,int y,int w10,int cap)
 {   char b[16]; char*e=u_num(b,(w10+5)/10); *e++='/'; e=u_num(e,cap); *e++='s'; *e=0; ui_text(x,y,b,C_BLACK); }
+/* the figure and what is readied on it; the things keep their places relative to the figure */
+static void draw_doll(int a,int fx,int fy)
+{   blit_tile(fx,fy,0x170,1); blit_tile(fx+16,fy,0x171,1); blit_tile(fx,fy+16,0x172,1); blit_tile(fx+16,fy+16,0x173,1);
+    for(int sl=0;sl<EQ_NSLOTS;sl++){ int x=IV_SLOT[sl][0]+fx-0xc0, y=IV_SLOT[sl][1]+fy-0x20; blit_tile(x,y,0x19a,1);
+        if(g_aready[a][sl]) blit_tile(x,y,basetile(g_aready[a][sl]),1); } }
 static void draw_inventory(uint8_t col)
 {
     (void)col;
     int a=g_status_actor; if(a<1||a>=U6_MAX_ACTORS) a=g_nparty?g_party[0].actor:1;
     const char*nm=g_party[member_index(a)].name; if(!nm[0]) nm="?";
     ui_text(PANX+(PANW-ui_textw(nm))/2, PTXT_Y(0), nm, C_BLACK);
-    blit_tile(0xc0,0x20,0x170,1); blit_tile(0xd0,0x20,0x171,1); blit_tile(0xc0,0x30,0x172,1); blit_tile(0xd0,0x30,0x173,1);   /* the figure */
-    for(int sl=0;sl<EQ_NSLOTS;sl++){ int x=IV_SLOT[sl][0], y=IV_SLOT[sl][1]; blit_tile(x,y,0x19a,1);
-        if(g_aready[a][sl]) blit_tile(x,y,basetile(g_aready[a][sl]),1); }
+    draw_doll(a,0xc0,0x20);
     if(g_atile[a]!=0xffff) blit_tile(0x110,0x10,g_atile[a],1);
     { int per=IVG_COLS*IVG_ROWS, armed=(g_pending_verb=='D'||g_pending_verb=='E'||(g_pending_verb=='U'&&g_use_pack)||(g_pending_verb=='M'&&g_move_pack)||(g_pending_verb=='L'&&g_look_pack));
       if(armed && g_inv_sel>=0 && g_inv_sel<g_ow.ninv){ int o=g_ow.inv[g_inv_sel].owner?g_ow.inv[g_inv_sel].owner:1; if(o!=a && is_party_member(o)){ a=o; g_status_actor=o; } }   /* the view follows the armed thing */
@@ -7031,13 +7063,16 @@ static void look_view(int id,int thing,const char*cap)
     if(!thing && id>=224){ int on=actor_objn(id); a=on==373?192:on==382?193:on==363?194:0; }
     if(!thing && actor_real(a)==1 && g_cc_face_ok) face=g_cc_face;
     else if(a>0 && portrait_for_actor(thing?a:actor_real(a),g_statface)) face=g_statface;
-    if(!face && !thing) return;
+    int dressed=0;                                     /* DOS leaves two types out of this test (usecode_use.md) */
+    if(!thing) for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[id][sl] && g_aready[id][sl]!=336 && g_aready[id][sl]!=337) dressed=1;
+    if(!face && !dressed && !thing) return;
     if(!thing && (id==1||is_party_member(id))) actor_name(id,nm,sizeof nm);
     else if(!thing && id<256 && g_cg.talk_flags[id] && conv_name(id,nm,sizeof nm)) { }
     else { int o=0; while(cap[o]&&o<31){ nm[o]=cap[o]; o++; } nm[o]=0; }
-    int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
+    int pxx=dressed?0xf8:0xd8, pyy=0x18;
     restore_panel();
     if(face) draw_portrait_buf(face,pxx,pyy);
+    if(dressed) draw_doll(id,face?0xc0:0xe0,0x28);
     ui_text(PANX+(PANW-ui_textw(nm))/2, pyy+PH+4, nm, C_BLACK);
     ui_text_wrap(PANX, MSGY, PANW, g_msg, 9, C_BLACK);
     rdr_present_doubled(LH);
@@ -7267,6 +7302,7 @@ static int nearest_party(const world_t*w,int x,int y,int*tx,int*ty,int*tid){
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, ax,ay;
         if(a==1){ ax=(int)w->px; ay=(int)w->py; }
         else { if(!actor_pos(a,&ax,&ay)) continue; if(g_ahp[a]==0) continue; }
+        if(g_dragged[a]) continue;                       /* out of reach under a corpser */
         int cx=ax>x?ax-x:x-ax, cy=ay>y?ay-y:y-ay, d=cx>cy?cx:cy;
         if(d<bd){ bd=d; bx=ax; by=ay; bid=a; }
     }
@@ -7341,7 +7377,44 @@ static int weapon_spend(int a,int on,int spare_first);
 static void glass_shatters(int att,int wobj){ if(wobj==48 && weapon_spend(att,48,0)){ int n=msg_tail(); msgcat(n,"Thy sword hath shattered!"); } }
 /* att strikes def with wobj; rolled = the hit roll was made (and hit) by the caller, on a shot */
 static int g_blows;                     /* the foes' blows struck (ATTACK.REQ's turn check) */
+/* what some creatures' blows do besides the wound (combat.md §3e) */
+static int touch_list(int on,const uint16_t*l){ for(;*l;l++) if(*l==on) return 1; return 0; }
+static int touch_take(int def,const uint16_t*l,char*out,int cap){     /* a random thing of the list, carried or readied, gone. 1 = found */
+    int n=0, row=-1, slot=-1;
+    for(int i=0;i<g_ow.ninv;i++) if((g_ow.inv[i].owner?g_ow.inv[i].owner:1)==def && touch_list(g_ow.inv[i].obj_n,l)){
+        n++; if(rng_range(&g_crng,n)==0){ row=i; slot=-1; } }
+    for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[def][sl] && touch_list(g_aready[def][sl],l)){
+        n++; if(rng_range(&g_crng,n)==0){ row=-1; slot=sl; } }
+    if(!n) return 0;
+    int on=slot>=0?g_aready[def][slot]:g_ow.inv[row].obj_n;
+    obj_name(basetile(on),out,cap);
+    if(slot>=0){ g_aready[def][slot]=0; ready_fx_off(def,on); if(on==90) g_torch_fuel[def]=0; equip_refold(def); }
+    else { if(g_ow.inv[row].qty>1) g_ow.inv[row].qty--; else { for(int k=row;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; } }
+    return 1; }
+static void creature_touch(int att,int def){
+    static const uint16_t DISSOLVES[]={2,3,4,5,7,10,11,12,13,15,19,20,21,22,35,38,43,113,114,0}, ROBS[]={128,129,130,131,132,133,135,209,210,211,0};
+    int on=actor_objn(att), n=msg_tail(); char dn[24], it[24];
+    if(att<0x100 && g_ahp[def]==0) return;
+    actor_name(def,dn,sizeof dn);
+    if(on==357){ sfx_play(9,0); n=msgcat(n,dn); msgcat(n," dragged under!"); g_dragged[def]=1; }
+    else if(on==364){ if(touch_take(def,DISSOLVES,it,sizeof it)){ sfx_play(11,0); n=msgcat(n,"A slug dissolves "); n=msgcat(n,dn); n=msgcat(n,"'s "); n=msgcat(n,it); msgcat(n,"!"); } }
+    else if(on==353){ if(touch_take(def,ROBS,it,sizeof it)){ sfx_play(12,0); n=msgcat(n,dn); msgcat(n," has been robbed!"); } }
+    if((on==342||on==360||on==426||on==413||on==375||on==358||on==361||on==345) && rng_range(&g_crng,4)==0){
+        n=msg_tail(); n=msgcat(n,dn); msgcat(n," poisoned!"); g_poison[def]=255; } }
+/* its turn under the corpser. 1 = the turn is spent */
+static int dragged_turn(int a){
+    if(!g_dragged[a]) return 0;
+    char dn[24]; actor_name(a,dn,sizeof dn); int n=msg_tail();
+    if((int)rng_range(&g_crng,30)+1<(g_astr[a]?g_astr[a]:10)){ sfx_play(10,0); n=msgcat(n,dn); msgcat(n," regurgitated!"); g_dragged[a]=0; return 1; }
+    n=msgcat(n,dn); msgcat(n,": ARGH!");
+    { int d=(int)rng_range(&g_crng,15)+1, hp=g_ahp[a]; g_ahp[a]=(uint8_t)(d>=hp?0:hp-d); if(g_ahp[a]==0) g_dragged[a]=0; sync_party_hp(); }
+    return 1; }
+static void swing_sound(const world_t*w,int att){   /* a blow struck near the party */
+    int ax,ay; if(!w||!actor_pos(att,&ax,&ay)) return;
+    int M=U6_SURFACE_TILES-1, ox=(ax-(int)w->px)&M, oy=(ay-(int)w->py)&M; if(ox>512) ox-=1024; if(oy>512) oy-=1024; if(ox<0) ox=-ox; if(oy<0) oy=-oy;
+    if(ox<6&&oy<6) sfx_play(17,0); }
 static void enemy_strike(int att,int def,int wobj,int rolled){ g_act_cost=10; g_blows++;
+    if(!rolled) swing_sound(g_wp,att);
     if(veh_aboard()){                                        /* the party is in a vessel (cannons.md §2) */
         if(g_veh_kind==412){ ship_struck(att); return; }     /* a ship takes the blow on its hull */
         if(g_veh_kind==423) return;                          /* the balloon cannot be hit */
@@ -7365,6 +7438,7 @@ static void enemy_strike(int att,int def,int wobj,int rolled){ g_act_cost=10; g_
     if(g_ahp[def]==0){ n=msgcat(n," kills "); n=msgcat(n,dn); msgcat(n,"!"); }
     else            { n=msgcat(n," hits ");  n=msgcat(n,dn); msgcat(n,"!"); }
     sync_party_hp();
+    if(g_ahp[def]) creature_touch(att,def);
     glass_shatters(att,wobj);
 }
 static int actor_max_mana(int i)
@@ -7532,6 +7606,7 @@ static int lord_british_actor(void){ for(int a=2;a<160;a++) if(g_atile[a]!=0xfff
 /* a party member strikes a foe (CB4 combat mode): like the player's attack — readied weapon
  * vs the foe's armour, removes a slain foe + grants the avatar experience (§3). */
 static void party_strike(int att,int def,int wobj,int rolled){ g_act_cost=10;
+    if(!rolled) swing_sound(g_wp,att);
     char nm[24]; obj_name(npc_tile(def),nm,sizeof nm);
     if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
     int wmax=blow_max(att,wobj,def);
@@ -7769,6 +7844,7 @@ static int obj_hit(const world_t*w,int oi,int dmg){
 }
 /* flies a missile from (sx,sy) at (tx,ty) along the line (§6b), drawn with tile mis in the view if it isn't 0; it
  * stops ON a missile boundary. (lx,ly) = where it lands */
+static int g_spell_fx;                                   /* a spell's missile sounds as DOS has it (sound_effects.md) */
 static void missile_fly(const world_t*w,int sx,int sy,int tx,int ty,int mis,int*lx,int*ly){
     int M=U6_SURFACE_TILES-1, fx=sx, fy=sy, ddx=tx-sx, ddy=ty-sy;
     if(ddx>512) ddx-=1024; if(ddx<-512) ddx+=1024; if(ddy>512) ddy-=1024; if(ddy<-512) ddy+=1024;
@@ -7778,7 +7854,7 @@ static void missile_fly(const world_t*w,int sx,int sy,int tx,int ty,int mis,int*
         fx=cx; fy=cy;
         if(missile_boundary_at(w,cx,cy)) break;                      /* it stops at the boundary tile */
         if(mis){ int vx=(cx-(int)w->px)&M, vy=(cy-(int)w->py)&M; if(vx>512) vx-=1024; if(vy>512) vy-=1024;
-            if(vx>=-VT/2&&vx<=VT/2&&vy>=-VT/2&&vy<=VT/2) fx_show(w,cx,cy,mis,2); } }
+            if(vx>=-VT/2&&vx<=VT/2&&vy>=-VT/2&&vy<=VT/2){ sfx_play(g_spell_fx?16:5,steps); fx_show(w,cx,cy,mis,2); } } }
     g_fx_last_dist=steps;
     *lx=fx; *ly=fy; }
 static int missile_reaches(const world_t*w,int x0,int y0,int x1,int y1){ int lx,ly,keep=g_fx_last_dist; missile_fly(w,x0,y0,x1,y1,0,&lx,&ly); g_fx_last_dist=keep; return lx==x1&&ly==y1; }
@@ -8634,7 +8710,9 @@ static void foe_damage(int att,int def,int dmg,const char*verb){
 static void foe_fire(int att,int def){ int f=monster_flags(actor_objn(def)); if(f&MF_FIRE_IMMUNE) return;
     int d=1+(int)rng_range(&g_crng,20); if(f&MF_DOUBLE_FIRE) d*=2; foe_damage(att,def,d," burns "); }
 /* the monster `i` casts U6 spell `sp` at target actor tid on (tx,ty) (the reference's scripts, monster as caster) */
-static void foe_spell(const world_t*w,int i,int sp,int tid,int tx,int ty){
+static void foe_spell_do(const world_t*w,int i,int sp,int tid,int tx,int ty);
+static void foe_spell(const world_t*w,int i,int sp,int tid,int tx,int ty){ g_spell_fx=1; foe_spell_do(w,i,sp,tid,tx,ty); g_spell_fx=0; }
+static void foe_spell_do(const world_t*w,int i,int sp,int tid,int tx,int ty){
     int x=g_actx[i], y=g_acty[i], span=(w->level==0)?U6_SURFACE_TILES:256;
     int dx=tx>x?1:(tx<x?-1:0), dy=ty>y?1:(ty<y?-1:0);
     { char an[24]; obj_name(npc_tile(i),an,sizeof an); if(!an[0]){ an[0]='f'; an[1]='o'; an[2]='e'; an[3]=0; }
@@ -8936,7 +9014,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
         else { int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
             if(!can_put_obj(w,tx,ty) || temp_obj_new(g_vanish_obj,g_vanish_frame,tx,ty,0)<0){ msgcat(0,"No effect"); applied=0; }
             else { g_vanish_obj=0; g_vanish_frame=0; build_blocked(); msgcat(0,"Success"); recompose=1; } }
-    } else if(!strcmp(nm,"Repel Undead")||!strcmp(nm,"Tremor")||!strcmp(nm,"Wing Strike")||!strcmp(nm,"Slime")){   /* everyone within 5 (4 for the wing) of the player (§5f) */
+    } else if(!strcmp(nm,"Repel Undead")||!strcmp(nm,"Tremor")||!strcmp(nm,"Wing Strike")||!strcmp(nm,"Slime")){ if(!strcmp(nm,"Tremor")) sfx_play(8,0);   /* everyone within 5 (4 for the wing) of the player (§5f) */
         int foes=0, wing=!strcmp(nm,"Wing Strike"), lim=wing?4:5; g_msg[0]=0;
         for(int i=2;i<U6_MAX_ACTORS;i++){ if(is_party_member(i)) continue; int ax,ay; if(!actor_pos(i,&ax,&ay)) continue;
             int cx=ax-(int)w->px, cy=ay-(int)w->py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; if(cx>lim||cy>lim) continue;
@@ -9009,6 +9087,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             else if(!strcmp(nm,"Hail Storm")){ int stones=10+(int)rng_range(&g_crng,20);
                 for(int st=0;st<stones;st++){ int ox=(int)rng_range(&g_crng,30)+(int)rng_range(&g_crng,30)-23, oy=(int)rng_range(&g_crng,30)+(int)rng_range(&g_crng,30)-23;
                     int tx=(cx+(ox>=0?ox>>4:-((15-ox)>>4)))&(span-1), ty=(cy+(oy>=0?oy>>4:-((15-oy)>>4)))&(span-1);
+                    sfx_play(7,sfx_rand(100,1000));
                     int id=(tx==(int)w->px&&ty==(int)w->py)?1:npc_at(w,tx,ty); if(id>=0) spell_damage(caster,id,1); }
                 { int n=msg_tail(); msgcat(n,"Success"); } }
             else if(!strcmp(nm,"Web")){ int put=0;
@@ -9082,6 +9161,7 @@ static int spell_needs_target(int spell){ return spell_prompt(spell)!=0; }
 static void open_cast_menu(void){
     if(g_storm){ msgcat(0,"No magic at this time!"); return; }   /* the magical storm (Negate Magic / the cloak; §5f) */
     if(!g_magic_demo && !book_readied()){ msgcat(0,"No spellbook is readied."); return; }
+    known_refresh();
     if(g_cast_sel<0 || !g_known[g_cast_sel]){
         g_cast_sel=-1;
         for(int s=0;s<SPELL_COUNT;s++) if(g_known[s]){ g_cast_sel=s; break; }
@@ -9089,7 +9169,7 @@ static void open_cast_menu(void){
     g_casting=1; g_inlen=0; g_inbuf[0]=0; g_show_inv=0; g_pending_verb=0; msgcat(0,"Cast-");
 }
 static void spell_words(int sp,char*out,int cap);
-static void close_cast_menu(void){ g_casting=0; g_enchant_mode=0; g_book_read=0; g_inlen=0; g_inbuf[0]=0; g_cast_undraw=1; }
+static void close_cast_menu(void){ if(g_book_read) known_refresh(); g_casting=0; g_enchant_mode=0; g_book_read=0; g_inlen=0; g_inbuf[0]=0; g_cast_undraw=1; }
 /* L)ook at the book: the same page, to read (usecode_use.md) */
 static void open_book_page(void){
     if(g_cast_sel<0 || !g_known[g_cast_sel]){ g_cast_sel=-1;
@@ -9137,9 +9217,9 @@ static void spell_words(int sp,char*out,int cap)        /* "In Lor": a capital t
 static void cast_header(int sp)
 {   char wd[40]; int o=0; const char*q=g_spells[sp].name; spell_words(sp,wd,sizeof wd);
     while(*q&&o<40) g_cast_hdr[o++]=*q++;
-    g_cast_hdr[o++]='\n'; g_cast_hdr[o++]='"'; for(q=wd;*q&&o<61;q++) g_cast_hdr[o++]=*q; g_cast_hdr[o++]='"'; g_cast_hdr[o]=0; }
+    g_cast_hdr[o++]='\n'; g_cast_hdr[o++]='"'; for(q=wd;*q&&o<61;q++) g_cast_hdr[o++]=*q; g_cast_hdr[o++]='"'; g_cast_hdr[o]=0; g_spell_fx=1; }
 static void cast_finish(const char*echo)
-{   static char res[sizeof g_msg]; int o=0; const char*q=g_msg; while(*q&&o<(int)sizeof res-1) res[o++]=*q++; res[o]=0;
+{   g_spell_fx=0; static char res[sizeof g_msg]; int o=0; const char*q=g_msg; while(*q&&o<(int)sizeof res-1) res[o++]=*q++; res[o]=0;
     int n=0; g_msg[0]=0;
     if(g_cast_hdr[0]) n=msgcat(0,g_cast_hdr);
     if(echo&&echo[0]){ if(n) n=msgcat(n,"\n"); n=msgcat(n,echo); }
@@ -9553,6 +9633,22 @@ static int do_rest(world_t *w)
  * level (a surface record in its super-chunk, a dungeon record in its level chunk). Order matters:
  * a record flipped by an earlier step is what a later step looks for. Runs before every level
  * switch and every S)ave. Returns the number of records patched. */
+static int reconcile_new(uint8_t*d,int32_t*np,int32_t surf,int lv,int wait_drop)
+{   int32_t n=*np; int patched=0;
+    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
+        if(o->dirty!=WOBJ_DIRTY_NEW) continue;
+        if(wait_drop && o->parent!=WOBJ_PARENT_NONE && o->parent<g_ow.nobjs && g_wobj[o->parent].dirty==WOBJ_DIRTY_DROPPED) continue;   /* a dropped book's spells: once it has its map record */
+        if(g_wtemp[i>>3]&(1u<<(i&7))){ o->dirty=0; continue; }
+        int fr=(int)o->tile-basetile(o->obj_n); if(fr<0||fr>63) fr=0;
+        int q=(int)o->qty, ql=o->quality; if(is_stackable(o->obj_n)){ ql=(q>>8)&0xff; q&=0xff; }
+        int32_t nn=-1;
+        if(o->alive && o->parent==WOBJ_PARENT_NONE) nn=sav_insert_onmap(d,n,g_savetmpl_cap,surf,lv,o->x,o->y,o->obj_n,fr,q,ql,0x01);
+        else if(!o->alive && o->parent!=WOBJ_PARENT_NONE && o->parent<g_ow.nobjs){ int32_t hc; int hk;
+            if(rec_locate(o->parent,&hc,&hk,0)) nn=sav_insert_child(d,n,g_savetmpl_cap,hc,hk,o->obj_n,fr,q,ql); }
+        if(nn>0){ *np=nn; n=nn; g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(d,nn); o->dirty=(uint8_t)(o->alive?WOBJ_DIRTY_STATE:0); patched++; }
+        else { o->dirty=0; g_wtemp[i>>3]|=(uint8_t)(1u<<(i&7)); }      /* no room / no holder record: it stays a runtime object */
+    }
+    return patched; }
 static int objects_reconcile(const world_t *w)
 {
     if(!g_savetmpl) return 0;
@@ -9579,18 +9675,7 @@ static int objects_reconcile(const world_t *w)
         o->dirty=0; }
     /* 0b) NEW objects (save_load.md §5): a kept creation gets its record appended — on the map in the chunk of
      *     this level and its tile; a contained one (a spell's trap) under its holder's record */
-    for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
-        if(o->dirty!=WOBJ_DIRTY_NEW) continue;
-        if(g_wtemp[i>>3]&(1u<<(i&7))){ o->dirty=0; continue; }
-        int fr=(int)o->tile-basetile(o->obj_n); if(fr<0||fr>63) fr=0;
-        int q=(int)o->qty, ql=o->quality; if(is_stackable(o->obj_n)){ ql=(q>>8)&0xff; q&=0xff; }
-        int32_t nn=-1;
-        if(o->alive && o->parent==WOBJ_PARENT_NONE) nn=sav_insert_onmap(d,n,g_savetmpl_cap,surf,lv,o->x,o->y,o->obj_n,fr,q,ql,0x01);
-        else if(!o->alive && o->parent!=WOBJ_PARENT_NONE && o->parent<g_ow.nobjs){ int32_t hc; int hk;
-            if(rec_locate(o->parent,&hc,&hk,0)) nn=sav_insert_child(d,n,g_savetmpl_cap,hc,hk,o->obj_n,fr,q,ql); }
-        if(nn>0){ n=nn; g_savetmpl_len=nn; g_objlist_off=sav_objlist_off(d,nn); o->dirty=(uint8_t)(o->alive?WOBJ_DIRTY_STATE:0); patched++; }
-        else { o->dirty=0; g_wtemp[i>>3]|=(uint8_t)(1u<<(i&7)); }      /* no room / no holder record: it stays a runtime object */
-    }
+    patched+=reconcile_new(d,&n,surf,lv,1);
     /* 1) taken items (!alive): flip the on-map / in-container record to in-inventory, owner = the Avatar */
     for(int i=0;i<g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i];
         if(!o->dirty || o->alive) continue;
@@ -9626,6 +9711,7 @@ static int objects_reconcile(const world_t *w)
         int src=(o->origin!=WOBJ_PARENT_NONE && (o->origin&0x8000))?(o->origin&0x7fff):o->obj_n;   /* placed from a record of another type? */
         if(sav_drop_item(d, n, src, o->quality, o->x, o->y, lv, frame, (src!=o->obj_n)?o->obj_n:-1, in_party, U6_MAX_ACTORS)>0){
             o->dirty=WOBJ_DIRTY_STATE; o->origin=WOBJ_PARENT_NONE; patched++; } }
+    patched+=reconcile_new(d,&n,surf,lv,0);
     return patched;
 }
 /* Absorb the party's inventories from a save buffer's actor-inventory chunk into the live model
@@ -9651,6 +9737,9 @@ static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only)
         for(int sl = 0; sl < EQ_NSLOTS; sl++) g_aready[only][sl] = 0; g_pooled[only] = 1; }
     const uint8_t *inv = d + iv; int cnt = inv[0] | (inv[1] << 8);
     const uint8_t *rec = inv + 2;
+    if(only < 0){ for(int i=0;i<BOOK_SETS;i++) g_bookused[i]=0; for(int i=0;i<U6_MAX_ACTORS;i++) g_abook[i][0]=g_abook[i][1]=0; }
+    static int16_t bookrec[BOOK_SETS]; static uint8_t bookrs[BOOK_SETS]; int nbr=0;      /* each book record's spell set */
+    if(iv + 2 + (int32_t)cnt*8 <= n) for(int o = 0; o < cnt && nbr < BOOK_SETS; o++){ const uint8_t *b = rec + o*8; if((b[4] | ((b[5] & 3) << 8)) == 57){ bookrec[nbr]=(int16_t)o; bookrs[nbr]=(uint8_t)book_new(); nbr++; } }
     if(iv + 2 + (int32_t)cnt*8 <= n) for(int o = 0; o < cnt; o++){
         const uint8_t *b = rec + o*8;
         int loc = b[0] & 0x18, hops = 0;
@@ -9666,21 +9755,23 @@ static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only)
         int on = b[4] | ((b[5] & 3) << 8);
         int direct = (cur == b);
         if(direct && loc == 0x18){                            /* readied on the holder itself */
-            (void)equip_ready(g_aready[owner], on);
+            { int rs=equip_ready(g_aready[owner], on);
+              if(on == 57 && rs >= 0) for(int bi=0;bi<nbr;bi++) if(bookrec[bi]==o) g_abook[owner][rs==EQ_ARM2?1:0]=bookrs[bi]; }
             if(on == 90 && ((b[5] >> 2) & 0x3f) == 1) g_torch_fuel[owner] = b[6] ? b[6] : 1;   /* a lit torch relights with its fuel */
             if(on == 258) g_ainvis[owner] = 2;                    /* a worn invisibility ring hides its wearer at once (equipment.md §8) */
             continue; }
         if(on == 223 && ((b[5] >> 2) & 0x3f) == 1){ g_keg_carried = 1; continue; }   /* a lit keg: the carried fuse, not a pack item */
         if(on == 88){ int q = (b[7] << 8) | b[6]; g_cg.gold += q; continue; }   /* coins -> the gold pool */
         if(on == 58 && !direct){                              /* a spell in the spellbook -> known; a carried one is a parchment */
-            const uint8_t *hb = rec + ((((((b[2] >> 2) | ((b[3] & 0xf) << 6)) & 0x3f) << 10) | (b[1] | ((b[2] & 3) << 8))))*8;
+            int hl = ((((b[2] >> 2) | ((b[3] & 0xf) << 6)) & 0x3f) << 10) | (b[1] | ((b[2] & 3) << 8));
+            const uint8_t *hb = rec + hl*8;
             if((hb[4] | ((hb[5] & 3) << 8)) == 57){
-                int q = b[7];
-                for(int sp = 0; sp < SPELL_COUNT; sp++) if(q == 255 || magic_spell_num(sp) == q) g_known[sp] = 1;
+                for(int bi=0;bi<nbr;bi++) if(bookrec[bi]==hl) book_add(bookrs[bi],b[7]);
                 continue; } }
         { invitem_t it; it.owner = (uint8_t)owner; it.obj_n = (uint16_t)on; it.tile = (uint16_t)(basetile(on) + ((b[5] & 0xfc) >> 2));
           if(is_stackable(on)){ int q = (b[7] << 8) | b[6]; it.qty = (uint16_t)(q ? q : 1); it.quality = 0; }
           else { it.qty = b[6] ? b[6] : 1; it.quality = b[7]; }
+          if(on == 57){ it.qty = 1; it.quality = 0; for(int bi=0;bi<nbr;bi++) if(bookrec[bi]==o) it.quality=bookrs[bi]; }
           int done = 0;
           for(int k = 0; k < g_ow.ninv; k++) if(g_ow.inv[k].obj_n == it.obj_n && g_ow.inv[k].quality == it.quality && g_ow.inv[k].owner == it.owner){
               g_ow.inv[k].qty = (uint16_t)(g_ow.inv[k].qty + it.qty); done = 1; break; }
@@ -9694,6 +9785,10 @@ static void pool_from_inventory(const uint8_t *d, int32_t n, int32_t ol){ pool_a
  * non-stackable stack as up to 8 single records), the gold as coins, the spellbook with one spell
  * record per known spell as its contents (links relative to the first record). Returns the count. */
 #define PARTY_REC_MAX 640
+static int book_children(uint8_t *out,int nr,int set,int book)   /* contents of the book: link = its index */
+{   for(int sp = 0; sp < SPELL_COUNT && nr < PARTY_REC_MAX; sp++){ int q = magic_spell_num(sp); if(q < 0 || !book_has(set,q)) continue;
+        sav_encode_record(out + 8*nr++, 0x09, book & 0x3ff, (book >> 10) & 0x3f, 0, 58, 0, 0, q); }
+    return nr; }
 static int build_party_records(uint8_t *out)
 {
     int nr = 0, book = -1;
@@ -9701,13 +9796,14 @@ static int build_party_records(uint8_t *out)
         if(!g_pooled[a]) continue;
         for(int sl = 0; sl < EQ_NSLOTS && nr < PARTY_REC_MAX; sl++) if(g_aready[a][sl]){
             int fr = 0, q = 0; if(g_aready[a][sl] == 90 && g_torch_fuel[a]){ fr = 1; q = g_torch_fuel[a]; }   /* a lit torch: frame 1 + fuel (usecode_use.md) */
-            if(g_aready[a][sl] == 57 && book < 0) book = nr;      /* the readied book holds the spells */
-            sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], fr, q, 0); } }
+            int bs = g_aready[a][sl] == 57 ? g_abook[a][sl==EQ_ARM2?1:0] : 0; book = nr;
+            sav_encode_record(out + 8*nr++, 0x19, a, 0, 0, g_aready[a][sl], fr, q, 0);
+            nr = book_children(out, nr, bs, book); } }
     if(g_keg_carried && nr < PARTY_REC_MAX) sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 223, 1, 1, 0);   /* a lit keg in the pack: frame 1 (usecode_use.md) */
     for(int k = 0; k < g_ow.ninv && nr < PARTY_REC_MAX; k++){ const invitem_t *it = &g_ow.inv[k]; int own = it->owner ? it->owner : 1;
         int on = it->obj_n, fr = (int)it->tile - basetile(on); if(fr < 0 || fr > 63) fr = 0;
-        if(g_wko.spellbook && on == g_wko.spellbook && book < 0 && own == 1){ book = nr;
-            sav_encode_record(out + 8*nr++, 0x11, own, 0, 0, on, fr, 0, 0); continue; }
+        if(g_wko.spellbook && on == g_wko.spellbook){ book = nr;
+            sav_encode_record(out + 8*nr++, 0x11, own, 0, 0, on, fr, 0, 0); nr = book_children(out, nr, it->quality, book); continue; }
         if(is_stackable(on)){ int q = it->qty > 65535 ? 65535 : it->qty;
             sav_encode_record(out + 8*nr++, 0x11, own, 0, 0, on, fr, q & 0xff, q >> 8); }
         else { int copies = it->qty < 1 ? 1 : (it->qty > 8 ? 8 : it->qty);
@@ -9715,10 +9811,6 @@ static int build_party_records(uint8_t *out)
                 sav_encode_record(out + 8*nr++, 0x11, own, 0, 0, on, fr, 0, it->quality); } }
     if(g_cg.gold > 0 && nr < PARTY_REC_MAX){ int q = g_cg.gold > 65535 ? 65535 : g_cg.gold;
         sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 88, 0, q & 0xff, q >> 8); }
-    for(int sp = 0; sp < SPELL_COUNT && nr < PARTY_REC_MAX; sp++) if(g_known[sp]){
-        int q = magic_spell_num(sp); if(q < 0) continue;      /* contents of the book: link = its index */
-        if(book >= 0) sav_encode_record(out + 8*nr++, 0x09, book & 0x3ff, (book >> 10) & 0x3f, 0, 58, 0, 0, q);
-        else sav_encode_record(out + 8*nr++, 0x11, 1, 0, 0, 58, 0, 0, q); }   /* no book held: carried, so a dropped book loses nothing (§4) */
     return nr;
 }
 
@@ -10097,6 +10189,7 @@ static void avatar_death(world_t*w){
     if(g_cg.karma<98){ int k=g_cg.karma<0?0:g_cg.karma; g_aexp[1]=(uint16_t)(((uint32_t)g_aexp[1]*(uint32_t)k)/100u); }
     g_combat_mode=0; g_pending_verb=0; g_show_inv=0; if(g_talking) end_talk();
     sync_party_hp(); build_blocked(); moongates_update(w);
+    memset(g_dragged,0,sizeof g_dragged); sfx_play(21,0);
     msgcat(0,"An unending darkness engulfs thee...  A voice in the darkness intones, \"KAL LOR!\""); }
 /* once a turn: companions at 0 HP die, the Avatar at 0 HP is resurrected; 1 = the view changed */
 static int party_deaths(world_t*w){
@@ -11392,7 +11485,7 @@ static void bot_report(const world_t*w)
     n=bot_put(n," verb="); { char v[2]={(char)(g_pending_verb?g_pending_verb:'-'),0}; n=bot_put(n,v); }
     n=bot_kv(n,"cx",g_tcur_dx); n=bot_kv(n,"cy",g_tcur_dy);
     n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
-    { int sp=0; for(int s=0;s<SPELL_COUNT;s++) sp+=g_known[s]; n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58)); }
+    { int sp=0; for(int s=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s), has=g_magic_demo?g_known[s]:0; for(int b=0;b<BOOK_SETS&&!has;b++) if(g_bookused[b]&&book_has(b+1,q)) has=1; sp+=has; } n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58)); }
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"more",g_msg_more); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
     n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",g_cg.gold); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
@@ -11479,7 +11572,7 @@ static int first_start(void)
     int g = fr_detect_game();
     if (g == FR_NONE) {
         Cconws("\r\n No game data here.\r\n\r\n Copy the files of your DOS\r\n Ultima VI, Savage Empire or\r\n"
-               " Martian Dreams to this folder,\r\n then start the game again.\r\n\r\n Press a key.\r\n");
+               " Martian Dreams to this folder, or\r\n your ST Ultima VI disks to a folder\r\n named ST here, then start the game\r\n again.\r\n\r\n Press a key.\r\n");
         Crawcin(); return 1; }
     if (!fr_exists("CONVERT.TOS")) {
         Cconws("\r\n CONVERT.TOS is missing from this\r\n folder: it turns your DOS files\r\n"
@@ -13342,6 +13435,44 @@ int main(int argc, char **argv)
                 int c1=pack_count(du,90), rows0=g_ow.ninv;
                 (void)do_save(&w); dbg_num("LK loaded=",load_game(&w)); dbg_num("LK member torches after load same=",pack_count(du,90)==c1); dbg_num("LK rows before=",rows0); dbg_num("LK rows after=",g_ow.ninv);
                 dbg_num("LK cmode kept=",g_cmode[du]); dbg_num("LK carried av=",(int)actor_carried(1)); dbg_num("LK carried du=",(int)actor_carried(du)); } }
+            /* each book its own spells (magic_skills.md §4) */
+            { int sv=g_magic_demo; g_magic_demo=0; for(int r=g_ow.ninv-1;r>=0;r--) if(g_ow.inv[r].obj_n==57) pack_row_take(r,99);
+              for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==57) g_aready[1][sl]=0; g_abook[1][0]=g_abook[1][1]=0;
+              int a=book_new(), b=book_new(); book_add(a,16*0+9); book_add(b,1);        /* Light, Detect Magic numbers */
+              g_cg.player_objq[57]=(uint8_t)a; inv_add_objn(57,1); g_cg.player_objq[57]=(uint8_t)b; inv_add_objn(57,1); g_cg.player_objq[57]=0;
+              int r0=-1; for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n==57 && g_ow.inv[r].quality==a) r0=r;
+              g_inv_sel=r0; equip_to_member(0); dbg_num("LK book a readied=",g_abook[1][0]==a||g_abook[1][1]==a); known_refresh();
+              #define LK_COUNT() ({ int c_=0; for(int s_=0;s_<SPELL_COUNT;s_++) c_+=g_known[s_]; c_; })
+              dbg_num("LK known a=",LK_COUNT());
+              (void)do_save(&w); dbg_num("LK book loaded=",load_game(&w)); known_refresh(); dbg_num("LK known after load=",LK_COUNT());
+              { int nb=0,nq=-1; for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n==57){ nb++; nq=g_ow.inv[r].quality; } dbg_num("LK pack books=",nb);
+                int has1=nq>0&&book_has(nq,1); dbg_num("LK other book keeps its spell=",has1);
+                for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n==57) g_inv_sel=r;
+                teleport_party(&w,X,Y); w.px=(uint16_t)X; w.py=(uint16_t)Y; build_blocked();
+                (void)do_verb(&w,'D',1,0); LK_SHOW("drop book"); int bi=obj_idx_at((X+1)&M,Y&M,57); dbg_num("LK book on map=",bi>=0);
+                (void)do_save(&w); dbg_num("LK book loaded2=",load_game(&w)); bi=obj_idx_at((X+1)&M,Y&M,57); dbg_num("LK book still on map=",bi>=0);
+                int c=0; if(bi>=0) for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive&&g_wobj[j].parent==(uint16_t)bi&&g_wobj[j].obj_n==58) c++; dbg_num("LK dropped book's spells=",c);
+                teleport_party(&w,X,Y); w.px=(uint16_t)X; w.py=(uint16_t)Y; build_blocked();
+                (void)do_verb(&w,'G',1,0); LK_SHOW("get book"); nq=-1; for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n==57) nq=g_ow.inv[r].quality; dbg_num("LK got back spell=",nq>0&&book_has(nq,1)); }
+              g_magic_demo=sv; }
+            {   /* a creature's touch (combat.md §3e) */
+                #define LK_HATCH(ON,DX,DY) hatch_creature(&w,(int)((w.px+(DX))&(U6_SURFACE_TILES-1)),(int)((w.py+(DY))&(U6_SURFACE_TILES-1)),(ON),0)
+                int a=LK_HATCH(364,1,0), got=0; g_ow.ninv=0;
+                { invitem_t it; it.owner=1; it.obj_n=4; it.tile=basetile(4); it.qty=1; it.quality=0; g_ow.inv[g_ow.ninv++]=it; }
+                g_ahp[1]=200; if(a>=0){ for(int k=0;k<30&&!got;k++){ g_msg[0]=0; g_ahp[1]=200; enemy_strike(a,1,0,1); if(g_ow.ninv==0) got=1; } }
+                dbg_num("LK slug dissolved=",got); Cconws("LK slug: "); Cconws(g_msg); Cconws("\r\n");
+                a=LK_HATCH(353,-1,0); got=0;
+                { invitem_t it; it.owner=1; it.obj_n=129; it.tile=basetile(129); it.qty=1; it.quality=0; g_ow.inv[g_ow.ninv++]=it; }
+                if(a>=0){ for(int k=0;k<30&&!got;k++){ g_msg[0]=0; g_ahp[1]=200; enemy_strike(a,1,0,1); if(g_ow.ninv==0) got=1; } }
+                dbg_num("LK gremlin robbed=",got); Cconws("LK gremlin: "); Cconws(g_msg); Cconws("\r\n");
+                a=LK_HATCH(345,0,1); got=0; g_poison[1]=0;
+                if(a>=0){ for(int k=0;k<40&&!got;k++){ g_msg[0]=0; g_ahp[1]=200; enemy_strike(a,1,0,1); if(g_poison[1]) got=1; } }
+                dbg_num("LK poisoned=",got); g_poison[1]=0;
+                a=LK_HATCH(357,0,-1); got=0;
+                if(a>=0){ for(int k=0;k<30&&!got;k++){ g_msg[0]=0; g_ahp[1]=200; enemy_strike(a,1,0,1); got=g_dragged[1]; } }
+                dbg_num("LK dragged=",got); Cconws("LK corpser: "); Cconws(g_msg); Cconws("\r\n");
+                got=0; for(int k=0;k<200&&g_dragged[1];k++){ g_msg[0]=0; g_ahp[1]=200; dragged_turn(1); got=k+1; }
+                dbg_num("LK free after turns=",got); Cconws("LK free: "); Cconws(g_msg); Cconws("\r\n"); }
             dbg_num("LK done=",1); g_look_test=0;
         }
     }
@@ -15587,6 +15718,7 @@ int main(int argc, char **argv)
         if (g_cast_undraw){ g_cast_undraw=0;             /* the page's strip over the map comes off */
             for(int y=SPELL_Y;y<SPELL_Y+SPELL_H;y++) memcpy(ROW(y)+SPELL_X, g_paper+(int32_t)y*LW+SPELL_X, (size_t)(PANX-SPELL_X));
             compose_map(&w); draw_border_tiles(); redraw=1; }
+        if (g_dragged[1] && !g_pending_verb && !g_talking && !g_casting && !g_save_menu && dragged_turn(1)){ if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); } redraw=1; }
         if (g_verb_pts && !g_pending_verb && !g_talking){ verb_spend(&w); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* the command's time (movement_turns.md §3b) */
         if (g_inv_open && !g_show_inv && !g_show_status && !g_talking && !g_casting && !g_save_menu){ g_show_inv=1; redraw=1; }   /* the display stays up through a verb */
         if (g_solo_m && (g_ahp[1]==0 || g_ahp[g_solo_m]==0)){ solo_end(&w); compose_map(&w); draw_border_tiles(); redraw=1; }   /* one of them fell */

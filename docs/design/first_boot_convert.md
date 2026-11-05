@@ -200,6 +200,8 @@ Emulated 2 MB ST (TOS 1.04): the whole conversion runs in 270 s with byte-identi
     way out, or the restarted game's console text lands in the log.
 - **Game boot** (`first_start()` in render/gamedemo.c, before anything is allocated): if U6.PAK is
   missing, the game clears the screen and:
+  - Ultima VI also installs from the ST floppies, in a folder named ST: the first stage makes DOS-shaped files in a temporary
+    folder (../formats/st_data.md), and the rest is the same;
   - with no DOS files, says which files to copy; without CONVERT.TOS, says so;
   - otherwise says the files need converting once, about how long that takes on this machine, and
     "Press a key to convert, or Esc to quit";

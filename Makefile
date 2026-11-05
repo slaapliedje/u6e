@@ -862,7 +862,7 @@ game-st: $(BUILD)/gamest.prg
 # CONVERT.TOS (the first start on the Atari, docs/design/first_boot_convert.md): mksave + nuviesave +
 # mkworld linked into one plain-68000 program, their main()s renamed, behind a progress display. The
 # game hands over to it when U6.PAK is missing (platform/firstrun.h). Runs on every machine of the line.
-CONVERT_TOOLS := mksave nuviesave mkworld
+CONVERT_TOOLS := mksave nuviesave mkworld st2dos
 CONVERT_SRC := tools/convert.c tools/cv_68k.s dataformats/u6lzw.c dataformats/u6lzw_68k.s dataformats/u6lzc.c dataformats/u6lib.c \
                dataformats/u6pal.c dataformats/u6tile.c dataformats/u6obj.c dataformats/u6shape.c dataformats/u6map.c \
                engine/combat.c engine/rng.c
