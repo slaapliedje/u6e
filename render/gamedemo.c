@@ -3353,6 +3353,81 @@ static const world_t *g_wp;                                 /* the live world, f
  * FACE the step. Turn-based: called when the game clock advances. */
 static void wind_tick(int level);                      /* wind.md (defined with the status line below) */
 static void arrest_step(const world_t*w,int i);
+/* the turn economy (movement_turns.md §3b): what the action just taken cost the actor, in movement points;
+ * step_npcs pays each actor g_turn_p of the Avatar's points scaled by dexterity, g_amp in 1/16 points. */
+static int16_t g_amp[U6_MAX_ACTORS];
+static int g_turn_p, g_turn_d, g_act_cost;   /* g_turn_p 0 = everyone acts once (rest, the test hooks) */
+static int g_verb_pts;                       /* what the command in hand will cost when it is over */
+/* a walk from or onto (x,y): 5 + the impedance of the tile and of each thing on it (tileflags1 high nibble,
+ * not on an impassable tile) */
+static int walk_points(const world_t*w,int x,int y){
+    int f=g_tflags1[world_tile(w,x,y)], c=5+((f&2)?0:f>>4);
+    int b=((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1));
+    for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]];
+        if(o->alive && o->x==x && o->y==y){ f=g_tflags1[o->tile]; if(!(f&2)) c+=f>>4; } }
+    return c; }
+/* one actor's action: everything it may do when its points come up */
+static void npc_act(const world_t*w,int i,int avx,int avy)
+{
+        if(g_summon[i]==1){ ally_step(w,i); return; }       /* allied: hunt hostiles */
+        if(g_wt_force[i]==0x12){ arrest_step(w,i); return; }    /* the guard coming for a thief (usecode_use.md) */
+        if(g_temp[i] && g_wt_force[i] && !is_party_member(i) && !g_ally[i] && hatched_step(w,i)) return;   /* a hatched creature's own worktype (eggs.md §3b) */
+        if(g_ally[i] && !is_party_member(i)){ ally_step(w,i); return; }   /* a charmed / confused foe fights for the party (magic_skills.md §5b) */
+        if(g_coward[i] && !is_party_member(i) && coward_step(w,i)) return;         /* coward flees the party on sight (before any assault: a fleeing evil creature runs) */
+        if(actor_hostile(i) && !g_coward[i] && !is_party_member(i)){     /* CB2/CB4 assault — aggro-on-sight */
+            if(!g_alert[i] && sees_party(w,i)) g_alert[i]=1;   /* lurk until it PERCEIVES the party */
+            if(g_alert[i]) hostile_step(w,i); else g_amoved[i]=0;
+            return; }
+        int x=g_actx[i], y=g_acty[i], dx,dy;
+        if(is_party_member(i)){                         /* party follows the Avatar */
+            if(g_charm[i]){                             /* charmed by a foe (combat.md §7b): it turns on the party */
+                int best=-1; for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, ax,ay; if(a==i) continue;
+                    if(a==1){ ax=avx; ay=avy; } else { if(!actor_pos(a,&ax,&ay) || g_ahp[a]==0) continue; }
+                    int cx=ax>x?ax-x:x-ax, cy=ay>y?ay-y:y-ay; if(cx<=1&&cy<=1){ best=a; break; } }
+                if(best>=0) enemy_attack(i,best);
+                g_amoved[i]=0; return; }
+            if(g_combat_mode){                          /* CB4: auto-fight an adjacent foe */
+                int tid=adjacent_hostile(w,x,y);
+                if(tid>=0){ int tx=x,ty=y, wp=actor_pick_weapon(i,1); (void)actor_pos(tid,&tx,&ty);
+                    g_facing[i]= ty<y?0:ty>y?2:tx>x?1:3;
+                    if(wp && weapon_shoots(wp)) npc_attack(w,i,wp,x,y,tx,ty); else party_attack(i,tid);
+                    g_amoved[i]=0; return; }
+                if(companion_shoots(w,i,x,y)){ g_amoved[i]=0; return; } }
+            int cx=avx>x?avx-x:x-avx, cy=avy>y?avy-y:y-avy;
+            if(cx<=1 && cy<=1){ g_amoved[i]=0; return; }  /* already alongside */
+            dx=avx; dy=avy;
+        } else if(!npc_dest(i,&dx,&dy)){ g_amoved[i]=0; return; }
+        else if(wt_activity(npc_worktype(i))==ACT_WANDER){   /* Stage 3c: roam near the anchor */
+            int ox=x-dx, oy=y-dy; if(ox<0)ox=-ox; if(oy<0)oy=-oy;
+            if(ox<=WANDER_R && oy<=WANDER_R){                /* inside the roam radius */
+                /* deterministic per (clock,npc) so headless runs reproduce; step ~1 turn in 3 */
+                uint32_t r=((uint32_t)w->clock*2654435761u)^((uint32_t)i*40503u);
+                if(r%3==0){
+                    static const int DX[4]={0,1,0,-1}, DY[4]={-1,0,1,0};   /* N E S W */
+                    int d=(int)((r>>13)&3), nx=(x+DX[d])&(U6_SURFACE_TILES-1), ny=(y+DY[d])&(U6_SURFACE_TILES-1);
+                    int qx=nx-dx, qy=ny-dy; if(qx<0)qx=-qx; if(qy<0)qy=-qy;
+                    if(qx<=WANDER_R && qy<=WANDER_R && mover_can_enter(w,nx,ny) &&
+                       !npc_occupied(i,nx,ny) && !(nx==avx&&ny==avy)){
+                        g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny;
+                        g_facing[i]=(uint8_t)d; g_walkf[i]^=1; g_amoved[i]=1; return;
+                    }
+                }
+                g_amoved[i]=0; return;                     /* stand this turn */
+            }
+            /* strayed past the radius: fall through and walk back toward the anchor */
+        }
+        if(x==dx && y==dy){ g_amoved[i]=0; return; } /* arrived: stand */
+        int mx,my;
+        if(npc_routestep(w,i,x,y,dx,dy,avx,avy,&mx,&my)){  /* route around walls */
+            int nx=(x+mx)&(U6_SURFACE_TILES-1), ny=(y+my)&(U6_SURFACE_TILES-1);
+            if(npc_occupied(i,nx,ny)){ g_amoved[i]=0; return; }  /* tile taken: wait */
+            npc_routetaken(i,nx,ny);
+            g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny;
+            g_facing[i]= my<0?0 : my>0?2 : mx>0?1 : 3;  /* N E S W */
+            g_walkf[i]^=1; g_amoved[i]=1;
+        } else g_amoved[i]=0;                            /* no route: stand */
+}
+
 static void step_npcs(const world_t*w)
 {
     if(g_time_stop){ g_time_stop--; return; }         /* Time Stop (magic_skills.md §5f): nothing but the Avatar moves */
@@ -3392,65 +3467,21 @@ static void step_npcs(const world_t*w)
             if(g_summon_life[i]<=1){ g_atile[i]=0xffff; g_summon[i]=0;   /* lifetime expired: vanish */
                 g_align_hostile[i]=g_hostile[i]=g_alert[i]=0; g_amoved[i]=0; continue; }
             g_summon_life[i]--;
-            if(g_summon[i]==1){ ally_step(w,i); continue; }       /* allied: hunt hostiles */
             /* g_summon[i]==2 (hostile summon) falls through to the assault path below */
         }
-        if(g_wt_force[i]==0x12){ arrest_step(w,i); continue; }    /* the guard coming for a thief (usecode_use.md) */
-        if(g_temp[i] && g_wt_force[i] && !is_party_member(i) && !g_ally[i] && hatched_step(w,i)) continue;   /* a hatched creature's own worktype (eggs.md §3b) */
-        if(g_ally[i] && !is_party_member(i)){ ally_step(w,i); continue; }   /* a charmed / confused foe fights for the party (magic_skills.md §5b) */
-        if(g_coward[i] && !is_party_member(i) && coward_step(w,i)) continue;         /* coward flees the party on sight (before any assault: a fleeing evil creature runs) */
-        if(actor_hostile(i) && !g_coward[i] && !is_party_member(i)){     /* CB2/CB4 assault — aggro-on-sight */
-            if(!g_alert[i] && sees_party(w,i)) g_alert[i]=1;   /* lurk until it PERCEIVES the party */
-            if(g_alert[i]) hostile_step(w,i); else g_amoved[i]=0;
-            continue; }
-        int x=g_actx[i], y=g_acty[i], dx,dy;
-        if(is_party_member(i)){                         /* party follows the Avatar */
-            if(g_charm[i]){                             /* charmed by a foe (combat.md §7b): it turns on the party */
-                int best=-1; for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, ax,ay; if(a==i) continue;
-                    if(a==1){ ax=avx; ay=avy; } else { if(!actor_pos(a,&ax,&ay) || g_ahp[a]==0) continue; }
-                    int cx=ax>x?ax-x:x-ax, cy=ay>y?ay-y:y-ay; if(cx<=1&&cy<=1){ best=a; break; } }
-                if(best>=0) enemy_attack(i,best);
-                g_amoved[i]=0; continue; }
-            if(g_combat_mode){                          /* CB4: auto-fight an adjacent foe */
-                int tid=adjacent_hostile(w,x,y);
-                if(tid>=0){ int tx=x,ty=y, wp=actor_pick_weapon(i,1); (void)actor_pos(tid,&tx,&ty);
-                    g_facing[i]= ty<y?0:ty>y?2:tx>x?1:3;
-                    if(wp && weapon_shoots(wp)) npc_attack(w,i,wp,x,y,tx,ty); else party_attack(i,tid);
-                    g_amoved[i]=0; continue; }
-                if(companion_shoots(w,i,x,y)){ g_amoved[i]=0; continue; } }
-            int cx=avx>x?avx-x:x-avx, cy=avy>y?avy-y:y-avy;
-            if(cx<=1 && cy<=1){ g_amoved[i]=0; continue; }  /* already alongside */
-            dx=avx; dy=avy;
-        } else if(!npc_dest(i,&dx,&dy)){ g_amoved[i]=0; continue; }
-        else if(wt_activity(npc_worktype(i))==ACT_WANDER){   /* Stage 3c: roam near the anchor */
-            int ox=x-dx, oy=y-dy; if(ox<0)ox=-ox; if(oy<0)oy=-oy;
-            if(ox<=WANDER_R && oy<=WANDER_R){                /* inside the roam radius */
-                /* deterministic per (clock,npc) so headless runs reproduce; step ~1 turn in 3 */
-                uint32_t r=((uint32_t)w->clock*2654435761u)^((uint32_t)i*40503u);
-                if(r%3==0){
-                    static const int DX[4]={0,1,0,-1}, DY[4]={-1,0,1,0};   /* N E S W */
-                    int d=(int)((r>>13)&3), nx=(x+DX[d])&(U6_SURFACE_TILES-1), ny=(y+DY[d])&(U6_SURFACE_TILES-1);
-                    int qx=nx-dx, qy=ny-dy; if(qx<0)qx=-qx; if(qy<0)qy=-qy;
-                    if(qx<=WANDER_R && qy<=WANDER_R && mover_can_enter(w,nx,ny) &&
-                       !npc_occupied(i,nx,ny) && !(nx==avx&&ny==avy)){
-                        g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny;
-                        g_facing[i]=(uint8_t)d; g_walkf[i]^=1; g_amoved[i]=1; continue;
-                    }
-                }
-                g_amoved[i]=0; continue;                     /* stand this turn */
-            }
-            /* strayed past the radius: fall through and walk back toward the anchor */
-        }
-        if(x==dx && y==dy){ g_amoved[i]=0; continue; } /* arrived: stand */
-        int mx,my;
-        if(npc_routestep(w,i,x,y,dx,dy,avx,avy,&mx,&my)){  /* route around walls */
-            int nx=(x+mx)&(U6_SURFACE_TILES-1), ny=(y+my)&(U6_SURFACE_TILES-1);
-            if(npc_occupied(i,nx,ny)){ g_amoved[i]=0; continue; }  /* tile taken: wait */
-            npc_routetaken(i,nx,ny);
-            g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny;
-            g_facing[i]= my<0?0 : my>0?2 : mx>0?1 : 3;  /* N E S W */
-            g_walkf[i]^=1; g_amoved[i]=1;
-        } else g_amoved[i]=0;                            /* no route: stand */
+        if(!g_turn_p || (is_party_member(i) && !g_combat_mode)){ npc_act(w,i,avx,avy); continue; }   /* followers walk with the leader */
+        { int d=g_adex[i]?g_adex[i]:g_turn_d, n=0;
+          int32_t acc=(int32_t)g_amp[i]+(int32_t)(((uint32_t)g_turn_p*(uint32_t)d*16u)/(uint32_t)g_turn_d);
+          if(acc>d*16) acc=d*16;
+          g_amoved[i]=0;
+          while(acc>0 && n<4){ int ox=g_actx[i], oy=g_acty[i], mv=g_amoved[i];
+              g_act_cost=0; npc_act(w,i,avx,avy); n++;
+              if(g_atile[i]==0xffff) break;
+              if(g_act_cost==0) g_act_cost=(g_actx[i]!=ox||g_acty[i]!=oy)?walk_points(w,ox,oy):5;
+              else g_amoved[i]=(uint8_t)mv;
+              acc-=(int32_t)g_act_cost*16; }
+          if(acc<-3200) acc=-3200;
+          g_amp[i]=(int16_t)acc; }
     }
     slime_frames();                                    /* adjoining slimes share frames (§5f) */
 }
@@ -6082,7 +6113,7 @@ static int use_churn(void)
     objworld_consume(&g_ow,180,1); inv_add_objn(178,1); inv_add_objn(96,1); msgcat(0,"Done"); return 1;
 }
 static int use_pack_item(world_t*w,int on)
-{   if(on==212){ g_wind=(g_wind==WIND_CALM)?0:((g_wind+1)&7); g_wind_timer=1+rng_range(&g_wind_rng,30);
+{   g_verb_pts=5;   if(on==212){ g_wind=(g_wind==WIND_CALM)?0:((g_wind+1)&7); g_wind_timer=1+rng_range(&g_wind_rng,30);
         msgcat(0,"You feel a breeze."); return 1; }
     if(on==420){
         if(w->level>0){ msgcat(0,"Not usable here."); return 1; }
@@ -6211,11 +6242,33 @@ static int vehicle_try_move(world_t*w,int dx,int dy)
     w->px=(uint16_t)nx; w->py=(uint16_t)ny;
     build_blocked();                               /* objects moved -> rebuild buckets/blocking */
     return cost; }
+/* the Avatar spends pts (movement_turns.md §3b): a rider half, at least 1; the clock moves on and everyone else gets a share */
+static void turn_spend(world_t*w,int pts)
+{   if(g_veh_kind==431) pts>>=1;
+    if(pts<1) pts=1;
+    w->turns++; w->min_pts=g_adex[1]; world_spend(w,pts);
+    g_hour=clock_hour(w); g_minutes=clock_minutes(w);
+    g_turn_p=pts; g_turn_d=g_adex[1]?g_adex[1]:20; step_npcs(w); g_turn_p=0; }
+/* a command's cost, paid when it is over (Get 3, Drop 3, Move 5, Use 5, a spell 10 + 3 per circle) */
+static void verb_spend(world_t*w)
+{   int p=g_verb_pts; g_verb_pts=0; g_msg_append=1; turn_spend(w,p); g_msg_append=0; }
+/* the pace of a walk: out of combat followers walk too and the slowest ends the minute */
+static int party_pace(void)
+{   int d=g_adex[1]; if(g_combat_mode) return d;
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a>=0 && a<U6_MAX_ACTORS && g_ahp[a]>0 && g_adex[a]>0 && g_adex[a]<d) d=g_adex[a]; }
+    return d; }
+/* what a step costs: the ground entered, 5 more on a diagonal; a rider alone pays half of each */
+static int g_walk_cost;
+static int game_move_cost(const world_t*w,int dx,int dy)
+{   int c=walk_points(w,(int)((w->px+dx)&(U6_SURFACE_TILES-1)),(int)((w->py+dy)&(U6_SURFACE_TILES-1))), diag=(dx&&dy)?5:0;
+    if(g_veh_kind==431 && (g_nparty<=1||g_combat_mode)){ c>>=1; diag>>=1; }
+    return g_walk_cost=c+diag; }
+static const RuleSet g_game_rules={game_move_cost};
 /* the world advances one turn per 5 movement points (wind.md §2) */
 static void vehicle_turns(world_t*w,int cost)
 {   g_mp_acc+=cost;
-    while(g_mp_acc>=5){ g_mp_acc-=5; w->turns++; w->min_pts=g_adex[1]; world_spend(w,5);
-        g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); } }
+    while(g_mp_acc>=5){ g_mp_acc-=5; g_turn_p=5; g_turn_d=g_adex[1]?g_adex[1]:20; w->turns++; w->min_pts=g_adex[1]; world_spend(w,5);
+        g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); g_turn_p=0; } }
 
 /* one player step by (dx,dy): on foot, mounted, or steering a vessel. Advances the world by the
  * step's movement cost (a walked step = one turn; vehicles per wind.md §2) and runs the step
@@ -6225,18 +6278,20 @@ static int player_step(world_t*w,int dx,int dy)
     if(veh_aboard()){ int cost=vehicle_try_move(w,dx,dy); stepped=cost>0; if(stepped) vehicle_turns(w,cost); }
     else {
         if(g_alcohol>3 && rng_range(&g_crng,4)!=0){ dx=(int)rng_range(&g_crng,3)-1; dy=(int)rng_range(&g_crng,3)-1; msgcat(0,"Hic!"); }   /* drunk (usecode_use.md Food) */
-        w->min_pts=g_adex[1];                         /* a minute per the Avatar's dexterity in points (movement_turns.md §3) */
+        w->min_pts=party_pace();                      /* a minute per the slowest walker's dexterity in points (movement_turns.md §3b) */
         stepped=(dx||dy) ? world_try_move(w,dx,dy) : 0;
         if(stepped){
             if(g_veh_kind==431){ g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;   /* mounted: re-face the horse sprite */
                 g_avatar_ovr=(uint16_t)(basetile(431)+g_veh_face*2+g_veh_phase); }
-            g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); } }
+            g_hour=clock_hour(w); g_minutes=clock_minutes(w);
+            g_turn_p=g_walk_cost; g_turn_d=w->min_pts>0?w->min_pts:20; step_npcs(w); g_turn_p=0; } }
     if(stepped) (void)step_triggers(w);
     return stepped; }
 /* a passed turn (wind.md §3): a raft or the balloon drifts with the wind; the world moves on */
 static int player_pass(world_t*w)
 {   if((g_veh_kind==415||g_veh_kind==423) && g_wind!=WIND_CALM){ int cost=vehicle_try_move(w,0,0); if(cost>0){ vehicle_turns(w,cost); (void)step_triggers(w); return 1; } }
-    w->turns++; w->clock+=1; w->mp_acc=0; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w);   /* the rest of this minute */
+    { int per=w->min_pts>0?w->min_pts:(g_adex[1]?g_adex[1]:20), left=per-(int)w->mp_acc; g_turn_p=left>0?left:1; g_turn_d=per; }
+    w->turns++; w->clock+=1; w->mp_acc=0; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); g_turn_p=0;   /* the rest of this minute */
     return 1; }
 
 /* horses (§4): a wandering horse actor at (x,y)? (its tile sits in obj 430's frame range) */
@@ -6314,7 +6369,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
             uint16_t q=g_wobj[idx].qty; if(!q) q=1;
             int stolen=theft_counts(w,idx);                       /* before the taking moves anything */
             if(take_gold(idx)){
-                n=msgcat(0,"You get "); n=msgcat_int(n,q);
+                g_verb_pts=3; n=msgcat(0,"You get "); n=msgcat_int(n,q);
                 if(g_gd==&gamedef_u6){ n=msgcat(n," "); n=msgcat(n,nm); msgcat(n,"."); } else msgcat(n," gold.");   /* "You get 30 gold coin." as for any stack */
                 recompose=1;
             }
@@ -6324,7 +6379,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
                     if(!c->alive && c->parent==(uint16_t)idx && c->obj_n==58) spell_learn(c->quality); }
                 if(g_wobj[idx].obj_n==73){ int fr=(int)g_wobj[idx].tile-basetile(73);          /* a dug-up moonstone: its gate is gone (moongates.md §4) */
                     if(fr>=0&&fr<8){ moonstone_set(fr,0,0,0); moongates_update(w); } }
-                n=msgcat(0,"You get ");
+                g_verb_pts=3; n=msgcat(0,"You get ");
                 if(q>1){ n=msgcat_int(n,q); n=msgcat(n," "); }    /* "You get 30 gold." */
                 else n=msgcat(n,"the ");
                 n=msgcat(n,nm); msgcat(n,"."); recompose=1;
@@ -6351,11 +6406,12 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
                     for(int k=s;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--;   /* remove from inventory */
                     if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
                     build_blocked();                             /* new on-map object -> rebuild buckets/blocking */
-                    n=msgcat(0,"You drop the "); n=msgcat(n,dn); msgcat(n,"."); recompose=1;
+                    g_verb_pts=3; n=msgcat(0,"You drop the "); n=msgcat(n,dn); msgcat(n,"."); recompose=1;
                 }
             }
         }
     } else { /* 'U' use — dispatch by object number (doors open/close, ...) */
+        g_verb_pts=5;
         if(g_veh_kind==412||g_veh_kind==414||g_veh_kind==415) return vehicle_exit(w);   /* aboard: U = disembark (vehicles.md §3.1) */
         if(g_veh_kind==423) return balloon_land(w);                        /* in the balloon: U = land (wind.md §4) */
         if(g_veh_kind==431) return horse_dismount(w);                      /* mounted: U = dismount (§4) */
@@ -6371,7 +6427,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         if(idx>=0 && (g_wobj[idx].obj_n==305||g_wobj[idx].obj_n==106||g_wobj[idx].obj_n==308))
             return use_transition_object(w,idx);                             /* ladder / hole (map_levels.md §4) */
         if(idx<0){
-                   msgcat(0,"Nothing to use there."); }
+                   g_verb_pts=0; msgcat(0,"Nothing to use there."); }
         else recompose = use_object(idx);
     }
     return recompose;
@@ -6412,7 +6468,7 @@ static void move_pack_item(void)
     spell_learn(q);
     if(g_ow.inv[g_inv_sel].qty>1) g_ow.inv[g_inv_sel].qty--;
     else { for(int k=g_inv_sel;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; }
-    msgcat(0,"The spell goes into the spellbook.");
+    msgcat(0,"The spell goes into the spellbook."); g_verb_pts=5;
 }
 static void arm_drop(void)          /* start a D)rop: open the pack, arm the verb, select the first item */
 {
@@ -6919,7 +6975,8 @@ static void note_striker(int att,int def){ int ax,ay,bx,by; if(actor_where(att,&
 static int weapon_spend(int a,int on,int spare_first);
 static void glass_shatters(int att,int wobj){ if(wobj==48 && weapon_spend(att,48,0)){ int n=msg_tail(); msgcat(n,"Thy sword hath shattered!"); } }
 /* att strikes def with wobj; rolled = the hit roll was made (and hit) by the caller, on a shot */
-static void enemy_strike(int att,int def,int wobj,int rolled){
+static int g_blows;                     /* the foes' blows struck (ATTACK.REQ's turn check) */
+static void enemy_strike(int att,int def,int wobj,int rolled){ g_act_cost=10; g_blows++;
     if(veh_aboard()){                                        /* the party is in a vessel (cannons.md §2) */
         if(g_veh_kind==412){ ship_struck(att); return; }     /* a ship takes the blow on its hull */
         if(g_veh_kind==423) return;                          /* the balloon cannot be hit */
@@ -7105,7 +7162,7 @@ static int lord_british_actor(void){ for(int a=2;a<160;a++) if(g_atile[a]!=0xfff
 
 /* a party member strikes a foe (CB4 combat mode): like the player's attack — readied weapon
  * vs the foe's armour, removes a slain foe + grants the avatar experience (§3). */
-static void party_strike(int att,int def,int wobj,int rolled){
+static void party_strike(int att,int def,int wobj,int rolled){ g_act_cost=10;
     char nm[24]; obj_name(npc_tile(def),nm,sizeof nm);
     if(!nm[0]){ nm[0]='f'; nm[1]='o'; nm[2]='e'; nm[3]=0; }
     int wmax=blow_max(att,wobj,def);
@@ -7496,11 +7553,10 @@ static void attack_fire(world_t*w,int dx,int dy){
     if(do_attack(w,dx,dy)) g_atk_tried=1;
     if(++g_atk_i<g_atk_n){ attack_aim(); g_next_verb='A'; return; }
     g_atk_n=0; g_atk_i=0;
-    if(g_atk_tried){ g_atk_tried=0; w->turns++; w->min_pts=g_adex[1]; world_spend(w,10);
-        g_hour=clock_hour(w); g_minutes=clock_minutes(w); g_msg_append=1; step_npcs(w); g_msg_append=0; } }
+    if(g_atk_tried){ g_atk_tried=0; g_verb_pts=10; verb_spend(w); } }
 /* a foe or fighting companion attacks the tile (tx,ty) from (x,y) with wobj (§6c) */
 static void foe_damage(int att,int def,int dmg,const char*verb);
-static void npc_attack(const world_t*w,int att,int wobj,int x,int y,int tx,int ty){
+static void npc_attack(const world_t*w,int att,int wobj,int x,int y,int tx,int ty){ g_act_cost=10;
     int M=U6_SURFACE_TILES-1, mis=weapon_missile(wobj), ox=(tx-x)&M, oy=(ty-y)&M;
     if(ox>512) ox-=1024; if(oy>512) oy-=1024;
     int dist=combat_dist(ox,oy);
@@ -8259,7 +8315,7 @@ static void foe_spell(const world_t*w,int i,int sp,int tid,int tx,int ty){
 static int foe_cast(const world_t*w,int i,int tid,int tx,int ty){
     const uint8_t*sp; int n=monster_spells(actor_objn(i),&sp); if(n<=0) return 0;
     for(int k=0;k<n;k++){ if(rng_range(&g_crng,4)!=0) continue; if((int)rng_range(&g_crng,(uint32_t)sp[k]+1)>=16) continue;
-        foe_spell(w,i,sp[k],tid,tx,ty); return 1; }
+        foe_spell(w,i,sp[k],tid,tx,ty); g_act_cost=10+3*((sp[k]>>4)+1); return 1; }
     return 0; }
 /* Detect Magic's "It's magical." set: the tile numbers the reference's script lists (wands, rings, amulets,
  * moonstones, magic armour and weapons, the Codex, …) — our own table from reading it (§5g) */
@@ -8583,7 +8639,7 @@ static int cast_spell(world_t*w,int caster,int spell,int dx,int dy){
             g_ahp[i]=0; g_charm[i]=0; g_ally[i]=0; g_aflee[i]=0; if(!is_party_member(i)){ g_atile[i]=0xffff; g_summon[i]=0; } }
         g_armageddon=1; sync_party_hp(); g_msg[0]=0; recompose=1;
     } else { msgcat(0,"Nothing happens."); applied=0; }
-    if(applied && !g_free_cast) magic_spend(caster,spell);
+    if(applied && !g_free_cast){ magic_spend(caster,spell); g_verb_pts=10+3*g_spells[spell].circle; }
     g_free_cast=0;
     return recompose;
 }
@@ -8816,7 +8872,7 @@ static __attribute__((noinline)) int push_to(world_t*w,int dx,int dy)
             build_blocked(); }
         moved=1;
     }
-    if(moved){ w->turns++; w->min_pts=g_adex[1]; world_spend(w,5); g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w); }   /* the push spends the turn */
+    if(moved) turn_spend(w,5);   /* the push spends the turn */
     return 1; }
 
 /* apply the armed verb to the tile (dx,dy) from the avatar. Returns 1 if the
@@ -11534,6 +11590,7 @@ int main(int argc, char **argv)
     world_t w; g_wp=&w;
     if (!world_init(&w,map,(int32_t)map_len,chunks,(int32_t)chunks_len,passable,&def,1)){
         Cconws("world_init failed\r\n"); Crawcin(); return 1; }
+    w.rules=&g_game_rules;                /* a step's cost by the ground (movement_turns.md §3b) */
     build_blocked();                      /* impassable-object map (walls/furniture) */
     world_set_blocked_obj(&w, &g_blocked); /* player + NPCs now respect object walls */
     world_set_force_pass(&w, force_pass_at); /* ... and walk the bridges over water */
@@ -12737,6 +12794,17 @@ int main(int argc, char **argv)
             equip_refold(1);
 #define AT_MSG(t) do{ Cconws(t); Cconws(": "); Cconws(g_msg); Cconws("\r\n"); g_msg[0]=0; }while(0)
 #define AT_CLR(on) do{ int c_=objworld_count(&g_ow,(on)); if(c_) objworld_consume(&g_ow,(on),c_); }while(0)
+            if(mode=='7'){                                          /* time: blows by dexterity, costs of ground (movement_turns.md §3b) */
+                int s=summon_creature(X+1,Y,368,2,250,200); g_adex[1]=20;
+#define AT_TURNS(TAG,DEX,PTS) do{ g_adex[s]=(DEX); g_amp[s]=0; g_blows=0; for(int k=0;k<20;k++){ g_ahp[1]=200; g_ahp[s]=200; g_summon_life[s]=250; g_verb_pts=(PTS); verb_spend(&w); g_msg[0]=0; } dbg_num("AT blows, 20 of " TAG "=", g_blows); }while(0)
+                AT_TURNS("attacks, foe dex 10",10,10); AT_TURNS("attacks, foe dex 20",20,10); AT_TURNS("attacks, foe dex 40",40,10);
+                AT_TURNS("steps, foe dex 20",20,5); AT_TURNS("gets, foe dex 20",20,3);
+                g_veh_kind=431; AT_TURNS("rider's attacks, foe dex 20",20,10); g_veh_kind=0;
+                { int c0=(int)w.clock; for(int k=0;k<20;k++){ g_verb_pts=10; verb_spend(&w); g_msg[0]=0; } dbg_num("AT minutes, 20 attacks dex 20=", (int)w.clock-c0); }
+                g_atile[s]=0xffff; g_ahp[1]=30; build_blocked();
+                dbg_num("AT step, clear ground=", game_move_cost(&w,1,0)); dbg_num("AT step, diagonal=", game_move_cost(&w,1,1));
+                { int seen[16]={0}; for(int y=0;y<1024;y+=2) for(int x=0;x<1024;x+=2){ int f=g_tflags1[world_tile(&w,x,y)], v=f>>4; if(!(f&2) && v && !seen[v]){ seen[v]=1; dbg_num("AT ground tile=", world_tile(&w,x,y)); dbg_num("AT its step=", walk_points(&w,x,y)); } } }
+                dbg_num("AT pace, party=", party_pace()); g_combat_mode=1; dbg_num("AT pace, combat=", party_pace()); g_combat_mode=0; }
             if(mode=='1'){                                          /* bow: arrows, range, pass, time */
                 AT_CLR(55); (void)equip_ready(g_aready[1],41); equip_refold(1);
                 arm_attack(); Cconws(g_atk_prompt); Cconws("\r\n");
@@ -14608,6 +14676,7 @@ int main(int argc, char **argv)
           if(bl>0 && br[0]=='n') g_bot_nf=bot_nf_id("NF_STDERR"); bot_report(&w); } }   /* bot mode: first report = ready */
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
+    g_verb_pts=0;                                    /* a test hook's leftovers */
     for (;;) {                                       /* interactive; holds frame for capture */
         int mlx,mly,mbtn; read_mouse_logical(&mlx,&mly,&mbtn);
         int mouse_moved=(mlx!=g_mx||mly!=g_my);
@@ -14887,6 +14956,7 @@ int main(int argc, char **argv)
         if (g_cast_undraw){ g_cast_undraw=0;             /* the page's strip over the map comes off */
             for(int y=SPELL_Y;y<SPELL_Y+SPELL_H;y++) memcpy(ROW(y)+SPELL_X, g_paper+(int32_t)y*LW+SPELL_X, (size_t)(PANX-SPELL_X));
             compose_map(&w); draw_border_tiles(); redraw=1; }
+        if (g_verb_pts && !g_pending_verb && !g_talking){ verb_spend(&w); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* the command's time (movement_turns.md §3b) */
         if (redraw){ draw_conversation(ink); draw_status(&w,ink); draw_command_bar(15); }
         /* Exactly ONE Vsync per loop iteration paces the frame. present_frame() (full
          * doubled present) Vsyncs internally, so don't Vsync again after it — the old code

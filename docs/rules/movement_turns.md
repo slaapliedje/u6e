@@ -17,7 +17,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M5
 >                  deterministic RNG. All pass.
 > - Confidence   : confirmed (movement mechanics) / PLACEHOLDER (passability
 >                  source) / guessed (exact turn-cost value).
-> - Last updated : 2026-06-23
+> - Last updated : 2026-11-04
 
 ## 1. System
 The player occupies one surface tile (0..1023 on each axis, toroidal wrap). A
@@ -41,8 +41,43 @@ u6e keeps one world turn per step (NPCs and the party act once per step, which m
 reference while their dexterities are close to the Avatar's) and charges the clock separately:
 the step's points accumulate and a minute passes per *Avatar dexterity* points (`world_spend`).
 A passed turn (space) ends the current minute. Vehicles spend their own points (wind.md §2) the
-same way; a M)ove push spends 5, an A)ttack 10 (combat.md §6c). Rest keeps explicit ten-minute rest turns (rest.md).
-Diagonal cost not yet distinguished; terrain impedance is not added yet.
+same way; §3b has every other price. Rest keeps explicit ten-minute rest turns (rest.md).
+
+### 3b. What DOS GAME.EXE 4.5 does (read 2026-11-04)
+Every actor holds movement points, a signed byte. **Spending** (one routine for everybody): an actor of
+type 431, the horse with a rider, pays half, rounded down; the minimum is 1.
+
+**The next to act** is the actor with the highest points / dexterity, among those alive, on the party's
+level, within 39 tiles of the leader, with points above 0 and able to move. A follower out of combat is not
+picked: it walks when the leader does, and when any follower is at 0 or below the leader's points go to 0,
+so **the slowest walker sets the pace**. An actor that is too far away loses its points.
+
+**When nobody has points** the minute ends: an actor below 0 gets its dexterity added, any other is set to its
+dexterity, so debts carry over and savings don't, and the clock moves one minute.
+
+| Action | Points |
+|---|---|
+| A step | 5 + the impedance of the ground (below). The leader pays for the tile it enters, others for the tile it leaves. |
+| A diagonal step by the leader | 5 more |
+| Raft, balloon | 5 |
+| Skiff, ship | by the angle to the current or the wind (wind.md) |
+| A)ttack, by anyone | 10 |
+| A foe with nothing to do | 5 |
+| G)et, D)rop | 3 |
+| M)ove, U)se | 5 (a refused use costs nothing) |
+| C)ast | 10 + 3 × the spell's circle |
+| L)ook, T)alk, readying | nothing |
+| P)ass | all the leader has left |
+
+**Impedance:** the high nibble of tileflags1, for the map tile and for each thing on it, skipped for an
+impassable tile. So open ground costs 5, forest 12 and swamp 20.
+
+**Ours.** A command's price goes through `turn_spend`: the clock moves by the points over the pace, and each
+actor is paid those points × its dexterity / the pace, in sixteenths, keeps any debt, and acts while it is above
+0, at most four times a command. This gives the same actions per minute as DOS but not its order within the
+minute, and one effect timer tick per command. Actors beyond 39 tiles still walk (schedules depend on it).
+A follower out of combat walks each command, whatever its points. A mounted Avatar with followers pays the
+walkers' full price. Rest and the test hooks use the old way, everyone once. Timers keep their per-command tick.
 
 Until 2026-10-30 a step cost a flat **10 minutes** (a placeholder): a day passed in ~144 steps,
 about 40× too fast, so schedules, nightfall and torch fuel ran away while walking.

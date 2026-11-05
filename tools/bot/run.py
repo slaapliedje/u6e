@@ -24,6 +24,7 @@ def seg_castle(p, kw):
 
 def seg_bridge(p, kw):
     """the crank opens the drawbridge; walk across the moat"""
+    if p.g.state['foes'] and p.foes(): p.fight()                        # the opening gargoyles keep up with a walking party (movement_turns.md §3b)
     p.nav.goto(303, 384, adj=True); x, y = p.nav.pos()
     p.key('u'); st = p.key(VDIR[(303 - x, 384 - y)], 'crank')
     if 'drawbridge' not in st['msg']: p.issue('bridge', 'crank said %r' % st['msg'])
@@ -139,6 +140,7 @@ def seg_death(p, kw):
         if p.actor(4) and p.actor(4)['hostile']: p.issue('death', 'Iolo turned hostile when struck'); return
         if 'Iolo killed' in st['msg']: break
     else: p.issue('death', 'Iolo alive after 60 blows (%r)' % st['msg']); return
+    if not p.g.state['party'] or 'spot' not in locals(): p.issue('death', 'Iolo was gone before the blows'); return
     p.log('  Iolo: %r at %s, karma %d -> %d' % (st['msg'], spot, k0, p.g.state['karma']))
     if 'Iolo killed' not in st['msg']: p.issue('death', 'no "Iolo killed!" (%r)' % st['msg'])
     if p.actor(4): p.issue('death', 'dead Iolo still on the map: %r' % p.actor(4))

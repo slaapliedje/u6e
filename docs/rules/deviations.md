@@ -9,13 +9,13 @@ call; "open" = worth closing later; "data" = unreachable in the user's own data.
 > Provenance
 > - Derived from : the deviation / simplification sections of the rule specs listed below (each of
 >   which cites the reference code it was read against). Nothing new is asserted here.
-> - Last updated : 2026-11-04 (attacks as DOS has them)
+> - Last updated : 2026-11-04 (time as DOS has it)
 
 ## Combat and creatures
 | Deviation | Where | Status |
 |---|---|---|
 | Attacks follow DOS (combat.md §6c), except: a town NPC never runs out of ammunition and keeps what it throws, as its pack isn't in memory; a member's weapons go by slot, not carrying order; the triple crossbow's bolts fly in turn; no sounds | combat.md §6c | accepted |
-| G)et, U)se, D)rop and the other verbs that aren't a walk, a push or an attack spend no time; not yet checked against DOS | movement_turns.md | open |
+| Time follows DOS's movement points and prices (movement_turns.md §3b), except: actors are paid per command rather than taking turns within a minute, at most four actions a command; actors beyond 39 tiles keep walking; effect timers tick per command | movement_turns.md §3b | accepted |
 | The ship's cannonball bursts where it lands (the reference's ship shot is a plain projectile); another ship's centre loses the rolled damage and "breaks" at 0 without a raft | cannons.md §5 | accepted |
 | NPC ships never fire back: no ship actor and no ship-hatching egg exist in the data | cannons.md §5 | data |
 | Movement types: no passing over / under other actors (mice, dragons), no mouseholes | combat.md §7c | open |
