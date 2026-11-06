@@ -5781,11 +5781,20 @@ static int use_object_inner(int idx)
                         : (hit?"Operate the switch, you hear a noise.":"Operate the switch, strange, nothing happened."));
         return 1; }
     if(o==288){                                                   /* crank: the drawbridge (usecode_use.md) */
-        int cx=g_wobj[idx].x, cy=g_wobj[idx].y, M=U6_SURFACE_TILES-1, sx=-1, sy=-1;
-        for(int i=0;i<6 && sx<0;i++) if(obj_idx_at((cx+1)&M,(cy+i)&M,269)>=0){ sx=(cx+1)&M; sy=(cy+i)&M; }   /* the left crank */
-        for(int i=0;i<6 && sx<0;i++) if(obj_idx_at((cx-1)&M,(cy+i)&M,269)>=0)                                /* the right crank: walk to the left one */
-            for(int j=1;j<cx && sx<0;j++){ int ox=(cx-j)&M; if(obj_idx_at(ox,cy,288)>=0 && obj_idx_at((ox+1)&M,(cy+i)&M,269)>=0){ sx=(ox+1)&M; sy=(cy+i)&M; } }
-        if(sx<0){ msgcat(0,"No correspondent drawbridge"); return 0; }
+        /* DOS takes the first piece with the crank's quality among the objects it holds: the 2x2 superchunks
+         * round the party on the surface. Seen in DOS: that piece is the bridge's start, the closed row's
+         * left end (frame 6) or the top open row's left end (frame 3); any other frame: nothing happens */
+        int M=U6_SURFACE_TILES-1, sx=-1, sy=-1, q=g_wobj[idx].quality, lv=g_wp?g_wp->level:0, any_q=0, best=-1;
+        int wx=0, wy=0, wn=U6_SURFACE_TILES;
+        if(g_wp && lv==0){ wx=(g_wp->px-64)>>7; wy=(g_wp->py-64)>>7; if(wx<0) wx=0; if(wy<0) wy=0; if(wx>6) wx=6; if(wy>6) wy=6; wx<<=7; wy<<=7; wn=256; }
+        for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*b=&g_wobj[j]; if(!b->alive || b->obj_n!=269 || b->quality!=q) continue;
+            if(b->x<wx || b->x>=wx+wn || b->y<wy || b->y>=wy+wn) continue;
+            any_q=1; { int f=(int)b->tile-basetile(269); if(f!=3 && f!=6) continue; }
+            if(best<0 || b->y<g_wobj[best].y || (b->y==g_wobj[best].y && b->x<g_wobj[best].x)) best=j; }
+        if(!any_q){ msgcat(0,"No correspondent drawbridge"); return 0; }
+        if(best<0){ msgcat(0,"Strange, nothing happened."); return 0; }
+        sx=g_wobj[best].x; sy=g_wobj[best].y;
+        if((int)g_wobj[best].tile-basetile(269)==6) sx=(sx+1)&M;    /* closed: the open rows start one tile right */
         int si=obj_idx_at(sx,sy,269), open=(si>=0 && (int)g_wobj[si].tile-basetile(269)==3);
         if(g_wp){ int span=0, rows=16; while(span<32 && obj_idx_at((sx+span)&M,sy,269)>=0) span++;   /* anything on the deck stops it */
             for(int h=open?0:1;h<rows;h++){ int any=0; for(int i=0;i<span;i++){ int bx=(sx+i)&M, by=(sy+h)&M; if(open&&obj_idx_at(bx,by,269)<0) continue; any=1;
@@ -9286,9 +9295,10 @@ static void wing_pass(const world_t*w,int ax,int ay)
     for(int st=0;st<10;st++,x+=d){ g_fx_on=1; g_fx_tile=(uint16_t)t; g_fx_x=x; g_fx_y=ay; g_fx_extra=1; g_fx_ex[0]=x-d; g_fx_ey[0]=ay; compose_map(w); present_map(); vsync_pump(); vsync_pump(); }
     g_fx_extra=0; g_fx_on=0; compose_map(w); present_map(); }
 /* X-ray: a moment's view through the walls, no time passing (magic_skills.md §5e) */
+#define XRAY_TICKS 1099                  /* 100 DOS ticks of 18.2 Hz: 5.48 s timed in DOS */
 static void xray_view(const world_t*w)
 {   g_xray_turns=1; g_tmpdm_invalidate(); compose_map(w); present_map();
-    if(!g_look_test) for(int i=0;i<100;i++) vsync_pump();
+    if(!g_look_test){ uint32_t t0=plat_ticks_200hz(); while(plat_ticks_200hz()-t0<XRAY_TICKS) vsync_pump(); }   /* DOS: 100 idle refreshes of a tick each */
     g_xray_turns=0; g_tmpdm_invalidate(); compose_map(w); present_map(); }
 /* a spell tile in flight to (tx,ty); 1 = it got there */
 static int spell_flight(const world_t*w,int tx,int ty,int tile)
@@ -10196,6 +10206,9 @@ static int      g_rest_fed, g_rest_meal; /* members that had food; the mealtime 
 static uint32_t g_rest_tick;             /* 200 Hz stamp of the last rest turn */
 static uint16_t g_rest_base[8]; static uint8_t g_rest_tpd[8], g_rest_slept[8];   /* shapes to restore; who slept */
 #define REST_TURN_TICKS 25               /* one rest turn per 1/8 s: eight hours pass in six seconds */
+#define MEAL_LINE_TICKS 44               /* a member's mealtime line every 4 DOS ticks (18.2 Hz), timed in DOS */
+#define MEAL_TICKS     600               /* the mealtime lasts 3 s from "Mealtime!" (2.9 s music on, 3.0 s off, in DOS) */
+static uint32_t g_rest_meal_t0;          /* when "Mealtime!" was printed */
 /* a town: a MAP tile within 5 of (x,y) with the Wall flag and a wall-direction bit (rest.md §1) */
 static int rest_in_town_at(const world_t*w,int x,int y)
 {   for(int dy=-5;dy<=5;dy++) for(int dx=-5;dx<=5;dx++){ int t=world_tile(w,x+dx,y+dy);
@@ -10278,7 +10291,8 @@ static void rest_tick(world_t*w)
     if(g_rest_meal==0){ int n=msgcat(0,"Mealtime!");                                       /* a bard plays */
         for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a>1 && g_ahp[a]>0 && actor_objn(a)==386){ g_abase[a]=(uint16_t)basetile(392); g_atile[a]=g_abase[a];
             n=msgcat(n," "); n=msgcat(n,g_party[p].name); n=msgcat(n," plays a tune."); break; } }
-        g_rest_meal++; return; }
+        g_rest_meal++; g_rest_meal_t0=plat_ticks_200hz();                                   /* the first member's line comes with it */
+        { int ap=g_msg_append; g_msg_append=1; rest_tick(w); g_msg_append=ap; } return; }
     if(g_rest_meal<=g_nparty){ int p=g_rest_meal-1, a=g_party[p].actor, k=-1;                  /* each eats its own food, else anyone's */
         for(int i=0;i<g_ow.ninv&&k<0;i++) if(is_food_objn(g_ow.inv[i].obj_n)==1&&(g_ow.inv[i].owner?g_ow.inv[i].owner:1)==a) k=i;
         for(int i=0;i<g_ow.ninv&&k<0;i++) if(is_food_objn(g_ow.inv[i].obj_n)==1&&!g_away[g_ow.inv[i].owner]) k=i;
@@ -10985,17 +10999,17 @@ static void potion_to_member(int m)
     if(g_potion_idx>=0){ wobj_t*po=&g_wobj[g_potion_idx]; if(po->qty>1) po->qty--; else { obj_destroy(g_potion_idx); build_blocked(); } g_potion_idx=-1; }
     else if(g_ow.inv[row].qty>1) g_ow.inv[row].qty--;
     else { for(int k=row;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0; }
-    int n=msgcat(0,g_party[m].name); n=msgcat(n,": ");
+    g_msg[0]=0;                                                              /* DOS says nothing after a dose, but X-ray's Done (seen in DOS) */
     switch(g_potion_frame){
-    case 0: g_asleep[a]=0; msgcat(n,"awake."); break;                       /* blue */
-    case 1: g_poison[a]=0; msgcat(n,"cured."); break;                       /* red */
-    case 2: if(g_amaxhp[a]) g_ahp[a]=g_amaxhp[a]; msgcat(n,"healed."); break;   /* yellow */
-    case 3: g_poison[a]=10; msgcat(n,"poisoned!"); break;                   /* green */
-    case 4: g_asleep[a]=8; msgcat(n,"falls asleep."); break;                /* orange */
-    case 5: g_protect[a]=30; msgcat(n,"protected."); break;                 /* purple */
-    case 6: g_ainvis[a]=1; msgcat(n,"vanishes!"); break;                    /* black */
-    case 7: if(g_wp) xray_view(g_wp); msgcat(n,"sees through walls!"); break;         /* white: x-ray sight (usecode_use.md) */
-    default: msgcat(n,"No effect"); break; }
+    case 0: g_asleep[a]=0; break;                                            /* blue */
+    case 1: g_poison[a]=0; break;                                            /* red */
+    case 2: if(g_amaxhp[a]) g_ahp[a]=g_amaxhp[a]; break;                     /* yellow */
+    case 3: g_poison[a]=10; break;                                           /* green */
+    case 4: g_asleep[a]=8; break;                                            /* orange */
+    case 5: g_protect[a]=30; break;                                          /* purple */
+    case 6: g_ainvis[a]=1; break;                                            /* black */
+    case 7: if(g_wp) xray_view(g_wp); msgcat(0,"Done"); break;               /* white: x-ray sight (usecode_use.md) */
+    default: msgcat(0,"No effect"); break; }
     sync_party_hp();
 }
 /* the gem's overview: 48x48 tiles around the party, chunk-aligned, one 3x3 block per tile */
@@ -13604,6 +13618,16 @@ int main(int argc, char **argv)
                     use_object(ck); PS_MSG("crank again"); int f6=obj_idx_at(303,385,269), f7=obj_idx_at(306,385,269), f8=obj_idx_at(310,385,269);
                     dbg_num("PS closed frames 6/7/8 ok=", (f6>=0&&PS_FR(f6)==6) + (f7>=0&&PS_FR(f7)==7)*10 + (f8>=0&&PS_FR(f8)==8)*100); int open_left=0; for(int y=386;y<400;y++) open_left+=obj_idx_at(304,y,269)>=0; dbg_num("PS open pieces left=", open_left); dbg_num("PS crank frame=", PS_FR(ck));
                     (void)do_save(&w); dbg_num("PS saved closed row (306,385)=", PS_TMPL(269,306,385,0,(int*)0)); dbg_num("PS saved open (306,386)=", PS_TMPL(269,306,386,0,(int*)0)); dbg_num("PS objlist ok=", g_objlist_off==sav_objlist_off(g_savetmpl,g_savetmpl_len)); }
+            }
+            if(mode=='8'){                                             /* the far crank: DOS opens the bridge beside it, not the castle's */
+                int ok=travel_to(&w,789,958,0); dbg_num("PS at the far crank=", ok); int ck=obj_idx_at(789,959,288); dbg_num("PS far crank found=", ck>=0);
+                if(ok && ck>=0){ use_object(ck); PS_MSG("far crank");
+                    int f=0; for(int y=960;y<=961;y++) f+=(obj_idx_at(786,y,269)>=0&&PS_FR(obj_idx_at(786,y,269))==3)+(obj_idx_at(787,y,269)>=0&&PS_FR(obj_idx_at(787,y,269))==4)+(obj_idx_at(788,y,269)>=0&&PS_FR(obj_idx_at(788,y,269))==5);
+                    dbg_num("PS far open rows 960-961 ok (6)=", f); int e=(obj_idx_at(786,962,269)>=0&&PS_FR(obj_idx_at(786,962,269))==0)+(obj_idx_at(787,962,269)>=0&&PS_FR(obj_idx_at(787,962,269))==1)+(obj_idx_at(788,962,269)>=0&&PS_FR(obj_idx_at(788,962,269))==2);
+                    dbg_num("PS far last row 962 ok (3)=", e); int c=0; for(int x=785;x<=788;x++) c+=obj_idx_at(x,959,269)>=0; dbg_num("PS far closed row left=", c);
+                    int cr=0; for(int x=303;x<=310;x++) cr+=obj_idx_at(x,385,269)>=0; dbg_num("PS castle closed row (8)=", cr); dbg_num("PS far crank frame=", PS_FR(ck));
+                    use_object(ck); PS_MSG("far crank again"); c=0; for(int x=785;x<=788;x++) c+=obj_idx_at(x,959,269)>=0; dbg_num("PS far closed row back (4)=", c);
+                    dbg_num("PS far start frame 6=", obj_idx_at(785,959,269)>=0&&PS_FR(obj_idx_at(785,959,269))==6); }
             }
             if(mode=='3'){                                             /* a slain NPC's body with its inventory, the dead flag, load-back, Resurrect */
                 int id=-1, bd=1<<30, inv0=0;
@@ -16550,7 +16574,9 @@ int main(int argc, char **argv)
         if (g_gw && !g_gw_hold) { uint32_t t=plat_ticks_200hz();                       /* the moongate walk, a step per 1/8 s (moongates.md §2b) */
             if (t-g_gw_tick>=GW_TICKS) { g_gw_tick=t; gw_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
         if (g_resting) { uint32_t t=plat_ticks_200hz();                               /* the camp: a rest turn per 1/8 s (rest.md §3) */
-            if (t-g_rest_tick>=REST_TURN_TICKS) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
+            int due = g_rest_meal>=1 && g_rest_meal<=g_nparty ? t-g_rest_tick>=MEAL_LINE_TICKS     /* the mealtime as DOS paces it */
+                    : g_rest_meal==g_nparty+1 ? t-g_rest_meal_t0>=MEAL_TICKS : t-g_rest_tick>=REST_TURN_TICKS;
+            if (due) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
         if (g_travel_active && !key && !g_talking && !g_show_inv && !g_casting && !g_save_menu && !g_pending_verb) {
             if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;   /* arrived */
             else { int sx,sy;

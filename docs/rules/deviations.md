@@ -5,7 +5,7 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows)
+> - Last updated: 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found)
 
 ## A choice for the user: DOS's own faults we don't copy
 | Difference | Where | Why it's a question |
@@ -30,9 +30,12 @@ register is empty. What's left is listed by why it's left.
 | Schedule walkers re-use a route of up to 16 steps, as DOS keeps its stored path, but found by our own search | design/performance.md |
 | No memory for a level leaves the party where it stood; DOS can't fail there | moongates.md §5 |
 
-## Not worked out yet
-| Question | How to settle it |
-|---|---|
-| Which bridge the far cranks move: all four cranks and every piece have quality 0 in the data, so DOS probably moves the castle's | See it in DOS (dosbox) before changing ours |
-| How long the mealtime lasts: DOS runs it for one bar of a tune | Time it in DOS |
-| X-ray's wall time: DOS redraws 100 times, however long that took; ours holds 100 frames | Time it in DOS |
+## Not built yet
+| Difference | Where | How to settle it |
+|---|---|---|
+| The spell-cast effect: DOS runs a routine (15 callers, X-ray among them) that sounds a sweep pitched by the spell's circle and redraws the map window in shifted colours for about 2.8 s before the spell acts. u6e has neither | magic_skills.md | Read the routine and its video-driver calls in GAME.EXE, then build it; seen in DOS while timing X-ray |
+
+## Settled in DOS (2026-11-05, DOSBox-X, the GOG copy)
+- The far cranks work their own bridge (DOS holds only the superchunks round the party); u6e now finds the bridge the same way.
+- The mealtime lasts 3 s from `Mealtime!`, a member every 4 ticks; u6e now paces it so.
+- X-ray holds 5.48 s (100 ticks), then `Done`; u6e now holds it so, and potions print nothing else, as in DOS.

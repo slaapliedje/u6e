@@ -146,10 +146,10 @@ containers (jars/buckets/vases/casks). Hook: PERSIST.REQ '4' (below).
   73 portcullises and all 13 electric fields in the world stand on doorway tiles (frames: a frame-1
   doorway carries a frame-1 portcullis 47×, frame-3 → 3 24×, frame-9 → 1 2×). The force fields (51,
   qualities 0-7) are NOT lever targets (they are the shrine mechanism).
-- **Crank (288)**: drives a **drawbridge (269)**. Find the bridge: the first 269 at (crank.x+1,
-  crank.y+i), i = 0..5 (the left crank), else one at (crank.x−1, crank.y+i) means the right crank —
-  walk left along the crank's row to the other crank and take (its x+1, its y+i). The bridge is OPEN
-  if that start piece has frame 3. Remove every piece: the end piece at (x−1,y), then rows from y
+- **Crank (288)**: drives a **drawbridge (269)**. Find the bridge as DOS does (see "Crank: which bridge"
+  below, seen in DOS 2026-11-05; the position search this line used to give is gone): from a
+  closed row's left end (frame 6) the open rows start one tile right of it; from a top open row's
+  left end (frame 3) they start there. The bridge is OPEN if that piece has frame 3. Remove every piece: the end piece at (x−1,y), then rows from y
   downward, each row from x rightward until a tile without a piece (the first row's length = the
   width W). Then **open** (`Open the drawbridge.`): rows from y+1 down — frame 3 at x, frame 5 at
   x+W−1, frame 4 between — until the tile below the row is passable map, then a last row of frame 1
@@ -256,7 +256,7 @@ the Wall-only tiles are doorways, arches and the open secret door frames — fix
   meridians 38 / 45, the gargoyle world x/2, y/2. Elsewhere "Not usable".
 - **Potions (275, frame = colour).** U)se asks "On whom:" — a party member by number 1..5 (only
   the party can be dosed). blue 0 wakes a sleeper, red 1 cures poison, yellow 2 heals to full,
-  green 3 poisons, orange 4 puts to sleep, purple 5 protects, black 6 makes invisible, white 7
+  green 3 poisons, orange 4 puts to sleep, purple 5 protects, black 6 makes invisible, white 7 gives the X-ray view and prints `Done`; nothing else is printed (seen in DOS 2026-11-05 for white, black, purple and orange; superseding the next words), white 7
   (the original's x-ray vision) has no effect here. The potion is used up. A dead companion
   (0 HP, combat.md §3d) cannot be dosed: "No effect", and the potion is kept.
 - **Runes (242..249 = the eight virtues, Honesty first).** U)se asks "Mantra:" — a typed word.
@@ -587,7 +587,7 @@ Where this section differs from the older sections above, this one is the rule. 
 
 **Horse (430):** by the acting member: Sherry `Sherry says: "Eeek!!! I'm afraid of horses!"`, Beh Lem `BehLem says: "Horses are for food!"`, already riding `You're already on a horse!`. A town's horse (actor under 224): `Not boardable!`.
 
-**Lever:** closing onto something: `can't close the portcullis.`, and the rest of its gates stay as they are. A new portcullis has frame 3 where the doorway's frame has bit 1, else frame 1. **Passthrough:** only closing can be refused by an actor (`Not now!`). **Crank:** a closed bridge that can't move says `Can't close the drawbridge.` or `Can't open the drawbridge.`
+**Lever:** closing onto something: `can't close the portcullis.`, and the rest of its gates stay as they are. A new portcullis has frame 3 where the doorway's frame has bit 1, else frame 1. **Passthrough:** only closing can be refused by an actor (`Not now!`). **Crank: which bridge** (seen in DOS 2026-11-05): DOS takes the first piece whose quality is the crank's among the objects it holds, the 2x2 superchunks round the party, so a crank always works its own bridge; at the far bridge the crank at (789,959) opened rows 960-961 (frames 3,4,5) and the end row 962 (0,1,2) and left the castle's alone. The piece found is the closed row's left end (frame 6) or the top open row's left end (frame 3); none in reach: `No correspondent drawbridge`; another frame: `Strange, nothing happened.` Hook PERSIST.REQ '8'. A closed bridge that can't move says `Can't close the drawbridge.` or `Can't open the drawbridge.`
 
 **Food and drink in the pack** work the same as on the map. Things that also work where they lie: fan, pole, sextant, runes, orb, cube, balloon; readied-only ones still say `Not readied.` A readied thing is used by picking its slot on the status display.
 

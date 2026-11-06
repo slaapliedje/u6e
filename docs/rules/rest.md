@@ -79,7 +79,8 @@ Aboard a **ship** the command is the hull repair of cannons.md §2 (no prompts).
 - The horse refusal is tested before the vehicle one (the reference's "in a vehicle" means the
   vehicle actor is the player; a rider there is still the Avatar, so its order coincides).
 - "Not in solo mode!" never fires (no solo mode).
-- No pathfinding to the circle; the mealtime is paced per rest turn instead of per 500 ms.
+- No pathfinding to the circle.
+- **Mealtime pacing** (timed in DOS 2026-11-05, GOG copy, 3000 cycles): `Mealtime!`, the bard's line and the first member's line come together; then one member a line every 4 DOS ticks (0.22 s); the sleep starts 3 s after `Mealtime!` (2.9 s with music, 3.0 s without; DOS ends it with a tune's cycle). u6e: 44 and 600 ticks of 200 Hz. The sleep that follows took 5.6 s for 8 hours in DOS; u6e's 1/8 s a turn takes 6 s.
 - The "in town" scan takes every map tile within 5, not only the currently visible ones.
 
 ## 6. Test hook
