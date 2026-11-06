@@ -5,7 +5,7 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found)
+> - Last updated: 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
 
 ## A choice for the user: DOS's own faults we don't copy
 | Difference | Where | Why it's a question |
@@ -29,13 +29,10 @@ register is empty. What's left is listed by why it's left.
 | The view dissolve takes about 0.6 s on a TT and 3 s on an 8 MHz ST, drawn in steps on TT and Falcon; DOS runs it at CPU speed | moongates.md §6 |
 | Schedule walkers re-use a route of up to 16 steps, as DOS keeps its stored path, but found by our own search | design/performance.md |
 | No memory for a level leaves the party where it stood; DOS can't fail there | moongates.md §5 |
-
-## Not built yet
-| Difference | Where | How to settle it |
-|---|---|---|
-| The spell-cast effect: DOS runs a routine (15 callers, X-ray among them) that sounds a sweep pitched by the spell's circle and redraws the map window in shifted colours for about 2.8 s before the spell acts. u6e has neither | magic_skills.md | Read the routine and its video-driver calls in GAME.EXE, then build it; seen in DOS while timing X-ray |
+| The cast effect's two sweeps vary the speaker's duty; the YM can't, so u6e plays the pitch with the volume following the duty (added 2026-11-05, after the user accepted the machine rows) | magic_skills.md §12 |
 
 ## Settled in DOS (2026-11-05, DOSBox-X, the GOG copy)
 - The far cranks work their own bridge (DOS holds only the superchunks round the party); u6e now finds the bridge the same way.
 - The mealtime lasts 3 s from `Mealtime!`, a member every 4 ticks; u6e now paces it so.
 - X-ray holds 5.48 s (100 ticks), then `Done`; u6e now holds it so, and potions print nothing else, as in DOS.
+- The cast effect, found while timing X-ray, is built: the rattle, the view XORed with 0x0D while two sweeps play, for the sixteen spells DOS gives it (magic_skills.md §12).

@@ -7701,6 +7701,26 @@ static void view_dissolve(const world_t*w,int to_black)
         if(++n==4096){ n=0; present_map(); vsync_pump(); }
     } while(st!=1);
     ROW(MAPY+E_)[MAPX+E_]=newv[0]; present_map(); plat_chip_reset(mk_); }
+/* the cast effect (magic_skills.md §12): a rattle, then the view's colours XORed with 0x0D while two duty sweeps play */
+static void cast_effect(const world_t*w,int c)
+{   static const uint16_t ST_[9]={8810,7830,7060,6550,5950,5570,5180,4820,4480}, LO_[9]={2700,3000,1000,100,5000,4000,2500,1000,1},
+        HI_[9]={32700,31000,37000,45000,31000,34000,36500,39000,42000};
+    enum{ S_=160, E_=8 };
+    if(c<1||c>8||g_bot||g_look_test) return;
+    int snd=g_sfx_on&&!g_sound_off;
+    if(snd){ g_sfx_r4=(uint8_t)sfx_read(4); g_sfx_r5=(uint8_t)sfx_read(5); g_sfx_r10=(uint8_t)sfx_read(10); g_sfx_r7=(uint8_t)sfx_begin(); }
+    for(int i=0;i<10+2*c;i++){ int f=sfx_rand(100,700); if(snd) sfx_tone(f); for(int k=0;k<12;k++) sfx_wait(); }   /* 60 ms each */
+    compose_map(w);
+    for(int y=0;y<S_;y++){ uint8_t*r=ROW(MAPY+E_+y)+MAPX+E_; for(int x=0;x<S_;x++) r[x]^=0x0d; }
+    draw_border_tiles(); present_map();
+    {   int f=(int)((long)ST_[c]*20000L/65536L), p=125000/f, n=(c*4000+10000)/100;   /* 100 samples of 20 kHz a 200 Hz tick */
+        if(snd){ SFX_REG(4,p&0xff); SFX_REG(5,(p>>8)&0x0f); }
+        for(int sw=0;sw<2;sw++) for(int t=0;t<n;t++){
+            long th=sw?HI_[c]+(long)(LO_[c]-HI_[c])*t/n:LO_[c]+(long)(HI_[c]-LO_[c])*t/n;   /* the threshold the phase must pass */
+            int hi=(int)((65536L-th)>>8), v=(int)(13L*4*hi*(256-hi)/65536L);               /* the high part 0..256; loudest at half */
+            if(snd) SFX_REG(10,v); sfx_wait(); } }
+    if(snd){ SFX_REG(4,g_sfx_r4); SFX_REG(5,g_sfx_r5); SFX_REG(10,g_sfx_r10); SFX_REG(7,g_sfx_r7); }
+    compose_map(w); draw_border_tiles(); present_map(); }
 /* a missile-boundary tile (tileflags2 bit5) under or on (x,y) — our own vessel's parts excepted */
 static int missile_boundary_at(const world_t*w,int x,int y){
     if(g_tflags[world_tile(w,x,y)]&0x20) return 1;
@@ -9297,7 +9317,7 @@ static void wing_pass(const world_t*w,int ax,int ay)
 /* X-ray: a moment's view through the walls, no time passing (magic_skills.md §5e) */
 #define XRAY_TICKS 1099                  /* 100 DOS ticks of 18.2 Hz: 5.48 s timed in DOS */
 static void xray_view(const world_t*w)
-{   g_xray_turns=1; g_tmpdm_invalidate(); compose_map(w); present_map();
+{   cast_effect(w,5); g_xray_turns=1; g_tmpdm_invalidate(); compose_map(w); present_map();
     if(!g_look_test){ uint32_t t0=plat_ticks_200hz(); while(plat_ticks_200hz()-t0<XRAY_TICKS) vsync_pump(); }   /* DOS: 100 idle refreshes of a tick each */
     g_xray_turns=0; g_tmpdm_invalidate(); compose_map(w); present_map(); }
 /* a spell tile in flight to (tx,ty); 1 = it got there */
@@ -9348,6 +9368,9 @@ static int cast_spell_do(world_t*w,int caster,int spell,int dx,int dy){
         return 0;
     }
     const char*nm=g_spells[spell].name; int applied=1, recompose=0;
+    {   static const char*const fx_[]={"Create Food","Help","Light","Infravision","Great Light","Peer","Conjure","Locate",
+            "Insect Swarm","Negate Magic","Armageddon","Eclipse","Summon","Time Stop",0};    /* X-ray's is in xray_view, Wizard Eye's below */
+        for(int k=0;fx_[k];k++) if(!strcmp(nm,fx_[k])){ cast_effect(w,g_spells[spell].circle); break; } }
     { const char*pr_=spell_prompt(spell); if(pr_&&pr_[3]=='w') g_spell_quiet=0; }   /* DOS's result byte: the last single spell's, an area spell reads it */
     if(!strcmp(nm,"Heal")||!strcmp(nm,"Great Heal")){
         int tgt=caster, worst=0;
@@ -9475,7 +9498,7 @@ static int cast_spell_do(world_t*w,int caster,int spell,int dx,int dy){
     } else if(!strcmp(nm,"Peer")){                         /* gem overview of the area (§5) */
         overview_view(w,(int)w->px,(int)w->py,0); g_msg[0]=0; msgcat(0,"Done"); recompose=1;
     } else if(!strcmp(nm,"Wizard Eye")){                   /* a scouting eye — pan the overview (§5) */
-        wizard_eye(w); msgcat(0,"Done"); recompose=1;
+        cast_effect(w,6); wizard_eye(w); msgcat(0,"Done"); recompose=1;     /* DOS passes 6, not its circle */
     } else if(!strcmp(nm,"Invisibility")||!strcmp(nm,"Mass Invis")){   /* vanish (§5) */
         if(!strcmp(nm,"Mass Invis")){
             int ids[24], c=0, cx,cy;
@@ -13826,6 +13849,11 @@ int main(int argc, char **argv)
     }
     /* headless PARTY-DEATH checks (combat.md §3d): DEATH.REQ byte = mode ('1' = a companion, then the Avatar, in a dungeon) */
     {   int32_t xl_=0; if(plat_load_file("DISSOLVE.REQ",1,&xl_)){ compose_map(&w); present_map(); uint32_t t0=plat_ticks_200hz(); view_dissolve(&w,1); uint32_t t1=plat_ticks_200hz(); view_dissolve(&w,0); uint32_t t2=plat_ticks_200hz(); dbg_num("DV to black ticks=",(int)(t1-t0)); dbg_num("DV back ticks=",(int)(t2-t1)); dbg_num("DV planar=",g_native_planar); } }
+    {   int32_t cl_=0; const uint8_t*cq=(const uint8_t*)plat_load_file("CASTFX.REQ",1,&cl_);   /* the cast effect (magic_skills.md §12) */
+        if(cq && cl_>0 && cq[0]=='1'){ compose_map(&w); present_map(); uint32_t t0=plat_ticks_200hz(); cast_effect(&w,5); dbg_num("CF circle 5 ticks=",(int)(plat_ticks_200hz()-t0));
+            t0=plat_ticks_200hz(); cast_effect(&w,1); dbg_num("CF circle 1 ticks=",(int)(plat_ticks_200hz()-t0)); }
+        if(cq && cl_>0 && cq[0]=='2'){ compose_map(&w); for(int y=0;y<160;y++){ uint8_t*r=ROW(MAPY+8+y)+MAPX+8; for(int x=0;x<160;x++) r[x]^=0x0d; }
+            draw_border_tiles(); present_map(); Cconws("CF holding the flash\r\n"); for(;;) vsync_pump(); } }
     {   int32_t dl_=0; const uint8_t*dq=(const uint8_t*)plat_load_file("DEATH.REQ",1,&dl_);
         if(dq && dl_>0 && dq[0]=='1'){
             #define DE_READY() do { int n_=0; for(int sl_=0;sl_<EQ_NSLOTS;sl_++) if(g_aready[1][sl_]) n_++; dbg_num("DE avatar readied=", n_); } while(0)

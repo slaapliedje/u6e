@@ -877,3 +877,34 @@ in play the nearest-actor behaviour is expected. REMAINING: more per-spell effec
 **Timers (each ticks per minute):** Light 100, Great Light 255, Infravision 20, Eclipse 20, Negate Magic 20.
 
 Reference: ~/src/u6e-re/audits/audit_spells.md has the full comparison, outside the repo.
+
+## 12. The cast effect (read and seen 2026-11-05)
+
+> Provenance
+> - Derived from : reading GAME.EXE 4.5 (the effect routine, its two speaker helpers, the per-circle tables, the spell
+>   dispatch table and its 15 call sites); the GOG DOS copy observed in DOSBox-X (an X-ray potion, recorded at 25 fps).
+> - Validated by  : the colour rule and the flash length against the recording; the call list by reading.
+> - Confidence   : confirmed (colours, order, which spells); probable (the YM rendering of the sweeps).
+
+Sixteen spells announce themselves before they act, with circle c: Create Food, Help, Light (1); Infravision (2); Great
+Light, Peer (3); Conjure, Locate (4); Insect Swarm, X-ray (5); Negate Magic (6); Wizard Eye (7, but it passes 6, and only
+when cast); Armageddon, Eclipse, Summon, Time Stop (8). X-ray's potion goes through the same routine, so it has it too.
+Nothing is tested first: the effect comes as the spell starts.
+
+1. A rattle: 10 + 2c tones, each a random 100-700 Hz for 60 ms. The view is unchanged.
+2. The flash: every pixel of the 160x160 map view gets its colour index XORed with 0x0D (black becomes magenta, the
+   reds swap with oranges); the border drawn over the view's edge is untouched. It stays while two sweeps play, each
+   (4000c + 10000) samples of DOS's 20 kHz speaker synth, (0.5 + 0.2c) s: a square wave of phase step S[c] (Hz =
+   S x 20000 / 65536) whose high part shrinks as a threshold climbs from LO[c] to HI[c] by INC[c] a sample, then
+   grows back. Circle 5 holds 3.0 s (DOS measured 2.8 s). Sound off, the times are the same, silent.
+3. The view as it was.
+
+| c | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| S | 7830 | 7060 | 6550 | 5950 | 5570 | 5180 | 4820 | 4480 |
+| LO | 3000 | 1000 | 100 | 5000 | 4000 | 2500 | 1000 | 1 |
+| HI | 31000 | 37000 | 45000 | 31000 | 34000 | 36500 | 39000 | 42000 |
+| INC | 2 | 2 | 2 | 1 | 1 | 1 | 1 | 1 |
+
+u6e plays the sweeps on the YM as a square tone at the step's pitch, its volume following the duty (loudest at half),
+since the YM can't vary the duty. The bot and test hooks skip the effect.
