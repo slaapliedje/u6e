@@ -87,7 +87,8 @@ int monster_roll_stat(int base, rng_t *r)
 int monster_movetype(int obj_n)
 {
     switch (obj_n){
-    case 343: case 344: case 356: case 369: case 373: case 411: case 423: return MT_AIR_LOW;
+    case 343: case 344: case 355: case 356: case 362: case 367: case 369: case 372: case 411: case 423: return MT_AIR_LOW;
+    case 352: case 373: return MT_AIR_HIGH;                /* ghost, wisp: nothing on the map stops them */
     case 345: case 346: case 412: return MT_WATER_HIGH;
     case 414: case 415: return MT_WATER_LOW;
     case 365: return MT_NONE;

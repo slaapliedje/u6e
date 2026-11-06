@@ -240,3 +240,7 @@ the run ends with the eclipse on at noon so a capture shows the strip and the da
     (dither the pre-dim level selection, or ship dithered variants).
   - Repro: build a night pack (`START_MIN=0 make world-svm` / `gamedata-st`), stage `SHOT.REQ` +
     `LIGHTSTY.REQ`, boot gamef.prg (Falcon) or gamest.prg (ST), `shot2png` the dump.
+
+## 8. As DOS has it (read 2026-11-05; overrides §2)
+
+A level of light 0-7, worked out each minute: 0 in an eclipse, before hour 5, after hour 19, and on levels 1-4. Hour 5: minute/10 + 1. Hour 19: (59 - minute)/10 + 1. Otherwise 7. Below 4 with a light burning in the party or a Light spell running it is 4. At 7 there is no darkness at all, indoors or out; below it only what lies within that radius of the leader, or of a light, can be seen. **An eclipse** is the spell's, or all day on the first of months 3, 6, 9, 12.

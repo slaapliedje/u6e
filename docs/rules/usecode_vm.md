@@ -394,3 +394,9 @@ eval, IF/ELSE/ENDIF branching, keyword loop, BYE) for NPCs across CONVERSE.A/.B,
 host AND on the TT/Falcon. Game-mutation opcodes JOIN/LEAVE/GIVE/NEW/DELETE/HEAL/CURE/
 RESURRECT/WORKTYPE act on the live game (§6, §6b); NPCNEARBY stays stubbed. See also
 /docs/design/m4-usecode-gate.md.
+
+## 6g. Things and people, as DOS has them (read 2026-11-05; overrides §6c and §6f)
+
+Every operation asks one actor about its own things: HASOBJ(npc,obj,quality), with quality 0 any and otherwise exact; OBJCOUNT; CANCARRY = its strength × 20 less what it carries, in 0.1 stone. OBJINPARTY: the first member in view holding it. NEW and DELETE act on that actor; GIVE moves the whole record. RESURRECT: the first dead body the carrier holds. `Which of you?` is the script's own words. **Gold is coins,** carried by whoever has them.
+
+WORKTYPE sets the byte and nothing else (0x91 also lays the actor down). Worktype and alignment bytes are saved as they stand. A code from a script stays until the actor's schedule next begins an entry, if it is 0x80 up or 7; lower ones stay. 0x99 is a shove: 1 turn in 4, at the nearest within 8, near its post; no damage.

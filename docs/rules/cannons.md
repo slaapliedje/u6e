@@ -144,3 +144,9 @@ deletion's count / link re-index / tail / trailer fix-up and the hull qty patch;
 and the logic suite pass.
 Found and fixed on the way: S)ave captured the template length + objlist offset BEFORE the
 reconcile that may now shrink the template (a stale trailer offset in the written file).
+
+## 6. As DOS has it (read 2026-11-05; overrides the above)
+
+The ship's own shot is a plain missile, range 5, 1..30: **no burst**. Fired along the keel she swings broadside. Another ship: qty 0 can't be hurt; at 0 `Ship broken!`, removed. A boarded ship at 0 hull is a raft on the very tile with hull 10, and nothing is said. A miss on the ship is silent, and so is the hit.
+
+**A fixed cannon:** `Fire!`. It aims at the first actor on tiles 1-5 along its facing, else tile 6. The ball, tile 399, flies through actors and stops at a boundary. If it didn't reach its aim, a burst (tile 393, 16 sparks) on the tile past where it stopped. The top thing on the tile takes 1..60: no roll, no armour.

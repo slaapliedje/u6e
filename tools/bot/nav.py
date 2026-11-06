@@ -74,10 +74,18 @@ class Nav:
             self.doors[(x, y)] = max(fr, 8)                    # treat as locked: route elsewhere
         return st
 
+    def dismiss(self):
+        """end a conversation someone else began"""
+        for _ in range(8):
+            st = self.g.state
+            if not st['ask']: return
+            self.g.type('n', enter=False) if st.get('askc') else self.g.type('bye')
+
     def goto(self, tx, ty, adj=False, keys=False, on_step=None, max_steps=3000, near=0):
         """walk to (tx,ty); adj=True stops orthogonally next to it (to use / get); near=r stops anywhere
         within r tiles of it (to talk through the crosshair)"""
         st = self.g.state
+        self.dismiss()
         if st['ask'] or st['cast'] or st['mantra'] or st['verb']:
             raise NavError('cannot walk: in a prompt (ask=%s cast=%s mantra=%s verb=%r)' % (st['ask'], st['cast'], st['mantra'], st['verb']))
         self.ensure()
@@ -105,6 +113,7 @@ class Nav:
                 fr = self.doors.get((nx, ny))
                 if fr is not None and fr >= 4: self.open_door(nx, ny, d)
                 st = self.keyfn(d); steps += 1
+                if st['ask']: self.dismiss(); st = self.g.state          # someone came up and spoke (worktype 0x96)
                 if self.g.state['L'] != self.level: return st          # a level change ends the walk
                 jx = (st['X'] - x + self.span // 2) % self.span - self.span // 2
                 jy = (st['Y'] - y + self.span // 2) % self.span - self.span // 2

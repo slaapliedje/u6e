@@ -50,7 +50,7 @@ def seg_shop(p, kw):
     out = p.talk_to(22, ['buy', 'torc', '1', str(many)], 'Efram')
     g2, t2 = p.g.state['gold'], pack_qty(p, 90)
     p.log('  Efram, %d asked: gold %d -> %d, torches %d -> %d' % (many, g1, g2, t1, t2))
-    if g2 < 0 or g1 - g2 != 3 * (t2 - t1) or g2 >= 3: p.issue('shop', 'asking %d torches with %d gold: gold %d, torches +%d' % (many, g1, g2, t2 - t1))
+    if g2 < 0 or g1 - g2 != 3 * (t2 - t1) or t2 <= t1: p.issue('shop', 'asking %d torches with %d gold: gold %d, torches +%d' % (many, g1, g2, t2 - t1))
 
 def seg_healer(p, kw):
     """Tiberius (26) heals in his shop 9-18 (worktype 0x90). Carrying a companion's body, he asks 400
@@ -61,9 +61,9 @@ def seg_healer(p, kw):
     more, else refused; a companion holds no gold); all well when nobody is hurt"""
     if not wait_for_work(p, 26, 'Tiberius'): return
     party = p.g.state['party']; g0 = p.g.state['gold']
-    dead = [m['id'] for m in party if m['hp'] == 0]
+    dead = missing(p)
     q = getattr(p, 'expect_body', None)
-    if q: p.approach(26); party = p.g.state['party']; g0 = p.g.state['gold']; dead = [m['id'] for m in party if m['hp'] == 0]
+    if q: p.approach(26); party = p.g.state['party']; g0 = p.g.state['gold']; dead = missing(p)
     if q and not [r for r in p.g.objects()[1] if r['obj'] == 339 and r['q'] == q]:   # lost on the way (the Avatar fell, all were recalled)
         p.issue('healer', 'the body of %d was gone before Tiberius (party %s, msg %r)' % (q, party, p.g.state['msg'][:80])); return
     hurt = [m['id'] for m in party if m['hp'] < m['max']]                # the numbered "Which of you?" list
@@ -102,6 +102,10 @@ def seg_healer(p, kw):
 def member(p, aid):
     return next((m for m in p.g.state['party'] if m['id'] == aid), None)
 
+def missing(p):
+    """of the starting party, who is off the roster: a dead companion leaves it (combat.md §3d)"""
+    return [a for a in (2, 3, 4) if not member(p, a)]
+
 def strike(p, aid, name, waits=8):
     """A)ttack party member aid once it stands beside the Avatar (walking up to it); the state after"""
     for _ in range(waits):
@@ -119,7 +123,7 @@ def strike(p, aid, name, waits=8):
 def seg_death(p, kw):
     """the Avatar strikes Shamino (3) until he is hurt, then Iolo (4) until he dies (combat.md §3d):
     a struck companion never turns hostile; at 0 HP "Iolo killed!", his body (339, quality 4) lies
-    where he stood, he leaves the map but stays in the roster at 0 HP, and karma drops 5; then the
+    where he stood, holding what he had; he leaves the map and the roster; karma stays; then the
     Avatar picks the body up (the healer segment takes it to Tiberius)"""
     if p.g.state['foes'] and p.foes(): p.fight()                        # an attack takes its time now: they'd answer
     k0 = p.g.state['karma']; p.meant.add(4)
@@ -131,7 +135,7 @@ def seg_death(p, kw):
     p.log('  Shamino struck: %r, hp %d/%d' % (st['msg'], m3['hp'], m3['max']))
     if m3['hp'] == m3['max']: p.issue('death', 'Shamino never hurt in 40 blows (%r)' % st['msg'])
     if a3 and a3['hostile']: p.issue('death', 'Shamino turned hostile when struck')
-    for _ in range(60):
+    for _ in range(200):
         a = p.actor(4)
         if not a: break
         spot = (a['x'], a['y'])
@@ -139,13 +143,13 @@ def seg_death(p, kw):
         if st is None: p.issue('death', 'Iolo never came beside the Avatar'); return
         if p.actor(4) and p.actor(4)['hostile']: p.issue('death', 'Iolo turned hostile when struck'); return
         if 'Iolo killed' in st['msg']: break
-    else: p.issue('death', 'Iolo alive after 60 blows (%r)' % st['msg']); return
+    else: p.issue('death', 'Iolo alive after 200 blows (%r)' % st['msg']); return
     if not p.g.state['party'] or 'spot' not in locals(): p.issue('death', 'Iolo was gone before the blows'); return
     p.log('  Iolo: %r at %s, karma %d -> %d' % (st['msg'], spot, k0, p.g.state['karma']))
     if 'Iolo killed' not in st['msg']: p.issue('death', 'no "Iolo killed!" (%r)' % st['msg'])
     if p.actor(4): p.issue('death', 'dead Iolo still on the map: %r' % p.actor(4))
-    if not member(p, 4) or member(p, 4)['hp'] != 0: p.issue('death', 'roster after the death: %r' % p.g.state['party'])
-    if p.g.state['karma'] != max(k0 - 5, 0): p.issue('death', 'karma %d -> %d' % (k0, p.g.state['karma']))
+    if member(p, 4): p.issue('death', 'roster after the death: %r' % p.g.state['party'])
+    if p.g.state['karma'] != k0: p.issue('death', 'karma %d -> %d' % (k0, p.g.state['karma']))
     body = [o for o in p.g.objects()[0] if o['obj'] == 339 and o['q'] == 4]
     if not body: p.issue('death', 'no body of Iolo near %s' % (spot,)); return
     b = body[0]
@@ -161,7 +165,7 @@ def seg_help(p, kw):
     """C)ast Help with a companion dead (magic_skills.md §5d): Lord British's revival. The party must
     stand in the throne room (307,352) on the surface, the dead up on the map, everyone at full HP,
     the hour one when he sits on his throne, karma unchanged"""
-    dead = [m['id'] for m in p.g.state['party'] if m['hp'] == 0]
+    dead = missing(p)
     k0 = p.g.state['karma']
     st = p.key('c', 'cast')
     if not st['cast']: p.issue('help', 'C did not open the spell prompt'); p.idle(); return
@@ -173,7 +177,7 @@ def seg_help(p, kw):
     p.log('  Help: %r, L%d (%d,%d) %02d:%02d, dead %s -> party %s, karma %d -> %d' % (st['msg'][:80], st['L'], st['X'], st['Y'], hour, st['min'] % 60, dead,
           ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in st['party']), k0, st['karma']))
     if (st['L'], st['X'], st['Y']) != (0, 307, 352): p.issue('help', 'Help landed at L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
-    if any(m['hp'] != m['max'] for m in st['party']): p.issue('help', 'not all healed: %r' % st['party'])
+    if not st['foes'] and any(m['hp'] != m['max'] for m in st['party']): p.issue('help', 'not all healed: %r' % st['party'])   # eggs hatch at the castle on arrival
     for d in dead:
         if not p.actor(d): p.issue('help', 'dead %d not back on the map' % d)
     if not (8 <= hour < 12 or 14 <= hour < 18): p.issue('help', 'hour %d: Lord British is not on his throne' % hour)
@@ -202,7 +206,7 @@ def seg_sell(p, kw):
         for r in p.g.ready: c[r['obj']] = c.get(r['obj'], 0) + 1
         return c
     g0 = p.g.state['gold']; pack0 = carried()
-    out = p.talk_to(18, ['sell', '1', 'y'], 'Max')         # which of you: 1 (the Avatar holds the pooled pack, usecode_vm.md §6f)
+    out = p.talk_to(18, ['sell', '1', '1', 'y'], 'Max')         # which of you: 1 (the Avatar holds the pooled pack, usecode_vm.md §6f)
     if out is None: p.issue('sell', 'could not reach Max'); return
     text = ' '.join(r for _, r in out)
     m = re.search(r'take (\d+) gold for that ([^,?]+)', text)
@@ -212,7 +216,7 @@ def seg_sell(p, kw):
     p.log('  Max: offer %s, gold %d -> %d, pack lost %s' % (m and m.groups(), g0, g1, gone))
     if not m: p.issue('sell', 'no offer from Max: %r' % out[-3:]); return
     if re.search(r'Aye,\s+has', text): p.issue('sell', 'no name in the offer: %r' % text[:120])
-    if g1 - g0 != int(m.group(1)) or sum(gone.values()) != 1: p.issue('sell', 'sold %s for %s: gold %d -> %d, pack lost %s' % (m.group(2), m.group(1), g0, g1, gone))
+    if g1 - g0 != int(m.group(1)) or sum(v for o, v in gone.items() if not 65 <= o <= 72) != 1: p.issue('sell', 'sold %s for %s: gold %d -> %d, pack lost %s' % (m.group(2), m.group(1), g0, g1, gone))
 
 CAVE = (185, 436)                                     # the nearest cave west of Britain that can be walked to (obj 326)
 
@@ -487,7 +491,7 @@ def seg_paid(p, kw):
     if not tiberius_cure(p): return
     g0 = p.g.state['gold']
     seg_death(p, kw)
-    if member(p, 4)['hp'] != 0: return
+    if member(p, 4): return
     p.expect_body = 4
     try: seg_healer(p, kw)
     finally: p.expect_body = None

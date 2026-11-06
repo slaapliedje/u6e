@@ -241,6 +241,8 @@ screens. Nobody had run that machine since the first round. BSS is now 1,033,080
 Frame times are unchanged within noise (TT and Falcon scroll benches against the last commit). On all
 three: convert, title menu, play, S)ave, reboot, Journey Onward, "Game restored.".
 
+**2026-11-05:** the view dissolve's two copies (62 KB of BSS) and a dead fade buffer (31 KB) had taken the 4 MB TT to 63 KB free in play, below the 72 KB a level change needs: "Not enough memory to change level." at the first cave. The dissolve's copies are now pool transients (the ST uses its second screen), the fade buffer is gone, and BSS is 1,032,796 bytes.
+
 Rule of thumb kept: the margin is what the binary's growth leaves, so **a release test runs the 4 MB TT**,
 the tightest machine, not only the Falcon. Still in BSS if more is needed: `g_wobj` 216 KB, `g_dimcache`
 128 KB, four 31 KB map layers, the intro's `pbg` and `holdbg` (41 KB), the LZW dictionary 32 KB.

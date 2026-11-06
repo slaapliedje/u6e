@@ -24,7 +24,7 @@ enum { MF_POISON_IMMUNE = 1, MF_UNDEAD = 2, MF_SLEEP_IMMUNE = 4, MF_FLIES = 8, M
 int monster_flags(int obj_n);
 int monster_str_based(int obj_n);   /* its own blow rolls to hit on strength (combat.md §2) */
 /* movement types (combat.md §7c): what a creature type may step onto */
-enum { MT_LAND = 0, MT_AIR_LOW = 1, MT_WATER_HIGH = 2, MT_WATER_LOW = 3, MT_NONE = 4 };
+enum { MT_LAND = 0, MT_AIR_LOW = 1, MT_WATER_HIGH = 2, MT_WATER_LOW = 3, MT_NONE = 4, MT_AIR_HIGH = 5 };
 int monster_movetype(int obj_n);
 /* What a slain creature leaves (the reference's actor-type dead_obj_n / dead_frame_n; combat.md §3c,
  * usecode_use.md "Created and destroyed objects persist"): the remains' obj_n, or 0 for nothing; *frame = its

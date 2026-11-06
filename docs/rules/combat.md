@@ -111,58 +111,35 @@ holding the kit they hatched with (eggs.md §3c). This holds whoever strikes the
 (CORRECTED 2026-11-01: a foe the Avatar slew in melee used to vanish with no remains and no dead
 flag; only companions' blows and spells left them).
 
-## 3d. Death of a party member and of the Avatar (2026-10-31)
+## 3d. Death of a party member and of the Avatar (DOS GAME.EXE 4.5, read 2026-11-05)
 
-> Derived from READING the reference's `actor.lua` (actor_dead, actor_avatar_death, actor_resurrect,
-> get_LB_to_throne), `init.lua` (party_heal) and `party.cpp` (resurrect_dead_members), re-expressed.
-> Found missing by the bot harness: melee and foe spells took the Avatar and companions to 0 HP and
-> play went on.
+> Provenance: READING GAME.EXE 4.5: the damage routine $1c2e5, the body $affa, its unpacking $b112, Resurrect $12b02, the recall $890c
+> (the Avatar's death and the Help spell run this same routine) and the travel $8668. Re-expressed, no code transcribed.
 
-- **A companion at 0 HP dies** (any cause: a blow, a foe's spell, a field, poison). Its remains
-  (§3c; a person leaves a dead body, quality = the actor) lie where it stood and it leaves the map,
-  but it stays in the party, shown in the roster with 0 HP. It neither follows nor fights.
-  Its readied equipment stays with it (u6e pools the party's pack, so nothing is moved into the
-  body; the reference drops the companion's inventory into the body — deviation).
-  It comes back with the Resurrect spell cast on the body, a healer paid to raise the body the party
-  carries (usecode_vm.md §6f), or the Avatar's death below. A dead companion's body is temporary:
-  after a save and a load the companion is still dead (0 HP) with no body, and a healer raises it as
-  if the party carried one (§6f), or the Avatar's death revives it.
-- **Striking a companion** (from READING the reference's `actor.lua` actor_attack / actor_hit; found by
-  the bot harness): A)ttack may rest on a party member. The blow rolls to hit and for damage as against
-  anyone ("Hit Iolo!", "Iolo grazed.", "Missed Iolo."), but the companion never turns hostile, never
-  flees, and gives no experience. At 0 HP: "Iolo killed!" and it dies as above at the end of the turn.
-- **Karma**: a party member (the Avatar included) brought to 0 HP costs 5 karma ("allowing your
-  party to die is bad karma"), taken before the Avatar's experience loss below. u6e takes it at the
-  death itself, whatever the cause.
-- **Whenever a dead companion rises** (the Avatar's death, Help, the Resurrect spell or a healer), its
-  body is used up: the one the party carries first (a dead body, 339, whose quality names it), else
-  one on the map (reference: Actor::find_body). Before 2026-10-31 a carried body stayed in the pack
-  after Help or the Avatar's death had raised its owner (found by the bot).
-- A companion dies once: the death sets its dead flag (the one the save keeps), and only a
-  resurrection clears it; a dead companion that something puts back on the map is simply taken off
-  again, without a second body or karma loss.
-- Every cause (a blow, the Avatar's own, a field, poison) leaves the companion on the map at 0 HP
-  until the end of the turn, so the death above (remains, roster) always runs. A non-party actor
-  killed by a field or by poison leaves its remains like one slain in combat (§3c).
-- **The Avatar at 0 HP**: at the end of that turn —
-  1. "An unending darkness engulfs thee..." then "A voice in the darkness intones, "KAL LOR!"".
-  2. A horse is dismounted, a vessel left where it is.
-  3. Every dead companion stands up again (not after Armageddon).
-  4. The Avatar's readied items go back into the pack, except the amulet of submission (76).
-  5. The whole party is healed: full HP, no poison, sleep, paralysis or charm.
-  6. The party is moved to Lord British's throne room, (307,352) on the surface.
-  7. The clock runs on in whole hours until Lord British sits on his throne: an hour in 8..11 or
-     14..17.
-  8. Foes that were hunting the party forget it (they stop assaulting until they see it again).
-  9. The Avatar's experience becomes exp × karma / 100 when karma is below 98 (actor_resurrect).
-  10. Combat mode ends.
-  The reference also fades the screen and plays the death and KAL LOR sounds; u6e prints the two
-  lines only (deviation).
-- The key pressed in the frame the death is noticed is dropped: the death ends the turn.
-- Test hook: `DEATH.REQ '1'` (Dupre falls, then the Avatar, on dungeon level 1 at 20:00): body, off
-  the map, still in the party; then (307,352) on the surface at 08:00, everyone at full HP and cured,
-  Dupre back, exp 1000 → 500 at karma 50, combat mode off, the readied item in the pack, Lord British
-  at (307,348). Identical on the emulated TT and the stock 4 MB Falcon.
+**Killing anyone neutral** costs 5 karma, by whatever cause. Only that: a member's death costs none. A kill of anything with the
+evil bit gives the attacker (str + dex + int + hp + damage + exp of the creature table) / 4 experience, up to 9999.
+
+**A companion at 0 HP dies.** A body (quality = the actor) lies where it stood, **with everything it carried or had readied inside**;
+the body is an ordinary container and is saved. The dead one leaves the roster; it stays marked as in the party (status 0x80 with
+0x10) so that rising brings it back. A)ttack on a companion rolls as usual; at 0 "Iolo killed!".
+
+**Rising** (Resurrect, a healer, the recall): the body gives back what it holds, into the pack, the amulet of submission on, and
+is gone. Health 1, magic full, the conditions gone, experience × karma / 100 below karma 98. It stands on the first free tile of the
+rings around the body (out to 4), else on the body, and rejoins the roster at its end.
+
+**The recall** (the Avatar at 0 health at the end of its action, or the Help spell):
+1. At death only: "An unending darkness engulfs thee..." and the descending tones, the view blanks, a pause, then "A voice in the darkness
+   intones, "KAL LOR!"". The Avatar's experience × karma / 100 below karma 98. Its readied things go into the pack,
+   but for the amulet of submission.
+2. Every dead member rises (not after Armageddon).
+3. Any worktype 0x9b reverts (the struck forget). Temporary guards vanish.
+4. The party: asleep ends, good alignment, charmed, cursed, invisible, protected, poisoned, paralysed all gone, full health, points = dexterity.
+5. Every timer of magic ends. Horses dismounted, combat ends.
+6. The party is moved to (307,352) on the surface, level 0.
+7. The clock runs on 15 minutes at a time until an hour in 8..11 or 14..17, the schedules running.
+8. A view refresh and sound 21.
+
+(Ours: aboard a vessel it is left where it is. DOS leaves the Avatar's figure a ship in the castle.)
 
 ## 3e. What some creatures' blows do (DOS GAME.EXE 4.5, read 2026-11-05)
 After a blow lands on an actor that lives through it:
@@ -303,9 +280,6 @@ damage whose range reaches the target; with none, its bare hands (the creature t
 when the target is in that range with a clear line, else it moves. So a bow foe shoots from up to 5 tiles and, out of
 arrows, stands and does nothing there. A hatchling's arrows and thrown spares are those it was given (eggs.md §3c).
 
-Ours: a town NPC's pack isn't in memory, so it never runs out and doesn't lose what it throws. One person's arrows are
-the party's pooled pack (usecode_vm.md §6f). The order of a member's weapons is by slot, DOS's by carrying order. A
-triple crossbow's bolts fly one after the other. Sounds are not played.
 
 ## 7. Enemy AI (worktype)
 Hostile actors run worktype ASSAULT: each turn, path one step toward the nearest party member
@@ -545,3 +519,65 @@ mode.` at mounting; `You must be in party mode to enter.` at a moongate. A save,
 
 (Engine: whoever is played takes actor slot 1 and the Avatar its slot, since everything reads slot 1 as "the one at
 (px,py)"; they swap back before a save.)
+
+## 8b. The turn order and every worktype, as DOS has them (read 2026-11-05)
+
+> Provenance: READING GAME.EXE 4.5: the scheduler $1ab7d, the geometry $1a4b6, the worktype switch $19bda and its routines
+> ($1df2e-$1f690, $19046-$19b94). Re-expressed, no code transcribed. This replaces §7 and the places in §8.
+
+**Alignment** is a per-actor field, status bits 0x60: 0 neutral, 0x20 evil, 0x40 good, 0x60 chaotic. The leader is forced good.
+
+**Next to act** (each pass, after `geometry` below): the first actor at or above its dexterity in points, else the highest
+points/dexterity (equal: the higher dexterity), among the living, awake unless under the scheduled-sleep worktype, not paralysed,
+not hidden in a container or pack, on this level, with points above 0, within 39 tiles of the leader's 8-aligned window, and
+not a follower (worktype 1). Too far: its points go to 0, and if it was on its way to a scheduled place (0x83-0x86) it is put
+there at once and goes to 0x81. A follower at or below 0 points zeroes the leader's points. Nobody left: the minute ends.
+An actor under 0x80 first looks up its schedule. Whoever is under worktype 2 is at the keys: that is how a COMMAND member gets
+its turn, by its own points like anyone else. An actor swallowed by a corpser only struggles (§3e). Time Stop: any actor but
+the one at the keys loses its points. An action that spends nothing costs 10.
+
+**Who leads:** a leader paralysed, asleep, dead, swallowed or charmed hands the keys to the first member who isn't; the Avatar
+takes them back when able unless in Solo.
+
+**Geometry**, worked out every pass:
+- G, the party's centre: the mean position of the members, but those in FLANK or BERSERK; none: the leader.
+- E, the foes' centre: the mean position of every living actor with the evil bit (evil or chaotic) within 23 tiles of the leader
+  (one in worktype 7 only within 5). Counted as F. None: E = the leader's tile plus its facing, and F = 0.
+- If E = G, E moves one tile along the leader's facing.
+- Among living actors in worktype 2 or 3, measuring `along = (p-G)·(E-G)` and `across = (p-G)×(E-G)`: in the party the one
+  furthest along, and the most and least across; outside it the first such actor, the most and least across.
+
+**A place in the line** (FRONT's, returns "fight on" or "moved"), O and w being: for a member the leader and E minus the leader; for
+another G and the first enemy-line actor minus G. If there are no foes and the actor isn't in the party, it pays 5 and fights
+on. The place is the projection on w of the leader (for a member, plus |wx|+|wy|) or of that first actor. A taken place is moved
+one tile sideways, on the actor's own side of the line (a coin if on it), by whichever of the two axes changes the projection less, until
+free. If the place is outside the active window or is where it stands: fight on. Else it walks there; a failed walk restores its
+points and it assaults instead. A member still short of the place walks again (its points restored first if there are no foes).
+
+| Worktype | Does |
+|---|---|
+| 3 FRONT | A place. Then a member assaults; another beyond 7 of G pays 5, the first enemy-line actor 1 in 8 walks to G, else it assaults |
+| 4 REAR | No foes: a member walks to the leader, another pays 5. Else with O, w the party's centre and way to E (others: E and the way to G), and the line's rearmost FRONT of its own alignment: a member over 3 from the leader walks to it; level or ahead of that rearmost steps back along w; else outside the line's own edges steps back in; a failed or unneeded step restores its points and it assaults |
+| 5 FLANK | No foes, or another over 7 from the leader: a member over 2 away walks to the leader free of points, then pays 5. Else its target is the foe furthest out on its own side of the line, within 7 of the leader or 5 of itself (one in 7, 9, 0x9a only within 5 of the leader), hit if in range and clear (a blocked shot sidesteps at a right angle, either way); else it walks to the tile outward of the target. A failed walk: assault. No target: wander |
+| 6 BERSERK | Its target is the living enemy within 8 with the highest strength + dexterity + intelligence; no target: assault; hit if in reach and clear, else walk at it or sidestep as above; a failed walk: assault. Always 5 more |
+| 7 RETREAT | Over 7 from the leader: points to 0. Nearest foe within 7 runs it directly away; cornered, it assaults. A good one with no foe that close walks to G, others wander. 1 in 4: 1 health back, and at a quarter of its maximum it returns to the worktype it had |
+| 9, 0x13, 0x9a | As 7 with radius 2 (0x13 as 7's cornered rule; 9, 0x9a never fight), no healing, wander when clear |
+| 8, 0x9b ASSAULT | The nearest enemy within 8 (a coin on a tie; 0x9b, neutral, only at the good): §6c's weapon choice, hit if in range and clear; a blocked line sidesteps at a right angle; else walks at it. No target: wanders |
+| 0xa | A member within 2: 1 in 2 walks to G. Else 1 in 2 aims ten tiles one way on a random axis, else pays 5 |
+| 0xb | Same, but a member within 2: 1 in 8 becomes 8 and assaults |
+| 0xc, 0x8f | Wanders |
+| 0xd | The nearest enemy adjoining: 1 in 2 strikes it. Within 4, 1 in 4: a vine grows from it toward the enemy, on the longer axis, then the shorter. Else 1 in 4 it grows a random way, not back on itself; else its points go to 0 |
+| 0xe | Doesn't move. 16 tries at a random tile within 4: an enemy there, it strikes and pays 10. Else pays 5. A neutral one pays 5 |
+| 0xf, 0x10, 0x8b-0x8e | 1 in 2 a step along its facing (0x8b-0x8e: the fixed way if on the post), turning back if blocked; else 5 |
+| 0x12 | The arrest (usecode_use.md) |
+| 0x82-0x85 | Follows a walked path, in up to 8 parties, 0x86 at the end |
+| 0x90, 0x94 | At work: 1 in 8 a step toward its post by the longer axis, else 5 |
+| 0x96, 0x97 | Within 4 of the leader: walks to the nearest member and, adjoining, talks to it; 0x97 instead steals: a purse loses 10-30 unless int beats a roll |
+| 0x98 | Rings for the hour, once |
+| 0x99 | 1 in 4 goes for a nearby thing (see §8c); else as 0x90 |
+| others | 5 |
+
+**Walking to a tile** tries by the longer axis (ties and over 3 tiles by chance), then the diagonal, then the other axis, then 1 in 2 back
+the opposite way; if none it pays nothing but faces the way and fails. Within 4 tiles, the better axis first, a coin on a tie;
+further, axis chance is by distance. A worktype 0xe never moves, and pays 5.
+

@@ -35,7 +35,7 @@ int objworld_get(objworld_t *o, int idx)
 
     for (int i = 0; i < o->ninv; i++)            /* merge into an existing stack — same obj AND
                                                   * same quality (two different KEYS must not merge) */
-        if (o->inv[i].obj_n == w->obj_n && o->inv[i].quality == w->quality && o->inv[i].owner == o->add_owner) {
+        if (!o->no_merge && !o->inv[i].in && o->inv[i].obj_n == w->obj_n && o->inv[i].quality == w->quality && o->inv[i].owner == o->add_owner) {
             uint32_t t = (uint32_t)o->inv[i].qty + q;
             o->inv[i].qty = (uint16_t)(t > 65535u ? 65535u : t);
             w->alive = 0; w->dirty = 1; return 1;    /* taken -> re-serialise in-inventory on save */
@@ -47,6 +47,7 @@ int objworld_get(objworld_t *o, int idx)
     o->inv[o->ninv].qty     = q;
     o->inv[o->ninv].quality = w->quality;
     o->inv[o->ninv].owner   = o->add_owner;
+    o->inv[o->ninv].in = 0; o->inv[o->ninv].id = 0; o->inv[o->ninv].seq = 0;
     o->ninv++;
     w->alive = 0; w->dirty = 1;                       /* taken -> re-serialise in-inventory on save */
     return 1;

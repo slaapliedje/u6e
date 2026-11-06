@@ -172,7 +172,9 @@ class Player:
         for _ in range(abs(d[1])): self.key('down' if d[1] > 0 else 'up')
         st = self.key('ret', 'talk %d' % aid)
         if st['talk'] != aid:
-            self.issue('talk', 'T)alk to %d %s (%s) gave talk=%s msg=%r' % (aid, name, d, st['talk'], st['msg']))
+            a = self.actor(aid)
+            if not (a and a.get('wt') == 0x91 and 'No response' in st['msg']):                  # a sleeper doesn't answer (usecode_use.md)
+                self.issue('talk', 'T)alk to %d %s (%s) gave talk=%s msg=%r' % (aid, name, d, st['talk'], st['msg']))
             return None
         out = [('', st['conv'])]; self.numtry = {}
         for _ in range(6):                                      # the script poses questions first
@@ -256,6 +258,7 @@ class Player:
         while turns < max_turns:
             st = self.g.state
             if st['over']: self.issue('combat', 'game over in a fight'); return False
+            if not st['combat'] and not st['veh']: self.key('b', 'combat on')   # the recall ends combat mode, and followers stand aside without it
             fs = self.foes()
             if not fs: break
             total = sum(a['hp'] for a in fs)                    # hp of the foes in reach

@@ -57,6 +57,14 @@ typedef struct {
     char     party_name[16][16]; /* their names, for SETNAME ($Y) */
     int      nparty;
     const uint8_t *obj_weight; /* [1024] raw weights by obj_n (TILEFLAG; 0.1 stone), or NULL */
+    /* the engine's own packs, when it has them: each actor answers for itself (usecode_vm.md §6c). quality<0 = any */
+    int32_t (*inv_count)(int actor,int obj,int quality);
+    void    (*inv_new)(int actor,int obj,int quality,int qty);
+    void    (*inv_del)(int actor,int obj,int quality,int qty);
+    void    (*inv_give)(int from,int to,int obj,int quality);
+    int32_t (*inv_room)(int actor);
+    int     (*inv_seen)(int actor);          /* in view of the leader */
+    void    (*inv_resurrect)(int carrier);
     int32_t  party_room;       /* CANCARRY for a party member: the whole party's room, 0.1 stone */
 } cvm_game_t;
 

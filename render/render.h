@@ -139,6 +139,8 @@ void     rdr_ptmp_restore(const uint8_t *dmask);                        /* idle:
 void     rdr_pframe_end(void);                                          /* drain queued dynamic blits -> g_ptmp (Blitter) */
 void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit -> g_ptmp */
 void     rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar static blit -> g_pdimmed (4c) */
+int      rdr_pdissolve_begin(void);                                     /* the view changes pixel by pixel (moongates.md §6) */
+void     rdr_pdissolve_end(int to_black);
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
 int      rdr_native_planar_ok(void);   /* 1 = ST map uses a single LUT (no band raster) -> planar OK */
 int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller must rebuild the planar static */

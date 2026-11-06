@@ -732,3 +732,13 @@ neutral:
   under 0x12 become worktype 0x08 and alignment 0x20 (hostile).
 
 Our message box holds five lines, so we leave out the echoed Yes / No and the blank lines between these messages.
+
+## M)ove and more, as DOS has them (read 2026-11-05; overrides the above)
+
+**The crosshair finds nothing on a dark tile.** **M)ove on the map:** beside the leader or `Out of range!`; weight 0 or type 411 `Not possible`; an actor `Failed` by the strength test, if the leader or seated. 5 points. The first thing on the target, if a holder that takes it, has it inside: 98, 186, 192 at frame 0, 99, 188, 191, or the cube, taking anything but those three, under weight 255. Else it needs a tile it could stand on, or something with a top before a boundary; a diagonal needs one side clear too; otherwise `Blocked`, and the points are gone. A cannon turns whatever its way out. **How many? comes first** for a carried stack, then `Location: ` or `To `. Enter = all; 0, a bad number or too many stop it.
+
+**Gem, potion, moonstone** work where they lie within one tile. **A horse** carries its rider; the others walk. Dismounting puts the horse on the first free tile around by column, else `No room!` and it's gone. **Every theft** sounds 13. A sleeper or a body reads as what it is, and **a book's text goes in the scroll**. Asleep, an actor lies down, in a bed as 146; under 0x91 it stays down till its schedule moves on; a blow wakes it. A musician at work (0x95) shows shape 392 and its instrument plays.
+
+**D)rop on the map, as DOS has it (read 2026-11-05):** the target needs a tile the thing could stand on, or a thing with a top, or a first thing that is a holder that takes it; within 8 by the distance table of combat.md §6c, with a clear line; otherwise `Not possible`. 3 points. It flies there as a missile, whatever it is. Further than one tile, the breakables of the list above break. Otherwise a holder on the tile takes it, and anything else leaves it on top.
+
+**A crank, as DOS has it (read 2026-11-05):** it doesn't change frame. Closing, anything but a bridge piece on a piece's tile says `Can't close the drawbridge.`. Opening, rows run from the start until the map tile under the column after the end post is 16, 28, 32, 44 or 214; anything on the rows above that says `Can't open the drawbridge.`.

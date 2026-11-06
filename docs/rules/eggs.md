@@ -263,3 +263,7 @@ hostile gargoyles (hp ≈ 30 rolled) at distance 12; '2' standing on it hatches 
 Start of play: the throne-room egg at (307,350) hatches its 3 gargoyles in front of Lord
 British — Ultima VI's actual opening battle. LOAD.REQ '1': the hatch is remembered across a
 save + load (0 re-hatched, 2 eggs active).
+
+## 6. As DOS has it (read 2026-11-05; overrides the above)
+
+Only the 32 slots 224-255 hold hatchlings, last freed first; with none free it's skipped. A creature is by type alone (342 up, or 98). **The first piece of an egg stays on it, with no test.** The rest are tossed: 8 tries of d4 + d4 - 5 each way; away from a teleport not within 5 of the party on both axes; if none serves it never was. No grouping by type. Treaty: anyone of type 362 or 363 under an Avatar with the amulet (76) or Beh Lem in the party gets worktype 12. Worktype 6 on those types doubles strength, dexterity, intelligence. A tangle vine puts out four pods (366, worktype 13).

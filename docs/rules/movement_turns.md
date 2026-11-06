@@ -72,12 +72,22 @@ dexterity, so debts carry over and savings don't, and the clock moves one minute
 **Impedance:** the high nibble of tileflags1, for the map tile and for each thing on it, skipped for an
 impassable tile. So open ground costs 5, forest 12 and swamp 20.
 
-**Ours.** A command's price goes through `turn_spend`: the clock moves by the points over the pace, and each
-actor is paid those points × its dexterity / the pace, in sixteenths, keeps any debt, and acts while it is above
-0, at most four times a command. This gives the same actions per minute as DOS but not its order within the
-minute, and one effect timer tick per command. Actors beyond 39 tiles still walk (schedules depend on it).
-A follower out of combat walks each command, whatever its points. A mounted Avatar with followers pays the
-walkers' full price. Rest and the test hooks use the old way, everyone once. Timers keep their per-command tick.
+**Ours.** The same: `sched_run` picks as above and hands the keys back when the actor at them comes up (combat.md §8b). The clock moves in
+`minute_end`. What the minute does (`minute_effects`), from the routine behind DOS's clock: the magic timers (Light 100, Great Light 255,
+Infravision, Eclipse and Negate Magic 20, Time Stop 10 and it stops the clock too); torches and readied rings and cloak for the party; the
+conditions' own rolls (magic_skills.md §5b); the wind; what lies underfoot. On the hour: schedules (§8b), the drunk sobers, each magic-user
+gains mana equal to its level up to its maximum. **Nobody regains health by walking**, only by resting, potions, spells and the regeneration ring. R)est and the test hooks use `step_npcs`, a minute's worth for everyone at once.
+
+### 3c. Followers (DOS, read 2026-11-05)
+Out of combat the others take places behind the leader. Slot n (roster order, leader skipped) lies `back[n]` tiles behind it and
+`across[n]` to the side, along the leader's facing: across -1, 1, 0, -2, 2, -1, 1, -3, 3, 0; back 1, 1, 2, 2, 2, 3, 3, 3, 3, 1.
+Two passes after each step of the leader. In each pass, each follower: if it stands clear of those before it in the line and beside one of
+them it stays, except that in the second pass it still moves if its place lies ahead along the facing. Moving, it scores all eight neighbours it
+could enter: 0x100 (a damaging tile 0x80, or none at all if it was already beside someone); 0x100 more for ending beside one of those
+before it, or 0 if it was beside one and wouldn't be; less the distance to its place. It takes the best above 0. Either way it
+pays 5, each pass, so **10 points for each step of the leader**, and a follower at 0 or below ends the leader's points.
+
+Every other walker refuses a damaging tile.
 
 Until 2026-10-30 a step cost a flat **10 minutes** (a placeholder): a day passed in ~144 steps,
 about 40× too fast, so schedules, nightfall and torch fuel ran away while walking.

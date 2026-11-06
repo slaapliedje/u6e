@@ -842,3 +842,38 @@ member, not the slug) — the demo now aims down a VERIFIED-clear 8-way directio
 in play the nearest-actor behaviour is expected. REMAINING: more per-spell effects
 (travel/detection/utility need new systems); save-backed spellbook + current-mana
 (the mana offset is still OPEN — §8; max is modeled = Intelligence).
+
+## 11. The spells as DOS has them (read 2026-11-05; overrides everything above where they differ)
+
+> Provenance: READING GAME.EXE 4.5, the spell switch at $15495 and its helpers. Re-expressed, no code transcribed.
+
+**The contest.** A spell against a mind fails when target int / 2 + 15 - caster int > d30. Magic Arrow: fails when (target dex / 2 + 30 - caster int) / 2 > d30.
+
+**Damage from a spell** wakes the target and flashes it. It kills in silence. Lord British goes back to 255. The balloon takes none, what's aboard a skiff or raft passes to a random member, a ship at 0 becomes a raft with 10. Anger (the same rule as a blow) comes only from Harm, Disable, Magic Arrow, Fireball, Explosion, Lightning, Chain Bolt's first strike, Kill in all its forms, Energy Wind and Flame Wind.
+
+**The line:** tested, `Blocked!`: Douse, Vanish, Dispel Field, Animate, Replicate, Ignite and every "On whom" spell of the plain kind. Tested, `Blocked`: Reappear, area spells, fields, Web, Telekinesis, Pickpocket. Not tested: Detect Magic, Detect Trap, Trap, Untrap, Unlock Magic, Lock, Disable, Resurrect, Seance, Hail Storm, Enchant, winds. "On what" looks at the top of the tile, so an actor there means `No effect`.
+
+**Area spells** burst at the centre, then 16 rays run out to the ring at (2,-1) (1,2) (0,-2) (1,-1) (-1,2) (-1,-1) (-2,0) (-1,1) (0,2) (-1,-2) (-2,-1) (-2,1) (2,1) (2,0) (1,1) (1,-2). A ray stops at a blocking tile; whoever it crosses is touched once. They say `Success` unless the last single-target spell was one of the silent kind (Lightning, Fireball, Disable, Chain Bolt, or an Explosion that found someone): a byte DOS doesn't reset.
+
+**Winds:** from the caster, rays to the target and to one and two tiles along the two directions of the crossbow's table (combat.md §6c). Whoever is crossed is hit, party too.
+
+**Fields** have no timer. They are temporaries, going when the map window moves and leaves them 20 tiles off, or on a change of level. See Hazards below.
+
+**Hazards**, once a minute and on stepping in, for anyone on the level within the 40-tile window, but for fliers, the balloon, ships, skiffs, rafts. First the map tile, then fields, then objects:
+
+| Tiles | Effect |
+|---|---|
+| 2-5 swamp | poison, unless in swamp boots (28), protected, immune or poisoned |
+| 220-223, 890, 1124, 1125, 1130, 1131, 1193 | fire 1..8, doubled by creature; not if protected or immune |
+| 1164 fire field | as above, 1..30 |
+| 1165 poison field | poison |
+| 1167 sleep field | sleep; not if protected, immune or asleep |
+| 562, 731, 1458-1463 | 1..8; not if protected, not a tangle pod |
+| 732, 1010 | 1..30; not if protected |
+| 564 web | stuck when strength < d30; not if protected, not a giant spider |
+
+**Single spells:** Clone: a new one of its type with stats rolled afresh, alignment and worktype copied, 8 tries around the leader. Summon, Conjure, Insect Swarm: no timer, the leader's alignment, worktype 8, don't follow; a hostile daemon is chaotic. X-ray: a moment's view, no time passes; the potion the same. Enchant: `On what: `, pack or map, the staff or `No effect`; `It's full` at 10; `With: `, any spell, `none` if cancelled; prints its words; paid first. Tremor: 20 frames of shake up to 3 pixels; evil only, fliers spared. Time Stop: 9 minutes frozen, clock and all, tile animation and colour cycling stopped. Wizard Eye: the party stays drawn at its tile, the eye sees all. Invisibility: refused if already, or for types 426 up, 411, 374, 413, 375. Reveal: within 7, takes off a ring of invisibility. Fear: within 7, not good and not invisible, worktype 0x13. Repel Undead: within 7, types 352, 367, 368, worktype 0x13. Confuse: within 7, evil only, neutral with worktype 8. Slime: evil only. Wing Strike: within 5, evil or chaotic, the dragon crossing the row. Chain Bolt: 7 strikes, a blocked line ends it. Charm: no test of hostility; charmed is freed; fresh: `<name> is charmed.`. Mass Charm prints each; Mass Kill blasts as Explosion. Kill: dead `No effect`. Fireball: immune `No effect`. Lock: a door 4-11 goes magically locked, Success after; open `Can't (Un)lock an opened door`. Douse and Ignite: 90, 164, 122, 253, 206 frame 0-1, 145, 223; a doused torch `A torch burned out.`. Pickpocket: `Which object: ` on the target's own things, any actor; karma -5 wrapping. Resurrect: 339, 340, 341, 354, pack or map; quality 0xe0 up `No effect`, 0 `The corpse is too old!`; what it holds goes to the actor. Armageddon: every slot but 1 and 5 gone, party count 1. Replicate on the wrong thing: `Failed`. Peer: `Done`. Locate: below the surface position × 4. Web: 9 rays, one short and `Blocked`, no webs; webs are temporaries. Wind Change: no direction `nowhere.`, and the wind goes the last way asked. Hail: 10-30 stones, each r1 + r2 - 23 pixels, 1 damage, no experience, sound 400-500.
+
+**Timers (each ticks per minute):** Light 100, Great Light 255, Infravision 20, Eclipse 20, Negate Magic 20.
+
+Reference: ~/src/u6e-re/audits/audit_spells.md has the full comparison, outside the repo.

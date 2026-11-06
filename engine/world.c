@@ -126,6 +126,7 @@ bool world_is_passable(const world_t *w, int32_t x, int32_t y)
 void world_spend(world_t *w, int pts)
 {
     int32_t per = w->min_pts > 0 ? w->min_pts : 5;
+    if (w->min_pts < 0) return;                     /* the game runs its own clock */
     w->mp_acc += pts;
     while (w->mp_acc >= per) { w->mp_acc -= per; w->clock++; }
 }

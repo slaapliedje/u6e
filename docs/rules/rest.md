@@ -115,3 +115,11 @@ hatches an egg's gargoyles (cleared by the hook). Found on the way: a world turn
 ~1.7 s on the TT (0.35-0.39 s by day, 166 actors pathing home: checklist item 17), so eight hours take
 ~85 s on a TT and ~4 min on a 4 MB Falcon; and the status line's clock piled up under the transparent
 border whenever the clock changed without a scroll (fixed: draw_status repaints its band).
+
+## 7. As DOS has it (read 2026-11-05; overrides the above)
+
+**Refusals, in order:** combat `-Not while in Combat!`; a vehicle but a ship `-Can not be repaired!`; town (any tile within 5 with walls and impedance) or, on foot, a wet tile underfoot `-Only in the wilderness!`; any evil or chaotic actor on the level inside the 39-tile window from ((x-16)&~7, (y-16)&~7) `-Not while foes are near!`; anyone not of the party within 5 but a type 430 horse `-Not while others are near!`; `-Not in solo mode!`; the 3x3 `-Not enough room!`. Aboard these all apply, then the hull gains 5. Last, any rider `-Dismount first!`.
+
+**Prompts:** `How many hours? ` takes one key, 1-9, anything else 0 and it's over. `Who will guard? ` takes a digit up to the party's size less one, or the crosshair; anything else `none`.
+
+**Camp:** a lit campfire on the tile. Up to 20 rounds each walks to its ring place, dx 0,0,1,-1,1,-1,1,-1, dy -1,1,0,0,-1,1,1,-1; one that can't stays where it is, turned to the fire. **Mealtime:** each eats its own food, else anyone's. **Healing** (4+ hours, counter 0, unbroken) goes to members before the first who went hungry, not the guard: deficit d (1 reads as 2), d/2 + 0..d/2, and **magic full**. The guard walks about under worktype 0xc. Broken with no guard: everyone stays asleep, lying down, until the usual roll.

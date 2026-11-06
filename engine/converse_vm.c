@@ -70,6 +70,7 @@ void cvm_game_init(cvm_game_t*g,uint32_t seed){
 }
 static int is_player(cvm_t*vm,int n){ return n==vm->g->avatar_num || n==0 || n==1 || (n>0 && n<256 && vm->g->in_party[n]); }   /* the pooled pack (§ game state) */
 /* reads of one member's things: the pooled pack is the leader's, a companion holds nothing (§6f) */
+static int actor_of(cvm_t*vm,int n){ return n==0?(vm->g->nparty>0?vm->g->party_actor[0]:1):n; }
 static int holds(cvm_t*vm,int n){ int lead=vm->g->nparty>0?vm->g->party_actor[0]:1; return n==0 || n==lead || n==vm->g->avatar_num || (n==1 && lead==1); }
 
 /* resolve a numeric "system" var (read-only, from game state). Returns 1 and
@@ -169,7 +170,8 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case OP_LEAVE:{ a=POP(); vm->g->in_party[npc_num(vm,a)&0xff]=0; vm->g->mutations++; PUSH(0); } break;
       case OP_NPC:{ uint32_t ig=POP(), pi=POP(); (void)ig;            /* NPC(party index, ?) -> that member's actor number (§6c) */
                     PUSH(pi<(uint32_t)vm->g->nparty ? (uint32_t)vm->g->party_actor[pi] : 0u); } break;
-      case OP_HASOBJ:{ uint32_t q=POP(),o=POP(); int np=npc_num(vm,POP()); (void)q;  /* (npc,obj,qual) */
+      case OP_HASOBJ:{ uint32_t q=POP(),o=POP(); int np=npc_num(vm,POP());  /* (npc,obj,qual): quality 0 = any */
+                       if(vm->g->inv_count){ PUSH(vm->g->inv_count(actor_of(vm,np),(int)(o&0x3ff),q?(int)q:-1)>0?1:0); break; }
                        PUSH((holds(vm,np)&&cnt(vm,o)>0)?1:0); } break;
       case OP_DATA:{ uint32_t idx=POP(),loc=POP();                  /* DATA(loc,idx) */
                      if(vm->decl_t==0xb3){ unsigned sv=SVI(vm->decl_v); /* string -> $n var */
@@ -178,11 +180,15 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case 0xb7:{ uint32_t sv=POP(),loc=POP();                      /* INDEXOF(loc,svar) */
                   PUSH(db_find(vm,loc,vm->svar[SVI(sv)])); } break;
       case 0xbb:{ uint32_t o=POP(); int np=npc_num(vm,POP());       /* OBJCOUNT(npc,obj) */
+                  if(vm->g->inv_count){ PUSH((uint32_t)vm->g->inv_count(actor_of(vm,np),(int)(o&0x3ff),-1)); break; }
                   PUSH(holds(vm,np)?(uint32_t)cnt(vm,o):0); } break;
-      case 0xc7:{ POP(); uint32_t o=POP()&0x3ff;                   /* OBJINPARTY(obj,qual): the carrier or 0x8001 (§6f) */
+      case 0xc7:{ uint32_t ql=POP(); uint32_t o=POP()&0x3ff;       /* OBJINPARTY(obj,qual): the carrier or 0x8001 (§6f) */
+                  if(vm->g->inv_count){ uint32_t who=0x8001u; for(int p=0;p<vm->g->nparty;p++){ int a_=vm->g->party_actor[p]; if(vm->g->inv_seen(a_)&&vm->g->inv_count(a_,(int)o,ql?(int)ql:-1)>0){ who=(uint32_t)a_; break; } } PUSH(who); break; }
+                  (void)ql;
                   int has=cnt(vm,o)>0 || (o==339 && (cnt(vm,354)>0 || vm->g->lost_body));
                   PUSH(has?(uint32_t)(vm->g->nparty>0?vm->g->party_actor[0]:1):0x8001u); } break;
       case OP_CANCARRY:{ a=POP()&0xff;                                /* CANCARRY(actor) -> room, 0.1 stone (§6c) */
+                         if(vm->g->inv_room){ int32_t r_=vm->g->inv_room(actor_of(vm,(int)a)); PUSH((uint32_t)(r_<0?0:r_)); break; }
                          int32_t r=(is_player(vm,(int)a)||vm->g->in_party[a])?vm->g->party_room:(int32_t)vm->g->str[a]*20;
                          PUSH((uint32_t)(r<0?0:r)); } break;
       case OP_SVAR: a=POP(); PUSH(a); break;                        /* SVAR -> svar handle */
@@ -391,18 +397,23 @@ static void do_ctrl(cvm_t*vm){
       case OP_ADDKARMA:{ int k=vm->g->karma+(int)ARG(); vm->g->karma=(int16_t)(k>99?99:k); vm->g->mutations++; } break;
       case OP_SUBKARMA:{ int k=vm->g->karma-(int)ARG(); vm->g->karma=(int16_t)(k<0?0:k); vm->g->mutations++; } break;
       case OP_GIVE:{ uint32_t o=ARG(), ql=ARG(); int fr=npc_num(vm,ARG()),to=npc_num(vm,ARG());  /* obj,qual,from,to */
+                     if(vm->g->inv_give){ vm->g->inv_give(actor_of(vm,fr),actor_of(vm,to),(int)(o&0x3ff),ql?(int)ql:-1); vm->g->mutations++; break; }
                      if(is_player(vm,to)) add(vm,o,ql,1);
                      if(is_player(vm,fr)&&cnt(vm,o)>0) add(vm,o,0,-1);
                      vm->g->mutations++; } break;
       case OP_NEW:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(), ql=ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
+                    if(vm->g->inv_new){ vm->g->inv_new(actor_of(vm,np),(int)(o&0x3ff),(int)ql,(int)q); vm->g->mutations++; break; }
                     if(is_player(vm,np)) add(vm,o,ql,(int32_t)q);
                     vm->g->mutations++; } break;
-      case OP_DELETE:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(); ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
+      case OP_DELETE:{ int np=npc_num(vm,ARG()); uint32_t o=ARG(); uint32_t dq=ARG(); uint32_t q=ARG();  /* npc,obj,qual,quant */
+                       if(vm->g->inv_del){ vm->g->inv_del(actor_of(vm,np),(int)(o&0x3ff),dq?(int)dq:-1,(int)q); vm->g->mutations++; break; }
                        if(is_player(vm,np)) add(vm,o,0,-(int32_t)q);
                        vm->g->mutations++; } break;
       case OP_HEAL:{ int np=npc_num(vm,ARG())&0xff; vm->g->wounded[np]=0; vm->g->healed_full[np]=1; vm->g->mutations++; } break;   /* full HP only: no cure, the dead stay dead (§6f) */
       case OP_CURE:{ int np=npc_num(vm,ARG())&0xff; vm->g->poisoned[np]=0; vm->g->mutations++; } break;
-      case OP_RESURRECT:{ (void)ARG(); cvm_game_t*g=vm->g; if(g->resurrect_req<255) g->resurrect_req++; g->mutations++;   /* the carrier's body rises (§6f) */
+      case OP_RESURRECT:{ int rc=npc_num(vm,ARG()); cvm_game_t*g=vm->g;
+          if(g->inv_resurrect){ g->inv_resurrect(actor_of(vm,rc)); g->mutations++; break; }
+          if(g->resurrect_req<255) g->resurrect_req++; g->mutations++;   /* the carrier's body rises (§6f) */
           if(g->player_obj[339]>0) g->player_obj[339]--;                 /* ... and leaves the pack now, so a script that asks */
           else if(g->player_obj[354]>0) g->player_obj[354]--;            /* again ("another slain friend?") sees it gone */
           else if(g->lost_body) g->lost_body=0; } break;

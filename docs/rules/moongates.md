@@ -154,3 +154,9 @@ raises a red gate of quality 9, stepping in carries the party to (188,45) on lev
 on the throne-room floor, works on bare ground (table entry = the Avatar's tile, the stone lies there,
 a gate rises on it) and G)et takes the stone from under the gate and clears the entry; '4' 50 hours
 move 7-04 08:00 to day 6 10:00 and S)ave writes day 6 / month 7 / year 161.
+
+## 6. As DOS has it (read 2026-11-05; overrides the above)
+
+**The dissolve:** the 160x160 view is copied from old to new a pixel at a time: a 15-bit shift register from 1, taps 0x6000, x = value mod 160, y = value / 160, rows past 159 skipped, (0,0) last. The same order every time. Used when a member steps through, at the far end, when a red gate appears, at the recall and at death (to black, then in), for Wizard Eye going out and coming back, for a torch burning out, and for spells that put something on the map or take it away, or change the light (probable from reading the sites; which spell each site belongs to is inferred from what it does).
+
+**The trip:** riders dismount. Up to 30 rounds, each member woken and freed of paralysis: on the gate it goes in, with a dissolve; else it walks at the gate; if it can't and it's within a tile it hops on; else it wanders. Anyone left over goes in anyway. A red gate is deleted. A red gate of quality 0 runs the trip in place. All members arrive on the far tile together, dissolve, then five rounds of stepping off.

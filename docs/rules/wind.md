@@ -120,3 +120,7 @@ at the landing tile — one balloon item and no inflated balloon after a save �
 '3' a real raft on shallow water steers; a raft on deep flowing water (tile 9, current NE)
 under a west wind is carried NE as the table says, whatever the player asks. 2026-10-27: '4' the
 movement types as §7c says (the double-sized object met was 323; TT and Falcon identical).
+
+## 7. As DOS has it (read 2026-11-05; overrides the above)
+
+**The wind** changes 1 in 64 each minute, to calm or any way (nine equal chances); on levels 1-4 it is calm. **A ship in calm** pays what walking would, +5 on a diagonal. **A raft** takes the current on tiles 8-15, otherwise goes as told, bent by the wind through the table; there is no depth test. Only the balloon drifts on P)ass. Ghost and wisp are high air: nothing on the map stops them.

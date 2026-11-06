@@ -97,6 +97,15 @@ name to the right on text row 11. A selected thing with no verb armed is readied
 **M)ove** of a carried thing: `To `, a crosshair: another of the party takes the stack (`To Dupre.`, 5 points), `To yourself.`,
 `To nobody.`, or `Only within the party!`. A parchment goes straight into the book (§4 of magic_skills.md).
 
+**Containers in the pack (DOS, read 2026-11-05).** Chest 98, backpack 99, spellbook 57, barrel 186, bag 188, basket 191, crate 192, dead body 339 and the
+vortex cube 62 hold things. Selected with no verb armed, any of these but the book opens: its contents fill the pack area, its picture replaces the
+member's sprite and its name the member's; a locked chest (frame bit 1) says `It's locked.`, a closed one opens first. A click on the picture goes
+back up a level. M)ove's `To ` on a thing in the pack: `not a container`; `Can't move to another person's bag.`; `How can a container go
+into itself!`; `Only spells can go into the spellbook.`; `Only moonstones can go into the vortex cube.`; from inside it: `Spells are not suppose to be
+taken out from the Spellbook.`, else `To out of bag.`, one level up; else `To into bag.`; 5 points. On the picture of the open one: out of it.
+A container taken from the map keeps what it holds and weighs what it holds; dropped, it keeps it too. **New things go to the front of a list,** the order of the pack and of the weapons in A)ttack.
+Each member's arrows and bolts are its own. A person outside the party has a pack too, read in when it first needs it (`npc_pack`).
+
 **Weight:** G)et refuses at `The total is too heavy.` when what the leader carries plus the thing passes 2 stones per point of
 strength. Reagents are the caster's own. Keys, scripts and the rest still look through the whole party.
 

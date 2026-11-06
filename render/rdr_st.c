@@ -806,6 +806,44 @@ void rdr_ppresent(void)
     else ppresent_st_asm(g_ptmp, g_screen + 8*ST_ROWBYTES, PMAP_STRIDE_W*2, ST_ROWBYTES, 160);
 }
 
+/* The view changes a pixel at a time, in a fixed shift-register order (moongates.md §6). The old screen is
+ * shown from the second buffer (Setscreen, XBIOS 5), the caller presents the new frame into the hidden one,
+ * and the 160x160 square is carried across; to_black: to colour 0. */
+int rdr_pdissolve_begin(void)
+{
+    if (!g_screen2) return 0;
+    memcpy(g_screen2, g_screen, 32000);
+    Setscreen(g_screen2, g_screen2, -1); Vsync();
+    return 1;
+}
+void rdr_pdissolve_end(int to_black)
+{
+    enum { VX = 8, VY = 8, VS = 160 };
+    static const uint16_t BIT[16] = { 0x8000,0x4000,0x2000,0x1000,0x800,0x400,0x200,0x100,0x80,0x40,0x20,0x10,8,4,2,1 };
+    uint16_t st = 1;
+    uint8_t *sv = g_screen2; const uint8_t *sf = g_screen;
+    do {                                                /* 16-bit sums only: a 32-bit divide is a library call on the 68000 */
+        uint16_t y = (uint16_t)(st / VS);
+        if (y < VS) {
+            uint16_t x = (uint16_t)(st - (uint16_t)((y << 7) + (y << 5))), px = (uint16_t)(x + VX), m = BIT[px & 15], nm = (uint16_t)~m;
+            uint16_t off = (uint16_t)((uint16_t)((y + VY) << 7) + (uint16_t)((y + VY) << 5) + ((px >> 4) << 3));
+            uint16_t *d = (uint16_t *)(sv + off);
+            if (to_black) { d[0] &= nm; d[1] &= nm; d[2] &= nm; d[3] &= nm; }
+            else { const uint16_t *f = (const uint16_t *)(sf + off);
+                d[0] = (uint16_t)((d[0] & nm) | (f[0] & m)); d[1] = (uint16_t)((d[1] & nm) | (f[1] & m));
+                d[2] = (uint16_t)((d[2] & nm) | (f[2] & m)); d[3] = (uint16_t)((d[3] & nm) | (f[3] & m)); }
+        }
+        st = (st & 1) ? (uint16_t)((st >> 1) ^ 0x6000u) : (uint16_t)(st >> 1);
+    } while (st != 1);
+    if (to_black) { memcpy(g_screen, g_screen2, 32000); }
+    else { /* pixel (0,0) comes last */
+        uint16_t m = (uint16_t)(1u << (15 - (VX & 15))); int32_t off = (int32_t)VY * ST_ROWBYTES + (VX >> 4) * 8;
+        uint16_t *d = (uint16_t *)(g_screen2 + off); const uint16_t *f = (const uint16_t *)(g_screen + off);
+        for (int k = 0; k < 4; k++) d[k] = (uint16_t)((d[k] & ~m) | (f[k] & m));
+    }
+    Setscreen(g_screen, g_screen, -1); Vsync();
+}
+
 /* --- Planar mouse cursor (native-planar path) --- The chunky path draws the cursor into g_back then
  * c2p's it; the native-planar present reads g_ptmp, not g_back, so the cursor must be drawn DIRECTLY
  * into the planar screen with save-under (the map/panel under it is restored on the next move). The
