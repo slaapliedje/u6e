@@ -45,18 +45,18 @@ SE cast (context): 311 professor, 312 reporter, 313 woman, 314 shaman, 315 chief
   fountain/cave; 234 open 0/2 closed 1/3; 270 open 2 closed 0 with "table" tiles interleaved; 275 open 3;
   161/226/236/272 have NO open frame), so there is no uniform frame delta. Instead the toggle is derived
   from **passability**: an OPEN door tile is passable, a CLOSED one impassable (tileflags1, now shipped
-  to the core pack via **CTF1**). USE flips to the NEAREST tile that is still "door"-named AND has the
+  in the world pack's tileflags1 section). USE flips to the NEAREST tile that is still "door"-named AND has the
   opposite passability (name-match skips the interleaved table/window tiles; tie-break keeps orientation).
   Doors with no opposite-passability door tile (161/226/236/272 arches, 160 trap door) → "won't budge"
   (safe). Validated: `SEUSE.BIN` — door 977 (closed) → USE → 976 (open, passable).
-- **CTF1** also gives SE/MD **object passability in general** (walls/furniture/closed doors block) — it
-  was entirely absent before (g_tflags1 was zeroed for core packs); the Avatar keeps 7/8 walkable
-  neighbours at the SE start, so it's not boxed in.
+- tileflags1 also gives SE/MD **object passability in general** (walls/furniture/closed doors block);
+  the Avatar keeps 7/8 walkable neighbours at the SE start, so it's not boxed in.
 - water 140/152 excluded from food (terrain water, not a gettable item).
 
 ### SE GET (mostly already generic)
-GET (`do_verb 'G'` → `objworld_get`) is game-agnostic and reads the `gettable[1024]` table the core pack
-already ships (CLOK), so SE GET works with NO SE-specific code: fruit/items leave the map and land in the
+GET (`do_verb 'G'` → `objworld_get`) is game-agnostic and reads the `gettable[1024]` table the world pack
+ships, so SE GET works
+ with NO SE-specific code: fruit/items leave the map and land in the
 inventory (validated: `SEUSE.BIN` places SE fruit 197 east of the Avatar, `do_verb('G')` takes 3 into inv).
 One game delta: **gold** — SE gold (69) GET feeds the shared Gold POOL (`g_cg.gold`, the panel "Gold:"
 count), not an inventory stack (via `g_gd`+`wko.gold`; U6 keeps its existing path, gated out → byte-identical).

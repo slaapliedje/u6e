@@ -693,9 +693,8 @@ world: $(BUILD)/mkworld $(BUILD)/nuviesave save-template roof-extract
 world-st world-tt: world
 gamedata-st gamedata-tt: world
 
-# M9: emit a CORE world pack for Savage / Martian from the user's SE/MD data.
-# Reuses the U6 loaders (MAP/CHUNKS/tileset/palette/passable/objects); SE/MD wrap
-# the compressible core files in a single-item .LZC which mkworld unwraps.
+# M9: the world pack for Savage / Martian, built the way U6's is (same layout, each game's own
+# files; SE/MD wrap their compressible files in a one-item .LZC which mkworld unwraps).
 # SE_REFDATA / MD_REFDATA are defined with the lzctest target above.
 # Start: 0 0 = where the game's own actor list puts the player (as U6); set SE_X/SE_Y or
 # MD_X/MD_Y to look somewhere else.
@@ -703,23 +702,24 @@ SE_X ?= 0
 SE_Y ?= 0
 MD_X ?= 0
 MD_Y ?= 0
-# The starting actor roster (CACT) comes from each game's own LZDNGBLK, as for U6: mksave writes
-# the new-game save, nuviesave takes its objlist out, mkworld emits CACT from it
+# Objects, actors and party inventories come from each game's own new-game state, as for U6:
+# mksave writes the save from LZOBJBLK + LZDNGBLK, nuviesave takes it apart
 # (docs/formats/nuvie_save.md "A new game from the original files").
 world-se: $(BUILD)/mkworld $(BUILD)/mksave $(BUILD)/nuviesave
 	MKWORLD_GAME=savage $(BUILD)/mksave $(SE_REFDATA) $(BUILD)/SAVE.SE
-	$(BUILD)/nuviesave $(BUILD)/SAVE.SE $(BUILD)/se.objblk $(BUILD)/se.objlist
-	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y) $(BUILD)/se.objlist
+	$(BUILD)/nuviesave $(BUILD)/SAVE.SE $(BUILD)/se.objblk $(BUILD)/se.objlist $(BUILD)/se.inv
+	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y) $(BUILD)/se.objblk $(BUILD)/se.objlist $(BUILD)/se.inv
 world-md: $(BUILD)/mkworld $(BUILD)/mksave $(BUILD)/nuviesave
 	MKWORLD_GAME=martian $(BUILD)/mksave $(MD_REFDATA) $(BUILD)/SAVE.MD
-	$(BUILD)/nuviesave $(BUILD)/SAVE.MD $(BUILD)/md.objblk $(BUILD)/md.objlist
-	MKWORLD_GAME=martian $(BUILD)/mkworld $(MD_REFDATA) $(BUILD)/MD.PAK $(MD_X) $(MD_Y) $(BUILD)/md.objlist
+	$(BUILD)/nuviesave $(BUILD)/SAVE.MD $(BUILD)/md.objblk $(BUILD)/md.objlist $(BUILD)/md.inv
+	MKWORLD_GAME=martian $(BUILD)/mkworld $(MD_REFDATA) $(BUILD)/MD.PAK $(MD_X) $(MD_Y) $(BUILD)/md.objblk $(BUILD)/md.objlist $(BUILD)/md.inv
 
 # SE from a ScummVM save instead (the state that save holds; kept for comparisons).
 SE_SCUMMVM_SAVE ?= $(HOME)/.local/share/scummvm/saves/thesavageempire_enh.001
 world-se-svm: $(BUILD)/mkworld $(BUILD)/nuviesave
-	$(BUILD)/nuviesave "$(SE_SCUMMVM_SAVE)" $(BUILD)/se.objblk $(BUILD)/se.objlist
-	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y) $(BUILD)/se.objlist
+	$(BUILD)/nuviesave "$(SE_SCUMMVM_SAVE)" $(BUILD)/se.objblk $(BUILD)/se.objlist $(BUILD)/se.inv
+	MKWORLD_GAME=savage $(BUILD)/mkworld $(SE_REFDATA) $(BUILD)/SE.PAK $(SE_X) $(SE_Y) $(BUILD)/se.objblk $(BUILD)/se.objlist $(BUILD)/se.inv
+
 
 # host-validate a core pack: render its densest object cluster (terrain+objects)
 COREDUMP_SRC := dataformats/u6pal.c dataformats/u6map.c tools/png.c
@@ -988,35 +988,25 @@ shot-falcon: world-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot.png
 	@echo "wrote $(BUILD)/shot.png (pixel-perfect 320x200, 1:1)"
 
-# M9 P2: boot The Savage Empire from the SHARED Falcon binary + its CORE pack, and
-# pixel-dump the map window. Stages SE.PAK as the loaded pack name (PACK_NAME=U6.PAK);
-# gamef.prg detects the "SEWT" core magic (gamedef_se) and stubs the U6-only UI tail.
-# No CONVERSE/PORTRAIT (SE has none) -> idle conversation panel; that's expected.
-shot-se: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
-	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK                     # engine loads PACK_NAME (=U6.PAK)
-	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png $(BUILD)/SAVEDEMO.REQ
-	printf 'x' > $(BUILD)/SHOT.REQ
-	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
-	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
+# M9: boot Savage Empire / Martian Dreams from the shared Falcon binary and pixel-dump the screen.
+# Each runs from its own folder (build/se-run, build/md-run) holding its pack under the loaded name
+# (PACK_NAME = U6.PAK), so the U6 pack in build/ is never overwritten. The engine tells the game by
+# the pack's magic (SEWT / MDWT). $(1) = se|md, $(2) = SE|MD, $(3) = the world target.
+define SHOT_WOU
+shot-$(1): $(3) $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
+	rm -rf $(BUILD)/$(1)-run && mkdir -p $(BUILD)/$(1)-run
+	cp $(BUILD)/$(2).PAK $(BUILD)/$(1)-run/U6.PAK
+	cp $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF $(BUILD)/$(1)-run/
+	printf 'x' > $(BUILD)/$(1)-run/SHOT.REQ
+	-$$(HL) $$(HATARI) --machine falcon --fast-boot on --conout 2 \
+	          --tos '$$(TOS_FALC)' --harddrive $(BUILD)/$(1)-run --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 4000 2>/dev/null
-	@rm -f $(BUILD)/SHOT.REQ
-	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT (SE boot)"; exit 1; }
-	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot-se.png
-	@echo "wrote $(BUILD)/shot-se.png (Savage Empire, shared binary + core pack)"
-
-# As shot-se, but on the SE pack WITH the captured actor roster (CACT): boots the
-# Kurak village populated with NPCs + party. Verifies the CACT load + actor render.
-shot-se-svm: world-se-svm $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
-	cp $(BUILD)/SE.PAK $(BUILD)/U6.PAK
-	rm -f $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png $(BUILD)/SAVEDEMO.REQ
-	printf 'x' > $(BUILD)/SHOT.REQ
-	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
-	          --tos '$(TOS_FALC)' --harddrive $(BUILD) --auto 'C:\GAMEF.PRG' \
-	          --fast-forward on --run-vbls 4000 2>/dev/null
-	@rm -f $(BUILD)/SHOT.REQ
-	@test -f $(BUILD)/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT (SE+CACT boot)"; exit 1; }
-	python3 tools/shot2png.py $(BUILD)/SHOT.DAT $(BUILD)/shot-se-svm.png
-	@echo "wrote $(BUILD)/shot-se-svm.png (Savage Empire village, populated via CACT)"
+	@test -f $(BUILD)/$(1)-run/SHOT.DAT || { echo "FAIL: engine did not write SHOT.DAT ($(2) boot)"; exit 1; }
+	python3 tools/shot2png.py $(BUILD)/$(1)-run/SHOT.DAT $(BUILD)/shot-$(1).png
+	@echo "wrote $(BUILD)/shot-$(1).png"
+endef
+$(eval $(call SHOT_WOU,se,SE,world-se))
+$(eval $(call SHOT_WOU,md,MD,world-md))
 
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This

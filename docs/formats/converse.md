@@ -132,7 +132,8 @@ occupy actors 2–11 (TALK items 0–9); general NPCs follow, actor-numbered so 
 TALK items land alphabetically (Aloron…Darden…).
 
 Host pipeline: `tools/mkworld.c::convert_talk` ships the plain **name + look
-description** per actor in the core pack's optional **`CTLK`** section
+description** per actor in the world pack's **`CTLK`** section (after everything else; SE/MD only)
+
 `[4 "CTLK"][u16 nact=256][u16 blob_len][256 × u16 off][blob of "name\0desc\0"]`,
 `off[a]=0xFFFF` when actor `a` has no conversation. The engine (`gamedemo.c::
 se_talk`) shows the NPC's portrait (CFAC) + name + look description on talk. The

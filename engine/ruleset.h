@@ -57,8 +57,9 @@ typedef struct GameDef {
 
 extern const RuleSet ruleset_u6;   /* the default rule set */
 extern const GameDef  gamedef_u6;  /* Ultima VI                                    */
-extern const GameDef  gamedef_se;  /* The Savage Empire  (core pack magic "SEWT")  */
-extern const GameDef  gamedef_md;  /* Martian Dreams     (core pack magic "MDWT")  */
+extern const GameDef  gamedef_se;  /* The Savage Empire  (pack magic "SEWT")       */
+extern const GameDef  gamedef_md;  /* Martian Dreams     (pack magic "MDWT")       */
+
 
 /* Select the GameDef whose pack_magic matches the first 4 bytes at `magic`, or NULL if none
  * is registered. This is the multi-game gate: the same binary accepts any registered game's pack. */

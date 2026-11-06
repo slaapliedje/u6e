@@ -1312,16 +1312,11 @@ static void build_conv_palettes(FILE *f, const uint8_t *paper, const uint8_t *pa
 }
 
 /* ------------------------------------------------------------------------ *
- * M9 multi-game: a per-game input profile + a self-contained CORE-pack emitter.
- * The full U6 pack (main() below) bakes in ~20 U6-only sub-sections (chargen,
- * PAPER background, portraits, intro cutscenes, ST low-colour palettes, roof
- * lighting, ...). To bring up Savage/Martian we first emit just the CORE world
- * — geometry + terrain tiles + palette + passability + objects — which is all
- * that is needed to host-validate that SE/MD data decodes with our U6 loaders.
- * The core pack is a strict prefix of the U6WT layout (through the objects
- * section); P2 extends the runtime reader to consume it. See multigame.md.
- *
- * Selected by $MKWORLD_GAME (u6|savage|martian); unset => the full U6 path. */
+ * M9 multi-game: a per-game input profile. main() builds the same full pack for
+ * every game from that game's own files; the inputs that differ by name or
+ * wrapping come from here, and what a game lacks is written empty.
+ * Selected by $MKWORLD_GAME (u6|savage|martian); unset => U6. */
+
 typedef struct {
     const char *id;          /* MKWORLD_GAME value            */
     char        magic[4];    /* core-pack magic (per game)    */
@@ -1329,12 +1324,13 @@ typedef struct {
     const char *font;        /* WOU proportional font (NULL = none) */
     const char *faces;       /* portrait library .LZC (NULL = none) */
     const char *talk;        /* conversation library .LZC (NULL = none) */
+    const char *cursor;      /* mouse pointer library */
 } GameProfile;
 
 static const GameProfile G_PROFILES[] = {
-    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL,          NULL       },
-    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC",   "TALK.LZC" },
-    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC", "TALK.LZC" },
+    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL,          NULL,       "U6MCGA.PTR"   },
+    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC",   "TALK.LZC", "SECURSOR.PTR" },
+    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC", "TALK.LZC", "MDCURSOR.PTR" },
 };
 
 static const GameProfile *profile_for(const char *id)
@@ -1569,218 +1565,18 @@ static int convert_talk(const char *dir, const char *name, uint8_t marker, FILE 
     return nnpc;
 }
 
-/* Build the CORE world pack for `prof` from the game data in `dir`. Shares the
- * MAP/CHUNKS/tileset(MASKTYPE-aware)/palette/passable/objects pipeline with the
- * U6 path — only the palette filename and pack magic vary. All three games use
- * 2048 tiles and byte-identical MAP/CHUNKS geometry (verified host-side). */
-static int emit_core_pack(const GameProfile *prof, const char *dir,
-                          const char *out, int startx, int starty,
-                          const char *objlist_path)
-{
-    uint8_t marker = (strcmp(prof->id, "savage") == 0)  ? U6LZC_COMP_SE
-                   : (strcmp(prof->id, "martian") == 0) ? U6LZC_COMP_MD : U6LZC_COMP_SNIFF;
-    if (startx == 0 && starty == 0 && objlist_path){            /* 0 0 = where the actor list puts the player */
-        long ol; uint8_t *o = slurp_path(objlist_path, NULL, &ol);
-        if (o && ol >= 0x106){ const uint8_t *p = o + 0x100 + 3;  /* actor 1's position (LE 3 bytes) */
-            startx = p[0] | ((p[1] & 3) << 8); starty = (p[1] >> 2) | ((p[2] & 0xf) << 6); }
-        free(o); }
-    long mn, cn, pn, on, in, bn, tfn, mtl, mskl, uz;
-    cv_step("Map and objects");
-    uint8_t *mapb = slurp(dir, "MAP", &mn),          *chk = slurp(dir, "CHUNKS", &cn);
-    uint8_t *palb = slurp(dir, prof->palette, &pn),  *ti  = slurp(dir, "TILEINDX.VGA", &in);
-    uint8_t *bt   = slurp(dir, "BASETILE", &bn);
-    on = fsize_in(dir, "OBJTILES.VGA"); if (on < 0){ printf("cannot read %s/OBJTILES.VGA\n", dir); exit(2); }
-    uint8_t *tflag = slurp(dir, "TILEFLAG", &tfn);
-    uint8_t *mtc = load_core_asset(dir, "MAPTILES.VGA", marker, &mtl);   /* LZC/LZW -> logical */
-    uint8_t *msk = load_core_asset(dir, "MASKTYPE.VGA", marker, &mskl);
-    uint8_t *od  = load_core_asset(dir, "LZOBJBLK",     marker, &uz);
-    if (pn < 768)   { printf("%s too small (%ld, need >=768)\n", prof->palette, pn); return 2; }
-    if (tfn < 0x1C00){ printf("TILEFLAG too small (%ld, need 7168)\n", tfn); return 2; }
-    if (!mtc || !msk || !od){ printf("core asset decode failed\n"); return 2; }
-
-    u6pal_t pal; u6pal_parse(&pal, palb, (int32_t)pn);   /* validate the palette parses */
-
-    /* passability from TILEFLAG (shared Impassable|Wall rule) */
-    static uint8_t passable[256]; compute_passable_tflag(tflag, passable);
-
-    /* objects: LZOBJBLK -> world decode -> repack surface roots + contained chains */
-    u6_object_t *objs = malloc(sizeof(u6_object_t) * MAXOBJ);
-    int32_t nobj = u6obj_decode_world(od, (int32_t)uz, objs, MAXOBJ);
-    free(od);
-    int nsurf = 0;
-    { int32_t *shipidx = malloc(sizeof(int32_t) * MAXOBJ);
-      if (!shipidx){ printf("out of memory (objects)\n"); return 2; }
-      for (int32_t i = 0; i < nobj; i++){
-          int keep; uint16_t newpar = U6OBJ_PARENT_NONE;
-          if (objs[i].parent == U6OBJ_PARENT_NONE) keep = (objs[i].z == 0);
-          else { int32_t r = shipidx[objs[i].parent]; keep = (r >= 0); if (keep) newpar = (uint16_t)r; }
-          shipidx[i] = keep ? nsurf : -1;
-          if (keep){ objs[nsurf] = objs[i]; objs[nsurf].parent = newpar;
-              if (newpar != U6OBJ_PARENT_NONE){ objs[nsurf].x = 0; objs[nsurf].y = 0; objs[nsurf].z = 0xF; }
-              nsurf++; } }
-      free(shipidx);
-      nobj = nsurf;
-      u6_object_t *fit = realloc(objs, sizeof(u6_object_t) * (size_t)(nobj ? nobj : 1));
-      if (fit) objs = fit; }
-
-    cv_step("Tiles");
-    /* combined tileset (maptiles ++ objtiles), MASKTYPE-aware decode (after the objects, whose
-     * decode buffer is the other big block) */
-    int32_t comb_len = (int32_t)mtl + (int32_t)on;
-    uint8_t *comb = malloc((size_t)comb_len);
-    if (!comb){ printf("out of memory (tileset)\n"); return 2; }
-    memcpy(comb, mtc, (size_t)mtl); free(mtc);
-    slurp_into(dir, "OBJTILES.VGA", comb + mtl, on);
-    u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
-    if (mskl < NTILES){ printf("MASKTYPE too small (%ld, need >=%d)\n", mskl, NTILES); return 2; }
-    u6tile_set_masktype(&ts, msk);
-
-    FILE *f = fopen(out, "wb"); if (!f){ printf("cannot write %s\n", out); return 2; }
-    fwrite(prof->magic, 1, 4, f);                     /* per-game core magic (SEWT/MDWT/U6WT) */
-    be32(f, (unsigned long)mn); be32(f, (unsigned long)cn);
-    be32(f, NTILES); be32(f, (unsigned long)nobj);
-    be16(f, (unsigned)startx); be16(f, (unsigned)starty);
-    be16(f, 12*60);                                   /* start_min = noon (core packs have no save clock) */
-    fwrite(mapb, 1, (size_t)mn, f); fwrite(chk, 1, (size_t)cn, f);
-    for (int t = 0; t < NTILES; t++){ uint8_t tile[256]; u6tile_decode(&ts, t, tile); fwrite(tile, 1, 256, f); }
-    free(comb); free(msk); free(ti);
-    fwrite(palb, 1, 768, f);
-    fwrite(passable, 1, 256, f);
-    for (int32_t i = 0; i < nobj; i++){               /* {u16 x,y,tile,obj_n,qty16,quality,parent} BE */
-        int tile = u6_basetile(bt, objs[i].obj_n) + objs[i].frame;
-        int contained = (objs[i].parent != U6OBJ_PARENT_NONE);
-        be16(f, contained ? 0 : objs[i].x); be16(f, contained ? 0 : objs[i].y);
-        be16(f, (unsigned)tile); be16(f, objs[i].obj_n);
-        be16(f, objs[i].quantity); be16(f, objs[i].quality); be16(f, objs[i].parent); }
-    free(objs); free(mapb); free(chk);
-
-    /* Optional "CLOK" section (object identity): SE/MD LOOK.LZC decodes to the
-     * SAME run-fill tile->name table as U6's LOOK.LZD ([u16 tile][name\0]...),
-     * plus a precomputed gettable[obj_n] from TILEFLAG. Magic-guarded so the
-     * core pack can grow; the loader parses whatever sections are present.
-     * [4 "CLOK"][u32 look_len][look][gettable 1024]. */
-    long lookl = 0; uint8_t *lookd = load_core_asset(dir, "LOOK.LZC", marker, &lookl);
-    int nget = 0;
-    if (lookd && lookl > 0){
-        fwrite("CLOK", 1, 4, f); be32(f, (unsigned long)lookl); fwrite(lookd, 1, lookl, f);
-        uint8_t gettable[1024];
-        for (int o = 0; o < 1024; o++){
-            uint8_t w = tflag[0x1000 + o];                 /* weight block, by obj_n */
-            uint16_t base = u6_basetile(bt, (uint16_t)o);
-            int toptile = (base < NTILES) && (tflag[0x800 + base] & 0x10);
-            gettable[o] = (w != 0 && w != 255 && !toptile) ? 1 : 0; nget += gettable[o];
-        }
-        fwrite(gettable, 1, 1024, f);
-    }
-
-    /* Optional "CTF1" section: per-tile tileflags1 (2048 B; bit1 Impassable, bit2 Wall). Gives the
-     * core-pack (SE/MD) engine OBJECT passability — walls/furniture/CLOSED DOORS block — and the
-     * open/closed passability a USE-a-door toggle reads (docs/formats/se_md_objn.md). [4 "CTF1"][2048]. */
-    if (tflag){ fwrite("CTF1", 1, 4, f); fwrite(tflag, 1, 2048, f); }
-
-    /* Optional "CFNT" section: the game's WOU proportional font converted to the
-     * U6.CH 8x8 1bpp format so the shared text renderer can draw it.
-     * [4 "CFNT"][2048 font]. */
-    uint8_t font8[2048]; int have_font = 0;
-    if (prof->font && convert_wou_font(dir, prof->font, marker, font8)){
-        fwrite("CFNT", 1, 4, f); fwrite(font8, 1, 2048, f); have_font = 1;
-    }
-
-    /* Optional "CFAC" section: the game's portrait library (79x85 U6 shapes),
-     * slot-indexed so face(actor N) = FACES slot N-1 (docs/formats/portraits.md). */
-    cv_step("Portraits");
-    if (prof->faces) convert_faces(dir, prof->faces, marker, f);
-
-    /* Optional "CTLK" section: per-actor NPC name + look-description from TALK.LZC. */
-    cv_step("Conversation art");
-    if (prof->talk) convert_talk(dir, prof->talk, marker, f);
-
-    /* Optional "CACT" section: the initial ACTOR ROSTER. SE/MD ship NO
-     * savegame/objlist (U6 does); the 256-actor roster is generated by GAME.EXE
-     * at new-game. We CAPTURE it from a ScummVM new-game save via tools/nuviesave
-     * (see docs/design/multigame.md + memory se-actor-capture). objlist layout
-     * (DOS little-endian, objlist.md): appearance@0x400 (2B: obj_n|frame),
-     * position@0x100 (3B packed x/y/z), status@0x800 (bit 0x80 = in party),
-     * stats @0x900(str)/0xA00(dex)/0xB00(int)/0xE00(hp).
-     * Section = [4 "CACT"][u16 nact][nact x u16 tile]
-     *           [nact x {u16 x,u16 y,u8 z}][nact x {u8 hp,str,dex,int}]
-     *           [u8 nparty][nparty x u8 idx].
-     * Appearance obj_n+frame is resolved to an ABSOLUTE tile here (via BASETILE)
-     * because the core loader stubs BASETILE. The avatar (actor 1) is planted at
-     * the demo start; other party members get "no position" (z=0xff) so the
-     * engine spawns them beside the avatar (party-follow, gamedemo). */
-    cv_step("People");
-    int have_cact = 0, cact_npc = 0, cact_party = 0;
-    if (objlist_path){
-        long oln; uint8_t *objl = slurp_path(objlist_path, NULL, &oln);
-        if (objl && oln >= 0x600){
-            enum { CN = 256 };
-            static uint16_t ct[CN], cx[CN], cy[CN]; static uint8_t cz[CN];
-            static uint8_t chp[CN], cst[CN], cdx[CN], cit[CN], cpl[CN];
-            int cnp = 0;
-            for (int i = 0; i < CN; i++){
-                ct[i]=0xFFFF; cx[i]=0; cy[i]=0; cz[i]=0xFF;
-                chp[i]=cst[i]=cdx[i]=cit[i]=0;
-                const uint8_t *q = objl + 0x400 + i*2;          /* appearance (LE) */
-                uint16_t obj_n=(uint16_t)(q[0]|((q[1]&3)<<8));
-                uint8_t  fr   =(uint8_t)((q[1]&0xfc)>>2);
-                int in_party  = (oln>0x800+i) && (objl[0x800+i]&0x80);
-                if (obj_n){
-                    int tt = u6_basetile(bt, obj_n) + fr;
-                    if (tt>=0 && tt<NTILES){ ct[i]=(uint16_t)tt; cact_npc++; }
-                    const uint8_t *p = objl + 0x100 + i*3;       /* position (LE 3B) */
-                    cx[i]=(uint16_t)(p[0]|((p[1]&3)<<8));
-                    cy[i]=(uint16_t)(((p[1]&0xfc)>>2)|((p[2]&0xf)<<6));
-                    cz[i]=(uint8_t)((p[2]&0xf0)>>4);
-                }
-                if (oln >= 0xF00){                               /* stat blocks */
-                    chp[i]=objl[0xE00+i]; cst[i]=objl[0x900+i];
-                    cdx[i]=objl[0xA00+i]; cit[i]=objl[0xB00+i];
-                }
-                if (i>0 && in_party && cnp<CN) cpl[cnp++]=(uint8_t)i;
-            }
-            /* plant the avatar at the demo start; party-mates spawn beside him */
-            if (ct[1]!=0xFFFF){ cx[1]=(uint16_t)startx; cy[1]=(uint16_t)starty; cz[1]=0; }
-            for (int k=0;k<cnp;k++){ int a=cpl[k]; if(a!=1) cz[a]=0xFF; }
-            fwrite("CACT",1,4,f); be16(f,CN);
-            for(int i=0;i<CN;i++) be16(f,ct[i]);
-            for(int i=0;i<CN;i++){ be16(f,cx[i]); be16(f,cy[i]); fputc(cz[i],f); }
-            for(int i=0;i<CN;i++){ fputc(chp[i],f);fputc(cst[i],f);fputc(cdx[i],f);fputc(cit[i],f); }
-            fputc(cnp,f); for(int i=0;i<cnp;i++) fputc(cpl[i],f);
-            cact_party = cnp; have_cact = 1;
-        }
-        if (objl) free(objl);
-    }
-    fclose(f);
-
-    printf("core pack: game=%s magic=%.4s -> %s\n", prof->id, prof->magic, out);
-    printf("  MAP=%ld CHUNKS=%ld tiles=%d objects=%d palette=%s(%ld) start=(%d,%d)\n",
-           mn, cn, NTILES, nobj, prof->palette, pn, startx, starty);
-    if (lookl > 0)  printf("  +CLOK: look table %ld B, %d/1024 gettable obj_n\n", lookl, nget);
-    if (have_font)  printf("  +CFNT: %s -> 8x8 font (2048 B)\n", prof->font);
-    if (have_cact)  printf("  +CACT: %d actors placed (party=%d) from captured objlist %s\n",
-                           cact_npc, cact_party, objlist_path);
-    free(palb); free(bt); free(tflag); free(lookd);
-    return 0;
-}
-
 int main(int argc, char **argv)
 {
-    /* M9: $MKWORLD_GAME selects a non-U6 core pack (savage/martian). Unset or
-     * "u6" => the full U6 world pack built by the rest of main(). */
-    { const char *gid = getenv("MKWORLD_GAME");
-      if (gid && strcmp(gid, "u6") != 0){
-          const GameProfile *prof = profile_for(gid);
-          if (!prof){ printf("unknown MKWORLD_GAME '%s' (u6|savage|martian)\n", gid); return 2; }
-          const char *cdir = argc > 1 ? argv[1] : "refdata/dos/savage/SAVAGE";
-          const char *cout = argc > 2 ? argv[2] : "build/se.world";
-          int csx = argc > 3 ? atoi(argv[3]) : 512;
-          int csy = argc > 4 ? atoi(argv[4]) : 512;
-          /* argv[5] (or $MKWORLD_OBJLIST) = a captured objlist (tools/nuviesave
-           * output) -> ships the initial actor roster as a "CACT" section. */
-          const char *cobjl = argc > 5 ? argv[5] : getenv("MKWORLD_OBJLIST");
-          return emit_core_pack(prof, cdir, cout, csx, csy, cobjl);
-      } }
+    /* M9: $MKWORLD_GAME picks the game (u6|savage|martian; unset = u6). Every game gets the same
+     * full pack from its own files; what a game lacks is written empty (docs/design/se_md_checklist.md
+     * item 1). SE/MD wrap their compressible files in a one-item .LZC (lzc.md). */
+    const char *gid = getenv("MKWORLD_GAME");
+    const GameProfile *gp = profile_for(gid ? gid : "u6");
+    if (!gp){ printf("unknown MKWORLD_GAME '%s' (u6|savage|martian)\n", gid); return 2; }
+    const int u6 = (strcmp(gp->id, "u6") == 0);
+    const uint8_t marker = !strcmp(gp->id, "savage") ? U6LZC_COMP_SE
+                         : !strcmp(gp->id, "martian") ? U6LZC_COMP_MD : U6LZC_COMP_SNIFF;
+    const long tail = u6 ? 0 : 0x100;     /* the objlist's player fields (clock...) sit 0x100 later in SE/MD */
 
     const char *dir = argc > 1 ? argv[1] : "refdata/dos/u6";
     const char *out = argc > 2 ? argv[2] : "build/u6.world";
@@ -1805,9 +1601,12 @@ int main(int argc, char **argv)
     long mn,cn,pn,tn,on,bn,in,zn,fn;
     cv_step("Map and objects");
     uint8_t *mapb=slurp(dir,"MAP",&mn), *chk=slurp(dir,"CHUNKS",&cn);
-    uint8_t *palb=slurp(dir,"U6PAL",&pn);
-    uint8_t *bt=slurp(dir,"BASETILE",&bn), *lz=slurp(dir,"LZOBJBLK",&zn);
-    uint8_t *font=slurp(dir,"U6.CH",&fn);          /* 2048-byte authentic font */
+    uint8_t *palb=slurp(dir,gp->palette,&pn);
+    uint8_t *bt=slurp(dir,"BASETILE",&bn), *lz=NULL;
+    uint8_t *font;                                 /* 2048 bytes: U6.CH, or SE/MD's WOU font made 8x8 */
+    if (u6) font=slurp(dir,"U6.CH",&fn);
+    else { font=malloc(2048); fn=2048;
+        if (!font || !gp->font || !convert_wou_font(dir,gp->font,marker,font)){ printf("font conversion failed\n"); return 2; } }
     long adn; uint8_t *adat=slurp(dir,"ANIMDATA",&adn);   /* tile-animation table */
     if (fn != 2048) { printf("U6.CH is %ld bytes, expected 2048\n", fn); return 2; }
 
@@ -1822,8 +1621,10 @@ int main(int argc, char **argv)
     uint8_t *od; int32_t uz;
     if (svm){ long sz; od = slurp_path(svm_objblk, NULL, &sz); uz=(int32_t)sz;
         if(!od){ printf("cannot read svm objblk %s\n",svm_objblk); return 2; } }
-    else { uz = u6lzw_unpacked_size(lz, (int32_t)zn); od = malloc(uz); u6lzw_decompress(lz, (int32_t)zn, od, uz); }
-    free(lz);
+    else if (u6){ lz=slurp(dir,"LZOBJBLK",&zn);
+        uz = u6lzw_unpacked_size(lz, (int32_t)zn); od = malloc(uz); u6lzw_decompress(lz, (int32_t)zn, od, uz); free(lz); }
+    else { long l; od = load_core_asset(dir, "LZOBJBLK", marker, &l); uz=(int32_t)l;
+        if (!od){ printf("LZOBJBLK decode failed\n"); return 2; } }
     u6_object_t *objs = malloc(sizeof(u6_object_t)*MAXOBJ);
     int32_t nobj = u6obj_decode_world(od, uz, objs, MAXOBJ);   /* on-map + in-container chains */
     free(od);
@@ -1852,12 +1653,15 @@ int main(int argc, char **argv)
      * + a precomputed gettable[obj_n] from TILEFLAG (see docs/formats/look.md,
      * tileflag.md). gettable = weight in (0,255) AND base tile not a toptile. */
     long lkn, tfn;
-    uint8_t *lkc = slurp(dir,"LOOK.LZD",&lkn);
-    int32_t look_len = u6lzw_unpacked_size(lkc,(int32_t)lkn);
-    uint8_t *lookd = malloc((size_t)(look_len>0?look_len:1));
-    if (look_len<=0 || u6lzw_decompress(lkc,(int32_t)lkn,lookd,look_len)!=look_len){
-        printf("LOOK.LZD decode failed (got %d)\n", look_len); return 2; }
-    free(lkc);
+    int32_t look_len; uint8_t *lookd;
+    if (u6){ uint8_t *lkc = slurp(dir,"LOOK.LZD",&lkn);
+        look_len = u6lzw_unpacked_size(lkc,(int32_t)lkn);
+        lookd = malloc((size_t)(look_len>0?look_len:1));
+        if (look_len<=0 || u6lzw_decompress(lkc,(int32_t)lkn,lookd,look_len)!=look_len){
+            printf("LOOK.LZD decode failed (got %d)\n", look_len); return 2; }
+        free(lkc); }
+    else { lookd = load_core_asset(dir, "LOOK.LZC", marker, &lkn); look_len = (int32_t)lkn;   /* the same table (look.md) */
+        if (!lookd || look_len<=0){ printf("LOOK.LZC decode failed\n"); return 2; } }
     uint8_t *tflag = slurp(dir,"TILEFLAG",&tfn);
     if (tfn < 0x1C00){ printf("TILEFLAG too small (%ld, need 7168)\n",tfn); return 2; }
     compute_passable_tflag(tflag, passable);   /* real terrain passability (Impassable|Wall) */
@@ -1907,13 +1711,17 @@ int main(int argc, char **argv)
     /* mouse cursor: U6MCGA.PTR (whole-file LZW) -> 4-byte library; item 0 = the
      * arrow pointer (a shape frame). Decode to a flat bitmap + hot spot here so
      * the runtime just blits it. See docs/formats/cursor.md. */
-    long curn; uint8_t *curc = slurp(dir,"U6MCGA.PTR",&curn);
-    int32_t cursz = u6lzw_unpacked_size(curc,(int32_t)curn);
-    uint8_t *curd = malloc((size_t)(cursz>0?cursz:1));
+    long curn; uint8_t *curc=NULL, *curd; int32_t cursz; int curok;
+    if (u6){ curc = slurp(dir,gp->cursor,&curn);
+        cursz = u6lzw_unpacked_size(curc,(int32_t)curn);
+        curd = malloc((size_t)(cursz>0?cursz:1));
+        curok = cursz>=12 && u6lzw_decompress(curc,(int32_t)curn,curd,cursz)==cursz; }
+    else { curd = load_core_asset(dir, gp->cursor, marker, &curn); cursz=(int32_t)curn;   /* one stored item: the same library */
+        curok = curd && cursz>=12; }
     int cw=0,ch=0,chx=0,chy=0; uint8_t *cpix=NULL;
     /* decompressed PTR = [u32 filesize][u32 offsets...][shapes]; offsets are
      * absolute from file start. num = (offset[0]-4)/4. Item 0 = the arrow. */
-    if (cursz>=12 && u6lzw_decompress(curc,(int32_t)curn,curd,cursz)==cursz){
+    if (curok){
         #define LE32(p) ((uint32_t)(p)[0]|((uint32_t)(p)[1]<<8)|((uint32_t)(p)[2]<<16)|((uint32_t)(p)[3]<<24))
         uint32_t off0=LE32(curd+4);
         if (off0>=8 && (int32_t)off0<cursz){
@@ -1925,15 +1733,18 @@ int main(int argc, char **argv)
         #undef LE32
     }
     free(curc); free(curd);
-    if (!cpix||cw<=0||ch<=0||cw>64||ch>64){ printf("U6MCGA.PTR cursor decode failed\n"); return 2; }
+    if (!cpix||cw<=0||ch<=0||cw>64||ch>64){ printf("%s cursor decode failed\n", gp->cursor); return 2; }
 
-    /* authentic background: PAPER.BMP (whole-file LZW U6Bmp -> 320x200 indices) */
-    long ppn; uint8_t *paperc = slurp(dir,"PAPER.BMP",&ppn);
-    int32_t pun = u6lzw_unpacked_size(paperc,(int32_t)ppn);
-    uint8_t *paperd = malloc((size_t)pun);
-    u6lzw_decompress(paperc,(int32_t)ppn,paperd,pun); free(paperc);
-    int pw=paperd[0]|(paperd[1]<<8), ph=paperd[2]|(paperd[3]<<8);
-    if (pw!=320||ph!=200){ printf("PAPER.BMP %dx%d unexpected\n",pw,ph); return 2; }
+    /* authentic background: PAPER.BMP (whole-file LZW U6Bmp -> 320x200 indices). SE/MD draw their
+     * screens differently (SCREEN.LZC / MDSCREEN.LZC, checklist item 8): black until then */
+    uint8_t *paperd;
+    if (u6){ long ppn; uint8_t *paperc = slurp(dir,"PAPER.BMP",&ppn);
+        int32_t pun = u6lzw_unpacked_size(paperc,(int32_t)ppn);
+        paperd = malloc((size_t)pun);
+        u6lzw_decompress(paperc,(int32_t)ppn,paperd,pun); free(paperc);
+        int pw=paperd[0]|(paperd[1]<<8), ph=paperd[2]|(paperd[3]<<8);
+        if (pw!=320||ph!=200){ printf("PAPER.BMP %dx%d unexpected\n",pw,ph); return 2; } }
+    else { paperd = calloc(4+64000,1); if(!paperd){ printf("out of memory (paper)\n"); return 2; } }
     uint8_t *paper = paperd+4;                      /* 64000 pixels */
 
 
@@ -1964,12 +1775,12 @@ int main(int argc, char **argv)
         if (objl && oln>=0xF00){   /* stat arrays present (1 byte each, both byte orders) */
             achp[i]=objl[0xE00+i]; astr[i]=objl[0x900+i];
             adex[i]=objl[0xA00+i]; aint[i]=objl[0xB00+i];
-            if (oln>0x13f1+i) amana[i]=objl[0x13f1+i];    /* current mana @0x13f1 (Nuvie ActorManager) */
+            if (u6 && oln>0x13f1+i) amana[i]=objl[0x13f1+i];    /* current mana @0x13f1 (Nuvie ActorManager) */
             /* experience @objlist+0xc00 (2 bytes): LE on DOS/ScummVM, BE on ST. (combat.md §3) */
             { const uint8_t *e=objl+0xc00+i*2;
               aexp[i]=(uint16_t)(svm ? (e[0]|(e[1]<<8)) : (e[1]|(e[0]<<8))); }
             /* worktype @objlist+0x11f1 (Nuvie actor_manager). 0x07 = COMBAT_RETREAT -> coward. */
-            if (oln>0x11f1+i) acoward[i]=(uint8_t)(objl[0x11f1+i]==0x07);
+            if (u6 && oln>0x11f1+i) acoward[i]=(uint8_t)(objl[0x11f1+i]==0x07);
             if (svm && i>0 && (objl[0x800+i]&0x80) && nparty<NACT) party[nparty++]=(uint8_t)i;
         }
         if (objl && oln>=0x600){
@@ -1984,7 +1795,7 @@ int main(int argc, char **argv)
                  * "peace" is handled per-actor (post-treaty gargoyles are NEUTRAL in the save).
                  * (Supersedes the old obj_n+worktype heuristic and the separate peace flag.) */
                 ahostile[i]=(uint8_t)( oln>0x800+i && (objl[0x800+i]&0x20) );
-                atrainer[i]=(uint8_t)(obj_n==409); }             /* Lord British: level-advancing trainer */
+                atrainer[i]=(uint8_t)(u6 && obj_n==409); }       /* Lord British: level-advancing trainer */
             if (svm){   /* live actor position (LE 3-byte packing) -> place NPCs exactly */
                 const uint8_t *p=objl+0x100+i*3;
                 actx[i]=(uint16_t)(p[0]|((p[1]&3)<<8));
@@ -2007,8 +1818,8 @@ int main(int argc, char **argv)
      * walking to his noon dining spot). Noon only if there is no OBJLIST at all;
      * $START_MIN below overrides either. */
     int start_min = 12*60;
-    if (objl && oln > 0x1bf5){
-        int mm=objl[0x1bf3], hh=objl[0x1bf4];
+    if (objl && oln > tail+0x1bf5){
+        int mm=objl[tail+0x1bf3], hh=objl[tail+0x1bf4];
         if (mm<60 && hh<24){ start_min = hh*60 + mm;
             printf("save clock: %02d:%02d (start_min=%d)\n", hh, mm, start_min); }
     }
@@ -2024,7 +1835,7 @@ int main(int argc, char **argv)
     long indoor_rle_len = 0; uint8_t *indoor_rle = NULL;   /* built once the tileset is freed, below */
 
     FILE *f = fopen(out, "wb"); if (!f) { printf("cannot write %s\n", out); return 2; }
-    fwrite("U6WT", 1, 4, f);   /* U6WT: 14B object records {x,y,tile,obj_n,qty16,quality,parent} (quality = key id on locks/keys); U6WS 12B; U6WR gold; U6WP trainer; U6WO exp */
+    fwrite(gp->magic, 1, 4, f);   /* U6WT (SEWT/MDWT): 14B object records {x,y,tile,obj_n,qty16,quality,parent} (quality = key id on locks/keys); U6WS 12B; U6WR gold; U6WP trainer; U6WO exp */
     be32(f,(unsigned long)mn); be32(f,(unsigned long)cn);
     be32(f, NTILES); be32(f,(unsigned long)nsurf);
     be16(f,(unsigned)startx); be16(f,(unsigned)starty);
@@ -2033,24 +1844,30 @@ int main(int argc, char **argv)
     cv_step("Tiles");
     /* combined tileset blob + per-tile index (loaded here, at its first use, and freed after
      * U6WX band 1 below: it is the converter's biggest block) */
-    uint8_t *mtc=slurp(dir,"MAPTILES.VGA",&tn), *ti=slurp(dir,"TILEINDX.VGA",&in);
+    uint8_t *mtc, *ti=slurp(dir,"TILEINDX.VGA",&in); int32_t musz;
+    if (u6){ mtc=slurp(dir,"MAPTILES.VGA",&tn); musz = u6lzw_unpacked_size(mtc, (int32_t)tn); }
+    else { mtc=load_core_asset(dir,"MAPTILES.VGA",marker,&tn); musz=(int32_t)tn;
+        if (!mtc){ printf("MAPTILES.VGA decode failed\n"); return 2; } }
     on=fsize_in(dir,"OBJTILES.VGA"); if(on<0){ printf("cannot read %s/OBJTILES.VGA\n",dir); exit(2); }
-    int32_t musz = u6lzw_unpacked_size(mtc, (int32_t)tn);
     int32_t comb_len = musz + (int32_t)on;
     uint8_t *comb = malloc(comb_len);
-    u6lzw_decompress(mtc, (int32_t)tn, comb, musz); free(mtc);
+    if (u6) u6lzw_decompress(mtc, (int32_t)tn, comb, musz); else memcpy(comb, mtc, (size_t)musz);
+    free(mtc);
     slurp_into(dir, "OBJTILES.VGA", comb + musz, on);
     u6tileset_t ts; u6tile_init(&ts, comb, comb_len, ti, (int32_t)in);
 
     /* MASKTYPE.VGA (LZW): per-tile encoding so transparent / pixel-block tiles
      * (e.g. the map-window border tiles 432-439) decode correctly, not as raw
      * 256-byte garbage. */
-    long mskn; uint8_t *mskc = slurp(dir,"MASKTYPE.VGA",&mskn);
-    int32_t msksz = u6lzw_unpacked_size(mskc,(int32_t)mskn);
-    uint8_t *msk = malloc((size_t)(msksz>0?msksz:1));
-    if (msksz < NTILES || u6lzw_decompress(mskc,(int32_t)mskn,msk,msksz)!=msksz){
-        printf("MASKTYPE.VGA decode failed (got %d, need >=%d)\n",msksz,NTILES); return 2; }
-    free(mskc);
+    long mskn; int32_t msksz; uint8_t *msk;
+    if (u6){ uint8_t *mskc = slurp(dir,"MASKTYPE.VGA",&mskn);
+        msksz = u6lzw_unpacked_size(mskc,(int32_t)mskn);
+        msk = malloc((size_t)(msksz>0?msksz:1));
+        if (msksz < NTILES || u6lzw_decompress(mskc,(int32_t)mskn,msk,msksz)!=msksz){
+            printf("MASKTYPE.VGA decode failed (got %d, need >=%d)\n",msksz,NTILES); return 2; }
+        free(mskc); }
+    else { msk = load_core_asset(dir,"MASKTYPE.VGA",marker,&mskn); msksz=(int32_t)mskn;
+        if (!msk || msksz < NTILES){ printf("MASKTYPE.VGA decode failed\n"); return 2; } }
     u6tile_set_masktype(&ts, msk);
     memset(g_terr, 0, sizeof g_terr);
     for (int t=0;t<NTILES;t++){ uint8_t tile[256];          /* full combined tileset */
@@ -2064,8 +1881,8 @@ int main(int argc, char **argv)
     build_command_band(&ts, paperd+4, palb, cb_pal, cb_pal4, cb_lut);
     free(comb); free(msk); free(ti); comb=NULL;
     cv_step("Indoor map");
-    indoor_rle = build_indoor_rle(dir, mapb, mn, chk, cn, tflag, objs, nobj, bt,
-                                  lookd, look_len, startx, starty, &indoor_rle_len);
+    if (u6) indoor_rle = build_indoor_rle(dir, mapb, mn, chk, cn, tflag, objs, nobj, bt,   /* SE/MD: all outdoors for now */
+                                          lookd, look_len, startx, starty, &indoor_rle_len);
     fwrite(palb,1,768,f);
     fwrite(passable,1,256,f);
     for (int32_t i=0;i<nobj;i++){                 /* repacked world objects (surface roots + contained chains) */
@@ -2084,8 +1901,13 @@ int main(int argc, char **argv)
     free(objs); free(mapb); free(chk); objs=NULL;
     fwrite(font,1,2048,f);                         /* authentic U6.CH font */
     fwrite(paper,1,64000,f);                        /* PAPER.BMP 320x200 background */
-    /* sample portraits (PORTRAIT.A items 0..NPORT-1: 4-byte lib of LZW 56x64) */
-    long prn; uint8_t *pra = slurp(dir,"PORTRAIT.A",&prn);
+    /* sample portraits (PORTRAIT.A items 0..NPORT-1: 4-byte lib of LZW 56x64); SE/MD ship their
+     * faces in CFAC at the end of the pack instead */
+    long prn; uint8_t *pra;
+    int32_t scr_len=0; uint8_t *scr=NULL;
+    if (!u6){ be16(f,0); be16(f,0); be16(f,0); }     /* no portraits; no demo NPC script */
+    else {
+    pra = slurp(dir,"PORTRAIT.A",&prn);
     u6lib_t plib;
     if (!u6lib_open(&plib,pra,(int32_t)prn,4,false)){ printf("PORTRAIT.A open failed\n"); return 2; }
     uint8_t (*portbuf)[56*64] = malloc((size_t)NPORT*56*64);
@@ -2102,10 +1924,11 @@ int main(int argc, char **argv)
      * usecode VM runs it on-target. [u16 npc][u16 script_len][script bytes].
      * (Portrait = NPC-1, already in the shipped portrait set.) */
     long ccn; uint8_t *ccb = slurp(dir,"CONVERSE.A",&ccn);
-    int32_t scr_len=0; uint8_t *scr=conv_script(ccb,ccn,DEMO_NPC,&scr_len); free(ccb);
+    scr=conv_script(ccb,ccn,DEMO_NPC,&scr_len); free(ccb);
     if (!scr) printf("warning: demo NPC %d script not decompressed\n", DEMO_NPC);
     be16(f,DEMO_NPC); be16(f,(unsigned)(scr?scr_len:0));
     if (scr&&scr_len>0) fwrite(scr,1,(size_t)scr_len,f);
+    }
 
     /* actor block: [u16 nact][nact x u16 appearance-tile]
      *              [nact x {u16 x, u16 y, u8 z}]          (live positions; z=0xFF none)
@@ -2182,7 +2005,7 @@ int main(int argc, char **argv)
      * [u16 nroof][nroof x {u32 pos=y*1024+x, u16 dense roof-tile idx}]. The engine overdraws
      * roofs over roofed cells when the avatar is OUTSIDE. (docs/rules/lighting.md Stage E) */
     { int n_rtiles=0; uint8_t *roof_map=NULL; long roof_map_len=0;
-      uint8_t *roof_tiles=build_roof(dir,&n_rtiles,&roof_map,&roof_map_len);
+      uint8_t *roof_tiles=u6?build_roof(dir,&n_rtiles,&roof_map,&roof_map_len):NULL;   /* the roofs are U6's (ultima.dat) */
       be16(f,(unsigned)n_rtiles);
       if (roof_tiles && n_rtiles>0) fwrite(roof_tiles,1,(size_t)n_rtiles*256,f);
       be16(f,(unsigned)(roof_map_len/6));
@@ -2192,7 +2015,7 @@ int main(int argc, char **argv)
     /* per-actor readied combat gear (U6WL): 256 x {u16 weapon obj_n, u8 armour class}
      * parsed from the save's actor-inventory chunk. (docs/rules/combat.md CB3b) */
     { static uint16_t gw[256]; static uint8_t gac[256];
-      build_actor_gear(svm_inv, gw, gac);
+      build_actor_gear(u6?svm_inv:NULL, gw, gac);    /* U6's weapon and armour numbers (combat.c) */
       for (int i=0;i<256;i++){ be16(f,gw[i]); fputc(gac[i],f); } }
 
     /* per-actor READIED ITEM LIST (U6WQ, magic-guarded — docs/rules/equipment.md §6): the actual
@@ -2243,12 +2066,12 @@ int main(int argc, char **argv)
     { int nt=0; for (int i=0;i<NACT;i++){ fputc(atrainer[i],f); nt+=atrainer[i]; }
       printf("trainers: %d/%d actors (Lord British)\n", nt, NACT); }
     /* party GOLD (U6WR): u16 BE — Σ obj_n-88 coins over party members (objlist.md; combat.md §3) */
-    { int gold = svm ? party_gold(svm_inv, objl, oln) : 0;
+    { int gold = (u6&&svm) ? party_gold(svm_inv, objl, oln) : 0;
       be16(f, (uint16_t)(gold>65535?65535:gold));
       printf("gold: party=%d (obj_n 88 coins)\n", gold); }
     /* avatar KARMA (U6WR cont.): u8 — objlist 0x1bf9 (objlist.md §Player fields). The ztats
      * screen shows it; conversation ADDKARMA/SUBKARMA then move it. 0 when no save (demo world). */
-    { int karma = (svm && objl && oln>0x1bf9) ? objl[0x1bf9] : 0;
+    { int karma = (u6 && svm && objl && oln>0x1bf9) ? objl[0x1bf9] : 0;
       fputc((uint8_t)karma, f);
       printf("karma: avatar=%d (objlist 0x1bf9)\n", karma); }
     free(objl); objl=NULL;
@@ -2256,7 +2079,7 @@ int main(int argc, char **argv)
      * Loaded from the save's spellbook (obj 57 -> spell 58 by quality); present=0 => engine keeps its
      * demo/implemented set. (magic_skills.md §4; Nuvie Magic::spellbook_has_spell.) */
     { uint8_t known[16]; int all=0;
-      int has = svm ? scan_spellbook(svm_inv, known, &all) : 0;
+      int has = (u6&&svm) ? scan_spellbook(svm_inv, known, &all) : 0;
       fputc((uint8_t)has, f); fputc((uint8_t)all, f);
       if(!has){ for(int i=0;i<16;i++) fputc(0,f); }
       else { for(int i=0;i<16;i++) fputc(known[i],f); }
@@ -2264,7 +2087,7 @@ int main(int argc, char **argv)
         printf("spellbook: present=%d all-spells=%d known=%d (obj 57->58 by quality)\n", has, all, nsp); } }
     /* avatar REAGENTS (U6WR cont.): [u8 present][8 x u8 counts] — obj 65..72 carried by the Avatar.
      * present=0 => engine keeps its seeded starter stock (magic_skills.md §2). */
-    { uint8_t rc[8]={0}; int has = svm ? scan_reagents(svm_inv, rc) : 0;
+    { uint8_t rc[8]={0}; int has = (u6&&svm) ? scan_reagents(svm_inv, rc) : 0;
       fputc((uint8_t)has, f); for(int i=0;i<8;i++) fputc(has?rc[i]:0, f);
       printf("reagents: present=%d [%d,%d,%d,%d,%d,%d,%d,%d] (obj 65-72 carried by Avatar)\n",
              has, rc[0],rc[1],rc[2],rc[3],rc[4],rc[5],rc[6],rc[7]); }
@@ -2292,13 +2115,14 @@ int main(int argc, char **argv)
                             cv_step(fe_label[(id)]); fe_cur=(id); fe_sec_off[fe_cur]=_p; if(fe_cur+1>fe_nsec) fe_nsec=fe_cur+1; } while(0)
     long fepn=0; char fep[1024]; snprintf(fep,sizeof fep,"%s/FEPAL",dir); uint8_t *fepal=slurp_path(fep,NULL,&fepn);          /* the ST release's: the front end's own colours (st_data.md) */
     if(!fepal||fepn!=768){ free(fepal); fepal=malloc(768); if(fepal) memcpy(fepal,palb,768); }
-    if(slim){ fwrite("NOFE",1,4,f);
+    if(!u6){ fwrite("NOFE",1,4,f); fe=NULL; }        /* SE/MD front ends: checklist item 9 */
+    else if(slim){ fwrite("NOFE",1,4,f);
         fe = fopen(fe_path,"wb");
         if(fe){ fwrite(FEPACK_MAGIC,1,4,fe); fwrite(fepal,1,768,fe); fwrite(g_lc_pal,1,48,fe); fwrite(g_lc_lut,1,256,fe); fwrite(font,1,2048,fe);
                 fe_dir_pos=ftell(fe); fputc(FES_N,fe); for(int i=0;i<FES_N*FEPACK_DIR_ENT;i++) fputc(0,fe);   /* placeholder dir */
                 printf("front-end/intro art -> %s (sectioned: %d sections + base palette + ST 16 + font)\n", fe_path, (int)FES_N); }
         else  { fe = f; printf("WARN: cannot open %s; front-end inline\n", fe_path); } }
-    {
+    if(fe){
     FE_SEC(FES_MENU);
     /* FRONT-END art (U6WU): MAINMENU.SHP shape 0 + TITLES.SHP shape 0 (shapes.md).
      * [u16 mw][u16 mh][mw*mh indices][u16 tw][u16 th][tw*th indices]. 0x0 if absent. */
@@ -2693,7 +2517,7 @@ int main(int argc, char **argv)
       FE_SEC(FES_CURSOR);
       fputc(cw,fe); fputc(ch,fe); fputc(chx,fe); fputc(chy,fe); fwrite(cpix,1,(size_t)cw*ch,fe);
     }   /* end front-end/intro art block */
-    if(fe!=f){                                    /* close the section directory + the file */
+    if(fe && fe!=f){                              /* close the section directory + the file */
         { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; }
         fseek(fe, fe_dir_pos, SEEK_SET); fputc(FES_N,fe);
         for(int i=0;i<FES_N;i++){ fputc(i,fe); be32(fe,(unsigned long)fe_sec_off[i]); be32(fe,(unsigned long)fe_sec_len[i]); }
@@ -2734,7 +2558,8 @@ int main(int argc, char **argv)
     /* per-portrait CONVERSATION palettes (U6WY): the ST swaps to one while an NPC's portrait is up.
      * MUST precede U6WZ — the engine parses WW, WX, WY, WZ, WS in that order. Also fills g_conv4. */
     cv_step("Portrait palettes");
-    { long prbn=0; uint8_t *prb = slurp_path("refdata/dos/u6/PORTRAIT.B", NULL, &prbn);   /* full set for U6WY conv palettes */
+    if(!u6){ fwrite("U6WY",1,4,f); be16(f,0); }      /* SE/MD: no per-portrait palettes yet */
+    else { long prbn=0; uint8_t *prb = slurp_path("refdata/dos/u6/PORTRAIT.B", NULL, &prbn);   /* full set for U6WY conv palettes */
       if(!prb){ char pbp[1100]; snprintf(pbp,sizeof pbp,"%s/PORTRAIT.B",dir); prb=slurp_path(pbp,NULL,&prbn); }
       pra = slurp(dir,"PORTRAIT.A",&prn);
       build_conv_palettes(f, paper, palb, pra, prn, prb, prbn, g_conv4, &g_nconv4);
@@ -2762,7 +2587,7 @@ int main(int argc, char **argv)
      * section (moved out of the front-end block, which the ST FREES with U6FE — that nulled in-game
      * reading). COPYRIGHTED game text, extracted at build time, NEVER committed. Engine indexes by
      * (object quality - 1). [4 "U6BK"][u16 nbook][nbook x [u16 len][bytes]] (\n preserved). */
-    { fwrite("U6BK",1,4,f); int nb=extract_books(dir, f);
+    { fwrite("U6BK",1,4,f); int nb=0; if(u6) nb=extract_books(dir, f); else be16(f,0);
       printf("books: %d BOOK.DAT entries (U6BK, resident core section)\n", nb); }
     /* the spellbook page (U6WN, background.md), resident: [4 "U6WN"][144*82 indices]; only U6 has one */
     { char np[512]; snprintf(np,sizeof np,"%s/NEWMAGIC.BMP",dir); FILE *t=fopen(np,"rb");
@@ -2771,7 +2596,12 @@ int main(int argc, char **argv)
         u6lzw_decompress(nc,(int32_t)nn,nd,nu); free(nc);
         if((nd[0]|(nd[1]<<8))==144 && (nd[2]|(nd[3]<<8))==82){ fwrite("U6WN",1,4,f); fwrite(nd+4,1,144*82,f); }
         free(nd); } }
+    /* SE/MD: the portrait bank (CFAC, face(actor N) = slot N-1) and each NPC's name and look text
+     * (CTLK), magic-guarded after everything else (portraits.md, converse.md §6b) */
+    if(!u6){ cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
+             cv_step("Conversation art"); if(gp->talk) convert_talk(dir, gp->talk, marker, f); }
     fclose(f);
+
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "
            "look %d bytes, %d/1024 gettable; cursor %dx%d hot(%d,%d)\n",
            DEMO_NPC, scr?scr_len:0, nact_ok, (schd?scn:0), look_len, ngettable,

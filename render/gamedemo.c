@@ -5863,7 +5863,7 @@ static int se_use_object(int idx)
     if(strstr(nm,"door")){                           /* SE door: OPEN/CLOSE, data-driven (se_md_objn.md).
         * SE door frames are per-object (no U6 ±4 rule) and share tile ranges with other objects, so we
         * DON'T do frame arithmetic. Instead: a door's open frame is PASSABLE, its closed frame IMPASSABLE
-        * (g_tflags1, shipped via CTF1). USE flips to the nearest tile that is still a "door" AND has the
+        * (g_tflags1, the pack's tileflags1). USE flips to the nearest tile that is still a "door" AND has the
         * opposite passability. Name-matching skips the interleaved non-door tiles; the tie-break (opening
         * prefers the lower frame, closing the higher) keeps a multi-orientation door in its orientation. */
         int cur=g_wobj[idx].tile;
@@ -12596,117 +12596,16 @@ int main(int argc, char **argv)
     const uint8_t *palette=g_tileset+(int32_t)ntiles*256, *passable=palette+768;
     g_objs=passable+256;
 
-    /* M9: a CORE pack (Savage/Martian) carries the shared world (map/tiles/
-     * objects) + optional magic-guarded sections, but none of the U6-only tail
-     * (paper/portraits/actors/anim/lighting/save). Selected by the pack magic:
-     * only U6's own pack uses the full U6 layout. On a core pack we stub the
-     * globals the shared render loop reads, then parse whatever optional
-     * sections ARE present (CLOK object identity, ...). The U6 path (the else
-     * branch) is unchanged. See docs/design/multigame.md P2. */
-    long core_end = 26 + (long)map_len + chunks_len + (long)ntiles*256 + 768 + 256
-                  + (long)g_nobjs*14;
-    int is_core = (gd != &gamedef_u6);
-    const uint8_t *ctf1 = NULL;                          /* CTF1 per-tile tileflags1 (SE/MD core pack) */
-    g_gamename = is_core ? gd->name : (const char *)0;   /* panel title for SE/MD core packs */
+    /* M9: every game's pack has the same layout (tools/mkworld.c); the pack magic says which game
+     * it is (docs/design/se_md_checklist.md item 1). */
+    g_gamename = (gd != &gamedef_u6) ? gd->name : (const char *)0;   /* panel title for SE/MD */
     g_gd = gd ? gd : &gamedef_u6;                        /* authoritative loaded-game identity */
     g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
     const uint8_t *gettable;
-    uint8_t *s_stub_paper=NULL;              /* black background (no PAPER.BMP); 64 KB U6 never needs: pool */
-    static uint8_t s_stub_font[2048];        /* blank glyphs (no U6.CH)             */
-    static uint8_t s_stub_1k[1024];          /* empty gettable                      */
-    static uint8_t s_stub_basetile[2048];    /* obj_n -> base tile 0                */
     const uint8_t *after_actors = NULL;
 
-    if (is_core) {
-        s_stub_paper=(uint8_t*)plat_alloc_chip(64000+2);
-        if(!s_stub_paper){ music_stop_all(); rdr_shutdown(); Cconws("\r\n*** Not enough memory for this game's data.\r\n"); Crawcin(); return 1; }
-        memset(s_stub_paper,0,64000+2);
-        g_font=s_stub_font; g_paper=s_stub_paper; g_nport=0; g_portraits=NULL;
-        g_demo_npc=0; g_script_len=0; g_script=NULL; g_nsparty=0; g_savestate=0;
-        for(int i=0;i<U6_MAX_ACTORS;i++){ g_atile[i]=0xffff; g_actz[i]=0xff;
-            g_ahp[i]=g_astr[i]=g_adex[i]=g_aint[i]=0; g_amaxhp[i]=0;
-            g_amana[i]=g_amaxmana[i]=0; g_adead[i]=0; }
-        for(int i=0;i<2048;i++) g_looktbl[i]="";
-        gettable=s_stub_1k;
 
-        /* optional core sections after the objects (magic-guarded; grow over time):
-         *   "CLOK": object identity — [4 "CLOK"][u32 look_len][look run-fill][gettable 1024]
-         *   "CFNT": text font       — [4 "CFNT"][2048 U6.CH-format 8x8 glyphs] */
-        const uint8_t *ext = pak + core_end;
-        while (ext+4 <= pak+n){
-            if (ext[0]=='C'&&ext[1]=='L'&&ext[2]=='O'&&ext[3]=='K'){
-                if (ext+8 > pak+n) break;
-                uint32_t look_len=((uint32_t)ext[4]<<24)|(ext[5]<<16)|(ext[6]<<8)|ext[7];
-                const uint8_t *blob=ext+8, *gt=blob+look_len;
-                if (gt+1024 > pak+n) break;
-                int j=0; const uint8_t *p=blob;              /* same run-fill parse as the U6 path */
-                for(int i=0;i<2048 && p+2<gt;){
-                    i=p[0]|(p[1]<<8); if(i>=2048) break;
-                    const char *s=(const char*)(p+2);
-                    int len=0; while(s+len<(const char*)gt && s[len]) len++;
-                    for(;j<=i;j++) g_looktbl[j]=s;
-                    p+=len+3;
-                }
-                for(;j<2048;j++) g_looktbl[j]=g_looktbl[0]?g_looktbl[0]:"";
-                gettable=gt;                                 /* packed gettable[1024], points into pak */
-                ext=gt+1024;
-            } else if (ext[0]=='C'&&ext[1]=='F'&&ext[2]=='N'&&ext[3]=='T'){
-                if (ext+4+2048 > pak+n) break;
-                g_font = ext+4;                              /* SE/MD 8x8 font (points into pak) */
-                ext += 4+2048;
-            } else if (ext[0]=='C'&&ext[1]=='T'&&ext[2]=='F'&&ext[3]=='1'){
-                if (ext+4+2048 > pak+n) break;
-                ctf1 = ext+4;                                /* per-tile tileflags1 (obj passability + doors) */
-                ext += 4+2048;
-            } else if (ext[0]=='C'&&ext[1]=='F'&&ext[2]=='A'&&ext[3]=='C'){
-                if (ext+10 > pak+n) break;                   /* [u16 nface][u16 w][u16 h][n x w*h] */
-                int nf=(ext[4]<<8)|ext[5], fw=(ext[6]<<8)|ext[7], fh=(ext[8]<<8)|ext[9];
-                const uint8_t *fp=ext+10;
-                if (fp+(long)nf*fw*fh > pak+n) break;
-                g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;   /* SLOT-indexed portrait bank: face(actor N)=slot N-1 */
-                ext = fp+(long)nf*fw*fh;
-            } else if (ext[0]=='C'&&ext[1]=='T'&&ext[2]=='L'&&ext[3]=='K'){
-                /* per-actor NPC name + look-description (CTLK):
-                 * [u16 nact][u16 blob_len][nact x u16 off][blob "name\0desc\0"]. */
-                if (ext+8 > pak+n) break;
-                int na=(ext[4]<<8)|ext[5], bl=(ext[6]<<8)|ext[7];
-                const uint8_t *ofs=ext+8, *blob=ofs+(long)na*2;
-                if (blob+bl > pak+n) break;
-                g_setalk_nact=na; g_setalk_off=ofs; g_setalk_blob=blob;
-                ext = blob+bl;
-            } else if (ext[0]=='C'&&ext[1]=='A'&&ext[2]=='C'&&ext[3]=='T'){
-                /* initial ACTOR ROSTER (captured objlist -> mkworld CACT):
-                 * [u16 nact][nact x u16 tile][nact x {u16 x,u16 y,u8 z}]
-                 * [nact x {u8 hp,str,dex,int}][u8 nparty][nparty x u8 idx].
-                 * Tiles are pre-resolved; positions place NPCs; party list drives
-                 * the party panel + follow. (docs/design/multigame.md P2) */
-                if (ext+6 > pak+n) break;
-                int na=(ext[4]<<8)|ext[5];
-                if (na<0 || na>U6_MAX_ACTORS) break;
-                const uint8_t *at=ext+6, *ap=at+(long)na*2;
-                const uint8_t *as=ap+(long)na*5, *pp=as+(long)na*4;
-                if (pp+1 > pak+n) break;
-                int np=pp[0]; const uint8_t *pl=pp+1;
-                if (pl+np > pak+n) break;
-                for(int i=0;i<na && i<U6_MAX_ACTORS;i++){
-                    g_atile[i]=(uint16_t)((at[i*2]<<8)|at[i*2+1]);
-                    const uint8_t *p=ap+i*5;
-                    g_actx[i]=(uint16_t)((p[0]<<8)|p[1]);
-                    g_acty[i]=(uint16_t)((p[2]<<8)|p[3]);
-                    g_actz[i]=p[4];
-                    const uint8_t *s=as+i*4;
-                    g_ahp[i]=s[0]; g_astr[i]=s[1]; g_adex[i]=s[2]; g_aint[i]=s[3];
-                    g_amaxhp[i]=s[0];
-                    g_amaxmana[i]=(uint8_t)actor_max_mana(i);
-                    g_amana[i]=g_amaxmana[i];
-                }
-                if(np>MAXPARTY) np=MAXPARTY;
-                g_nsparty=np; for(int i=0;i<np;i++) g_sparty[i]=pl[i];
-                g_savestate = (na>1 && g_actz[1]!=0xff);
-                ext = pl+np;
-            } else break;
-        }
-    } else {
+    {
     g_font=g_objs+(int32_t)g_nobjs*14;                           /* 14 bytes/object (U6WT) */
     g_paper=g_font+2048;
     g_nport=(g_paper[64000]<<8)|g_paper[64001];
@@ -12757,7 +12656,7 @@ int main(int argc, char **argv)
             p+=len+3;
         }
         for(;j<2048;j++) g_looktbl[j]=g_looktbl[0]?g_looktbl[0]:""; }
-    }   /* end full-pack section A (a core pack stubbed these globals above) */
+    }
 
     /* build the mutable world-object store from the packed records */
     {   int nw=g_nobjs<MAXWOBJ?(int)g_nobjs:MAXWOBJ;
@@ -12773,7 +12672,7 @@ int main(int argc, char **argv)
         objects_stack_order(nw); objworld_init(&g_ow,g_wobj,nw,gettable); g_ow.add_owner=1; g_ow.away=g_away; }
     magic_init();                          /* seed spellbook + reagents (magic_skills.md §4) */
 
-    if (!is_core) {   /* full U6 pack: cursor + basetile + anim/lighting/save tail */
+    {   /* cursor + basetile + anim/lighting/save tail */
     /* mouse cursor: [u8 w][u8 h][u8 hotx][u8 hoty][w*h pixels] after gettable;
      * then BASETILE[2048] (1024 x u16 LE) for frame-aware use (doors). */
     {   const uint8_t *cur=gettable+1024;
@@ -12910,6 +12809,8 @@ int main(int argc, char **argv)
             if(ap+6<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='Y'){
                 int np=(ap[4]<<8)|ap[5]; const uint8_t *q=ap+6;
                 if(np>0 && q+(int32_t)np*(48+256) <= pak+n){ g_nconvpal=np; g_convpal=q; ap=q+(int32_t)np*(48+256); }
+                else if(np==0) ap=q;                       /* SE/MD: none yet */
+
             }
             /* COLOUR-CYCLING metadata (U6WZ): [4 "U6WZ"][u8 ncyc][ncyc x {u8 first_slot, u8 nslots}] —
              * which reserved ST-16 slots the shifter rotates each tick (fire/water). TT/Falcon ignore. */
@@ -12943,24 +12844,27 @@ int main(int argc, char **argv)
             /* the spellbook page (U6WN): [4 "U6WN"][144*82 indices], pointer into the pak */
             if(ap+4+SPELL_W*SPELL_H<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='N'){
                 g_spell_page=ap+4; ap+=4+SPELL_W*SPELL_H; }
+            /* SE/MD: the portrait bank (CFAC, face(actor N) = slot N-1) and each NPC's name and look text
+             * (CTLK), after everything else (portraits.md, converse.md §6b) */
+            while(ap+4<=pak+n){
+                if(ap[0]=='C'&&ap[1]=='F'&&ap[2]=='A'&&ap[3]=='C'){        /* [u16 nface][u16 w][u16 h][n x w*h] */
+                    if(ap+10>pak+n) break;
+                    int nf=(ap[4]<<8)|ap[5], fw=(ap[6]<<8)|ap[7], fh=(ap[8]<<8)|ap[9];
+                    const uint8_t *fp=ap+10;
+                    if(fp+(long)nf*fw*fh>pak+n) break;
+                    g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;
+                    ap=fp+(long)nf*fw*fh;
+                } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='L'&&ap[3]=='K'){ /* [u16 nact][u16 blob_len][nact x u16 off][blob "name\0desc\0"] */
+                    if(ap+8>pak+n) break;
+                    int na=(ap[4]<<8)|ap[5], bl=(ap[6]<<8)|ap[7];
+                    const uint8_t *ofs=ap+8, *blob=ofs+(long)na*2;
+                    if(blob+bl>pak+n) break;
+                    g_setalk_nact=na; g_setalk_off=ofs; g_setalk_blob=blob;
+                    ap=blob+bl;
+                } else break;
+            }
         }
     }
-    } else {   /* core pack (SE/MD): stub the U6-only cursor/basetile/anim/lighting/save tail */
-        g_cw=g_ch=0; g_basetile=s_stub_basetile;
-        for(int i=0;i<2048;i++){ g_anim_idx[i]=-1; g_tflags[i]=0; }
-        /* per-tile passability: from the CTF1 section if the core pack shipped it (SE/MD object blocking
-         * + door open/closed), else all-passable (0). build_blocked() (below) turns it into g_blocked. */
-        if(ctf1) for(int i=0;i<2048;i++) g_tflags1[i]=ctf1[i];
-        else     for(int i=0;i<2048;i++) g_tflags1[i]=0;
-        g_nanim=0;
-        for(int i=0;i<1024;i++) g_objanim[i]=0;
-        for(int lev=0;lev<NLEV;lev++) for(int i=0;i<256;i++) g_darklut[lev][i]=(uint8_t)i;
-        sb_clear(&g_indoor);                              /* all outdoor => full daylight */
-        g_nrtiles=0; g_nroof=0;
-        for(int i=0;i<U6_MAX_ACTORS;i++){ g_aweapon[i]=0; g_aac[i]=0; g_align_hostile[i]=0;
-            g_coward[i]=0; g_aexp[i]=0; g_trainer[i]=0; }
-        g_load_gold=0; g_load_karma=0; g_load_book_present=0; g_load_book_all=0; g_load_reag_present=0;
-        g_have_lowcolor=0; g_have_ste=0; g_nconvpal=0; g_lc_ncyc=0; g_lcx_nb=0; g_nbook=0;
     }
     /* magic_init seeded the pack before BASETILE was known: give those stacks their tiles now (else
      * they draw and name as tile 0, "Nothing", in the inventory and E)quip panels) */
@@ -15256,20 +15160,20 @@ int main(int argc, char **argv)
                     use_object(i); dbg_num("SE cont child spilled=", g_wobj[child].alive); }     /* expect 1 */
                 break; }
             /* DOOR: force an obj to SE door 234 at its CLOSED frame (tile 977, impassable). USE -> should
-             * OPEN to a passable "door" tile (976). Proves CTF1 passability + the name/passability toggle. */
+             * OPEN to a passable "door" tile (976). Proves tileflags1 passability + the name/passability toggle. */
             for(int i=0;i<g_ow.nobjs;i++){ if(!g_wobj[i].alive) continue;
                 g_wobj[i].obj_n=234; g_wobj[i].tile=977;                                          /* SE door, closed */
-                dbg_num("SE door tflags1 loaded=", (g_tflags1[976]|g_tflags1[977])!=0);           /* CTF1 present? */
+                dbg_num("SE door tflags1 loaded=", (g_tflags1[976]|g_tflags1[977])!=0);           /* tileflags1 present? */
                 dbg_num("SE door closed blk0=", (g_tflags1[977]&0x06)!=0);                        /* expect 1 (blocks) */
                 use_object(i);
                 dbg_num("SE door tile after USE=", g_wobj[i].tile);                               /* expect 976 (open) */
                 dbg_num("SE door open passable=", (g_tflags1[g_wobj[i].tile]&0x06)==0);           /* expect 1 */
                 break; }
-            /* SANITY: enabling object-blocking (CTF1) must not box the Avatar in — count walkable neighbours. */
+            /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }
               dbg_num("SE avatar passable neighbors=", pn); }                                      /* expect > 0 */
-            /* GET: SE ships the gettable table (CLOK), and GET is generic (objworld_get), so it should
+            /* GET: SE ships the gettable table, and GET is generic (objworld_get), so it should
              * already work. Sanity the table, then do a full do_verb('G'): place an SE item (fruit 197,
              * qty 3) one tile east of the Avatar, GET it -> it leaves the map and lands in inventory. */
             dbg_num("SE gettable fruit197=", objworld_can_get(&g_ow,197));

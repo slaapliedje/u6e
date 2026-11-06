@@ -173,6 +173,13 @@ unblocks (most foundational first):
   BASETILE/TILEFLAG are raw in all three. SE/MD TALK/LOOK/FACES = multi-item `.LZC` (see lzc.md).
 
 ## Status
+**2026-11-06: full packs.** SE and MD are built in the same full layout as U6.PAK by the same
+`mkworld` path (the per-game inputs come from its `GameProfile`; what a game lacks is written
+empty), from the game's own new-game save (mksave + nuviesave, objects, actors, schedule,
+inventories). The core pack, its CLOK/CTF1/CFNT/CACT sections and the engine's stub path are gone;
+CFAC and CTLK ride at the end of the pack. `make shot-se` / `shot-md` run from build/se-run and
+build/md-run. The road from here is docs/design/se_md_checklist.md; the history below is kept.
+
 IN PROGRESS (2026-07-19). P0 (GameDef identity + magic→game registry) + P1 (SE/MD data path) DONE;
 **P2 well advanced — SE boots POPULATED from the shared binary**: core-pack loader path +
 `gamedef_se`/`gamedef_md`; world + objects (`CLOK`) + font (`CFNT`) + portrait (`CFAC`) + **NPCs/party

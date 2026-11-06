@@ -55,10 +55,10 @@ including `/`-run chars only when singular and `\`-run chars only when plural.
 - /tools (mkworld) decompresses LOOK.LZD/`.LZC` and ships the raw payload in the
   world pack; the runtime builds a `char *name[2048]` table by the parse above and
   formats the singular form for Look / inventory. (render/gamedemo)
-- U6 full pack: in the "object verbs" section. SE/MD CORE pack: in the optional
-  magic-guarded `CLOK` section `[4 "CLOK"][u32 look_len][look][gettable 1024]`
-  (docs/design/multigame.md P2). Same parse; host-validated by tools/coredump,
-  which labels the rendered village objects with these names.
+- Every game's world pack (U6, SE, MD since 2026-11-06): in the "object verbs" section.
+  SE/MD packs before that carried it in a `CLOK` section, which tools/coredump still
+  reads from old packs.
+
 - The same lookup names terrain (tiles 0..511) and objects (512..2047), so the
   Look verb works on everything under/around the avatar.
 
