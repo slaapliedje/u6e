@@ -55,6 +55,16 @@ int main(void)
     equip_fold(s, &w, &ac);
     OK(w == 39, "fold picks the strongest weapon (mace over dagger)");
 
+    /* DOS's slots (equipment.md §9) */
+    { uint16_t d[EQ_NSLOTS] = {0};
+      OK(equip_ready(d, 9)  == EQ_ARM2, "DOS: a shield goes to the off hand first");
+      OK(equip_ready(d, 43) == EQ_ARM,  "DOS: then a sword takes the main hand");
+      uint16_t e[EQ_NSLOTS] = {0}; (void)equip_ready(e, 35);
+      OK(equip_ready(e, 9)  == EQ_ARM,  "DOS: a shield beside a main gauche takes the main hand");
+      OK(equip_class(203) < 0 && equip_class(204) < 0, "DOS: pliers and hammer can't be readied");
+      OK(equip_class(141) == EQ_ARM && equip_class(115) == EQ_ARM && equip_class(116) == EQ_ARM, "DOS: decorative sword, wine, mead in a hand");
+      OK(equip_class(26) == EQ_NECK, "DOS: the gargoyle belt on the neck"); }
+
     /* every obj_n with weapon damage or armour AC must be readiable (spec §3 note) */
     { int miss = 0;
       for (int o = 1; o < 300; o++)

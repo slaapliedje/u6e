@@ -164,3 +164,21 @@ VERIFIED 2026-09-20 — engine/equip.c (22 host asserts, `make equiptest`); U6WQ
 (18 actors / 68 items on the canonical save; folds match the old U6WL values); READY.REQ modes 1-3
 validated on emulated TT (fold prints + the status-view gear list + digit unready). Save
 persistence of ready CHANGES deferred (§6).
+
+## 9. Readiable objects as DOS has them (read 2026-11-05; overrides §2 and §3 where they differ)
+
+> Provenance: READING GAME.EXE 4.5, the R)eady command and the slot routine it calls (ranges of tile numbers, then a
+> 33-tile hand list), its hand placement and its messages. Re-expressed; checked by comparing every object's class
+> against the §3 table. Confidence: confirmed (reading).
+
+DOS keys the slot by the object's TILE (base tile + frame), but every frame of a readiable object gives the same slot.
+Against §3:
+- **Off hand first** (a new class, OFF-HAND): the shields 9-16 and the main gauche 35 go to ARM2, else ARM; DOS's
+  weapons go to ARM, else ARM2. Both refuse while a two-handed weapon is held. (§3 put the shields with the weapons.)
+- **Readiable in a hand** besides §3's list: 115 wine, 116 mead, 141 decorative sword.
+- **Not readiable:** 203 pliers, 204 hammer (§3 had them). `Can't be readied!`
+- **26 gargoyle belt goes on the NECK**: DOS lists its tile under both neck and body, and asks neck first.
+- Messages: `Can't be readied!`, `Too heavy!` (the leader's carried weight plus the thing over STR x 10 counts),
+  `No place to put!` when the slot it lands in is taken.
+
+So every object with a damage or armour row is readiable, as tools/equiptest asks.

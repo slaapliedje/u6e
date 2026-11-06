@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 enum { EQ_HEAD=0, EQ_NECK, EQ_BODY, EQ_ARM, EQ_ARM2, EQ_HAND, EQ_HAND2, EQ_FOOT, EQ_NSLOTS };
+#define EQ_CLS_OFFHAND EQ_NSLOTS   /* a class only, never a slot: shields go to the off hand first (equipment.md §9) */
 
 /* Readiable class of obj_n: the PREFERRED slot (EQ_*), where EQ_ARM2 means
  * "two-handed" (needs both arms). -1 = not readiable. */
