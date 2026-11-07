@@ -1,6 +1,6 @@
 # Format: Conversation container (CONVERSE.A / CONVERSE.B)
 
-Games: U6 / Savage / Martian — verify per game (U6 decoded here)
+Games: U6 (CONVERSE.A/.B) / Savage (TALK.LZC, §6b–6c) / Martian (not yet read)
 Implemented by: /dataformats (u6conv.c/.h, u6lzw.c), /tools (convspike)
 Tracked in: /docs/INDEX.md  ·  Milestone: M4 (spike) / M6 (full VM)
 
@@ -17,7 +17,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M4 (spike) / M6 (full VM)
 >                  text; name+greeting+responses parse for many other NPCs.
 > - Confidence   : confirmed (container + readable layer); the usecode
 >                  EXPRESSION/flag/branch opcodes are NOT yet decoded (probable).
-> - Last updated : 2026-06-23
+> - Last updated : 2026-11-07 (Savage Empire's driver, §6c)
 
 ## 1. Container layout
 CONVERSE.A is a **library** (see library.md) of per-NPC conversation scripts:
@@ -96,7 +96,8 @@ texts correct. Conditional-gated NPCs show their content via the flow layer
 (branch selection awaits the expression VM).
 
 ## 4. Per-game deltas
-Verify — Savage/Martian likely share the container; opcode set may differ.
+Savage Empire: its own container (TALK.LZC, §6b) and a few opcode differences (§6c). Martian Dreams:
+not yet read.
 
 ## 5. Validation method
 `make convspike` runs NPC 2 (Dupre) end-to-end with scripted keywords and
@@ -107,7 +108,7 @@ NPC interactively.
 - [ ] The `0xF2` expression encoding and the full opcode set (flags, branches,
       arithmetic, item/gold ops, asking for input strings/numbers).
 - [ ] `$G` and any other substitution tokens; the `0xB0`/arg semantics.
-- [ ] Confirm CONVERSE.B + per-game (Savage/Martian) opcode deltas.
+- [x] Savage Empire opcode deltas (§6c). [ ] Martian Dreams.
 
 ## 6b. Savage / Martian: `TALK.LZC` (per-actor conversations)
 
@@ -135,14 +136,78 @@ Host pipeline: `tools/mkworld.c::convert_talk` ships the plain **name + look
 description** per actor in the world pack's **`CTLK`** section (after everything else; SE/MD only)
 
 `[4 "CTLK"][u16 nact=256][u16 blob_len][256 × u16 off][blob of "name\0desc\0"]`,
-`off[a]=0xFFFF` when actor `a` has no conversation. The engine (`gamedemo.c::
-se_talk`) shows the NPC's portrait (CFAC) + name + look description on talk. The
-**usecode script after `0xF2` is NOT yet wired** — the SE/MD conversation VM
-(branching dialogue, keywords, JOIN/give) is a later milestone; the opcode set
-likely differs from U6's (§4). This section documents identity only.
+`off[a]=0xFFFF` when actor `a` has no conversation. Beside it, **`CTSC`** carries
+the whole scripts, repackaged without change so the conversation VM runs them:
+
+`[4 "CTSC"][u16 nact=256][u32 blob_len][256 × u32 off][blob]`, all big-endian;
+`off[a]=0xFFFFFFFF` when actor `a` has none. At `off[a]`: `[u8 kind][u32 len][len bytes]`,
+kind 1 = the TALK item's own [lzw.md] container (SE), kind 0 = stored bytes.
+
+## 6c. Savage Empire's talk driver (GAME.EXE)
+
+> Provenance
+> - Derived from : reading the user's own DOS Savage Empire GAME.EXE (plain Turbo C image,
+>                  header 0x3400; disassembled in the RE workspace, outside this repo): the
+>                  statement switch (ops 0x9C–0xDF, a jump table), the value-op switch (41
+>                  cases), the event routine behind 0xD1, the text-step loop, the character
+>                  output routine and the talk entry; plus a byte census of all 68 TALK items.
+> - Validated by : every SE script parses with no unknown statement; the census below counts
+>                  every statement and value op the scripts use. Behaviour in play: NOT YET
+>                  compared against DOS running.
+> - Confidence   : probable (read from the code; not yet watched in DOSBox)
+> - Last updated : 2026-11-07
+
+SE's interpreter is U6's: the same byte classes, data pushes (0xD2/D3/D4), EVAL (0xA7), frames
+(IF/ELSE/ENDIF, KEYWORDS/ANSWER), keyword loop, data block, string variables and text tokens.
+What differs:
+
+| Op | U6 | SE |
+|----|----|----|
+| 0xA4 SETF / 0xA5 CLEARF / 0xAB FLAG | flags 0–7 | flags **0–15**: 0–7 in the talk-flag byte (objlist 0x18F1 in SE), 8–15 in a second per-actor byte (objlist **0x12F1**); a flag above 15 is ignored, FLAG reads 0 |
+| 0xC4 ADDKARMA / 0xC5 SUBKARMA | karma | **not in SE**: "Unknown command." (no SE script uses them) |
+| 0xD1 EVENT(n) | — | runs scripted event *n* (table below) |
+| 0xDF (n) | — | $Y := "you" if n is 1, else actor n's name (no SE script uses it) |
+| 0xD0 (n) | — | steps the game clock n × 20 times (no SE script uses it) |
+| 0xC8 (npc, x) | — | an actor routine with (npc, x, 16) (no SE script uses it; not read further) |
+| 0xCB WAIT | waits for a key | the same |
+| 0xCD WORKTYPE(npc, w) | sets the worktype | sets it; w = 0x91 also puts the actor to sleep |
+| value ops 0xBC 0xBD 0xC1 0xC2 0xC3 | — | present in SE's value switch; no SE script uses them |
+| 0x9B WEIGHT(obj, qty) | | weight × qty, × 10 more unless the object is weighed per ten (the same in U6) |
+
+Text: a byte 0x20–0x7F or 0x0A prints; any other byte below 0x80 in a text run is an error
+("Try to print out a control char"). `$x` reads string variable x (0–9, then A–Z = 10–35), so `$P`,
+`$N`, `$Y`, `$Z` are variables 25, 23, 34, 35 as in U6; `#`, `/`, `\`, `@`, `^` take the next
+character, `*` waits for a key, `` ` `` capitalises the next letter. SE's font draws `&` as the
+closing quote mark: scripts open speech with `"` and close it with `&`.
+
+**EVENT (0xD1)**, by number (all SE uses):
+
+| n | Used by | What happens |
+|---|---------|--------------|
+| 1, 3, 4 | "Guards! Kill this man!" (Huitlapacti, Kipotli, the Nahuatla queen) | warriors (obj 320, "man") come for the party: count = random 2–10; for each try, pick a spot on the edge of the box round the party (x ± 5 by a random side at y ± 4, or the other way round), and where a man may stand create one there, hostile (alignment 3, chaotic), worktype 6. A try that places one counts twice |
+| 2, 5 | the Myrmidex queen and soldiers | the same with Myrmidex drones (obj 323), count random 5–10, alignment 1 (hostile) — unless actor 40's (Moctapotl's) talk flag 7 is set |
+| 10 | Intanya, when the Avatar fails his questions on waking | the game ends: DOS shuts down and returns to DOS |
+| 149 | (none) | adds 1 to a game counter |
+| 150 | the drum-maker: "you can beat it now" | a jungle drum (obj 148, frame 3) appears at (533, 453, level 0), beside Tuomaxx (actor 52) |
+| 175 | Fabozz fades away | actor 25 (Fabozz) moves to (997, 339, level 0); actor 179 gets worktype 0 and alignment 0 |
+| 222 | Yunapotli, "There! It is done." | the door (obj 161) at (146, 137) on the party's level opens (the data has it on level 3) |
+
+Other numbers do nothing.
+
+**Who answers** (the talk entry, before the script runs): a party member who isn't near prints
+`No response.`; so do the dead, the asleep, the paralysed and an actor whose worktype is 0x9B,
+0x13 or 0x07; talking to yourself prints `Talking to yourself?`. In solo mode the game prints
+`Not in solo mode!`, except to actor 25 (Fabozz).
+
+Census (68 scripts): statements a1 616, a2 619, a3 343, a4 208, a5 18, a6/a8 121, b0 1780, b6 191,
+b9 23, ba 15, bf 265, c9 2, cb 987, cd 28, d1 18, d6 3, d8 12, d9 3, db 2, ee 55, ef/f6 1185, f1/f2/ff
+68, f3 8, f7 83, f8 59, fb 11, fc 2. Value ops: only ones U6 has.
 
 ## 7. Status
-VERIFIED — container + readable layer + the full usecode VM
+Savage Empire (2026-11-07): its scripts run on the same VM in SE's dialect (§6c), in the game and on
+the host (`build/convvm TALK.LZC <actor> kw...`); `make check-se-talk` drives one in the game.
+
+U6: VERIFIED — container + readable layer + the full usecode VM
 (engine/converse_vm.c) which executes the bytecode (expression eval, IF/ELSE/
 ENDIF, keyword loop, BYE) for NPCs across CONVERSE.A, on host and on the TT.
 Game-mutation opcodes (SETF/CLEARF, GIVE/NEW/DELETE, ADDKARMA/SUBKARMA,

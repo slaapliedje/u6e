@@ -224,7 +224,11 @@ deterministic RNG seam so golden-transcript tests are reproducible.
   script that picked "Who will …?" from a numbered party list was off.
 - **0xe0 EXP, 0xe1 LVL, 0xe2 STR, 0xe3 INT, 0xe4 DEX take TWO args** `(npc, delta)`: the result is
   the actor's current value PLUS delta, which is also STORED (so delta 0 reads, delta ±n changes).
-  Exp is clamped to 9999, the others to a byte. We used to pop one arg and answer 1 / 10 (stubs).
+  We used to pop one arg and answer 1 / 10 (stubs).
+  Limits, as DOS GAME.EXE has them (U6 and SE alike; read 2026-11-07): the delta is added in the
+  field's own width without a sign, then compared unsigned. EXP (16 bits) above 9999 becomes 9999, so
+  a sum below 0 also becomes 9999. STR, INT and DEX (bytes) above 30 become 30, so a sum below 0 also
+  becomes 30. LVL is a byte with no limit: it wraps. (We used to floor at 0 and cap at 255.)
 - The VM sees every actor's str / dex / int / level / exp (`cvm_game_t` stats, synced in before a
   conversation) and the party ORDER (`party_actor[]`); after each VM run the host applies what
   changed (`sync_stats_out`): a new level sets max HP = level × 30 (HP itself untouched, as the

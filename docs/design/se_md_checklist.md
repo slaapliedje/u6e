@@ -54,3 +54,11 @@ list once SE's seams exist.
   Britain, shop, cave) gives the same log and transcripts as before, every U6 self-test hook and
   mode gives the same console output, make check and the logic tests pass. SE and MD boot; SEUSE
   passes. Item 3 next.
+- 2026-11-07: item 3 done (converse.md §6c): SE's talk driver read from GAME.EXE. Its scripts ship in the
+  pack (CTSC) and run on the shared VM in SE's dialect: flags 0-15, EVENT (0xD1: guards, Myrmidex,
+  the drum, Fabozz, Yunapotli's door, Intanya's quit), 0xDF, no karma; SE's own refusals; the face
+  follows PORTRAIT; talk flags load and save at SE's objlist places. All 68 scripts run on the host
+  (convvm TALK.LZC); `make check-se-talk` passes in the game. Found for U6 too: DOS caps STR/DEX/INT
+  at 30 and EXP at 9999 in conversations (now so). Open: '*' page waits and long replies (both games
+  show '*' and cut a reply at 8 lines; DOS waits for a key); SE's other objlist fields still sit at
+  U6's places (item 10); the spawned men and drones use U6's creature table (item 6). Item 4 next.

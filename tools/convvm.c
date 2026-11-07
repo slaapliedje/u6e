@@ -5,11 +5,15 @@
  * exchange. Validates the VM end-to-end (greeting, keyword loop, branching).
  *
  * Usage: convvm <CONVERSE.A> <npc> [kw1 kw2 ...]
+ *        convvm <TALK.LZC> <actor> [kw...]   Savage Empire: the item whose byte 1 is the actor
+ *                                            (converse.md §6b), run in SE's dialect (§6c)
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "u6lzw.h"
+#include "u6lzc.h"
 #include "converse_vm.h"
 
 static uint8_t *slurp(const char*p,long*n)
@@ -17,6 +21,17 @@ static uint8_t *slurp(const char*p,long*n)
   fseek(f,0,SEEK_END);*n=ftell(f);fseek(f,0,SEEK_SET);
   uint8_t*b=malloc((size_t)*n); if(fread(b,1,(size_t)*n,f)!=(size_t)*n){printf("short read\n");exit(2);}
   fclose(f); return b; }
+
+static int g_events[16], g_nev;
+static void on_event(int n){ if(g_nev<16) g_events[g_nev++]=n; }
+
+/* SE: the TALK.LZC item that names this actor */
+static uint8_t *load_talk(const uint8_t*f,long flen,int actor,int32_t*len)
+{ u6lzc_t lc; if(!u6lzc_open(&lc,f,(int32_t)flen,U6LZC_COMP_SE)) return NULL;
+  static uint8_t d[1<<17];
+  for(int i=0;i<u6lzc_count(&lc);i++){ int32_t got=u6lzc_read(&lc,i,d,sizeof d);
+    if(got>2 && d[0]==0xff && d[1]==actor){ uint8_t*r=malloc((size_t)got); memcpy(r,d,(size_t)got); *len=got; return r; } }
+  return NULL; }
 
 static long off(const uint8_t*f,int i)
 { return (long)(f[i*4]|f[i*4+1]<<8|f[i*4+2]<<16|((uint32_t)f[i*4+3]<<24)); }
@@ -41,10 +56,12 @@ int main(int argc,char**argv)
     int nkw = (argc>3)?(argc-3):3;
 
     long flen; uint8_t*f=slurp(path,&flen);
-    int32_t len; uint8_t*d=load_conv(f,flen,npc,&len);
+    size_t pl=strlen(path); int se=pl>4 && strcasecmp(path+pl-4,".LZC")==0;
+    int32_t len; uint8_t*d=se?load_talk(f,flen,npc,&len):load_conv(f,flen,npc,&len);
     if(!d){ printf("NPC %d: no conversation\n",npc); return 2; }
 
     cvm_game_t g; cvm_game_init(&g,0xC0FFEE);
+    if(se){ g.dialect=CVM_DIALECT_SE; g.event=on_event; }
     cvm_t vm; cvm_init(&vm,d,len,&g,npc,"Avatar","milord");
 
     int turn=0;
@@ -66,7 +83,8 @@ int main(int argc,char**argv)
     printf("\n[state] mutations=%d  karma=%d  gold=%d", g.mutations, g.karma, g.gold);
     if(g.portrait_npc>=0) printf("  portrait->%d", g.portrait_npc);
     printf("\n  party:"); for(int i=0;i<256;i++) if(g.in_party[i]) printf(" %d",i);
-    printf("\n  flags:"); for(int i=0;i<256;i++) if(g.talk_flags[i]) printf(" npc%d=0x%02x",i,g.talk_flags[i]);
+    printf("\n  flags:"); for(int i=0;i<256;i++) if(g.talk_flags[i]||g.talk_flags_hi[i]) printf(" npc%d=0x%02x%02x",i,g.talk_flags_hi[i],g.talk_flags[i]);
+    if(g_nev){ printf("\n  events:"); for(int i=0;i<g_nev;i++) printf(" %d",g_events[i]); }
     printf("\n  inv:");   for(int i=0;i<1024;i++) if(g.player_obj[i]) printf(" obj%d x%d",i,g.player_obj[i]);
     printf("\n");
     free(d); free(f);

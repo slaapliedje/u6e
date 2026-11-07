@@ -24,7 +24,7 @@ Per-game:   "shared" if identical across all three; else note deltas.
 | look.md              | LOOK.LZD object/terrain names      | all     | verify   | VERIFIED | confirmed | /tools, /engine        | M6 |
 | tileflag.md          | TILEFLAG per-tile flags + weights  | all     | verify   | VERIFIED | confirmed (weights/gettable; flags3 bit3 = Vanish/Replicate, shipped as U6W3) | /tools, /engine | M6 |
 | savegame_objects.md  | In-savegame object/positions data  | all     | verify   | SUPERSEDED | n/a | — (folded into objblk.md + objlist.md + nuvie_save.md) | M6 |
-| converse.md          | Conversation/usecode container     | all     | verify   | VERIFIED | confirmed (readable layer) | /dataformats | M4/M6 |
+| converse.md          | Conversation/usecode container     | all     | U6, SE (§6c) | VERIFIED (U6); SE probable | confirmed (U6); SE read from GAME.EXE | /dataformats, /engine | M4/M6 |
 | portraits.md         | portrait.a/.b/.z (4B lib, LZW 56x64)| all     | verify   | VERIFIED | confirmed | /dataformats, /tools   | M6 |
 | fonts.md             | U6.CH 8x8 game font (+runic/gargish)| all     | verify   | VERIFIED | confirmed | /tools, /render        | M6 |
 | shapes.md            | *.shp (intro/end/menu bitmaps)     | all     | verify   | VERIFIED | confirmed (container + shape hdr + RLE blocks; golden MAINMENU/TITLES) | /tools, /render | M6 |

@@ -115,6 +115,7 @@ typedef struct GameLayer {
     int  (*usable)(int on);                                     /* U)se finds something to use under a thing that is not (usecode_use.md) */
     int  (*use_pack)(world_t *w, int on);                       /* U)se a thing in the pack or readied (usecode_use.md) */
     uint8_t asks_count;                                         /* a stack asks "How many?" first (usecode_use.md) */
+    int16_t ol_talk, ol_talk_hi;                                /* objlist offsets of the talk flags (0-7, 8-15); 0 = U6's (converse.md §6c) */
     int  (*rest)(world_t *w);                                   /* R)est: the refusals, the camp, the meal, the sleep (rest.md) */
     void (*cast)(void);                                         /* C)ast: the spellbook page (magic_skills.md §6) */
     /* the pack */
@@ -149,6 +150,11 @@ static int g_senface, g_sefw, g_sefh;
 static const uint8_t *g_setalk_off, *g_setalk_blob;
 static int            g_setalk_nact;
 static int            g_talk_actor;   /* actor being talked to (SE/MD core path); 0 = none */
+static int            g_talk_face;    /* SE/MD: whose face the panel shows (PORTRAIT changes it) */
+/* SE/MD conversation scripts (CTSC, converse.md §6b): 256 big-endian u32 offsets into g_setsc_blob,
+ * 0xffffffff = none; each entry [u8 kind][u32 len][bytes], kind 1 = an LZW container */
+static const uint8_t *g_setsc_off, *g_setsc_blob;
+static int32_t        g_setsc_len;
 /* name/description for SE/MD actor `a`, or NULL if none. */
 static const char *se_npc_str(int a, int want_desc){
     if(!g_setalk_off || a<0 || a>=g_setalk_nact) return 0;
@@ -5224,7 +5230,7 @@ static void draw_conversation(uint8_t col)
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
         if(g_gamename){                            /* SE/MD core: draw the actor's own CFAC portrait (slot actor-1) */
-            int fi=g_talk_actor-1;
+            int fi=g_talk_face-1;
             if(g_seface && fi>=0 && fi<g_senface){
                 int fx=PANX+(PANW-g_sefw)/2, fy=MAPY+8;
                 for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++)
@@ -5584,33 +5590,125 @@ static void conv_palette_leave(void)
     if(g_lcx_nb>=2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, LCPAL(g_lcx_pal, g_lcx_pal4), g_lcx_lut);
 }
 
-/* SE/MD (core pack) conversation: no usecode VM yet — resolve the NPC's identity
- * from CTLK (name + look-description, keyed by actor number) and show it with the
- * actor's own portrait (CFAC slot actor-1). The full branching dialogue (the
- * usecode after 0xf2) is a later milestone. */
-static void se_talk(int id)
+/* SE/MD conversation identity without a script (CTLK only): the name and look line, as before. */
+static void se_talk_plain(int id)
 {
     const char *nm=se_npc_str(id,0), *ds=se_npc_str(id,1);
-    g_talk_actor=id;
     { int o=0; const char*s=nm?nm:"Someone"; while(s[o]&&o<31){ g_talk_name[o]=s[o]; o++; } g_talk_name[o]=0; }
     int tl=tappend(0,"You see ");
     tl=tappend(tl, ds?ds:"one of the tribesfolk.");
     if(!nm){ /* generic villager: no unique conversation */ tappend(tl," They have nothing to say."); }
     else    { tl=tappend(tl,"\n\""); tl=tappend(tl,nm); tappend(tl," greets thee.\""); }
-    g_talking=1; g_have_pc=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0;
+}
+
+/* MD: its scripts are not read yet (se_md_checklist.md item 13): the name and look line */
+static void md_talk(int id)
+{
+    g_talk_actor=id; g_talk_face=id; g_have_pc=0;
+    se_talk_plain(id);
+    g_talking=1; g_await_input=0; g_inlen=0; g_inbuf[0]=0;
+}
+
+/* SE's scripted events, EVENT n (0xD1; converse.md §6c) */
+static int npc_at(const world_t*w,int x,int y); static int se_use_object(int idx); static int use_actor_fwd(void);
+static cvm_status talk_vm(int id,int32_t got,int look);
+static int g_se_counter;                         /* EVENT 149 adds 1 (DOS keeps it; nothing here reads it yet) */
+static void end_talk(void);
+static int hatch_creature(const world_t*w,int x,int y,int obj_n,int align);
+static void hatched_worktype(int s,int wt);
+static int se_rand(int lo,int hi){ return lo+(int)rng_range(&g_crng,(uint32_t)(hi-lo+1)); }
+static void se_event_band(int obj_n,int lo,int hi,int align)  /* warriors or drones come for the party */
+{
+    world_t*w=(world_t*)g_wp; if(!w) return;
+    int span=(w->level==0)?U6_SURFACE_TILES:256, n=se_rand(lo,hi);
+    for(int t=0;t<n;t++){ int x,y;
+        (void)se_rand(0,1); (void)se_rand(0,1);       /* DOS draws two it doesn't use */
+        if(se_rand(0,1)){ x=(int)w->px+se_rand(0,10)-5; y=(int)w->py+se_rand(0,1)*8-4; }
+        else            { x=(int)w->px+se_rand(0,1)*8-4; y=(int)w->py+se_rand(0,10)-5; }
+        x&=span-1; y&=span-1;
+        if(!world_is_passable(w,x,y) || npc_at(w,x,y)>=0) continue;
+        int c=hatch_creature(w,x,y,obj_n,align); if(c<0) continue;
+        hatched_worktype(c,6); t++;                     /* a try that places one counts twice */
+    }
+}
+static void se_event(int n)
+{
+    world_t*w=(world_t*)g_wp; if(!w) return;
+    switch(n){
+    case 1: case 3: case 4: se_event_band(320,2,10,ALIGN_CHAOTIC); break;                        /* "Guards!" */
+    case 2: case 5: if(!(g_cg.talk_flags[40]&0x80)) se_event_band(323,5,10,ALIGN_EVIL); break;   /* the Myrmidex */
+    case 10: g_game_over=1; break;                                                               /* Intanya: back to sleep, DOS quits */
+    case 149: g_se_counter++; break;
+    case 150: if(w->level==0){ int i=persist_obj_new(148,3,533,453,0); if(i>=0) build_blocked(); } break;   /* Tuomaxx's drum */
+    case 175: g_actx[25]=997; g_acty[25]=339; g_actz[25]=0;                                      /* Fabozz fades */
+              wt_apply(179,0); g_align_hostile[179]=0; g_agood[179]=0; g_achaos[179]=0; break;
+    case 222: { int i=obj_idx_at(146,137,161); if(i>=0) (void)se_use_object(i); } break;         /* Yunapotli's door */
+    default: break;
+    }
+}
+static int se_per_ten(int on){ return on_in(g_on.tenth,2,on)||(g_on.tenth_n&&on>=g_on.tenth_first&&on<g_on.tenth_first+g_on.tenth_n); }
+
+/* SE: talk to actor `id` (converse.md §6c): who answers, then its TALK script on the VM in SE's
+ * dialect, with its own face (PORTRAIT may change it). */
+static void se_talk(int id)
+{
+    if(g_solo_on && id!=25){ msgcat(0,"Not in solo mode!"); return; }
+    if(id>=1 && id<U6_MAX_ACTORS){
+        if(is_party_member(id) && !vm_seen(id)){ msgcat(0,"No response."); return; }
+        int live=npc_live_worktype(id);
+        if(g_ahp[id]==0 || g_asleep[id] || g_paralyze[id] || live==0x9b||live==0x13||live==0x07){ msgcat(0,"No response."); return; }
+        if(id==use_actor_fwd()){ msgcat(0,"Talking to yourself?"); return; } }
+    g_talk_actor=id; g_talk_face=id; g_have_pc=0;
+    int32_t got=0;
+    if(g_setsc_off && id>=0 && id<256){
+        uint32_t o=((uint32_t)g_setsc_off[id*4]<<24)|((uint32_t)g_setsc_off[id*4+1]<<16)|((uint32_t)g_setsc_off[id*4+2]<<8)|g_setsc_off[id*4+3];
+        if(o!=0xFFFFFFFFu && (int32_t)o+5<=g_setsc_len){
+            const uint8_t*e=g_setsc_blob+o; int32_t L=(int32_t)(((uint32_t)e[1]<<24)|((uint32_t)e[2]<<16)|((uint32_t)e[3]<<8)|e[4]);
+            if((int32_t)o+5+L<=g_setsc_len){
+                if(e[0]==1) got=u6lzw_decompress(e+5,L,g_script_buf,(int32_t)sizeof g_script_buf);
+                else if(L<=(int32_t)sizeof g_script_buf){ for(int32_t k=0;k<L;k++) g_script_buf[k]=e[5+k]; got=L; } } } }
+    if(got<=0){
+        if(!g_setsc_off){ se_talk_plain(id); g_talking=1; g_await_input=0; g_inlen=0; g_inbuf[0]=0; return; }
+        msgcat(0,"No response."); return; }
+    g_cg.dialect=CVM_DIALECT_SE; g_cg.event=se_event; g_cg.per_ten=se_per_ten; g_cg.portrait_npc=-1;
+    cvm_status st=talk_vm(id,got,1);
+    if(g_cg.portrait_npc>=0) g_talk_face=g_cg.portrait_npc;
+    g_talking=1;
+    g_inlen=0; g_inbuf[0]=0;
+    g_await_input=(st==CVM_ASK);
+    if(g_game_over) end_talk();
 }
 
 static int g_talk_obj;                            /* 1 while a shrine / statue talks (no actor behind the number) */
 static int use_actor_fwd(void);
 static int g_seance;                                    /* Seance: the dead do answer */
 static void u6_talk(int id);
+/* The VM's first run, shared by every game's talk (converse.md): the world's state in, the run, the
+ * name and opening text into the panel, what the script changed back out. `look` = keep the look
+ * line before the first speech (SE prints it, converse.md §6c); else the text starts at the speech. */
+static cvm_status talk_vm(int id,int32_t got,int look)
+{
+    g_cg.kw_mark=1;
+    if(g_gd==&gamedef_u6 || g_gl!=&gl_u6){ g_cg.inv_count=vm_count; g_cg.inv_new=vm_new; g_cg.inv_del=vm_del; g_cg.inv_give=vm_give; g_cg.inv_room=vm_room; g_cg.inv_seen=vm_seen; g_cg.inv_resurrect=vm_resurrect; }
+    sync_party_in(); if(!g_cg.inv_count) sync_inv_in(); sync_carry_in(); sync_worktype_in(); sync_nearby_in(id);   /* persistent g_cg + real party + inventory + live worktypes + who is near */
+    g_cg.hour=(uint8_t)g_hour;                   /* $T greeting word tracks the game clock */
+    cvm_init(&g_cv,g_script_buf,got,&g_cg,id,g_avatar_name,g_avatar_title);
+    cvm_status st=cvm_run(&g_cv);
+    { int o=0; while(g_cv.npcname[o]&&o<31){ g_talk_name[o]=g_cv.npcname[o]; o++; } g_talk_name[o]=0; }
+    { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
+      if(!look) while(*q && *q!='"') q++;
+      tappend(0, *q?q:gt); }
+    sync_party_out(); if(!g_cg.inv_count) sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* greeting may JOIN/LEAVE, give/take items, heal */
+    return st;
+}
+
 static void talk(int id)
 {
-    if(g_solo_on){ msgcat(0,"Not in solo mode."); return; }
     if(g_gl->talk) g_gl->talk(id);
 }
 static void u6_talk(int id)
 {
+    if(g_solo_on){ msgcat(0,"Not in solo mode."); return; }
     if(g_armageddon){ msgcat(0,"No response"); return; }    /* after Armageddon nobody talks (§5f) */
     if(!g_talk_obj && !g_seance && id>=1 && id<U6_MAX_ACTORS){                     /* who will not answer (usecode_use.md) */
         int wf=g_wt_force[id], live=npc_live_worktype(id), on=actor_objn(id);
@@ -5627,17 +5725,7 @@ static void u6_talk(int id)
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf);
     if(got<=0) return;
 
-    g_cg.kw_mark=1;
-    if(g_gd==&gamedef_u6){ g_cg.inv_count=vm_count; g_cg.inv_new=vm_new; g_cg.inv_del=vm_del; g_cg.inv_give=vm_give; g_cg.inv_room=vm_room; g_cg.inv_seen=vm_seen; g_cg.inv_resurrect=vm_resurrect; }
-    sync_party_in(); if(!g_cg.inv_count) sync_inv_in(); sync_carry_in(); sync_worktype_in(); sync_nearby_in(id);   /* persistent g_cg + real party + inventory + live worktypes + who is near */
-    g_cg.hour=(uint8_t)g_hour;                   /* $T greeting word tracks the game clock */
-    cvm_init(&g_cv,g_script_buf,got,&g_cg,id,g_avatar_name,g_avatar_title);
-    cvm_status st=cvm_run(&g_cv);
-    { int o=0; while(g_cv.npcname[o]&&o<31){ g_talk_name[o]=g_cv.npcname[o]; o++; } g_talk_name[o]=0; }
-    { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
-      while(*q && *q!='"') q++;
-      tappend(0, *q?q:gt); }
-    sync_party_out(); if(!g_cg.inv_count) sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* greeting may JOIN/LEAVE, give/take items, heal */
+    cvm_status st=talk_vm(id,got,0);
 
     /* portrait: index id-1, library A for <98 else B (PORTRAIT.A holds 98) */
     g_have_pc=0;
@@ -5672,6 +5760,8 @@ static void submit_input(void)
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);
     sync_party_out(); if(!g_cg.inv_count) sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* a keyword may change the party, give/take items/gold, heal */
+    if(g_cg.dialect==CVM_DIALECT_SE && g_cg.portrait_npc>=0) g_talk_face=g_cg.portrait_npc;   /* SE: the last PORTRAIT shown */
+    if(g_game_over) end_talk();                                                               /* SE's EVENT 10 ends the game */
 }
 
 /* index of an NPC orthogonally/diagonally adjacent to the avatar at g_hour,
@@ -10591,6 +10681,7 @@ static int objects_reconcile(const world_t *w)
 static void talk_state_from_save(const uint8_t *d, int32_t ol)
 {
     int q = 0, g = 0;
+    if(g_gl->ol_talk){ for(int i = 0; i < 256; i++){ g_cg.talk_flags[i] = d[ol + g_gl->ol_talk + i]; g_cg.talk_flags_hi[i] = d[ol + g_gl->ol_talk_hi + i]; } return; }
     sav_get_talk_state(d, ol, g_cg.talk_flags, &q, &g);
     g_cg.on_quest = (uint8_t)(q ? 1 : 0); g_cg.knows_gargish = (uint8_t)(g ? 1 : 0);
 }
@@ -10747,7 +10838,8 @@ static int do_save(const world_t *w)
         if(g_adead[i]){ sav_set_actor_pos(d, off, i, 0, 0, 0); sav_set_actor_stats(d, off, i, 0, g_astr[i], g_adex[i], g_aint[i]); } }
     sav_set_alcohol(d, off, g_alcohol);
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
-    sav_set_talk_state(d, off, g_cg.talk_flags, g_cg.on_quest, g_cg.knows_gargish);   /* conversation state */
+    if(g_gl->ol_talk){ for(int i=0;i<256;i++){ d[off+g_gl->ol_talk+i]=g_cg.talk_flags[i]; d[off+g_gl->ol_talk_hi+i]=g_cg.talk_flags_hi[i]; } }   /* SE: its own places (converse.md §6c) */
+    else sav_set_talk_state(d, off, g_cg.talk_flags, g_cg.on_quest, g_cg.knows_gargish);   /* conversation state */
     sav_set_wind(d, off, g_wind==WIND_CALM ? 0xff : g_wind);                           /* the wind (wind.md §1) */
     /* the horse we ride (absorbed: it is where we are) or last left somewhere new (vehicles.md §4) */
     if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, w->level);
@@ -12559,10 +12651,10 @@ static const GameLayer gl_u6 = {
     .ending=run_ending,
 };
 static const GameLayer gl_se = {
-    .on=&objs_none, .talk=se_talk, .use=se_use_object, .gold_pool=1,
+    .on=&objs_none, .talk=se_talk, .use=se_use_object, .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
-    .on=&objs_none, .talk=se_talk, .gold_pool=1,
+    .on=&objs_none, .talk=md_talk, .gold_pool=1,
 };
 int main(int argc, char **argv)
 {
@@ -13016,6 +13108,13 @@ int main(int argc, char **argv)
                     const uint8_t *ofs=ap+8, *blob=ofs+(long)na*2;
                     if(blob+bl>pak+n) break;
                     g_setalk_nact=na; g_setalk_off=ofs; g_setalk_blob=blob;
+                    ap=blob+bl;
+                } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='S'&&ap[3]=='C'){ /* [u16 nact=256][u32 blob_len][256 x u32 off][blob] */
+                    if(ap+10>pak+n) break;
+                    int na=(ap[4]<<8)|ap[5]; int32_t bl=(int32_t)(((uint32_t)ap[6]<<24)|((uint32_t)ap[7]<<16)|((uint32_t)ap[8]<<8)|ap[9]);
+                    const uint8_t *ofs=ap+10, *blob=ofs+(long)na*4;
+                    if(na!=256 || blob+bl>pak+n) break;
+                    g_setsc_off=ofs; g_setsc_blob=blob; g_setsc_len=bl;
                     ap=blob+bl;
                 } else break;
             }
@@ -15289,6 +15388,30 @@ int main(int argc, char **argv)
             dbg_num("DROP inv after=", g_ow.ninv);                    /* expect ninv0-1 */
             int onmap=0; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==on && g_wobj[j].x==ex && g_wobj[j].y==ey) onmap=1;
             dbg_num("DROP item on map=", onmap);                      /* expect 1 */
+        }
+    }
+
+    /* headless check of SE conversations (converse.md §6c; SETALK.BIN, never staged in play): the
+     * Kysstaa (6) through name / join / bye, then again: wait (LEAVE, and flag 15 = 8+7 in SE's second
+     * flag byte), on the VM in SE's dialect. */
+    {   int32_t sl=0; void*sb=plat_load_file("SETALK.BIN",1,&sl);
+        if(sb && g_gd==&gamedef_se){
+            dbg_num("SETALK scripts=", g_setsc_off!=0);
+            g_actx[6]=(uint16_t)((w.px+1)&(U6_SURFACE_TILES-1)); g_acty[6]=(uint16_t)w.py; g_actz[6]=(uint8_t)w.level;   /* beside the Avatar, as a talk is */
+            se_talk(6); Cconws("SETALK greet: "); Cconws(g_transcript); Cconws("\r\n");
+            dbg_num("SETALK talking=", g_talking); dbg_num("SETALK ask=", g_await_input);
+            const char*kw[]={"name","join","bye"};
+            for(int k=0;k<3 && g_talking && g_await_input;k++){ int L=0; while(kw[k][L]){ g_inbuf[L]=kw[k][L]; L++; } g_inbuf[L]=0; g_inlen=L;
+                submit_input(); Cconws("SETALK: "); Cconws(g_transcript); Cconws("\r\n");
+                if(!g_await_input) end_talk(); }
+            dbg_num("SETALK kysstaa in party=", is_party_member(6));                          /* expect 1 */
+            dbg_num("SETALK met flag=", g_cg.talk_flags[6]&1);                                 /* expect 1 */
+            dbg_num("SETALK talking after bye=", g_talking);                                   /* expect 0 */
+            se_talk(6);
+            if(g_talking && g_await_input){ const char*k="wait"; int L=0; while(k[L]){ g_inbuf[L]=k[L]; L++; } g_inbuf[L]=0; g_inlen=L;
+                submit_input(); Cconws("SETALK: "); Cconws(g_transcript); Cconws("\r\n"); if(!g_await_input) end_talk(); }
+            dbg_num("SETALK kysstaa in party after wait=", is_party_member(6));               /* expect 0 */
+            dbg_num("SETALK flag15 after wait=", (g_cg.talk_flags_hi[6]>>7)&1);               /* expect 1 */
         }
     }
 

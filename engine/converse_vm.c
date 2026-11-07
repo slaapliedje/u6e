@@ -21,8 +21,8 @@ enum {
     OP_BYE=0xb6, OP_ENDDATA=0xb8, OP_NEW=0xb9, OP_DELETE=0xba, OP_INVENTORY=0xbe,
     OP_PORTRAIT=0xbf, OP_ADDKARMA=0xc4, OP_SUBKARMA=0xc5, OP_INPARTY=0xc6,
     OP_GIVE=0xc9, OP_JOIN=0xca, OP_WAIT=0xcb, OP_LEAVE=0xcc, OP_WORKTYPE=0xcd,
-    OP_RESURRECT=0xd6, OP_SETNAME=0xd8, OP_HEAL=0xd9, OP_WOUNDED=0xda,
-    OP_CURE=0xdb, OP_POISONED=0xdc, OP_NPC=0xdd,
+    OP_EVENT=0xd1, OP_RESURRECT=0xd6, OP_SETNAME=0xd8, OP_HEAL=0xd9, OP_WOUNDED=0xda,
+    OP_CURE=0xdb, OP_POISONED=0xdc, OP_NPC=0xdd, OP_SETNAME1=0xdf,
     OP_ENDANSWER=0xee, OP_KEYWORDS=0xef,
     OP_SLOOK=0xf1, OP_SCONVERSE=0xf2, OP_SPREFIX=0xf3, OP_ANSWER=0xf6,
     OP_ASK=0xf7, OP_ASKC=0xf8, OP_INPUTSTR=0xf9, OP_INPUT=0xfb, OP_INPUTNUM=0xfc,
@@ -62,7 +62,8 @@ void cvm_game_init(cvm_game_t*g,uint32_t seed){
         g->str[i]=g->dex[i]=g->intel[i]=0; g->level[i]=1; g->exp[i]=0; }
     for(int i=0;i<1024;i++){ g->player_obj[i]=0; g->player_objq[i]=0; }
     for(int i=0;i<16;i++){ g->party_actor[i]=0; g->party_name[i][0]=0; } g->nparty=0;
-    g->obj_weight=0; g->party_room=1000; g->lost_body=0; g->resurrect_req=0;
+    g->obj_weight=0; g->per_ten=0; g->dialect=0; g->event=0; for(int i=0;i<256;i++) g->talk_flags_hi[i]=0;
+    g->party_room=1000; g->lost_body=0; g->resurrect_req=0;
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
     g->gold=0; g->karma=0; g->avatar_num=0; g->portrait_npc=-1; g->mutations=0;
@@ -161,8 +162,10 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case 0x94: b=POP();a=POP(); PUSH((a||b)?1:0); break;          /* LOR */
       case 0x95: b=POP();a=POP(); PUSH((a&&b)?1:0); break;          /* LAND*/
       case OP_RAND:{ b=POP();a=POP(); PUSH(a>=b?a:a+(rng_next(vm->g)%(b-a+1))); } break;
-      case OP_FLAG:{ b=POP();a=POP(); int nn=npc_num(vm,a);         /* (npc,flag) */
-                     PUSH((b<=7 && (vm->g->talk_flags[nn&0xff]&(1u<<b)))?1:0); } break;
+      case OP_FLAG:{ b=POP();a=POP(); int nn=npc_num(vm,a)&0xff;    /* (npc,flag); SE has 8-15 too (converse.md §6c) */
+                     if(b<=7) PUSH((vm->g->talk_flags[nn]>>b)&1);
+                     else if(b<=15 && vm->g->dialect==CVM_DIALECT_SE) PUSH((vm->g->talk_flags_hi[nn]>>(b-8))&1);
+                     else PUSH(0); } break;
       case OP_VAR:{ a=POP(); int32_t sv; if(sysvar(vm,a,&sv)) PUSH((uint32_t)sv);
                     else PUSH(a<64?(uint32_t)vm->g->var[a]:0); } break;
       case OP_INPARTY:{ a=POP(); PUSH(vm->g->in_party[npc_num(vm,a)&0xff]?1:0); } break;
@@ -192,9 +195,9 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
                          int32_t r=(is_player(vm,(int)a)||vm->g->in_party[a])?vm->g->party_room:(int32_t)vm->g->str[a]*20;
                          PUSH((uint32_t)(r<0?0:r)); } break;
       case OP_SVAR: a=POP(); PUSH(a); break;                        /* SVAR -> svar handle */
-      case 0x9b:{ uint32_t q=POP(), o=POP()&0x3ff;                   /* WEIGHT(obj,qty): raw x qty, /10 for gold + reagents */
+      case 0x9b:{ uint32_t q=POP(), o=POP()&0x3ff;                   /* WEIGHT(obj,qty): raw x qty, /10 if weighed per ten */
                   uint32_t wt=(vm->g->obj_weight?vm->g->obj_weight[o]:0)*q;
-                  if(o==88||(o>=65&&o<=72)) wt/=10;
+                  if(vm->g->per_ten ? vm->g->per_ten((int)o) : (o==88||(o>=65&&o<=72))) wt/=10;
                   PUSH(wt); } break;
       case 0x9d: a=POP(); PUSH(0); break;                           /* HORSED      */
       case 0xd7: a=POP(); PUSH(vm->g->nearby[npc_num(vm,a)&0xff]); break;   /* NPCNEARBY: within 5 tiles of the speaker (usecode_vm.md §6) */
@@ -202,13 +205,15 @@ static int evop(cvm_t*vm,uint32_t*st,int sp){
       case OP_POISONED:{ int np=npc_num(vm,POP())&0xff; PUSH(vm->g->poisoned[np]?1:0); } break;
       case 0xe0: case 0xe1: case 0xe2: case 0xe3: case 0xe4:{        /* EXP/LVL/STR/INT/DEX(npc, delta): value+delta, stored (§6c) */
           int32_t dl=(int32_t)POP(); int np=npc_num(vm,POP())&0xff; int32_t v;
-          cvm_game_t*g=vm->g;
+          cvm_game_t*g=vm->g;                                        /* DOS: add in the field's width, compare unsigned (usecode_vm.md §6c) */
+          #define CAP30(x) ((uint8_t)(x)>30?30:(uint8_t)(x))
           switch(op){
-            case 0xe0: v=(int32_t)g->exp[np]+dl; if(v<0) v=0; if(v>9999) v=9999; g->exp[np]=(uint16_t)v; break;
-            case 0xe1: v=(int32_t)g->level[np]+dl; if(v<0) v=0; if(v>255) v=255; g->level[np]=(uint8_t)v; break;
-            case 0xe2: v=(int32_t)g->str[np]+dl; if(v<0) v=0; if(v>255) v=255; g->str[np]=(uint8_t)v; break;
-            case 0xe3: v=(int32_t)g->intel[np]+dl; if(v<0) v=0; if(v>255) v=255; g->intel[np]=(uint8_t)v; break;
-            default:   v=(int32_t)g->dex[np]+dl; if(v<0) v=0; if(v>255) v=255; g->dex[np]=(uint8_t)v; break; }
+            case 0xe0: { uint16_t e=(uint16_t)(g->exp[np]+dl); if(e>9999) e=9999; g->exp[np]=e; v=e; } break;
+            case 0xe1: g->level[np]=(uint8_t)(g->level[np]+dl); v=g->level[np]; break;
+            case 0xe2: g->str[np]=CAP30(g->str[np]+dl); v=g->str[np]; break;
+            case 0xe3: g->intel[np]=CAP30(g->intel[np]+dl); v=g->intel[np]; break;
+            default:   g->dex[np]=CAP30(g->dex[np]+dl); v=g->dex[np]; break; }
+          #undef CAP30
           if(dl) g->mutations++;
           PUSH((uint32_t)v); } break;
       default: PUSH(0); break;                                      /* unknown op  */
@@ -371,8 +376,10 @@ static void do_ctrl(cvm_t*vm){
     switch(op){
       case OP_IF: set_break(vm,OP_ELSE); set_run(vm,ARG()?1:0); break;
       case OP_ENDIF: case OP_ELSE: break;
-      case OP_SETF:{ int nn=npc_num(vm,ARG()); uint32_t f=ARG(); if(f<=7){ vm->g->talk_flags[nn&0xff]|=(uint8_t)(1u<<f); vm->g->mutations++; } } break;
-      case OP_CLEARF:{ int nn=npc_num(vm,ARG()); uint32_t f=ARG(); if(f<=7){ vm->g->talk_flags[nn&0xff]&=(uint8_t)~(1u<<f); vm->g->mutations++; } } break;
+      case OP_SETF: case OP_CLEARF:{ int nn=npc_num(vm,ARG())&0xff; uint32_t f=ARG(); uint8_t*fb=0;   /* SE: flags 8-15 in a second byte (§6c) */
+          if(f<=7) fb=&vm->g->talk_flags[nn]; else if(f<=15 && vm->g->dialect==CVM_DIALECT_SE){ fb=&vm->g->talk_flags_hi[nn]; f-=8; }
+          if(fb){ if(op==OP_SETF) *fb|=(uint8_t)(1u<<f); else *fb&=(uint8_t)~(1u<<f); vm->g->mutations++; } } break;
+      case OP_EVENT:{ uint32_t n=ARG(); if(vm->g->dialect==CVM_DIALECT_SE && vm->g->event){ vm->g->event((int)n); vm->g->mutations++; } } break;   /* SE: a scripted event (§6c) */
       case OP_DECL: vm->db_lvar=0;                                  /* loc,n,VAR,DATA / loc,k,DATA: a data-block element (§6g) */
           if(vm->nin>=5 && vm->in[3].v==OP_VAR && !vm->in[3].d && vm->in[4].v==OP_DATA && !vm->in[4].d){
               vm->db_lvar=1; vm->db_loc=vm->in[1].v; vm->db_off=(uint32_t)vm->g->var[vm->in[2].v&63]; }
@@ -381,6 +388,9 @@ static void do_ctrl(cvm_t*vm){
       case OP_ASSIGN:{ uint32_t v=ARG();   /* string assign (decl_t 0xb3) already stored in svar[]; */
           if(vm->db_lvar) db_set_integer(vm,vm->db_loc,vm->db_off,v);
           else if(vm->decl_t!=0xb3 && vm->decl_v<64) vm->g->var[vm->decl_v]=(int32_t)v; } break;  /* don't clobber the int var */
+      case OP_SETNAME1: if(vm->g->dialect!=CVM_DIALECT_SE) break;     /* SE: $Y = "you" for 1, else as SETNAME (§6c) */
+          if(ai<vm->nin && npc_num(vm,vm->in[ai].v)==1){ set_svar(vm,CVM_SVAR_YSTR,"you"); break; }
+          /* fall through */
       case OP_SETNAME:{ int n=npc_num(vm,ARG())&0xff; const char*nm=0;   /* $Y = that actor's name: a party member's from the roster, the speaker's from its script (§6c) */
           for(int p=0;p<vm->g->nparty;p++) if(vm->g->party_actor[p]==n){ nm=vm->g->party_name[p]; break; }
           if(!nm && n==vm->npc) nm=vm->npcname; if(!nm) nm="";
@@ -394,8 +404,10 @@ static void do_ctrl(cvm_t*vm){
                       if(vm->answer_mode==1){ set_run(vm,1); vm->answer_mode=2; } else set_run(vm,0); break;
       case OP_INPUTSTR: case OP_INPUT: case OP_INPUTNUM: vm->decl_v=ARG(); vm->decl_t=(uint8_t)ARG(); break;
       /* ---- game-mutation opcodes (act on cvm_game_t) ---- */
-      case OP_ADDKARMA:{ int k=vm->g->karma+(int)ARG(); vm->g->karma=(int16_t)(k>99?99:k); vm->g->mutations++; } break;
-      case OP_SUBKARMA:{ int k=vm->g->karma-(int)ARG(); vm->g->karma=(int16_t)(k<0?0:k); vm->g->mutations++; } break;
+      case OP_ADDKARMA: if(vm->g->dialect==CVM_DIALECT_SE) break;   /* not in SE (§6c) */
+                        { int k=vm->g->karma+(int)ARG(); vm->g->karma=(int16_t)(k>99?99:k); vm->g->mutations++; } break;
+      case OP_SUBKARMA: if(vm->g->dialect==CVM_DIALECT_SE) break;
+                        { int k=vm->g->karma-(int)ARG(); vm->g->karma=(int16_t)(k<0?0:k); vm->g->mutations++; } break;
       case OP_GIVE:{ uint32_t o=ARG(), ql=ARG(); int fr=npc_num(vm,ARG()),to=npc_num(vm,ARG());  /* obj,qual,from,to */
                      if(vm->g->inv_give){ vm->g->inv_give(actor_of(vm,fr),actor_of(vm,to),(int)(o&0x3ff),ql?(int)ql:-1); vm->g->mutations++; break; }
                      if(is_player(vm,to)) add(vm,o,ql,1);

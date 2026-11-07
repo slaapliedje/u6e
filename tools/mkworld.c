@@ -1565,6 +1565,44 @@ static int convert_talk(const char *dir, const char *name, uint8_t marker, FILE 
     return nnpc;
 }
 
+/* The SE/MD conversation scripts themselves, repackaged without change for the conversation VM
+ * (converse.md §6b): [4 "CTSC"][u16 nact=256][u32 blob_len][256 x u32 off][blob], big-endian;
+ * off[a]=0xFFFFFFFF when actor a has none; at off[a]: [u8 kind][u32 len][len bytes], kind 1 = the
+ * item's own LZW container, 0 = stored bytes. The actor is the item's byte 1, read by decompressing. */
+static int convert_talk_scripts(const char *dir, const char *name, uint8_t marker, FILE *out)
+{
+    long fl; uint8_t *b = slurp(dir, name, &fl);
+    u6lzc_t lc;
+    if (!u6lzc_open(&lc, b, (int32_t)fl, marker)){ free(b); return 0; }
+    int ni = u6lzc_count(&lc);
+    enum { NDEC = 1 << 17 };
+    uint8_t *dec = scratch(NDEC, 0);
+    static long off[256]; static int item[256];
+    for (int i = 0; i < 256; i++){ off[i] = -1; item[i] = -1; }
+    long blen = 0; int n = 0;
+    for (int it = 0; it < ni; it++){
+        int32_t sz; uint8_t flg; if (!u6lzc_entry(&lc, it, &sz, &flg)) continue;
+        int32_t got = u6lzc_read(&lc, it, dec, NDEC);
+        if (got < 3 || dec[0] != 0xFF) continue;
+        int actor = dec[1];
+        if (actor <= 0 || actor >= 256 || item[actor] >= 0) continue;            /* first wins */
+        item[actor] = it; off[actor] = blen; blen += 5 + sz; n++;
+    }
+    free(dec);
+    if (!n){ free(b); return 0; }
+    fwrite("CTSC", 1, 4, out); be16(out, 256); be32(out, (unsigned long)blen);
+    for (int i = 0; i < 256; i++) be32(out, off[i] < 0 ? 0xFFFFFFFFul : (unsigned long)off[i]);
+    for (int i = 0; i < 256; i++){
+        if (item[i] < 0) continue;
+        int32_t sz; uint8_t flg; const uint8_t *e = u6lzc_entry(&lc, item[i], &sz, &flg);
+        fputc(u6lzc_is_compressed(&lc, item[i]) ? 1 : 0, out); be32(out, (unsigned long)sz);
+        fwrite(e, 1, (size_t)sz, out);
+    }
+    printf("  +CTSC: %s -> %d conversation scripts (%ld B)\n", name, n, blen);
+    free(b);
+    return n;
+}
+
 int main(int argc, char **argv)
 {
     /* M9: $MKWORLD_GAME picks the game (u6|savage|martian; unset = u6). Every game gets the same
@@ -2599,7 +2637,7 @@ int main(int argc, char **argv)
     /* SE/MD: the portrait bank (CFAC, face(actor N) = slot N-1) and each NPC's name and look text
      * (CTLK), magic-guarded after everything else (portraits.md, converse.md §6b) */
     if(!u6){ cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
-             cv_step("Conversation art"); if(gp->talk) convert_talk(dir, gp->talk, marker, f); }
+             cv_step("Conversation art"); if(gp->talk){ convert_talk(dir, gp->talk, marker, f); if(marker==U6LZC_COMP_SE) convert_talk_scripts(dir, gp->talk, marker, f); } }   /* MD scripts: item 13 */
     fclose(f);
 
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "

@@ -66,7 +66,14 @@ typedef struct {
     int     (*inv_seen)(int actor);          /* in view of the leader */
     void    (*inv_resurrect)(int carrier);
     int32_t  party_room;       /* CANCARRY for a party member: the whole party's room, 0.1 stone */
+    int     (*per_ten)(int obj);             /* weighed per ten (WEIGHT), or NULL for U6's gold + reagents */
+    /* the game's own talk driver (converse.md §6c): 0 = U6, 1 = Savage Empire */
+    uint8_t  dialect;
+    uint8_t  talk_flags_hi[256]; /* SE: flags 8-15 (a second byte per actor)   */
+    void    (*event)(int n);     /* SE: EVENT(n), 0xD1 — the host runs scripted event n */
 } cvm_game_t;
+#define CVM_DIALECT_U6 0
+#define CVM_DIALECT_SE 1
 
 /* well-known object numbers used in conversations (U6) */
 #define CVM_OBJ_GOLD 88        /* gold coin: counted in `gold`, not player_obj  */

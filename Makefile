@@ -68,7 +68,7 @@ AUTO_PRG := c:\\$(notdir $(SELFTEST_PRG))
 # common Hatari invocation: mount build/ as C:, autostart the .PRG
 HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
-.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert
+.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk
 
 all: $(SELFTEST_PRG)
 
@@ -392,7 +392,7 @@ convspike: $(BUILD)/convspike
 	$(BUILD)/convspike $(REFDATA)/CONVERSE.A
 
 # M6 full conversation VM: drive a real NPC through engine/converse_vm
-$(BUILD)/convvm: tools/convvm.c dataformats/u6lzw.c engine/converse_vm.c
+$(BUILD)/convvm: tools/convvm.c dataformats/u6lzw.c dataformats/u6lzc.c engine/converse_vm.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
 convvm: $(BUILD)/convvm
@@ -1007,6 +1007,22 @@ shot-$(1): $(3) $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 endef
 $(eval $(call SHOT_WOU,se,SE,world-se))
 $(eval $(call SHOT_WOU,md,MD,world-md))
+
+# SE conversations on the VM (converse.md §6c): stage SETALK.BIN in a copy of the SE run folder, talk to
+# Kysstaa (name / join / bye, then wait) and check what the engine reports.
+check-se-talk: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
+	rm -rf $(BUILD)/se-talk && mkdir -p $(BUILD)/se-talk
+	cp $(BUILD)/SE.PAK $(BUILD)/se-talk/U6.PAK
+	cp $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF $(BUILD)/se-talk/
+	printf 'x' > $(BUILD)/se-talk/SETALK.BIN
+	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
+	          --tos '$(TOS_FALC)' --harddrive $(BUILD)/se-talk --auto 'C:\GAMEF.PRG' \
+	          --fast-forward on --run-vbls 4000 </dev/null 2>/dev/null | tr -d '\r' > $(BUILD)/se-talk/console.txt
+	@grep -a -A1 SETALK $(BUILD)/se-talk/console.txt
+	@for want in 'scripts=1' 'talking=1' 'ask=1' 'kysstaa in party=1' 'met flag=1' 'talking after bye=0' \
+	             'kysstaa in party after wait=0' 'flag15 after wait=1'; do \
+	    grep -aq "SETALK $$want" $(BUILD)/se-talk/console.txt || { echo "FAIL: SETALK $$want"; exit 1; }; done
+	@echo "SE talk: ALL PASS"
 
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This

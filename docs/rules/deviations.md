@@ -5,7 +5,12 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
+> - Last updated: 2026-11-07 (conversation page waits found; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
+
+## Found, not yet built
+| Difference | Where |
+|---|---|
+| A conversation's `*` (and the WAIT op) should wait for a key and start a new page, and a reply longer than the panel should page. u6e prints the `*` and cuts a reply after 8 lines. DOS's text routine has `*` in its token table (U6 and SE alike; found 2026-11-07 reading SE's) | usecode_vm.md, converse.md §6c |
 
 ## A choice for the user: DOS's own faults we don't copy
 | Difference | Where | Why it's a question |
@@ -35,4 +40,5 @@ register is empty. What's left is listed by why it's left.
 - The far cranks work their own bridge (DOS holds only the superchunks round the party); u6e now finds the bridge the same way.
 - The mealtime lasts 3 s from `Mealtime!`, a member every 4 ticks; u6e now paces it so.
 - X-ray holds 5.48 s (100 ticks), then `Done`; u6e now holds it so, and potions print nothing else, as in DOS.
+- (2026-11-07, read in GAME.EXE while reading Savage Empire's) Conversation stat changes: DOS caps STR, DEX and INT at 30 and EXP at 9999, compared unsigned; u6e capped at 255 and floored at 0. Now as DOS (usecode_vm.md §6c).
 - The cast effect, found while timing X-ray, is built: the rattle, the view XORed with 0x0D while two sweeps play, for the sixteen spells DOS gives it (magic_skills.md §12).

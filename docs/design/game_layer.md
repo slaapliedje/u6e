@@ -52,7 +52,8 @@ The struct comments in gamedemo.c name the rule spec each one follows. In short:
 **Hooks.** U6's entry is the code that stood at the call site; SE and MD have only the entries named.
 | Group | Hooks | SE | MD |
 |---|---|---|---|
-| Verbs | talk, use_at (aboard, mounts, the cow, churn, well, passthroughs, ladders), use (the switch), usable, use_pack, asks_count ("How many?"), rest, cast | talk (se_talk), use (se_use_object) | talk (se_talk) |
+| Verbs | talk, use_at (aboard, mounts, the cow, churn, well, passthroughs, ladders), use (the switch), usable, use_pack, asks_count ("How many?"), rest, cast | talk (se_talk: its scripts on the VM, converse.md §6c), use (se_use_object) | talk (md_talk: name and look line only, until item 13) |
+| Saves | ol_talk, ol_talk_hi (where the objlist keeps the talk flags; 0 = U6's places) | 0x18F1, 0x12F1 | |
 | The pack | gold_pool (one purse, not coins), ready_on/off/tick (rings, the cloak), theft | gold_pool | gold_pool |
 | The clock | wind_tick, burn_tick (torches, keg fuses), npc_torches, moongates, eggs | | |
 | Combat | max_mana, touch (drag, dissolve, rob, poison), shot_spend (ammunition), hazard (harmful tiles by tile number), foe_cast, avatar_death | | |
