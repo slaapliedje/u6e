@@ -48,3 +48,9 @@ list once SE's seams exist.
   and U6FE.PAK byte-identical to the old builder; SEUSE self-test, make check and the logic tests
   pass. Found on the way: SE's party carries 23 items but none read as readied (item 4), and the
   border and command bar still use U6's tile numbers (item 8). Item 2 next.
+- 2026-11-06: item 2 done (design/game_layer.md): gamedemo.c's U6 rules sit behind a per-game
+  table of 25 entries (23 hooks, 2 flags) and 75 named objects; SE and MD reach only their own entries (talk,
+  their use, the gold pool) and otherwise none. U6 checked unchanged: the bot run (castle, bridge,
+  Britain, shop, cave) gives the same log and transcripts as before, every U6 self-test hook and
+  mode gives the same console output, make check and the logic tests pass. SE and MD boot; SEUSE
+  passes. Item 3 next.
