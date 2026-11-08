@@ -77,7 +77,11 @@ replaced by the Wind Change spell. If a conversation later turns out to need it,
 ## 5. Open
 - Strength for the Gargoyle half: a level-3 party dies in Hythloth (drakes cast Fireball). The user's choice
   (2026-11-07): earn it. The `train` chapter hunts at surface eggs of evil creatures (only an evil kill
-  gives experience) and meditates at a shrine when a member has the experience for the next level.
+  gives experience) and meditates at a shrine when a member has the experience for the next level. The sites are
+  worked out at the start: the new-game eggs (objfind) of creatures worth experience, reachable on foot within 90
+  steps of an Orb gate (a walk over the game's own pass map). What hatches keeps to its egg, so the bot goes to it.
+  It camps with a guard: an unguarded camp that is ambushed sleeps on and the Avatar dies in his sleep (rest.md §7).
+  First hour: Dupre to level 4, Sherry to 2, about 40 experience per site visit.
 - The party's healing on a long run: the test stock's reagents run out; a restock (Xiao, Nicodemus,
   Horance, Rudyom sell them) or a healer is needed between chapters.
 

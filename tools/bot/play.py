@@ -427,7 +427,7 @@ class Player:
         st = self.g.state
         hurt = [m for m in st['party'] if m['max'] and m['hp'] < m['max'] * frac]
         if not hurt or st['combat'] or st['foes']: return None
-        hp0 = {m['id']: m['hp'] for m in st['party']}
+        hp0 = {m['id']: m['hp'] for m in st['party']}; st0 = st
         st = self.key('r', 'rest')
         if 'room' in st['msg'].lower():                                  # the camp needs the 3x3 around the Avatar open
             self.idle(); spot = self.open_spot()
@@ -438,11 +438,16 @@ class Player:
         if st.get('rest') != 1:
             self.log('  rest refused: %r' % st['msg']); self.idle(); return st['msg']
         st = self.g.type(str(hours))
-        if st.get('rest') == 2: st = self.g.type('0')                    # nobody guards
+        if st.get('rest') == 2:                                          # a guard: unguarded sleepers are slain in their sleep (rest.md §4b)
+            alive = [i for i, m in enumerate(st['party']) if m['id'] != 1 and m['hp'] > 0 and i + 1 < len(st['party'])]   # a digit up to the size less one (rest.md §7)
+            g_ = max(alive, key=lambda i: st['party'][i]['hp']) + 1 if alive else 0
+            st = self.g.type(str(g_))
         for _ in range(400):                                             # the camp runs on its own; wait it out
             if not self.g.state['busy']: break
             self.key('space', 'resting')
         hp1 = {m['id']: m['hp'] for m in self.g.state['party']}
+        if (self.g.state['X'], self.g.state['Y']) == (307, 352) and (st0['X'], st0['Y']) != (307, 352):
+            self.issue('death', 'the Avatar died in the camp at (%d,%d): %r' % (st0['X'], st0['Y'], self.g.state['msg'][:100]))
         self.log('  rested %dh: %s -> %s (%s)' % (hours, hp0, hp1, self.g.state['msg'][:120]))
         risen = [i for i in hp1 if hp0.get(i) == 0 and hp1[i] > 0]
         if risen: self.issue('rest', 'dead members %s rose by resting' % risen)

@@ -1109,9 +1109,50 @@ def meditate(p, v=1):
 
 # where evil things hatch over and over on the surface (eggs.md §1-§2; the new-game egg list read with objfind):
 # a hatch needs the party within 20 tiles but farther than 8, and the egg re-arms beyond 20
-GRIND = [(521, 327), (569, 340), (913, 504), (936, 824), (283, 115), (131, 460), (424, 934)]   # each within ~60 of an Orb gate but the last
+GRIND = [(913, 504), (283, 115), (178, 283), (164, 355)]   # a skeleton by gate 1, trolls by gate 15, headless and trolls west of the castle
+# left out after trying: (521,327) poisoned the Avatar each visit, (131,460) mongbats kill at level 3, (569,340) and
+# (936,824) hatch out of walking reach, (424,934) has no way near
 
-GRIND_SKIP = set()
+GRIND_SKIP = set(); SITE_GATE = {}
+EGG_XP = {352: 12, 355: 13, 357: 16, 361: 9, 366: 20, 368: 14, 370: 17, 371: 16, 378: 19, 424: 29, 426: 9, 427: 8}   # combat.md §3: (str+dex+int+hp+dmg+xp)/4
+EGG_AVOID = {362, 363, 367, 369, 372, 411, 413}         # gargoyles, daemons, drakes, mongbats, dragons, serpents: too strong for now
+def hunt_sites(p, reach=90):
+    """surface eggs of creatures worth experience, reachable on foot within `reach` steps of an Orb gate:
+    [(value, x, y, gate)], best first. Eggs from the new-game data (objfind), the walk from the game's pass map"""
+    import subprocess, collections
+    exe = os.path.join(ROOT, 'build', 'objfind')
+    if not os.path.exists(exe): subprocess.run(['make', '-C', ROOT, 'objfind'], check=True, capture_output=True)
+    out = subprocess.run([exe, REF, '335'] + [str(o) for o in EGG_XP], check=True, capture_output=True, text=True).stdout
+    eggs, emb = {}, collections.defaultdict(list)
+    for f in (l.split() for l in out.splitlines()):
+        o, q, qty, x, y, z, c = (int(f[i]) for i in (0, 2, 3, 4, 5, 6, 7))
+        if z: continue
+        if o == 335: eggs[(x, y)] = (q, qty)
+        elif c == 335: emb[(x, y)].append((o, qty))
+    out2 = subprocess.run([exe, REF] + [str(o) for o in EGG_AVOID], check=True, capture_output=True, text=True).stdout
+    bad = {(int(f[4]), int(f[5])) for f in (l.split() for l in out2.splitlines()) if f[7] == '335' and f[6] == '0'}
+    p.nav.refresh(); S = p.nav.span
+    dist = {}; dq = collections.deque()
+    for k, (gx, gy) in ORB.items():
+        if ORB_LEVEL.get(k, 0) == 0: dist[(gx, gy)] = (0, k); dq.append((gx, gy))
+    while dq:                                            # one walk from every gate at once
+        x, y = dq.popleft(); d, k = dist[(x, y)]
+        if d >= reach: continue
+        for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            t = ((x + a) % S, (y + b) % S)
+            if t not in dist and p.nav.cost(*t) is not None: dist[t] = (d + 1, k); dq.append(t)
+    sites = []
+    for (x, y), e in emb.items():
+        q, ch = eggs.get((x, y), (0, 0))
+        if (x, y) in bad or q % 10 in (1, 3) or not ch: continue          # neutral or good hatchlings are no foes
+        v = sum(EGG_XP.get(o, 0) * (n + 1) / 2 for o, n in e) * min(ch, 100) / 100
+        near = [dist[(x + a, y + b)] for a in (-1, 0, 1) for b in (-1, 0, 1) if (x + a, y + b) in dist]
+        if v >= 8 and near: d, k = min(near); sites.append((round(v), x, y, k, d))
+    sites.sort(key=lambda t: -t[0] / (30 + t[4]))
+    p.log('  hunting sites: %s' % sites[:12])
+    SITE_GATE.update({(x, y): k for _, x, y, k, _ in sites})
+    return [(x, y) for _, x, y, _, _ in sites[:8]]
+
 def ring_spot(p, ex, ey, r0, r1):
     """a reachable tile whose distance (the larger axis) to (ex,ey) is r0..r1, the nearest first"""
     p.nav.refresh(); x, y = p.nav.pos(); S = p.nav.span
@@ -1123,7 +1164,7 @@ def ring_spot(p, ex, ey, r0, r1):
 
 def grind(p, ex, ey, rounds=4):
     """step in and out of the egg's range: each approach is one hatch roll; fight what comes"""
-    pos = min((k for k in ORB if ORB_LEVEL.get(k, 0) == 0), key=lambda k: max(abs(ORB[k][0] - ex), abs(ORB[k][1] - ey)))
+    pos = SITE_GATE.get((ex, ey)) or min((k for k in ORB if ORB_LEVEL.get(k, 0) == 0), key=lambda k: max(abs(ORB[k][0] - ex), abs(ORB[k][1] - ey)))
     xp0 = sum(m.get('exp', 0) for m in p.g.state['party'])
     for r in range(rounds):
         st = p.g.state
@@ -1139,9 +1180,15 @@ def grind(p, ex, ey, rounds=4):
                 x, y = p.nav.pos()
                 if p.nav.route(x, y, {(ex + a, ey + b) for a in (-1, 0, 1) for b in (-1, 0, 1)}, limit=60000) is None:
                     p.log('  grind (%d,%d): the egg is out of walking reach, skipped' % (ex, ey)); GRIND_SKIP.add((ex, ey)); return
-            for _ in range(20):                                          # let them come
+            for _ in range(6):                                           # let them come
                 if p.g.state['foes'] and p.foes(): break
                 p.key('space', 'wait for the hatch')
+            if not p.foes():                                             # they keep to the egg beyond the party's sight: go to them
+                hatched = [a for a in p.g.actors() if a['id'] >= 224 and a.get('hostile') and a['hp'] > 0
+                           and max(abs(a['x'] - ex), abs(a['y'] - ey)) <= 8]
+                if hatched:
+                    try: p.nav.goto(ex, ey, near=5, on_step=lambda s_: s_['foes'] > 0, max_steps=40)
+                    except NavError as e: p.log('  to the hatchlings: %s' % e)
             if p.foes(): p.fight()
             p.cure_up(); p.heal_up(); p.rest_if_hurt(0.6)
         except (NavError, Danger) as e: p.log('  grind (%d,%d): %s' % (ex, ey, e)); p.rest_if_hurt(0.9)
@@ -1153,12 +1200,17 @@ def seg_train(p, kw):
     when anyone has the experience; until everyone is level TRAIN_TO (env, default 6) or the time runs out"""
     goal = int(os.environ.get('TRAIN_TO', '6')); t_end = time.time() + 60 * float(os.environ.get('TRAIN_MIN', '60'))
     p.log('  train from: %s' % party_line(p))
+    global GRIND
+    GRIND = hunt_sites(p) or GRIND
     i = 0
     while time.time() < t_end and not all(m['lvl'] >= goal for m in p.g.state['party']):
         if not carried(p, 87): p.issue('train', 'the Orb of the Moons is no longer carried'); break
         sites = [g_ for g_ in GRIND if g_ not in GRIND_SKIP]
         if not sites: p.issue('train', 'no hunting site left'); break
         ex, ey = sites[i % len(sites)]; i += 1
+        for obj in (68, 71, 67):                                       # the caster pays from his own pack (magic_skills.md)
+            for _ in range(4):
+                if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
         p.cure_up(); p.heal_up()
         grind(p, ex, ey)
         meditate(p)
