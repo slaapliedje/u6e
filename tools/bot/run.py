@@ -619,6 +619,46 @@ def descend_to(p, tx, ty, tz, tried=None):
             except NavError: return False
     return False
 
+def ascend_to(p, tx, ty, tz, tried=None):
+    """from a dungeon level, take ladders UP (to a lower level number) until (tx,ty) on level tz can be walked to;
+    ladders nearest the target first, back down to try the next when one leads nowhere. True if there"""
+    tried = set() if tried is None else tried
+    L = p.g.state['L']; reach = reach_set(p)
+    if L == tz: return beside(reach, tx, ty)
+    ups = [(o, fr, x, y) for o, fr, x, y, z in ladders() if z == L and o in (305, 106) and fr != 0]
+    ups = sorted((u for u in ups if beside(reach, u[2], u[3]) and (u[2], u[3], L) not in tried), key=lambda u: abs(u[2] - tx) + abs(u[3] - ty))
+    for o, fr, x, y in ups[:6]:
+        tried.add((x, y, L))
+        p.log('  L%d: up at (%d,%d) toward (%d,%d,%d)' % (L, x, y, tx, ty, tz))
+        try:
+            if not use_way(p, {'obj': o, 'x': x, 'y': y}) or p.g.state['L'] != L - 1: continue
+        except NavError: continue
+        if ascend_to(p, tx, ty, tz, tried): return True
+        if p.g.state['L'] == L - 1:                                   # back down the way we came
+            here = reach_set(p); cx, cy = p.nav.pos()
+            dn = sorted((d for d in ladders() if d[4] == L - 1 and d[0] in (305, 106) and d[1] == 0 and beside(here, d[2], d[3])), key=lambda d: abs(d[2] - cx) + abs(d[3] - cy))
+            try:
+                if not dn or not use_way(p, {'obj': dn[0][0], 'x': dn[0][2], 'y': dn[0][3]}): return False
+            except NavError: return False
+    return False
+
+def unlock_any(p, x, y, magic=False):
+    """the locked door beside the leader at (x,y): Unlock Magic (Ex Por) on a magical lock; else a key of its
+    quality, else a lock pick (quality 0 only; one may break, usecode_use.md)"""
+    px, py = p.nav.pos(); d = VDIR[(x - px, y - py)]
+    if magic:
+        st = p.key('c', 'cast')
+        if not st['cast']: p.idle(); return False
+        p.g.type('ep'); st = p.at(d, 'unlock magic'); p.idle(); p.log('  unlock magic (%d,%d): %r' % (x, y, st['msg'][-40:]))
+        return 'unlocked' in st['msg']
+    if unlock_with_key(p, x, y): return True
+    for _ in range(5):
+        st = p.use_pack(63)
+        if st is None: return False
+        st = p.at(d, 'lock pick') if st.get('verb') else st; p.idle(); p.log('  lock pick (%d,%d): %r' % (x, y, st['msg'][-40:]))
+        if 'unlocked' in st['msg']: return True
+    return False
+
 def unlock_with_key(p, x, y):
     """U)se each carried key on the locked door beside the leader at (x,y) until one fits (a lock's key is
     the key with its quality, usecode_use.md); True when unlocked"""
@@ -1282,7 +1322,7 @@ def seg_balloon(p, kw):
         p.walk(291, 379, adj=True); use_way(p, {'obj': 305, 'x': 291, 'y': 379}); p.nav.refresh()
         cast_light(p)
         if p.g.state['L'] != 1: p.issue('balloon', 'the castle ladder (291,379) did not lead down'); return
-        p.nav.unlock = lambda x, y: unlock_with_key(p, x, y)             # the cellar's rooms are locked too (key 1)
+        p.nav.unlock = lambda x, y, magic: unlock_any(p, x, y, magic)    # the cellar's rooms are locked too (key 1)
         try: p.walk(85, 83, keys=True)
         finally: p.nav.unlock = None
         if unlock_with_key(p, 86, 83):
@@ -1365,11 +1405,84 @@ def seg_singularity(p, kw):
     The Singularity asks for whom the Codex is sought: all; then the three catacombs' statues (Mondain, Minax,
     Exodus: their mantras UN, OR, US), and the temple again: the Mantra of Singularity, unorus"""
     p.loot_ok = False
-    if not carried(p, 420): p.issue('singularity', 'no balloon'); return
-    if not orb_go(p, 17): return
-    if not fly_to(p, 128, 49): return
-    out = p.talk_at(127, 48, 200, ['sacr', 'all', 'bye'], 'the Singularity', yes=True)
+    second = os.environ.get('SINGULARITY') == 'mantra'                    # back from the three catacombs
+    near = [o for o in p.g.objects()[0] if o['obj'] == 420]
+    if not carried(p, 420) and near: pick_heavy(p, near[0]['x'], near[0]['y'], 420)
+    if not (p.g.state['L'] == 5 and abs(p.nav.pos()[1] - 48) < 6):
+        if not carried(p, 420): p.issue('singularity', 'no balloon'); return
+        if not orb_go(p, 17): return
+        if not fly_to(p, 128, 49): return
+    words = ['y', 'unorus', 'bye'] if second else ['sacr', 'all', 'bye']
+    out = p.talk_at(127, 48, 200, words, 'the Singularity', yes=True)
     p.log('  singularity: %r' % (out and out[-3:]))
+    near = [o for o in p.g.objects()[0] if o['obj'] == 420]             # the balloon lies where it landed: take it along (the temple is mountain-locked)
+    if near and not carried(p, 420): pick_heavy(p, near[0]['x'], near[0]['y'], 420)
+
+def open_barriers(p, tx, ty, tries=20):
+    """a lever room (usecode_use.md levers): a lever or switch of quality Q toggles the barrier (portcullis 310,
+    electric field 175) on every doorway (301) of quality Q. Until (tx,ty) can be walked to, pull one reachable
+    actuator for each quality whose doorway has its barrier up (never one whose doorways stand open: that would
+    raise a barrier). True when there"""
+    pulled = set()
+    for _ in range(tries):
+        reach = reach_set(p)
+        if beside(reach, tx, ty): return True
+        objs = p.g.objects()[0]
+        bars = {(o['x'], o['y']) for o in objs if o['obj'] in (310, 175)}
+        shut = {o['q'] for o in objs if o['obj'] == 301 and (o['x'], o['y']) in bars and o['q']}
+        open_ = {o['q'] for o in objs if o['obj'] == 301 and (o['x'], o['y']) not in bars and o['q']}
+        acts = [o for o in objs if o['obj'] in (268, 174) and o['q'] in shut - open_ and o['q'] not in pulled and beside(reach, o['x'], o['y'])]
+        if not acts: p.log('  barriers: nothing to pull (shut %s, open %s)' % (sorted(shut), sorted(open_))); return False
+        a = acts[0]; pulled.add(a['q'])
+        p.walk(a['x'], a['y'], adj=True); px, py = p.nav.pos()
+        st = p.act('u', VDIR[(a['x'] - px, a['y'] - py)], 'pull'); p.log('  pull %s q%d (%d,%d): %r' % ('lever' if a['obj'] == 268 else 'switch', a['q'], a['x'], a['y'], st['msg'][-40:]))
+        p.nav.refresh()
+    return beside(reach_set(p), tx, ty)
+
+STATUES = [(7, (67, 42), 397, (67, 11, 4), 189, 'cont', 'un', 'Mondain'), (9, (188, 42), 398, (187, 10, 4), 190, 'pass', 'or', 'Minax'),
+           (18, (108, 218), 399, (83, 219, 3), 191, 'dili', 'us', 'Exodus')]   # Orb position, the catacomb's cave (level 5 -> 4), the statue, its script, its topic, the mantra
+
+def seg_statues(p, kw):
+    """the catacombs of Control, Passion and Diligence: each statue (Mondain, Minax, Exodus) teaches its principle
+    and has the Avatar repeat its mantra (UN, OR, US)"""
+    p.loot_ok = False
+    def ready_up():                                                      # the recall leaves the Avatar's gear in the pack (combat.md §3d)
+        if carried(p, 141): drop_here(p, 141)                            # (the decorative sword from Sutek's wall is no weapon)
+        equip_party(p)
+        if count(p, 43, 1): ready(p, 43)
+    lb_heal(p); ready_up()
+    if min(count(p, 68), count(p, 71)) < 25 and p.g.state.get('gold', 0) >= 40: restock(p, 25)   # Heal's ginseng and silk
+    skip = set(os.environ.get('SKIP_STATUES', '').split(','))             # those already taught (a rerun)
+    for pos, cave, obj, (sx, sy, sz), tid, topic, mantra, name in STATUES:
+        if name in skip: continue
+        if any(m['hp'] < m['max'] * 0.8 or m.get('psn') for m in p.g.state['party'] if m['id'] != 9) or (p.g.state['L'] == 0 and abs(p.g.state['X'] - 307) < 20):
+            lb_heal(p); ready_up()                                       # no reagents for Heal: Lord British, before each catacomb
+        if not orb_go(p, pos): return
+        p.walk(*cave); p.nav.refresh(); cast_light(p)
+        st = p.g.state; p.log('  %s cave (%d,%d): L%d (%d,%d)' % (name, cave[0], cave[1], st['L'], st['X'], st['Y']))
+        if p.g.state['L'] == sz and not beside(reach_set(p), sx, sy): open_barriers(p, sx, sy)   # the catacomb's lever room
+        if name == 'Exodus' and p.g.state['L'] == 4:                     # a maze of locked doors to a hidden ladder (103,239) up
+            p.nav.unlock = lambda x, y, magic: unlock_any(p, x, y, magic)
+            try: p.walk(103, 236, keys=True)
+            finally: p.nav.unlock = None
+            p.key('l', 'look'); st = p.at('down', 'search'); p.idle(); p.nav.refresh(); p.log('  hidden door (103,237): %r' % st['msg'][-40:])
+            p.walk(103, 238); st = p.act('u', 'down', 'ladder'); p.nav.refresh(); p.log('  ladder (103,239): L%d' % p.g.state['L'])
+        if name == 'Exodus' and p.g.state['L'] == 3:                     # daemons on his level: unseen (Mass Invisibility), straight to him
+            avatar_leads(p); st = p.key('c', 'cast')
+            if st['cast']:
+                p.g.type('vsl'); st = p.g.state
+                if st.get('verb') == 'C': st = p.key('ret', 'on the party')   # an area spell: its centre is the Avatar's own tile
+                p.idle(); p.log('  mass invisibility: %r' % st['msg'][-50:])
+            p.sneak = True
+        if name == 'Exodus' and p.g.state['L'] == 3 and not beside(reach_set(p), sx, sy): dispel_at(p, 83, 216, 'down')   # fields ring him
+        if p.g.state['L'] != sz and not ascend_to(p, sx, sy, sz): p.issue('statues', 'no way up to %s (%d,%d) L%d' % (name, sx, sy, sz)); continue
+        cast_light(p)
+        if not beside(reach_set(p), sx, sy): open_barriers(p, sx, sy)
+        if not beside(reach_set(p), sx, sy): p.issue('statues', 'no way to %s (%d,%d) L%d' % (name, sx, sy, sz)); continue
+        p.sneak = name in ('Minax', 'Exodus')                            # daemons guard them: straight there, a few words, away
+        try: out = p.talk_at(sx, sy, tid, ['task', topic, mantra, 'bye'], name, yes=True)   # the topic ends "Repeat after me the Mantra": the mantra
+        finally: p.sneak = False
+        p.log('  %s: %r' % (name, out and out[-2:]))
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1891,7 +2004,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)

@@ -81,7 +81,7 @@ class Player:
         self.hp_seen = hp
 
     def near_death(self, frac=0.35):
-        return [m['id'] for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac and self.in_view(m['id'])]
+        return [m['id'] for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac and self.in_view(m['id']) and m['id'] != 9]   # Sherry's fall stops nothing: Help raises her
 
     def in_view(self, aid):
         """is a member inside the 11x11 view? (a spell's crosshair finds 'nothing' beyond it, or in the dark)"""
@@ -505,7 +505,7 @@ class Player:
                 continue
             if self.g.state['foes'] > ignore and getattr(self, 'sneak', False):   # unseen (the invisibility ring): walk on, never strike
                 ignore = self.g.state['foes']; continue
-            if self.g.state['foes'] > ignore or (self.g.state['foes'] and any(max(abs(a['x'] - self.nav.pos()[0]), abs(a['y'] - self.nav.pos()[1])) <= 1 for a in self.foes())):
+            if not getattr(self, 'sneak', False) and (self.g.state['foes'] > ignore or (self.g.state['foes'] and any(max(abs(a['x'] - self.nav.pos()[0]), abs(a['y'] - self.nav.pos()[1])) <= 1 for a in self.foes()))):
                 fs = self.foes(); sig = sorted((a['id'], a['hp']) for a in fs)
                 if fs:
                     self.fight(); self.heal_up(); self.cure_up(); self.rest_if_hurt()
