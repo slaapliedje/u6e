@@ -1066,6 +1066,56 @@ def seg_keg(p, kw):
     if not board_skiff(p, getattr(p, 'skiff_at', (605, 119))): return
     sail_to(p, {t for t in region(p, 787, 970) if abs(t[0] - 787) + abs(t[1] - 970) <= 20})   # the beach below the gate
 
+def drop_here(p, obj_n):
+    """D)rop one obj_n at the leader's feet: D, D through the pack to it, Enter, Enter"""
+    inv = p.g.objects()[1]; rows = [r for r in inv if r['obj'] == obj_n]
+    if not rows: return False
+    name = rows[0].get('name', ''); n0 = count(p, obj_n)
+    p.idle(); p.key('d', 'drop')
+    for _ in range(len(inv) + 2):
+        st = p.key('d', 'next')
+        if ('Drop-' + name) in st['msg']: break
+    else: p.idle(); return False
+    p.key('ret'); st = p.key('ret', 'at the feet')
+    if 'How many' in st['msg']: p.g.type('1'); st = p.g.state
+    if 'Location' in st['msg']: st = p.key('ret', 'here')
+    p.log('  drop %s: %r' % (name, st['msg'][-50:])); p.idle()
+    return count(p, obj_n) < n0
+
+def seg_gate(p, kw):
+    """Sutek's gate (787,964) is locked past any key (quality 255): the powder keg blows it open (usecode_use.md
+    kegs: every door not magically locked within two tiles). The party waits on the beach; the Avatar alone drops
+    the keg two tiles south of the gate, lights it from a step back, and walks off before the three-turn fuse ends"""
+    p.loot_ok = False
+    if not carried(p, 223): p.issue('gate', 'no powder keg'); return
+    p.walk(787, 972)
+    for _ in range(4): p.key('space', 'the party gathers')
+    st = p.key('1', 'the Avatar alone'); p.log('  solo: %r' % st['msg'][-30:]); p.nav.refresh()
+    p.walk(787, 966)
+    if not drop_here(p, 223): p.issue('gate', 'could not drop the keg'); p.key('0'); return
+    p.key('down'); st = p.act('u', 'up', 'light the keg'); p.log('  keg: %r' % st['msg'][-40:])
+    for d in ('down', 'down', 'down'): p.key(d)
+    for _ in range(4):
+        st = p.key('space', 'the fuse'); 
+        if 'blown' in st['msg'] or 'explo' in st['msg'].lower(): break
+    p.log('  blast: %r at (%d,%d)' % (st['msg'][-80:], st['X'], st['Y']))
+    p.key('0', 'party mode'); p.nav.refresh()
+    if p.nav.route(*p.nav.pos(), {(787, 963)}) is None: p.issue('gate', 'the gate (787,964) still shut: %r' % st['msg'][-60:])
+
+def seg_sutek(p, kw):
+    """into Sutek's castle and down to the balloon plans. Past the blown gate a void (two rows) lies before the
+    raised drawbridge, its cranks (785,959)/(789,959) on the far side: Telekinesis (Ort Por Ylem) works a crank
+    from afar (magic_skills.md)"""
+    p.loot_ok = False
+    p.walk(789, 962); cast_light(p)
+    st = p.key('c', 'cast')
+    if st['cast']:
+        p.g.type('opy'); st = p.g.state
+        for _ in range(3): st = p.key('up', 'aim')
+        st = p.key('ret', 'telekinesis'); p.idle(); p.log('  telekinesis on the crank: %r' % st['msg'][-60:])
+    p.nav.refresh()
+    if p.nav.route(*p.nav.pos(), {(787, 958)}) is None: p.issue('sutek', 'the drawbridge is still up: %r' % st['msg'][-60:]); return
+
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
     return sum(r['qty'] or 1 for r in p.g.objects()[1] if r['obj'] == obj_n and (own is None or r.get('own', 1) == own))
@@ -1586,7 +1636,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
