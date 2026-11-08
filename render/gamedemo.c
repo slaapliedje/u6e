@@ -8885,6 +8885,8 @@ static int field_at(int x,int y){
     for(int i=0;i<g_nfields;i++) if(g_fields[i].x==x && g_fields[i].y==y) return i;
     return -1;
 }
+/* a field OBJECT on the map (fire 317, poison 318, protection 319, sleep 320; the Hall of Knowledge's door) */
+static int field_obj_at(int x,int y){ for(int on=317;on<=320;on++){ int i=obj_idx_at(x,y,on); if(i>=0) return i; } return -1; }
 static void field_add(int x,int y,uint16_t obj_n,uint8_t kind,uint8_t turns){ g_view_ct++;
     int i=field_at(x,y);
     if(i<0){ if(g_nfields>=MAXFIELDS) return; i=g_nfields++; }
@@ -9756,8 +9758,9 @@ static int cast_spell_do(world_t*w,int caster,int spell,int dx,int dy){
             else { msgcat(0,"Not possible"); applied=0; } }
     } else if(!strcmp(nm,"Dispel Field")){                /* remove a field on the target tile (§5a) */
         int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-        int fi=field_at(tx,ty);
+        int fi=field_at(tx,ty), oi=fi<0?field_obj_at(tx,ty):-1;
         if(fi>=0){ field_remove(fi); msgcat(0,"Success"); recompose=1; }
+        else if(oi>=0){ obj_destroy(oi); build_blocked(); msgcat(0,"Success"); recompose=1; }   /* one placed on the map (§5a) */
         else { msgcat(0,"No effect"); applied=0; }
     } else if(!strcmp(nm,"Poison")||!strcmp(nm,"Sleep")||!strcmp(nm,"Paralyze")||
               !strcmp(nm,"Curse")||!strcmp(nm,"Charm")){   /* single-target status (§5b) */
@@ -10193,10 +10196,11 @@ static int cast_aimed(world_t*w,int dx,int dy){
         if(want && !body) id=aim_actor_at(w,dx,dy);
         if(body) { id=npc_at(w,tx,ty); idx=objworld_at(&g_ow,tx,ty); if(id>=0) idx=-1; }
         if(!want&&!dispel){ idx=objworld_at(&g_ow,tx,ty); if(npc_at(w,tx,ty)>=0) idx=-1; }     /* the top of the tile: an actor there is not an object */
-        if(dispel){ if(field_at(tx,ty)>=0){ const char*q="field"; int o=0; while(q[o]&&o<39){ tn[o]=q[o]; o++; } tn[o]=0; } else idx=-1; }
+        int hasf=dispel&&(field_at(tx,ty)>=0||field_obj_at(tx,ty)>=0);
+        if(dispel){ if(hasf){ const char*q="field"; int o=0; while(q[o]&&o<39){ tn[o]=q[o]; o++; } tn[o]=0; } else idx=-1; }
         if(id>=0) actor_name(id,tn,sizeof tn);
         else if(idx>=0) obj_name(g_wobj[idx].tile,tn,sizeof tn);
-        else if(!dispel||field_at(tx,ty)<0){ const char*q="nothing"; int o=0; while(*q) echo[n+o]=*q,q++,o++; echo[n+o]=0; msgcat(0,"No effect"); cast_finish(echo); return 0; }
+        else if(!hasf){ const char*q="nothing"; int o=0; while(*q) echo[n+o]=*q,q++,o++; echo[n+o]=0; msgcat(0,"No effect"); cast_finish(echo); return 0; }
         { int o=0; while(tn[o]&&n<62) echo[n++]=tn[o++]; echo[n]=0; } }
     if(g_cast_row<0&&g_cast_slot<0&&(dx||dy)){ int rule=spell_line_rule(nm), tile=spell_flight_tile(nm);   /* the line, and what flies along it (magic_skills.md §6a) */
         if(rule && !spell_flight(w,tx,ty,tile)){ msgcat(0,rule==1?"Blocked!":"Blocked"); cast_finish(echo); return 0; } }
@@ -15991,6 +15995,13 @@ int main(int argc, char **argv)
                 cast_spell(&w,av,magic_find("Dispel Field"),edx,edy);
                 dbg_num("efield freed    =", ex>=0?world_is_passable(&w,ex,ey):-1);  /* 1 = freed */
                 dbg_num("fields remaining=", g_nfields);                    /* just the fire field east */
+                if(ex>=0 && g_ow.nobjs<MAXWOBJ){                          /* a protection field OBJECT on the map, as in the Hall of Knowledge's door */
+                    int pf=(int)g_ow.nobjs++; wobj_t*o=&g_wobj[pf]; o->obj_n=319; o->tile=(uint16_t)basetile(319); o->x=(uint16_t)ex; o->y=(uint16_t)ey;
+                    o->qty=0; o->quality=0; o->parent=WOBJ_PARENT_NONE; o->origin=WOBJ_PARENT_NONE; o->alive=1; o->dirty=0; build_blocked();
+                    dbg_num("pfield blocked  =", world_is_passable(&w,ex,ey));   /* 0 */
+                    g_cast_spell=magic_find("Dispel Field"); g_free_cast=1; g_msg[0]=0; (void)cast_aimed(&w,edx,edy); g_free_cast=0; Cconws(g_msg); Cconws("\r\n");
+                    dbg_num("pfield freed    =", world_is_passable(&w,ex,ey));   /* 1 */
+                    dbg_num("pfield gone     =", !g_wobj[pf].alive); }
             } else if(mode==20){                          /* MAGIC: status effects (magic_skills.md §5b) */
                 int av=1; g_aint[av]=24; g_amaxmana[av]=24; g_amana[av]=24;   /* mage-tier Int + mana */
                 /* place a hostile slug down a CLEAR line (no existing NPC — the throne room's

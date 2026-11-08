@@ -280,7 +280,9 @@ An **energy/force field** additionally marks its tile impassable (folded into th
 `build_blocked` bitmap that `world_is_passable` consults), so actors cannot walk
 through it. Fields draw in the map compose UNDER actors (an actor in a fire field
 shows on top of the flames). **Dispel Field** (circle 3, AN GRAV) removes the
-field on the targeted tile.
+field on the targeted tile: a spell's field, or else the first field OBJECT lying there — fire 317,
+poison 318, protection 319 or sleep 320 (DOS GAME.EXE 4.5 walks the tile's objects for those four,
+read 2026-11-08). The protection field in the Hall of Knowledge's door (127,184, level 5) is one.
 
 OPEN / simplified (honest): each field spell currently drops ONE tile at the
 targeted adjacent square (U6 spreads some fields into a short line/wall — future);
