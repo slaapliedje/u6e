@@ -376,6 +376,20 @@ class Player:
         if n: self.log('  healed x%d: party %s' % (n, ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in self.g.state['party'])))
         return n
 
+    FOOD = (128, 129, 130, 131, 132, 133)                               # bread, meat, rolls, cake, cheese, ham (eaten in camp, rest.md §7)
+
+    def create_food(self):
+        """C)ast Create Food when the pack can't feed everyone in camp (only the fed heal) and the Avatar can spare
+        the reagents (garlic, ginseng, mandrake; ginseng is kept for Heal): the message"""
+        food = sum(r['qty'] or 1 for r in self.g.objects()[1] if r['obj'] in self.FOOD)
+        gin = sum(r['qty'] or 1 for r in self.g.objects()[1] if r['obj'] == 68 and r.get('own', 1) == 1)
+        if food >= len(self.g.state['party']) or gin < 4: return None
+        st = self.key('c', 'cast')
+        if not st['cast']: self.idle(); return None
+        st = self.g.type('imy'); self.check('cast create food'); self.idle()
+        self.log('  create food: %r' % st['msg'][-60:])
+        return st['msg']
+
     def poisoned(self):
         return [m['id'] for m in self.g.state['party'] if m.get('psn') and m['hp'] > 0]
 
@@ -427,6 +441,7 @@ class Player:
         st = self.g.state
         hurt = [m for m in st['party'] if m['max'] and m['hp'] < m['max'] * frac]
         if not hurt or st['combat'] or st['foes']: return None
+        self.create_food(); st = self.g.state
         hp0 = {m['id']: m['hp'] for m in st['party']}; st0 = st
         st = self.key('r', 'rest')
         if 'room' in st['msg'].lower():                                  # the camp needs the 3x3 around the Avatar open

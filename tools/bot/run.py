@@ -829,7 +829,8 @@ def keep_up(p):
     p.rest_if_hurt(0.6)
     equip_party(p)
     drop_junk(p)
-    if min(count(p, 68), count(p, 71)) < 3 and p.g.state.get('gold', 0) >= 20: restock(p)
+    gold = p.g.state.get('gold', 0)
+    if min(count(p, 68), count(p, 71)) < 6 and gold >= 60: restock(p, 12 if gold >= 200 else 6)   # Heal, Dispel Magic and Create Food all take ginseng
     if any(m['max'] and m['hp'] < m['max'] * 0.6 for m in p.g.state['party']) and min(count(p, 68, 1), count(p, 71, 1)) < 1: lb_heal(p)
     if p.poisoned() and min(count(p, 67, 1), count(p, 68, 1)) < 1: lb_heal(p)
 
