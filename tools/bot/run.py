@@ -367,6 +367,17 @@ def orb_go(p, pos):
 def carried(p, obj_n):
     return any(r['obj'] == obj_n for r in p.g.objects()[1])
 
+HEAVY = (73, 90, 394, 396, 62, 48, 149)                                  # moonstones, torches, the lenses, the cube, glass sword, deed
+
+def lighten(p):
+    """the Avatar carries at most twice his strength (G)et says 'The total is too heavy.'): his heavy quest
+    things go to the strongest-backed companion, Dupre, else the next"""
+    ids = [m['id'] for m in p.g.state['party'] if m['id'] != 1 and m['hp'] > 0 and m['id'] != 9]
+    if not ids: return
+    who = 2 if 2 in ids else ids[0]
+    for obj in HEAVY:
+        if count(p, obj, 1): give_to(p, obj, who)
+
 def get_at(p, x, y, obj_n, tries=3):
     """walk beside (x,y) and G)et until obj_n is in the pack (what lies on top comes first); True if got"""
     for _ in range(tries):
@@ -374,6 +385,7 @@ def get_at(p, x, y, obj_n, tries=3):
         st = p.act('g', VDIR[(x - px, y - py)], 'get at (%d,%d)' % (x, y))
         p.log('  get at (%d,%d): %r' % (x, y, st['msg'][-120:]))
         if carried(p, obj_n): return True
+        if 'too heavy' in st['msg']: lighten(p)
     p.issue('get', 'no obj %d from (%d,%d): %r' % (obj_n, x, y, p.g.state['msg'][-200:])); return False
 
 def seg_orb(p, kw):
@@ -591,12 +603,17 @@ def descend_to(p, tx, ty, tz, tried=None):
     for o, fr, x, y in downs[:6]:
         tried.add((x, y, L))
         p.log('  L%d: down at (%d,%d) toward (%d,%d,%d)' % (L, x, y, tx, ty, tz))
-        if not use_way(p, {'obj': o, 'x': x, 'y': y}) or p.g.state['L'] != L + 1: continue
+        try:
+            if not use_way(p, {'obj': o, 'x': x, 'y': y}) or p.g.state['L'] != L + 1: continue
+        except NavError: continue
         if descend_to(p, tx, ty, tz, tried): return True
-        if p.g.state['L'] == L + 1:                                   # back up the way we came
-            up = [u for u in ladders() if u[4] == L + 1 and u[0] in (305, 106) and u[1] != 0]
-            up = sorted(up, key=lambda u: abs(u[2] - x) + abs(u[3] - y))
-            if not up or not use_way(p, {'obj': up[0][0], 'x': up[0][2], 'y': up[0][3]}): return False
+        if p.g.state['L'] == L + 1:                                   # back up the way we came: the up ladder we can reach, nearest us
+            here = reach_set(p); cx, cy = p.nav.pos()
+            up = [u for u in ladders() if u[4] == L + 1 and u[0] in (305, 106) and u[1] != 0 and beside(here, u[2], u[3])]
+            up = sorted(up, key=lambda u: abs(u[2] - cx) + abs(u[3] - cy))
+            try:
+                if not up or not use_way(p, {'obj': up[0][0], 'x': up[0][2], 'y': up[0][3]}): return False
+            except NavError: return False
     return False
 
 def unlock_with_key(p, x, y):
@@ -897,6 +914,113 @@ def seg_lenses(p, kw):
     out = p.talk_to(35, ['swor', 'bye'], 'Ephemerides', yes=True)
     p.log('  lenses now: concave %s convex %s, sword %s' % (carried(p, 394), carried(p, 396), carried(p, 48)))
     if not (carried(p, 394) and carried(p, 396)): p.issue('lenses', 'Ephemerides did not give both lenses: %r' % (out and out[-2:]))
+
+def region(p, sx, sy):
+    """the walkable tiles reachable on foot from (sx,sy) on the surface pass map"""
+    p.nav.ensure(); S, pm = p.nav.span, p.nav.pm
+    seen = {(sx, sy)}; q = [(sx, sy)]
+    while q:
+        x, y = q.pop()
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            n = ((x + dx) % S, (y + dy) % S)
+            if n not in seen and (pm[n[1] * S + n[0]] & 1 or n in p.nav.doors): seen.add(n); q.append(n)
+    return seen
+
+def sail_to(p, land, tries=8):
+    """aboard a skiff: over water (pass-map bit 8) to a water tile beside a tile of `land`, an arrow key a step
+    (vehicles.md, wind.md §2), then U)se to step ashore (§3.1); a tile that refuses the boat (another boat on
+    it) is routed around; True when ashore on `land`"""
+    import collections
+    S, pm = p.nav.span, p.nav.pm
+    stop = {(o['x'], o['y']) for o in p.g.objects()[0] if o['obj'] in (412, 414, 415)}
+    for _ in range(tries):
+        x0, y0 = p.nav.pos(); stop.discard((x0, y0))
+        came = {(x0, y0): None}; q = collections.deque([(x0, y0)]); end = None
+        while q and end is None:
+            x, y = q.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                n = ((x + dx) % S, (y + dy) % S)
+                if n in came or n in stop or not pm[n[1] * S + n[0]] & 8: continue
+                came[n] = (x, y); q.append(n)
+                if any(((n[0] + a) % S, (n[1] + b) % S) in land for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1))): end = n; break
+        if end is None: p.issue('sail', 'no water route from (%d,%d) to the shore' % (x0, y0)); return False
+        path = []; c = end
+        while c != (x0, y0): path.append(c); c = came[c]
+        path.reverse(); p.log('  sailing %d tiles from (%d,%d) to (%d,%d)' % (len(path), x0, y0, end[0], end[1]))
+        for nx, ny in path:
+            for _ in range(4):                                           # a step may cost more than a turn against the current
+                x, y = p.nav.pos()
+                if (x, y) == (nx, ny): break
+                p.key(VDIR[((nx - x + S // 2) % S - S // 2, (ny - y + S // 2) % S - S // 2)], 'sail')
+            if p.nav.pos() != (nx, ny): stop.add((nx, ny)); p.log('  (%d,%d) refuses the skiff: around it' % (nx, ny)); break
+        else:
+            p.key('u'); st = p.key('ret', 'ashore')                       # U)se on the boat's own tile: leaving is the use
+            p.log('  ashore: %r at (%d,%d)' % (st['msg'][-40:], st['X'], st['Y'])); p.nav.refresh()
+            if p.nav.pos() not in land: p.issue('sail', 'not ashore at (%d,%d): %r' % (st['X'], st['Y'], st['msg'][-60:]))
+            return p.nav.pos() in land
+    p.issue('sail', 'the skiff stuck at (%d,%d): %r' % (p.nav.pos() + (p.g.state['msg'][-60:],))); return False
+
+def get_key_from_papa(p, valley):
+    """the fishing pole at (607,291), a fish at the shore, and Papa trades the cellar key for it"""
+    if not carried(p, 264) and not get_at(p, 607, 291, 264): p.issue('cube', 'no fishing pole at (607,291)'); return
+    for _ in range(3):
+        if carried(p, 265): break
+        x, y = p.nav.pos()                                               # back to the water: the shore we landed on
+        shore = min((t for t in valley if any(p.nav.pm[(t[1] + b) * p.nav.span + t[0] + a] & 8 for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)))),
+                    key=lambda t: abs(t[0] - 607) + abs(t[1] - 296))
+        p.walk(*shore)
+        for _ in range(40):
+            st = p.use_pack(264); p.log('  fishing: %r' % (st and st['msg'][-40:]))
+            if carried(p, 265) or (st and 'water' in st['msg']): break
+    if not carried(p, 265): p.issue('cube', 'caught no fish'); return
+    wait_until(p, 7, 19, 'Papa is up')
+    if not go_to_actor(p, 143, 'Papa'): return
+    nkeys = count(p, 64)
+    out = p.talk_to(143, ['key', 'y', 'bye'], 'Papa', yes=True)                # "Got key. Want key?" - yes, for the fish
+    p.log('  keys %d -> %d: %r' % (nkeys, count(p, 64), out and out[-2:]))
+    if count(p, 64) <= nkeys: p.issue('cube', 'Papa gave no key for the fish'); return
+
+def seg_cube(p, kw):
+    """Stonegate, the cyclopes' castle in a valley that opens only on Lost Hope Bay: Trebor in Minoc sells the deed
+    to his skiff (595,119); sail south to the valley's shore; the fishing pole at (607,291) in Stonegate; a fish;
+    Papa (143) gives the cellar key for it; down the cellar to the vortex cube at (147,57) level 4"""
+    p.loot_ok = False
+    there = p.g.state['L'] == 0 and not p.g.state.get('veh') and p.nav.pos() in region(p, 607, 296)
+    if not there and not carried(p, 149) and not p.g.state.get('veh'):
+        if not orb_go(p, 25): return
+        wait_until(p, 8, 13, 'Trebor sells by day')
+        if not go_to_actor(p, 72, 'Trebor'): return
+        ids = [m['id'] for m in p.g.state['party']]
+        out = p.talk_to(72, ['skif', '1', 'y', 'bye'], 'Trebor', yes=True)
+        p.log('  deed: %s (%r)' % (carried(p, 149), out and out[-2:]))
+        if not carried(p, 149): p.issue('cube', 'no skiff deed from Trebor'); return
+    if not there and not p.g.state.get('veh'):
+        p.walk(595, 118); st = p.act('u', 'down', 'board the skiff'); p.log('  skiff: %r veh=%s' % (st['msg'][-40:], st.get('veh')))
+        if not p.g.state.get('veh'): p.issue('cube', 'could not board the skiff at (595,119): %r' % st['msg'][-60:]); return
+    valley = region(p, 607, 296)
+    if not there and not sail_to(p, valley): return
+    has_key = lambda: any(r['obj'] == 64 and r.get('q') == 13 for r in p.g.objects()[1])   # Papa's key fits the cellar (quality 13)
+    if not has_key(): get_key_from_papa(p, valley)
+    if not has_key(): return
+    if p.g.state['L'] == 0:                                              # the centre ladder (607,287) is behind a secret door (334 at (607,286))
+        p.walk(607, 285); p.key('l', 'look'); st = p.at('down', 'search'); p.log('  search (607,286): %r' % st['msg'][-60:]); p.idle(); p.nav.refresh()
+        p.walk(607, 286); st = p.act('u', 'down', 'the centre ladder')    # its cell holds the four levers (268, q11-14) of the cells' portcullises
+        if st['L'] == 1:
+            fr = {(o['x'], o['y']): o['fr'] for o in p.g.objects()[0] if o['obj'] == 268}
+            for d, t in (('up', (151, 70)), ('left', (150, 71)), ('right', (152, 71)), ('down', (151, 72))):
+                if fr.get(t, 0) != 0: continue                           # pulled already (frame 1): a second pull closes them again
+                st = p.act('u', d, 'lever'); p.log('  lever %s: %r' % (d, st['msg'][-50:]))
+            p.key('u'); st = p.key('ret', 'climb'); p.log('  up: L%d %r' % (st['L'], st['msg'][-40:])); p.nav.refresh()
+    if not descend_to(p, 151, 68, 4): p.issue('cube', 'no way down to the switch (151,69) L4'); return   # the castle's ladders: one cell leads on
+    cast_light(p)
+    p.walk(151, 68); st = p.act('u', 'down', 'the switch'); p.log('  switch (151,69): %r' % st['msg'][-60:]); p.nav.refresh()   # 174 q105: the electric fields (150,67), (147,70) go
+    p.walk(147, 65); p.key('l', 'look'); st = p.at('up', 'search'); p.log('  search (147,64): %r' % st['msg'][-60:]); p.idle(); p.nav.refresh()   # a secret door (334)
+    p.walk(147, 63)
+    if not unlock_with_key(p, 147, 62): p.issue('cube', 'the cellar door (147,62) L4 would not unlock: %r' % p.g.state['msg'][-60:]); return   # Papa's key, quality 13
+    st = p.act('u', 'up', 'open the cellar'); p.log('  cellar door: %r' % st['msg'][-40:]); p.nav.refresh()
+    dispel_at(p, 147, 59, 'up')                                          # protection fields (319) ring the cube: one dispelled opens it
+    if not get_at(p, 147, 57, 62, tries=4): p.issue('cube', 'no vortex cube at (147,57) L4'); return
+    climb_out(p)
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1418,7 +1542,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)

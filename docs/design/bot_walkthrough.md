@@ -94,6 +94,9 @@ replaced by the Wind Change spell. If a conversation later turns out to need it,
   First hour: Dupre to level 4, Sherry to 2, about 40 experience per site visit. After 2.5 hours (2026-11-08) the
   Avatar at 7, Dupre 4, Iolo and Shamino 3 was enough: with Light, 30 reagents and fighting rather than sneaking,
   the party reached Captain John and Beh Lem, losing only Sherry.
+- U)se on a tile where a party member stands names the member ("Use-a gargoyle") but works the lever under them
+  (Stonegate's lever cell). If DOS takes the actor first, as u6_use_at's comment says, it should answer
+  `Not usable` and leave the lever. A DOS check (Dupre on the castle lever at (303,383)) didn't load; to settle.
 - The party's healing on a long run: the test stock's reagents run out; a restock (Xiao, Nicodemus,
   Horance, Rudyom sell them) or a healer is needed between chapters.
 
