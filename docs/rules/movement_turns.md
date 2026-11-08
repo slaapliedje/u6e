@@ -105,7 +105,24 @@ blocks mountains/walls/bushes too. (Confirmed against real tiles: tools/passprob
 surface objects (render/gamedemo build_blocked, rebuilt on door open/close);
 `world_is_passable` checks the terrain table AND this bitmap, so the player and
 NPCs no longer walk through wall/furniture objects. tileflags1 ships in the world
-pack (U6WG). (See docs/formats/tileflag.md.)
+pack (U6WG). (See docs/formats/tileflag.md.) A big object (tileflags2 size bits) blocks on each of
+its cells by that cell's own tile, not only on its anchor: a fountain blocks all four of its tiles
+(seen in DOS U6 2026-11-07: the castle garden fountain at (304..305, 378..379)).
+
+**Eight ways.** DOS GAME.EXE 4.5 reads Up, Down, Left, Right, Home, PgUp, End and PgDn as the eight
+directions (its key switch at image 0x648b, extended codes 0x147..0x151, direction index 0..7 into the
+dx/dy tables at DS 0x1a2/0x1aa); on a PC the keypad's 7 9 1 3 are those last four. u6e: the arrows,
+the keypad digits (8 2 4 6 and 7 9 1 3) and Clr/Home for north-west.
+
+**A diagonal step needs one side open.** If both tiles beside the diagonal (the one across and the one
+down) are blocked, the step is refused, with no message and no time spent; with one of them open it
+goes. Seen in DOS U6 (DOSBox-X, 2026-11-07): from (304,377) to (303,378) with a bush and the fountain
+either side, refused both ways, the target reached the long way; from (303,379) to (304,380) with the
+fountain on one side only, taken. M)ove has the same rule for a pushed thing.
+
+**Alone, a member walks as its kind.** In solo mode the one who walks keeps its own walker rules: a mouse
+(Sherry) goes through mouse holes (213, 282, 310) as combat.md §7c has it for every mouse; that is how the
+Rune of Valor is reached. Until 2026-11-07 the leader always walked as the Avatar (found by the bot).
 
 ## 5. Determinism / RNG
 All randomness goes through the engine rng_t (xorshift32), seeded per game, so
@@ -120,7 +137,8 @@ logic tests reproduce exactly (enginetest verifies same-seed == same sequence).
 - [ ] Directional/impedance flags (tileflags1 bits 4-7) for one-way ledges etc.
       (currently Impassable|Wall = fully blocked, ignoring direction).
 - [ ] Confirm U6's real turn-cost / time-advance granularity by observation.
-- [ ] Diagonal movement + cost; running; party-follow movement.
+- [x] Diagonal movement + cost (§3 cost; §4 keys and the corner rule, 2026-11-07).
+- [ ] Running; party-follow movement.
 
 ## Status
 IN PROGRESS (movement mechanics confirmed; passability + exact costs pending).

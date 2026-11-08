@@ -19,7 +19,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M4 (spike) / M6 (full VM)
 > - Confidence   : confirmed (core: tokenise, expression eval, IF/ELSE/ENDIF,
 >                  keyword loop, flags/vars/party/RNG); partial (game-mutation
 >                  opcodes give/join/heal/karma are recognised but stubbed).
-> - Last updated : 2026-06-24
+> - Last updated : 2026-11-07 (the quest flag is written; the cheat menu)
 
 ## 1. System
 NPC dialog is driven by a per-NPC bytecode script (usecode). The conversation
@@ -120,7 +120,18 @@ cvm_game_t so karma/party/quest-gated conversations branch correctly:
 `0x10` sex, `0x14` karma, `0x15` knows-Gargish, `0x17` party-living, `0x18`
 party-total, `0x19` avatar hp, `0x1A` on-quest, `0x20` this NPC's worktype.
 (Indices ≥0x10 are system; lower indices stay ordinary local vars. Unit-tested
-in `make cvmtest`.) The host presets cvm_game_t (real party/karma/...) before a
+in `make cvmtest`.)
+**The quest flag is written too** (2026-11-07): a DECL of var 0x1A followed by ASSIGN sets the game's quest
+flag (objlist 0x1bf1, saved). A scan of every U6 script finds two scripts that assign a system var, both
+0x1A: the Singularity (CONVERSE.B entry 101: "Your final quest has begun!" then 0x1A = 1) and Iolo's
+hidden cheat menu (below). We used to keep the write in a local var, so the quest flag never rose and the
+way to the Codex stayed shut. Karma has its own ops (0xc4/0xc5); no script assigns the other system vars.
+Confidence: probable (from the scripts; DOS's copy-back not read).
+
+**Iolo's cheat menu** is part of the game: in Iolo's script `spam` (three times) then `humbug` opens
+"Secret Cheaters Menu!" (get items, set talk flags, view NPCs, edit a party member's stats, level,
+experience, heal, a horse; set the quest flag, add or take karma). It runs on the ordinary ops; nothing
+in the engine is special to it. The host presets cvm_game_t (real party/karma/...) before a
 conversation; with the zeroed defaults these match the previous behaviour.
 
 ### Text token $T (time-of-day greeting) — DONE
@@ -130,7 +141,7 @@ the hour bands are the standard U6 division). The host sets `cvm_game_t.hour`
 before each conversation. Unit-tested across all three bands in `make cvmtest`.
 
 ### Still stubbed (recognised so the stream never desyncs)
-- INVENTORY (UI), WAIT (emits a `*` page-break).
+- INVENTORY (UI), WAIT (emits a `*`: a wait for a key, converse.md §6d).
 - The system STRING vars NPC_NAME(0x17)/PLAYER_NAME(0x19) are reached in text via
   `$N`/`$P` (which work); the SVAR-op form isn't separately wired.
 - Per-game (SE/MD) opcode deltas: behind a RuleSet hook later.

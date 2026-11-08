@@ -16,7 +16,8 @@ SC.update({c: v for c, v in zip('1234567890', range(0x02, 0x0c))})
 SC.update({' ': 0x39, ',': 0x33, '.': 0x34, '/': 0x35, '-': 0x0c, "'": 0x28, ';': 0x27})
 SHIFTED = {'<': ',', '>': '.', '?': '/', '!': '1', '"': "'", ':': ';'}
 K = dict(ctrl=0x1d, ret=0x1c, esc=0x01, bksp=0x0e, tab=0x0f, up=0x48, down=0x50, left=0x4b, right=0x4d,
-         f1=0x3b, f2=0x3c, f3=0x3d, f4=0x3e, f5=0x3f, f10=0x44, space=0x39, shift=0x2a)
+         f1=0x3b, f2=0x3c, f3=0x3d, f4=0x3e, f5=0x3f, f10=0x44, space=0x39, shift=0x2a,
+         upleft=0x67, upright=0x69, downleft=0x6d, downright=0x6f)          # the keypad's 7 9 1 3: the diagonals
 DIRS = {(0, -1): 'up', (0, 1): 'down', (-1, 0): 'left', (1, 0): 'right'}
 
 def parse_state(line):
@@ -30,7 +31,7 @@ def parse_state(line):
         if '=' not in tok: continue
         k, v = tok.split('=', 1)
         if k == 'party':
-            st[k] = [dict(zip(('id', 'hp', 'max', 'mp', 'lvl', 'psn'), map(int, m.replace('/', ':').split(':')))) for m in v.split(',') if m]
+            st[k] = [dict(zip(('id', 'hp', 'max', 'mp', 'lvl', 'psn', 'exp'), map(int, m.replace('/', ':').split(':')))) for m in v.split(',') if m]
         elif k in ('verb', 'askc'): st[k] = '' if v == '-' else v
         else:
             try: st[k] = int(v)
@@ -105,6 +106,15 @@ class Game:
         with open(self.fifo, 'w') as f: f.write(s + '\n')
 
     def key(self, code, timeout=60, shift=False, ctrl=False):
+        """press one key and wait for the report that covers it; a conversation's page wait is
+        answered with Space (converse.md 6d), the whole reply is in the report anyway"""
+        st = self.press(code, timeout, shift, ctrl)
+        got = self.got
+        while st.get('cwait'): st = self.press('space', timeout); got += self.got
+        self.got = got
+        return st
+
+    def press(self, code, timeout=60, shift=False, ctrl=False):
         """press one key and wait for the report that covers it; the console lines printed in
         between (dumps) are kept in self.got"""
         if isinstance(code, str): code = K[code] if code in K else SC[code]
@@ -147,6 +157,15 @@ class Game:
 
     def actors(self):
         self.dump('f2', '@A end'); return [kv(l) for l in self.got if l.startswith('@A ') and l != '@A end']
+
+    def where(self, aid):
+        """(x, y, level) of actor aid on any level, or None"""
+        self.dump('f2', '@A end')
+        for l in self.got:
+            if l.startswith(('@A ', '@B ')) and l != '@A end':
+                r = kv(l)
+                if r.get('id') == aid: return r['x'], r['y'], r.get('z', self.state['L'])
+        return None
 
     def objects(self):
         self.dump('f3', '@O end'); rows = [kv(l) for l in self.got if l.startswith(('@O ', '@I ')) and l != '@O end']

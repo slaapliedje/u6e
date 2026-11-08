@@ -29,7 +29,10 @@ An **egg** is object 335 on the map (invisible in play). Its record fields:
 - **contents** (in-container records linked to the egg) = the **embryos**: each has an obj_n,
   a `qty` (how many) and a `quality` (a creature's schedule worktype; 0 for plain objects).
 - status bit **0x40 = ACTIVE** (already hatched on this approach); 0x20 = TEMPORARY marks
-  what an egg produced (never saved).
+  what an egg produced (never saved). An EGG that is itself TEMPORARY hatches once: U6's data has one,
+  the opening gargoyles in Lord British's throne room (307,350); a later DOS save no longer holds it, so
+  it is spent (chance 0, kept by the save) when it hatches (found by the bot, 2026-11-07: until then it
+  hatched three gargoyles on every visit to the throne room). Confidence: probable.
 
 All eggs of a game live in the save's dedicated EGGS chunk (nuvie_save.md), each followed by
 its embryos, with their level in z.
@@ -79,7 +82,7 @@ holds until slain) and decides its turns:
 | 0x0b | unfriendly | roams (half the turns a step toward a point ten tiles off along a random axis); a party member within two tiles turns it to **assault** with a 1-in-8 chance per turn |
 | 0x0a | like | the same roam, but a party member within two draws it toward the party half the turns |
 | 0x0c, 0x8f | wander near player / wander around | one turn in eight a step in a random direction |
-| 0x0e, 0x0d | stationary, tangle | never moves; a hostile one strikes a party member standing beside it (the reference tries 16 random tiles of the 9×9 around it: ≈16/81 per neighbour per turn; the tangle vine strikes a neighbour every other turn) |
+| 0x0e, 0x0d | stationary, tangle | never moves; a hostile one strikes a party member standing beside it (the reference tries 16 random tiles of the 9×9 around it: ≈16/81 per neighbour per turn; the tangle vine strikes a neighbour every other turn). A tile farther off than its weapon reaches is passed over: bare-handed, only a neighbour (found by the bot 2026-11-07: we struck anyone in the 9×9, a hatched tangle vine killed the Avatar from two tiles away) |
 | 0x0f, 0x10, 0x8b-0x8e | guard walk east-west / north-south, walk N/E/S/W | half the turns a step along its facing (0x0f starts east, 0x10 north, 0x8b-0x8e as named); blocked, it turns back |
 | 0x00, 0x01 | motionless | nothing: a creature embryo whose quality is 0 never takes a turn (the reference's "nothing" worktype), hostile or not |
 

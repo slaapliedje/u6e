@@ -121,6 +121,11 @@ int main(void)
       vm.nin=0; add_val(&vm,OP_DECL,0); add_val(&vm,9,0xd3); add_val(&vm,OP_VAR,0); do_ctrl(&vm);
       vm.nin=0; add_val(&vm,OP_ASSIGN,0); add_val(&vm,99,0); do_ctrl(&vm);
       ok=g.var[9]==99 && db_integer(&vm,10,1)==42; printf("  a plain DECL writes the variable again %s\n", ok?"OK":"FAIL"); if(!ok){ df++; fail++; }
+      g.on_quest=0;                                                  /* the Singularity: "Your final quest has begun!" assigns var 0x1A */
+      vm.nin=0; add_val(&vm,OP_DECL,0); add_val(&vm,0x1a,0xd3); add_val(&vm,OP_VAR,0); do_ctrl(&vm);
+      vm.nin=0; add_val(&vm,OP_ASSIGN,0); add_val(&vm,1,0); do_ctrl(&vm);
+      { int32_t q=-1; sysvar(&vm,0x1a,&q); ok=g.on_quest==1 && q==1; }
+      printf("  ASSIGN to var 0x1A sets the quest flag %s\n", ok?"OK":"FAIL"); if(!ok){ df++; fail++; }
       printf(df ? "data-block assignment: %d FAILURE(S)\n" : "data-block assignment: ALL PASS\n", df); }
 
     printf("\nHEAL:\n");

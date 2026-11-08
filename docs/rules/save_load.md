@@ -14,7 +14,7 @@ compiled for target), /render gamedemo.c `load_game()`.
 >   fold parity host-vs-target (§3); §5 write-back proven by LOAD.REQ modes 2/3 (two save->load
 >   cycles) and by loading the target-written file in real ScummVM (tools/savecheck.sh).
 > - Confidence   : confirmed
-> - Last updated : 2026-09-29
+> - Last updated : 2026-11-07 (a member's max HP from its level on load)
 
 ## 1. What loading restores (the exact mutable set the save carries)
 
@@ -28,11 +28,15 @@ nuvie_save.md) and rebuilds the LIVE state:
   is, with x/y zeroed, alive=0, parent re-indexed). The whole `g_wobj` array is replaced.
 - **Actors** (objlist, little-endian): position (0x100+i*3), appearance → tile
   (0x400+i*2, basetile+frame), str/dex/int (0x900/0xa00/0xb00), exp (0xc00, u16),
-  HP (0xe00); maxhp := HP and level := maxhp/30 — the SAME derivations the pack boot uses,
-  so a load equals a boot from that save.
+  HP (0xe00), level (0xff1; when unset, maxhp/30). A party member's max HP is level × 30 (capped
+  255, combat.md §3): the save holds current HP only, so taking max HP from it would make a wounded
+  member's wounds permanent (found by the bot, 2026-11-07). Others keep max HP := HP.
 - **Avatar/world**: position + z-level → the camera; clock (0x1bf3 minute, 0x1bf4 hour)
   → `g_start_min` (turn clock rebased to 0); gender 0x1c71, karma 0x1bf9.
-- **Party**: rebuilt from the objlist status bit 0x80 (names kept when already known,
+- **Party**: S)ave writes the objlist status bit 0x80 for the roster (and a fallen member still on it), clearing
+  it for everyone else, so a companion who joined (Sherry, Beh Lem) comes back with what they carry; until
+  2026-11-07 only the template's bits were kept and a joiner fell off at the next load (found by the bot).
+  Load: rebuilt from the objlist status bit 0x80 (names kept when already known,
   else resolved from CONVERSE).
 - **Conversation state**: per-NPC talk flags (0x17f1), quest flag (0x1bf1), knows-Gargish
   (0x1c5f) → the conversation VM's game state (also absorbed from the template at boot).

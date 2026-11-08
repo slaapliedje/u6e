@@ -146,6 +146,9 @@ bool world_try_move(world_t *w, int dx, int dy)
     int32_t nx = (w->px + dx) & (U6_SURFACE_TILES - 1);   /* toroidal wrap */
     int32_t ny = (w->py + dy) & (U6_SURFACE_TILES - 1);
     if (!world_is_passable(w, nx, ny)) return false;       /* blocked: no turn */
+    if (dx && dy                                           /* a diagonal needs one side open: no cutting a corner */
+        && !world_is_passable(w, (w->px + dx) & (U6_SURFACE_TILES - 1), w->py)
+        && !world_is_passable(w, w->px, (w->py + dy) & (U6_SURFACE_TILES - 1))) return false;
 
     int cost = w->rules->move_turn_cost
              ? w->rules->move_turn_cost(w, dx, dy)

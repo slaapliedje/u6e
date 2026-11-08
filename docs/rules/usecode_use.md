@@ -482,8 +482,18 @@ ScummVM's hatches it again.
 > the Look routine, its helpers, the verb dispatch, Get, Drop, Move and Use. Re-expressed, no code transcribed.
 > This section overrides the older notes above where they disagree.
 
+**The default command.** One command can be the default, shown by a line under its icon: a right-click
+on an icon picks it, and so does Alt with its letter (A C T L G D M U R B, the ten icons in order: DOS
+GAME.EXE's key switch passes 0x81..0x8A to the icon routine at image 0x5cad, which moves the line). A
+right-click on the map then runs the default command on that tile. Rest and comBat have no map use, so
+picking them leaves no default.
+
 **The cursor.** T)alk, L)ook, G)et, D)rop, M)ove and U)se all arm one crosshair on the map, starting on the
-leader. The arrows walk it anywhere in the map window, Enter or a click acts on the tile under it, Esc cancels. The
+leader. For T)alk, L)ook and D)rop (and A)ttack, C)ast) the arrows walk it anywhere in the map window; for G)et,
+U)se and M)ove a direction key acts at once on the next tile that way (DOS GAME.EXE sets their cursor range to
+0xFF at image 0x3e2a, and a key with that range acts on the neighbour at once, 0x6b38; seen in DOS U6 2026-11-07:
+M, Left named the bread beside the Avatar and asked `To `). Enter or a click acts on the tile under the
+crosshair, Esc cancels. The
 prompt is the verb's name and a dash: `Look-`, `Get-`, `Move-`, `Use-`, `Talk-`; D)rop's second prompt is
 `Location: `. Choosing nothing answers `nothing` after the dash (`Get-nothing`).
 

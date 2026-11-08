@@ -1,6 +1,6 @@
 # Format: Conversation container (CONVERSE.A / CONVERSE.B)
 
-Games: U6 (CONVERSE.A/.B) / Savage (TALK.LZC, §6b–6c) / Martian (not yet read)
+Games: U6 (CONVERSE.A/.B) / Savage (TALK.LZC, §6b–6c) / both: page waits §6d / Martian (not yet read)
 Implemented by: /dataformats (u6conv.c/.h, u6lzw.c), /tools (convspike)
 Tracked in: /docs/INDEX.md  ·  Milestone: M4 (spike) / M6 (full VM)
 
@@ -202,6 +202,33 @@ Other numbers do nothing.
 Census (68 scripts): statements a1 616, a2 619, a3 343, a4 208, a5 18, a6/a8 121, b0 1780, b6 191,
 b9 23, ba 15, bf 265, c9 2, cb 987, cd 28, d1 18, d6 3, d8 12, d9 3, db 2, ee 55, ef/f6 1185, f1/f2/ff
 68, f3 8, f7 83, f8 59, fb 11, fc 2. Value ops: only ones U6 has.
+
+## 6d. Page waits (U6 and SE GAME.EXE)
+Read from the text routine both games share. In U6 GAME.EXE 4.5: the token switch at image 0x7a13
+(table at 0x7a54, cs base 0x4640), the character routine at 0x753a, the key wait at 0x7099, the
+cursor at 0x54ae. SE has the same code: tokens at 0x8858, `*` at 0x8891, the page loop at 0x8466.
+Martian Dreams' GAME.EXE has no such loop; it is read with the rest of MD (se_md_checklist.md item 13).
+
+- **The count.** A window that pages keeps a count of lines left. Every key read and every line read
+  sets it to the window's height. Each line the routine puts out (at a line break, or where a line
+  wraps) takes one off first. When that leaves 0, it waits before putting the line out.
+- **The page wait.** The cursor is glyph 1 (below), on the empty row the next line will go to. Only
+  Space, Enter, Esc or a click go on; other keys do nothing. The row is cleared and the count set to
+  the height less one, so each later page brings a window less one of new lines.
+- **`*` in text** (and the WAIT op, which puts out a `*`): the part of the line so far is drawn, the
+  cursor is shown just after it, and any one key goes on. That key is a key read, so the count starts
+  again at the height. The text goes on from the same place on the line.
+- **The cursor.** Glyph `base + frame`, frame 0–3, one step for each pass of the wait loop: base 1
+  waiting for a key, base 5 for typed input. In U6.CH glyphs 1, 3, 4 are a down arrow and 2 is
+  blank (it blinks); 5–8 are an ankh turning. SAVAGE.FNT has an arrow with glyph 3 blank, and a
+  skull whose eyes blink. u6e steps the frame every 33 ticks of the 200 Hz clock, the pace of its
+  tile animation: DOS's pace is whatever its loop takes, so there is no number to copy.
+
+The message scroll pages by the same rule (u6e: a page less one row, the arrow on the last row).
+
+In u6e (render/gamedemo.c `talk_page_sync`/`talk_advance`/`talk_draw`): the panel's text area is 8
+rows, the typing row counting as a line; the panel shows the newest 8 rows of what is out. The `*`s
+stay in the transcript (the bot and the tests read it whole) and are not drawn.
 
 ## 7. Status
 Savage Empire (2026-11-07): its scripts run on the same VM in SE's dialect (§6c), in the game and on

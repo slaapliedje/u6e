@@ -13,7 +13,7 @@ class NavError(Exception): pass
 class Nav:
     def __init__(self, game, log=print):
         self.g, self.log = game, log
-        self.level = None; self.temp = {}
+        self.level = None; self.temp = {}; self.denied = set()    # tiles a guard refuses ("Passage denied!") stay shut
         self.keyfn = game.key                                  # Player routes it through its checks
 
     def refresh(self):
@@ -26,14 +26,15 @@ class Nav:
         if self.level != self.g.state['L']: self.refresh()
 
     def cost(self, x, y, keys=False):
-        if (x, y) in self.temp: return None
+        if (x, y) in self.temp or (self.level, x, y) in self.denied: return None
         fr = self.doors.get((x, y))
         if fr is not None:
             if fr < 4: return 1
             if fr < 8: return 3
             if fr < 12 and keys: return 4
             return None
-        return 1 if self.pm[y * self.span + x] & 1 else None
+        v = self.pm[y * self.span + x]
+        return (25 if v & 4 else 1) if v & 1 else None              # ground that hurts (lava, fire, swamp): only when there's no other way
 
     def route(self, sx, sy, goal, keys=False, limit=400000):
         """A* from (sx,sy) to any tile in the set goal; returns the tile list (excluding the start)"""
@@ -64,7 +65,7 @@ class Nav:
     def pos(self): return self.g.state['X'], self.g.state['Y']
 
     def open_door(self, x, y, d):
-        st = self.keyfn('u'); st = self.keyfn(d); st = self.keyfn('ret')
+        st = self.keyfn('u'); st = self.keyfn(d)                   # U)se acts at once on a direction (usecode_use.md)
         self.log('  door (%d,%d): %s' % (x, y, st['msg']))
         fr = self.doors.get((x, y))
         m = st['msg'].lower()
@@ -123,6 +124,8 @@ class Nav:
                     if on_step and on_step(st): return st              # the caller takes over (foes near)
                     continue
                 fails += 1                                              # someone stood there, or it is shut
+                if 'denied' in st['msg'].lower():                       # the Codex's way, before the Sacred Quest
+                    self.denied.add((self.level, nx, ny)); self.log('  (%d,%d): %r, keeping off it' % (nx, ny, st['msg'][-40:])); break
                 self.log('  step %s (%d,%d)->(%d,%d) failed: at (%d,%d) pm=%d door=%s msg=%r' % (d, x, y, nx, ny, st['X'], st['Y'],
                          self.pm[ny * self.span + nx], self.doors.get((nx, ny)), st['msg'][:60]))
                 if not refreshed:                                       # the map may have changed under us

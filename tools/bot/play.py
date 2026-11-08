@@ -107,6 +107,11 @@ class Player:
             for _ in range(abs(a['y'] - y)): self.key('down' if a['y'] > y else 'up', what)
         return self.key('ret', what)
 
+    def act(self, verb, d, what=''):
+        """G)et, U)se or M)ove on the next tile that way: the direction acts at once (DOS: their cursor range is
+        0xFF, usecode_use.md), no Enter"""
+        self.key(verb); return self.key(d, what)
+
     def at(self, d, what=''):
         """an armed verb's crosshair: a step that way and Enter"""
         self.key(d, what); return self.key('ret', what)
@@ -153,6 +158,7 @@ class Player:
         """if the text ends with a question the script itself answers, its first keyword"""
         tail = conv.rstrip()
         if not tail.endswith(('?', '?"')): return None
+        if re.search(r"(thy|your) name\?\"?$", tail, re.I): return 'Avatar'          # a child who won't talk to strangers
         for q, kws in sections(self.ref, aid):
             qq = q.strip().strip('"').strip()
             if len(qq) > 12 and qq[-30:] in tail and kws: return kws[0]
@@ -250,6 +256,7 @@ class Player:
         """combat mode on; A)ttack the nearest foe when adjacent, else step toward it; until no foes are
         near, then loot the fallen. Issues: a fight where no foe loses hp for 40 turns, a party member
         dying, game over."""
+        loot = loot and getattr(self, 'loot_ok', True)                 # the quest's chapters carry no spoils (bot_walkthrough.md)
         before = {o['i'] for o in self.g.objects()[0]} if loot else None
         if not self.g.state['combat']: self.key('b', 'combat on')
         stale = turns = misses = 0; seen = {}; msgs = []; hp0 = {p['id']: p['hp'] for p in self.g.state['party']}
@@ -300,7 +307,7 @@ class Player:
         objs, _ = self.g.objects(); x, y = self.nav.pos(); took = False
         for o in objs:
             if o['obj'] != 98 or o['i'] not in self.looted or abs(o['x'] - x) + abs(o['y'] - y) != 1: continue
-            self.key('g'); st = self.at(VDIR[(o['x'] - x, o['y'] - y)], 'get the chest')
+            st = self.act('g', VDIR[(o['x'] - x, o['y'] - y)], 'get the chest')
             self.log('  a looted chest in the way at (%d,%d): %r' % (o['x'], o['y'], st['msg']))
             took = took or got(st['msg'])
         if took: self.nav.refresh()
@@ -340,12 +347,12 @@ class Player:
             if abs(o['x'] - x) + abs(o['y'] - y) != 1: skip.add(o['i']); continue
             d = VDIR[(o['x'] - x, o['y'] - y)]
             if o['obj'] in self.HOLDERS:
-                used.add(o['i']); self.looted.add(o['i']); self.key('u' if o['obj'] in (98, 192, 186) else 'l'); st = self.at(d, 'search %d' % o['obj'])
+                used.add(o['i']); self.looted.add(o['i']); st = self.act('u', d, 'search %d' % o['obj']) if o['obj'] in (98, 192, 186) else (self.key('l'), self.at(d, 'search %d' % o['obj']))[1]
                 if 'nothing' in st['msg'].lower(): skip.add(o['i'])
             elif not self.wanted(o):                          # not worth its weight: leave it, and what lies under it
                 skip.add(o['i'])
             else:
-                self.key('g'); st = self.at(d, 'get %d' % o['obj'])
+                st = self.act('g', d, 'get %d' % o['obj'])
                 if got(st['msg']): took.append(st['msg'].split('Get-', 1)[1].split('\n')[0].strip(' .'))
                 else: skip.add(o['i']); self.log('  get %s: %r' % (o['name'], st['msg']))
         gained = self.g.state.get('gold', 0) - g0
@@ -446,13 +453,17 @@ class Player:
         ignore = 0; lv = self.g.state['L']                     # foes in view that cannot be reached
         for _ in range(30):
             hit = lambda s: s['foes'] or ' hits ' in s['msg'] or ' kills ' in s['msg']   # a foe out of view can still strike the rear
-            try: st = self.nav.goto(tx, ty, on_step=lambda s: s['foes'] > ignore or (hit(s) and self.near_death()), **kw)
+            sneak = getattr(self, 'sneak', False)
+            near = (lambda: [i for i in self.near_death() if i == 1]) if sneak else self.near_death   # sneaking: only the Avatar's own danger stops the walk
+            try: st = self.nav.goto(tx, ty, on_step=lambda s: (s['foes'] > ignore and not sneak) or (hit(s) and near()), **kw)
             except NavError:
                 if not self.clear_chests(): raise
                 continue
-            if hit(self.g.state) and self.near_death():                  # under fire: heal and go on, or give up the walk
-                if not self.heal_up(): raise Danger('members %s near death, foes %d in view, no heal' % (self.near_death(), self.g.state['foes']))
+            if hit(self.g.state) and near():                             # under fire: heal and go on, or give up the walk
+                if not self.heal_up(): raise Danger('members %s near death, foes %d in view, no heal' % (near(), self.g.state['foes']))
                 continue
+            if self.g.state['foes'] > ignore and getattr(self, 'sneak', False):   # unseen (the invisibility ring): walk on, never strike
+                ignore = self.g.state['foes']; continue
             if self.g.state['foes'] > ignore:
                 if self.foes(): self.fight(); ignore = 0; self.heal_up(); self.cure_up(); self.rest_if_hurt()
                 else: ignore = self.g.state['foes']

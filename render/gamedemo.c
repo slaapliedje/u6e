@@ -650,7 +650,8 @@ static int            g_mx,g_my;            /* logical cursor position (0..319,0
 static int g_start_min = 12*60;  /* game-time of day at load (minutes); set from the
                                   * save's clock via the pack header (U6WH). noon default. */
 
-static int tappend(int tl,const char*s){ while(*s&&tl<1023) g_transcript[tl++]=*s++; g_transcript[tl]=0; return tl; }
+static int g_tgen;                     /* bumped when a new transcript starts (the page wait re-reads it) */
+static int tappend(int tl,const char*s){ if(tl==0) g_tgen++; while(*s&&tl<1023) g_transcript[tl++]=*s++; g_transcript[tl]=0; return tl; }
 
 /* little-endian u32 (CONVERSE/PORTRAIT offset tables are LE in the originals) */
 static uint32_t rd4(const uint8_t*p){
@@ -3734,6 +3735,14 @@ static void build_blocked(void)
             int32_t idx=(int32_t)o->y*1024+o->x;
             if(g_tflags1[t]&0x02) sb_set(&g_blocked,o->x,o->y);   /* Impassable bit ONLY (the reference's tile.passable): a doorway (301) or an open secret door carries the Wall bit yet is walked through (tileflag.md) */
             if(blocks_sight(t))   sb_set(&g_sightblk,o->x,o->y);
+            { int f2=g_tflags[t]&0xC0;                          /* a big object's other cells block by their own tiles (tileflag.md: T-1 left, T-1/T-2 above, T-3 the corner) */
+              if(f2){ int span=(g_cur_level==0)?U6_SURFACE_TILES:256, tn=t, px[3], py[3], n=0;
+                  if(f2&0x80){ px[n]=o->x-1; py[n]=o->y;   n++; }
+                  if(f2&0x40){ px[n]=o->x;   py[n]=o->y-1; n++; }
+                  if((f2&0xC0)==0xC0){ px[n]=o->x-1; py[n]=o->y-1; n++; }
+                  for(int k=0;k<n;k++){ tn--; if(tn<0) break; int cx=px[k]&(span-1), cy=py[k]&(span-1);
+                      if(g_tflags1[tn]&0x02) sb_set(&g_blocked,cx,cy);
+                      if(blocks_sight(tn))   sb_set(&g_sightblk,cx,cy); } } }
             if(g_tflags3 && g_force_n<FORCE_MAX && (g_tflags3[t]&0x04)){
                 int32_t fb=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[fb>>3]|=(uint8_t)(1u<<(fb&7));
                 g_force_idx[g_force_n++]=idx; }
@@ -5090,6 +5099,23 @@ static void draw_border_tiles(void)
     if(g_casting||g_save_menu) spell_page_blit(PANX-SPELL_X);
 }
 
+/* one wrapped row: a keyword (byte 1 before it) in red, as HELP has it */
+static void ui_text_row(int x,int y,const char*s,int t,uint8_t col)
+{   int cx=x, red=0; char one[2]={0,0};
+    for(int k=0;k<t;k++){ if(s[k]==1){ red=1; continue; }
+        if(red && !((s[k]>='a'&&s[k]<='z')||(s[k]>='A'&&s[k]<='Z'))) red=0;
+        one[0]=s[k]; ui_text(cx,y,one,(red&&g_help_on)?12:col); cx+=8; } }
+
+/* The text cursor of a wait (converse.md §6d): DOS draws glyph base+frame where the text stops, base 1
+ * (an arrow: wait for a key) or 5 (typing); the frame steps while it waits. -1 = none on screen. */
+static int g_tcur_x=-1, g_tcur_y, g_tcur_base, g_tcur_col;
+static uint8_t g_tcur_frame;
+static void tcur_glyph(void)
+{   char c[2]={(char)(g_tcur_base+(g_tcur_frame&3)),0};
+    for(int y=g_tcur_y;y<g_tcur_y+8;y++) memcpy(ROW(y)+g_tcur_x, g_paper+(int32_t)y*LW+g_tcur_x, 8);
+    ui_text(g_tcur_x,g_tcur_y,c,g_tcur_col); }
+static void tcur_set(int x,int y,int base,uint8_t col){ g_tcur_x=x; g_tcur_y=y; g_tcur_base=base; g_tcur_col=col; tcur_glyph(); }
+
 /* word-wrap `s` into a box [x..x+w) from y, up to `lines` rows of font text */
 static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
 {
@@ -5102,7 +5128,7 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
         for(int k=0;k<g_msg_skip;k++){ while(*s==' ') s++; int n=0,last=-1; for(const char*p=s;*p&&*p!='\n';p++,n++){ if(*p==' ') last=n; if(n>=cols) break; }
             s+=(n<cols)?n:(last>=0?last:cols); if(*s=='\n') s++; }
         g_msg_more=rows-g_msg_skip>lines;
-        if(g_msg_more){ char c[2]={0x19,0}; ui_text(x+w-8,y+(lines-1)*9,c,col); g_msg_page=lines-1; } }
+        if(g_msg_more){ g_msg_page=lines-1; tcur_set(x,y+(lines-1)*9,1,col); lines--; } }   /* a page less one, the arrow on the row the next line goes to */
     while(*s && row<lines){
         while(*s==' ') s++;
         if(!*s) break;
@@ -5112,12 +5138,89 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
         char line[48]; int t=take<47?take:47;
         for(int k=0;k<t;k++) line[k]=s[k];
         line[t]=0;
-        { int cx=x, red=0; char one[2]={0,0};                     /* a keyword (byte 1 before it) in red, as HELP has it */
-          for(int k=0;k<t;k++){ if(line[k]==1){ red=1; continue; }
-              if(red && !((line[k]>='a'&&line[k]<='z')||(line[k]>='A'&&line[k]<='Z'))) red=0;
-              one[0]=line[k]; ui_text(cx,y+row*9,one,(red&&g_help_on)?12:col); cx+=8; } } row++;
+        ui_text_row(x,y+row*9,line,t,col); row++;
         s+=take; if(*s=='\n') s++;
     }
+}
+
+/* The conversation's page waits (converse.md §6d). DOS's text routine counts the lines it puts in the
+ * window since the last key; when the count runs out it waits (Space, Enter, Esc or a click) with the
+ * arrow on the next row, then shows a window less one; a `*` in the text waits for any key where it
+ * stands, and that key starts the count again. The panel shows the newest TROWS rows of what is out. */
+#define TROWS 8
+#define TMAXR 128
+static char    g_tdisp[1024];                 /* the transcript without its `*`s */
+static int16_t g_trs[TMAXR], g_tre[TMAXR], g_tstar[64];
+static int     g_tnr, g_tns, g_tdone=-1;      /* rows, stars, the transcript (g_tgen) they were made from */
+static int     g_trow, g_tpos, g_tcnt, g_tcounted, g_tsn, g_twait;   /* next row, out up to, lines left, row counted, next star, 1 page / 2 star */
+static void talk_advance(void)
+{
+    g_twait=0;
+    for(;;){
+        int input=g_trow==g_tnr && g_await_input && !g_tcounted;   /* the typing row comes out like a line */
+        if(g_trow>=g_tnr && !input){
+            if(g_tsn<g_tns){ g_tsn++; g_twait=2; }                  /* a `*` after the last line */
+            return; }
+        if(!g_tcounted){ if(g_tcnt) g_tcnt--;
+            if(g_tcnt==0){ g_twait=1; return; }
+            g_tcounted=1; if(input) return; g_tpos=g_trs[g_trow]; }
+        if(g_trow>=g_tnr) return;
+        if(g_tsn<g_tns && g_tstar[g_tsn]<=g_tre[g_trow]){           /* a `*` on this row: out up to it, wait */
+            int o=g_tstar[g_tsn++]; g_tpos=o<g_trs[g_trow]?g_trs[g_trow]:o; g_twait=2; return; }
+        g_tpos=g_tre[g_trow]; g_trow++; g_tcounted=0;
+    }
+}
+static void talk_page_sync(void)
+{
+    if(g_tdone==g_tgen) return;
+    g_tdone=g_tgen;
+    int n=0; g_tns=0;
+    for(const char*p=g_transcript;*p;p++){ if(*p=='*'){ if(g_tns<64) g_tstar[g_tns++]=(int16_t)n; } else g_tdisp[n++]=*p; }
+    g_tdisp[n]=0;
+    int cols=(PANW-12)/8, i=0; g_tnr=0;                              /* ui_text_wrap's rows */
+    while(g_tdisp[i] && g_tnr<TMAXR){
+        while(g_tdisp[i]==' ') i++;
+        if(!g_tdisp[i]) break;
+        int k=0, last=-1;
+        for(;g_tdisp[i+k] && g_tdisp[i+k]!='\n';k++){ if(g_tdisp[i+k]==' ') last=k; if(k>=cols) break; }
+        int take=(k<cols)?k:(last>=0?last:cols);
+        g_trs[g_tnr]=(int16_t)i; g_tre[g_tnr]=(int16_t)(i+take); g_tnr++;
+        i+=take; if(g_tdisp[i]=='\n') i++;
+    }
+    g_trow=0; g_tpos=0; g_tcounted=0; g_tsn=0; g_tcnt=TROWS;          /* the key that opened it reset the count */
+    talk_advance();
+}
+static int talk_waiting(void){ talk_page_sync(); return g_twait; }
+static int talk_page_key(int a)                /* a key during a wait: 1 = it was taken */
+{
+    if(g_twait==1){ if(a!=' ' && a!=0x0d && a!=0x1b && a!=0x8f) return 1;   /* others do nothing */
+        g_tcnt=TROWS-1; g_tcounted=1; if(g_trow<g_tnr) g_tpos=g_trs[g_trow]; }
+    else g_tcnt=TROWS;                         /* a key read starts the count again */
+    talk_advance(); return 1;
+}
+static void talk_draw(int x,int y,uint8_t col)
+{
+    talk_page_sync();
+    int cols=(PANW-12)/8, last=g_trow-1, cx=-1, cy=-1;            /* rows out: 0..last, row g_trow up to g_tpos once counted */
+    int part=(g_trow<g_tnr && g_tcounted)?g_tpos-g_trs[g_trow]:-1;
+    if(part>=0) last=g_trow;
+    int inrow=(g_trow==g_tnr && g_await_input && g_tcounted && !g_twait)?g_tnr:-1;
+    if(inrow>=0) last=inrow;
+    if(g_twait==1){ cx=0; cy=last+1; }                             /* the arrow where the next row goes */
+    else if(g_twait==2){ if(part>=0){ cx=part; cy=g_trow; } else { cx=g_tnr?g_tre[g_tnr-1]-g_trs[g_tnr-1]:0; cy=g_tnr-1; }
+        if(cy<0){ cy=0; cx=0; } if(cx>=cols){ cx=0; cy++; } }
+    int occ=(cy>last?cy:last)+1, first=occ>TROWS?occ-TROWS:0;
+    for(int r=first;r<=last;r++){
+        int yy=y+(r-first)*9;
+        if(r==inrow){                                              /* the input row: "> typed" and the cursor */
+            char line[24]; int t=0; line[t++]='>'; line[t++]=' ';
+            for(int k=0;k<g_inlen && t<21;k++) line[t++]=g_inbuf[k];
+            line[t]=0; ui_text(x,yy,line,col); tcur_set(x+t*8,yy,5,col); continue; }
+        int n=(r==g_trow)?part:g_tre[r]-g_trs[r];
+        char line[48]; int t=n<47?n:47; for(int k=0;k<t;k++) line[k]=g_tdisp[g_trs[r]+k];
+        ui_text_row(x,yy,line,t,col);
+    }
+    if(cy>=0) tcur_set(x+cx*8,y+(cy-first)*9,1,col);
 }
 
 /* blit a portrait already decoded into a flat 56x64 buffer (from talk()) */
@@ -5222,6 +5325,7 @@ static void draw_conversation(uint8_t col)
 {
     int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
     restore_panel();                               /* clean papyrus before text */
+    g_tcur_x=-1;                                   /* a wait's cursor is drawn again below if one is up */
     if(g_save_menu){                               /* the slot page (save_load.md §2b) */
         draw_save_page(col);
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
@@ -5241,13 +5345,7 @@ static void draw_conversation(uint8_t col)
         if(g_have_pc) draw_portrait_buf(g_cur_portrait,pxx,pyy);
         ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, pyy+PH+4, g_talk_name, col);
         }
-        ui_text_wrap(PANX+6, 116, PANW-12, g_transcript, g_await_input?7:8, g_gamename?15:col);  /* white on SE's black panel */
-        if(g_await_input){                         /* the input box: "> typed_" */
-            char line[24]; int t=0; line[t++]='>'; line[t++]=' ';
-            for(int k=0;k<g_inlen && t<21;k++) line[t++]=g_inbuf[k];
-            line[t++]='_'; line[t]=0;
-            ui_text(PANX+6, 116+7*9, line, col);
-        }
+        talk_draw(PANX+6, 116, g_gamename?15:col);  /* white on SE's black panel */
     } else if(g_show_status){
         draw_char_view(col);                       /* a party member's portrait + gender + stats */
         if(g_msg[0]) ui_text_wrap(PANX, MSGY, PANW, g_msg, 9, col);
@@ -6637,6 +6735,10 @@ static int player_step(world_t*w,int dx,int dy)
         if((dx||dy) && g_on.codex_way && !g_cg.on_quest && w->level==0 && obj_idx_at((w->px+dx)&(U6_SURFACE_TILES-1),(w->py+dy)&(U6_SURFACE_TILES-1),g_on.codex_way)>=0){   /* the way to the Codex (usecode_use.md) */
             msgcat(0,"\"Thou art not upon a Sacred Quest!\nPassage denied!\""); return 0; }
         stepped=(dx||dy) ? world_try_move(w,dx,dy) : 0;
+        if(!stepped && (dx||dy) && g_solo_m && g_on.mouse && actor_objn(1)==g_on.mouse){   /* a mouse alone goes by its holes, as its walker rule has it (combat.md §7c) */
+            int nx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ny=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), hole=0;
+            for(int k=0;k<3;k++) if(g_on.mouse_hole[k] && obj_idx_at(nx,ny,g_on.mouse_hole[k])>=0) hole=1;
+            if(hole && npc_at(w,nx,ny)<0){ w->px=nx; w->py=ny; w->turns++; stepped=1; } }
         if(stepped){
             if(g_veh_kind&&g_veh_kind==g_on.horse){ g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;   /* mounted: re-face the horse sprite */
                 g_avatar_ovr=(uint16_t)(basetile(g_on.horse)+g_veh_face*2+g_veh_phase); }
@@ -7433,6 +7535,19 @@ static void present_map(void)
 #endif
   if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); cursor_erase(); }
   else rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,MAPSZ,LH); }
+
+/* present one small panel rectangle (a wait's cursor), the mouse pointer kept on top. The main loop Vsyncs. */
+static void present_panel_rect(int x,int y,int w,int h)
+{
+    int x0=x&~15, w0=((x+w+15)&~15)-x0;
+#ifdef HAVE_RDR_ST
+    if(g_native_planar){ rdr_pcursor_hide(); rdr_present_rect_doubled(x0,y,w0,h,LH);
+        if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy); g_cur_onx=ox; g_cur_ony=oy; }
+        return; }
+#endif
+    if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_rect_doubled(x0,y,w0,h,LH); cursor_erase(); }
+    else rdr_present_rect_doubled(x0,y,w0,h,LH);
+}
 
 /* Cheap CURSOR-ONLY present for a bare mouse move: repaint just the old + new cursor
  * boxes (16-px-aligned) instead of the whole screen. A full present is a big c2p that on
@@ -8522,7 +8637,10 @@ static void wt_stationary(const world_t*w,int i)
 {   int a=align_of(i), x=g_actx[i], y=g_acty[i];
     if(a) for(int k=0;k<16;k++){ int tx=x+ROLL(8)-4, ty=y+ROLL(8)-4, j=actor_on(w,tx,ty);
         if(j<0||j>=U6_MAX_ACTORS||j==i||!can_target(i,j)) continue;
-        { int b=align_of(j); if(b==a||!b) continue; wt_strike(w,i,j,actor_pick_weapon(i,combat_dist(iabs_(tx-x),iabs_(ty-y))),x,y,tx,ty); return; } }
+        { int b=align_of(j); if(b==a||!b) continue;
+          int d=combat_dist(iabs_(tx-x),iabs_(ty-y)), wp=actor_pick_weapon(i,d);
+          if(d>(wp?weapon_range(wp):1)) continue;                     /* out of its reach: bare-handed, only a neighbour (eggs.md §3b) */
+          wt_strike(w,i,j,wp,x,y,tx,ty); return; } }
     pay(i,5); }
 static void wt_pace(const world_t*w,int i,int wt)
 {   int x=g_actx[i], y=g_acty[i], d, dx=0,dy=0;
@@ -8827,7 +8945,7 @@ static void status_tick(void){
         if(g_asleep[a]   && rng_range(&g_crng,16)==0 && (a==1||npc_worktype(a)!=0x91)) g_asleep[a]=0;
         if(g_ainvis[a]   && !(g_on.invis_ring&&has_readied(a,g_on.invis_ring)) && rng_range(&g_crng,64)==0 && int_adj(a)<=d30()) g_ainvis[a]=0;
         if(g_poison[a] && !g_protect[a] && rng_range(&g_crng,8)==0){ int hp=g_ahp[a];   /* poison: 1 HP now and then, never lifts by itself */
-            if(hp>0){ g_ahp[a]=(uint8_t)(hp-1); if(g_ahp[a]==0 && !is_party_member(a)) actor_die(a); } }
+            if(hp>0){ g_ahp[a]=(uint8_t)(hp-1); if(g_ahp[a]==0 && !member(a)) actor_die(a); } }   /* the Avatar and the party die their own way (combat.md §3d) */
     }
     sync_party_hp();                                  /* poison may have changed party HP */
 }
@@ -8952,7 +9070,7 @@ static int summon_creature(int x,int y,uint16_t obj_n,uint8_t mode,uint8_t life,
  * a block change (or a teleport / level change / load) runs the hatch check (§2). */
 #define EGG_MAX 700
 #define EMB_MAX 1200
-typedef struct { uint16_t x, y; uint8_t quality, chance, active, nemb; uint16_t emb, rec; } egg_t;
+typedef struct { uint16_t x, y; uint8_t quality, chance, active, nemb, temp; uint16_t emb, rec; } egg_t;
 typedef struct { uint16_t obj_n; uint8_t qty, quality, status; } embryo_t;
 static egg_t    g_eggs[EGG_MAX];
 static embryo_t g_emb[EMB_MAX];
@@ -8977,6 +9095,7 @@ static void eggs_load_level(const uint8_t *d, int32_t n, int level)
 
             egg_t*e=&g_eggs[g_neggs]; e->x=(uint16_t)x; e->y=(uint16_t)y; e->quality=b[7]; e->chance=b[6];
             e->active=(uint8_t)((b[0]&0x40)?1:0);                      /* already hatched on this approach (saved) */
+            e->temp=(uint8_t)((b[0]&0x20)?1:0);                        /* a TEMPORARY egg hatches once (eggs.md §2) */
             e->nemb=0; e->emb=(uint16_t)g_nemb; e->rec=(uint16_t)k; map[k]=(int16_t)g_neggs++; }
         else if(loc==0x08){ int link=((y&0x3f)<<10)|x;                  /* an embryo follows its egg */
             if(link<k && map[link]>=0){ egg_t*e=&g_eggs[map[link]];
@@ -9058,6 +9177,7 @@ static void u6_eggs_update(const world_t *w, int teleport)
         int roll=rng_range(&g_egg_rng,100)+1;
         if(!(eg->chance==100 || roll<=eg->chance)) continue;
         g_egg_hatched++;
+        if(eg->temp) eg->chance=0;                                      /* once only: the throne room's opening gargoyles (eggs.md §2) */
         int first_piece=1;
         for(int k=0;k<eg->nemb;k++){ const embryo_t*em=&g_emb[eg->emb+k];
             int on=em->obj_n, qty=em->qty;
@@ -10256,7 +10376,7 @@ static int pack_move_into(world_t*w,int t)
       if(out&&ton==57){ msgcat(0,"Spells are not suppose to be taken out from the Spellbook."); return 0; }
       if(!to->id) g_ow.inv[t].id=(uint16_t)++g_inv_next;
       { int dest=out?to->in:g_ow.inv[t].id, cnt=g_count&&g_count<src->qty?g_count:src->qty;
-        for(int k=0;k<g_ow.ninv;k++) if(k!=r&&!is_holder(on)&&g_ow.inv[k].obj_n==on&&g_ow.inv[k].quality==src->quality&&g_ow.inv[k].owner==src->owner&&g_ow.inv[k].in==(uint16_t)dest){ g_ow.inv[k].qty=(uint16_t)(g_ow.inv[k].qty+cnt); pack_row_take(r,cnt); cnt=0; break; }
+        for(int k=0;k<g_ow.ninv;k++) if(k!=r&&!is_holder(on)&&g_ow.inv[k].obj_n==on&&g_ow.inv[k].quality==src->quality&&(g_ow.inv[k].tile==src->tile||is_stackable(on))&&g_ow.inv[k].owner==src->owner&&g_ow.inv[k].in==(uint16_t)dest){ g_ow.inv[k].qty=(uint16_t)(g_ow.inv[k].qty+cnt); pack_row_take(r,cnt); cnt=0; break; }
         if(cnt&&cnt<src->qty&&g_ow.ninv<OBJ_INV_MAX){ invitem_t c=*src; c.qty=(uint16_t)cnt; c.in=(uint16_t)dest; c.id=0; c.seq=0; src->qty=(uint16_t)(src->qty-cnt); g_ow.inv[g_ow.ninv++]=c; }
         else if(cnt) src->in=(uint16_t)dest; }
       { int n=msgcat(0,out?"To out of ":"To into "); n=msgcat(n,nm); msgcat(n,"."); }
@@ -10276,7 +10396,7 @@ static int pack_move_to(world_t*w,int dx,int dy)
     if(g_count && g_count<g_ow.inv[r].qty){ int cq=g_count; g_add_to=id; g_cg.player_objq[g_ow.inv[r].obj_n<1024?g_ow.inv[r].obj_n:0]=(uint8_t)g_ow.inv[r].quality; inv_add_objn(g_ow.inv[r].obj_n,cq); g_cg.player_objq[g_ow.inv[r].obj_n<1024?g_ow.inv[r].obj_n:0]=0; g_add_to=1; g_ow.inv[r].qty-=(uint16_t)cq;
         char nm[24]; actor_name(id,nm,sizeof nm); int n=msgcat(0,"To "); n=msgcat(n,nm); msgcat(n,"."); g_verb_pts=5; return 1; }
     { invitem_t it=g_ow.inv[r]; int merged=0; char nm[24]; actor_name(id,nm,sizeof nm);
-      for(int k=0;k<g_ow.ninv;k++) if(k!=r && !it.id && !g_ow.inv[k].in && g_ow.inv[k].obj_n==it.obj_n && g_ow.inv[k].quality==it.quality && (g_ow.inv[k].owner?g_ow.inv[k].owner:1)==id){ g_ow.inv[k].qty=(uint16_t)(g_ow.inv[k].qty+it.qty); merged=1; break; }
+      for(int k=0;k<g_ow.ninv;k++) if(k!=r && !it.id && !g_ow.inv[k].in && g_ow.inv[k].obj_n==it.obj_n && g_ow.inv[k].quality==it.quality && (g_ow.inv[k].tile==it.tile||is_stackable(it.obj_n)) && (g_ow.inv[k].owner?g_ow.inv[k].owner:1)==id){ g_ow.inv[k].qty=(uint16_t)(g_ow.inv[k].qty+it.qty); merged=1; break; }
       if(merged) pack_row_take(r,it.qty?it.qty:1); else { g_ow.inv[r].owner=(uint8_t)id; g_ow.inv[r].in=0; if(it.id) rows_rehome(it.id,id); }
       int n=msgcat(0,"To "); n=msgcat(n,nm); msgcat(n,"."); g_verb_pts=5; }
     return 1; }
@@ -10848,6 +10968,8 @@ static int do_save(const world_t *w)
     for(int i=2;i<U6_MAX_ACTORS;i++)                     /* each NPC's CURRENT worktype (objlist 0x11f1; usecode_vm.md §6b) */
         if(g_atile[i]!=0xffff){ sav_set_actor_worktype(d, off, i, g_sched_st[i]?0x81:g_wt_force[i]?(g_wt_force[i]==WT_MOTIONLESS_FORCED?0:g_wt_force[i]):npc_live_worktype(i));   /* the byte itself, whatever it is */
             { int st=d[off+0x800+i]&~0x64; if(g_asleep[i]) st|=4; st|=align_of_save(i); d[off+0x800+i]=(uint8_t)st; } }
+    for(int i=1;i<U6_MAX_ACTORS;i++){                    /* who is in the party (objlist 0x800 bit 0x80): the roster, and a fallen member still on it (g_lost) */
+        int on=is_party_member(i)||i==1||g_lost[i]; if(on) d[off+0x800+i]|=0x80; else d[off+0x800+i]&=(uint8_t)~0x80; }
     for(int i=1;i<U6_MAX_ACTORS;i++) if(g_cmode[i]) d[off+0x12f1+i]=g_cmode[i];   /* each one's combat mode (combat.md §8) */
     { int mod=clock_minutes(w); sav_set_clock(d, off, mod%60, mod/60); }   /* game clock */
     { int dd,mm,yy; cur_date(w,&dd,&mm,&yy); sav_set_date(d, off, dd, mm, yy); }   /* the date the clock reached (moongates.md §1) */
@@ -10938,7 +11060,7 @@ static int32_t level_decode(const uint8_t *d, int32_t n, int level, int reset_pa
     {   invitem_t keep_inv[OBJ_INV_MAX]; int keep_n = g_ow.ninv;
         if(!reset_pack) memcpy(keep_inv, g_ow.inv, sizeof keep_inv);
         objects_stack_order(nk);
-        objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable); g_ow.add_owner=1; g_ow.away=g_away; for(int i=0;i<256;i++) g_away[i]=0;   /* empties the pack */
+        objworld_init(&g_ow, g_wobj, (int)nk, g_ow.gettable); g_ow.stackable=g_stackable; g_ow.add_owner=1; g_ow.away=g_away; for(int i=0;i<256;i++) g_away[i]=0;   /* empties the pack */
         if(!reset_pack){ memcpy(g_ow.inv, keep_inv, sizeof keep_inv); g_ow.ninv = keep_n; } }
     memset(g_wtemp, 0, sizeof g_wtemp);                           /* every object now has a record */
     g_nobjs = nk; g_nmoved = 0;                                   /* indices are new; records are at their positions */
@@ -11400,7 +11522,9 @@ static int load_game(world_t *w)
         g_ahp[i]  = d[ol + 0xe00 + i]; g_amaxhp[i] = g_ahp[i];              /* boot semantics (pack load) */
         { int lv = d[ol + 0xff1 + i];                                        /* level array (Nuvie); derive if unset */
           if(lv < 1 || lv > 8) lv = (g_amaxhp[i] >= 30) ? (g_amaxhp[i] / 30) : 1;
-          if(lv > 8) lv = 8; g_alevel[i] = (int8_t)lv; }
+          if(lv > 8) lv = 8; g_alevel[i] = (int8_t)lv;
+          if(d[ol + 0x800 + i] & 0x80){ int mh = lv*30; if(mh > 255) mh = 255;   /* a member's max HP is level x 30 (combat.md §3), not the HP it was saved with */
+              if(mh > g_amaxhp[i]) g_amaxhp[i] = (uint8_t)mh; } }
         g_amaxmana[i] = (uint8_t)actor_max_mana(i);
         g_amana[i] = (d[ol + 0x13f1 + i] == 0xFF) ? g_amaxmana[i] : d[ol + 0x13f1 + i];   /* current mana (0xFF = full) */
         if(g_amana[i] > g_amaxmana[i]) g_amana[i] = g_amaxmana[i]; }
@@ -12472,7 +12596,7 @@ out:
  * When BOT.REQ exists the game reports its state on the console (Hatari --conout 2) so a host
  * driver (tools/bot) can play it through the keyboard alone. After every key, and when a busy
  * spell (camp, moongate walk, click-travel) ends, one "@S" line: the key count, the place, the
- * modes, the party (id:hp/max:mana:level:poisoned), the message box and the conversation text. F2..F5 print dumps (actors,
+ * modes, the party (id:hp/max:mana:level:poisoned:exp), the message box and the conversation text. F2..F5 print dumps (actors,
  * objects + the pack, the passability file, the state again). Nothing here changes play. */
 static int      g_bot;                   /* BOT.REQ seen at boot                                 */
 static uint32_t g_bot_keys;              /* raw keys received (the driver's lock-step counter)   */
@@ -12507,7 +12631,7 @@ static void bot_report(const world_t*w)
     { int sp=0; for(int s=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s), has=g_magic_demo?g_known[s]:0; for(int b=0;b<BOOK_SETS&&!has;b++) if(g_bookused[b]&&book_has(b+1,q)) has=1; sp+=has; } n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58)); }
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
     { plat_mem_info_t mi_; plat_mem_get_info(&mi_); n=bot_kv(n,"cfree",(int)(((long)mi_.chip_size-(long)mi_.chip_used)/1024)); }
-    n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"more",g_msg_more); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
+    n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"more",g_msg_more); n=bot_kv(n,"cwait",g_talking?talk_waiting():0); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
     n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",gold_total()); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
     n=bot_put(n," askc="); n=bot_put(n,(g_await_input&&g_cv.askc[0])?g_cv.askc:"-"); n=bot_kv(n,"num",g_await_input&&g_cv.input_num);
     { int foes=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay)||!g_ahp[i]||!actor_hostile(i)) continue;
@@ -12517,7 +12641,7 @@ static void bot_report(const world_t*w)
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(p) n=bot_put(n,",");
         n=bot_num(n,a); n=bot_put(n,":"); n=bot_num(n,g_ahp[a]); n=bot_put(n,"/"); n=bot_num(n,g_amaxhp[a]);
         n=bot_put(n,":"); n=bot_num(n,g_amana[a]); n=bot_put(n,":"); n=bot_num(n,g_alevel[a]);
-        n=bot_put(n,":"); n=bot_num(n,g_poison[a]?1:0); }
+        n=bot_put(n,":"); n=bot_num(n,g_poison[a]?1:0); n=bot_put(n,":"); n=bot_num(n,g_aexp[a]); }
     n=bot_put(n," msg="); n=bot_put(n,g_msg);
     if(g_talking){ n=bot_put(n," conv="); n=bot_put(n,g_transcript); }
     if(g_await_input||g_casting||g_mantra){ n=bot_put(n," typed="); n=bot_put(n,g_inbuf); }
@@ -12530,6 +12654,8 @@ static void bot_dump_actors(const world_t*w)
         int n=bot_put(0,"@A"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",ax); n=bot_kv(n,"y",ay);
         n=bot_kv(n,"hp",g_ahp[i]); n=bot_kv(n,"max",g_amaxhp[i]); n=bot_kv(n,"tile",g_atile[i]);
         n=bot_kv(n,"hostile",actor_hostile(i)); n=bot_kv(n,"wt",i>1?npc_live_worktype(i):0); bot_flush(n); }
+    for(int i=2;i<U6_MAX_ACTORS;i++) if(g_atile[i]!=0xffff && (int)g_actz[i]!=g_cur_level){   /* the others, on other levels: "@B id x y z" */
+        int n=bot_put(0,"@B"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",g_actx[i]); n=bot_kv(n,"y",g_acty[i]); n=bot_kv(n,"z",g_actz[i]); bot_flush(n); }
     bot_flush(bot_put(0,"@A end"));
 }
 /* F3: on-map objects within 24 tiles + the party's pack  "@O idx obj frame x y qty q name" / "@I ..." / readied "@E ..." */
@@ -12542,7 +12668,7 @@ static void bot_dump_objects(const world_t*w)
         n=bot_kv(n,"x",o->x); n=bot_kv(n,"y",o->y); n=bot_kv(n,"qty",o->qty); n=bot_kv(n,"q",o->quality);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
     for(int i=0;i<g_ow.ninv;i++){ const invitem_t*it=&g_ow.inv[i]; char nm[40]; obj_name(it->tile,nm,sizeof nm);
-        int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality);
+        int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"fr",(int)it->tile-basetile(it->obj_n)); n=bot_kv(n,"own",actor_real(it->owner?it->owner:1)); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;   /* readied things "@E id slot obj" */
         for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]){ int n=bot_put(0,"@E"); n=bot_kv(n,"id",a); n=bot_kv(n,"slot",sl); n=bot_kv(n,"obj",g_aready[a][sl]); bot_flush(n); } }
@@ -12555,8 +12681,13 @@ static void bot_dump_pass(const world_t*w)
 {
     int span=(w->level==0)?U6_SURFACE_TILES:256; static uint8_t row[U6_SURFACE_TILES];
     plat_file f=plat_fcreate("BOTPASS.BIN"); if(f<0){ bot_flush(bot_put(0,"@P fail")); return; }
+    static uint16_t hx[512], hy[512]; int nh=0;                 /* what hazard_check would hit: objects and fields that damage */
+    for(int i=0;i<g_ow.nobjs && nh<512;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive && o->tile<2048 && (g_tflags1[o->tile]&8)){ hx[nh]=o->x; hy[nh]=o->y; nh++; } }
+    for(int i=0;i<g_nfields && nh<512;i++) if(g_tflags1[g_fields[i].tile]&8||g_fields[i].kind<3){ hx[nh]=(uint16_t)g_fields[i].x; hy[nh]=(uint16_t)g_fields[i].y; nh++; }
     for(int y=0;y<span;y++){
-        for(int x=0;x<span;x++) row[x]=(uint8_t)((world_is_passable(w,x,y)?1:0)|(tile_is_water(w,x,y)?8:0));
+        for(int x=0;x<span;x++){ int t=world_tile(w,x,y);
+            row[x]=(uint8_t)((world_is_passable(w,x,y)?1:0)|((t>=0&&t<2048&&(g_tflags1[t]&8))?4:0)|(tile_is_water(w,x,y)?8:0)); }
+        for(int k=0;k<nh;k++) if(hy[k]==y && hx[k]<span) row[hx[k]]|=4;
         plat_fwrite(f,row,span);
     }
     plat_fclose(f);
@@ -12917,7 +13048,7 @@ int main(int argc, char **argv)
             g_wobj[i].origin=WOBJ_PARENT_NONE;                     /* set when SPILLED (save locator) */
             g_wobj[i].alive=(g_wobj[i].parent==WOBJ_PARENT_NONE);  /* contained: off-map until spilled */
         }
-        objects_stack_order(nw); objworld_init(&g_ow,g_wobj,nw,gettable); g_ow.add_owner=1; g_ow.away=g_away; }
+        objects_stack_order(nw); objworld_init(&g_ow,g_wobj,nw,gettable); g_ow.stackable=g_stackable; g_ow.add_owner=1; g_ow.away=g_away; }
     magic_init();                          /* seed spellbook + reagents (magic_skills.md §4) */
 
     {   /* cursor + basetile + anim/lighting/save tail */
@@ -16477,7 +16608,7 @@ int main(int argc, char **argv)
     { int32_t bl=0; uint8_t*br=(uint8_t*)plat_load_file("BOT.REQ",1,&bl); if(br){ g_bot=1;      /* "n" = NatFeats output (Hatari --natfeats on) */
           if(bl>0 && br[0]=='n') g_bot_nf=bot_nf_id("NF_STDERR"); bot_report(&w); } }   /* bot mode: first report = ready */
     int prev_btn=0;
-    uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
+    uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim, last_tcur=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
     g_verb_pts=0;                                    /* a test hook's leftovers */
     for (;;) {                                       /* interactive; holds frame for capture */
         int mlx,mly,mbtn; read_mouse_logical(&mlx,&mly,&mbtn);
@@ -16485,6 +16616,7 @@ int main(int argc, char **argv)
         int click=(mbtn&1)&&!(prev_btn&1);           /* left-button press edge */
         int rclick=(mbtn&2)&&!(prev_btn&2);          /* right: sets or runs the default command */
         prev_btn=mbtn; g_mx=mlx; g_my=mly;
+        if (click && g_talking && talk_waiting()){ (void)talk_page_key(0x8f); click=0; draw_conversation(ink); present_frame(); }   /* a click is the wait's fourth key */
         int anim_redraw=0;                           /* set when the animation tick fires */
         int moved=0;                                 /* set on a clean walk (map-only present) */
 
@@ -16506,7 +16638,9 @@ int main(int argc, char **argv)
         if (key) {
             int a = key & 0xFF;
             g_travel_active=0;                       /* any key press cancels click-to-travel */
-            if (g_await_input && g_cv.askc[0]) {     /* a y/n-style prompt: ONE of its listed keys, no Enter (usecode_vm.md §6c) */
+            if (g_talking && talk_waiting()) {       /* a page wait takes the key (converse.md §6d) */
+                (void)talk_page_key(a); redraw=1;
+            } else if (g_await_input && g_cv.askc[0]) {     /* a y/n-style prompt: ONE of its listed keys, no Enter (usecode_vm.md §6c) */
                 if (a==0x1b) { end_talk(); redraw=1; }
                 else { char c=(char)((a>='A'&&a<='Z')?a+32:a); int ok=0;
                     for(int k=0;g_cv.askc[k];k++){ char l=g_cv.askc[k]; if(l>='A'&&l<='Z') l=(char)(l+32); if(l==c) ok=1; }
@@ -16551,14 +16685,21 @@ int main(int argc, char **argv)
                     else if (sc==0x4D) { spell_page_move(1); redraw=1; }
                 }
             } else {
-                if(g_msg_more && !g_talking){ g_msg_skip+=g_msg_page>0?g_msg_page:1; g_msg_more=0; redraw=1; key=0; }   /* the scroll's next page takes the key */
+                if(g_msg_more && !g_talking){ if(a==' '||a==0x0d||a==0x1b){ g_msg_skip+=g_msg_page>0?g_msg_page:1; g_msg_more=0; redraw=1; } key=0; a=0; }   /* the scroll's next page: Space, Enter or Esc; other keys do nothing (converse.md §6d) */
                 plat_input_t in = plat_input_map(key);
                 int dx=0,dy=0;
                 switch (in) {
                 case IN_UP: dy=-1; break; case IN_DOWN: dy=1; break;
                 case IN_LEFT: dx=-1; break; case IN_RIGHT: dx=1; break;
+                case IN_UPLEFT: dx=-1; dy=-1; break; case IN_UPRIGHT: dx=1; dy=-1; break;      /* the keypad's diagonals (DOS: Home PgUp End PgDn) */
+                case IN_DOWNLEFT: dx=-1; dy=1; break; case IN_DOWNRIGHT: dx=1; dy=1; break;
                 default: break;
                 }
+                if(dx||dy) a=0;                                     /* a keypad digit walks: it picks no solo member */
+                if((key&PLAT_KEY_ALT) && !g_pending_verb && !g_talking){   /* Alt+letter: that command becomes the default (DOS 0x5cad, as a right-click on its icon) */
+                    static const uint8_t altsc[]={0x1E,0x2E,0x14,0x26,0x22,0x20,0x32,0x16,0x13,0x30};   /* A C T L G D M U R B: the icons in order */
+                    int sc=(key>>8)&0xFF;
+                    for(int k=0;k<10;k++) if(sc==altsc[k]){ g_default_verb=cmd_verb(k); redraw=1; a=0; in=IN_NONE; dx=dy=0; key=0; break; } }
                 { int fk=(key>>8)&0xFF;                             /* the status display's keys (equipment.md §5) */
                   if(!g_bot && fk>=0x3B && fk<=0x42 && !g_pending_verb && !g_talking){ int m=fk-0x3B; if(m<g_nparty){ g_status_actor=g_party[m].actor; g_show_status=1; g_inv_open=0; g_show_inv=0; g_pan_focus=0; redraw=1; } a=0; in=IN_NONE; dx=dy=0; key=0; }
                   else if(fk==0x44 && !g_talking){ g_show_status=0; g_inv_open=0; g_show_inv=0; g_pan_focus=0; redraw=1; a=0; in=IN_NONE; dx=dy=0; }
@@ -16587,6 +16728,10 @@ int main(int argc, char **argv)
                             g_arrest_guard=-1; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
                     else if (g_pending_verb=='Q'){ g_pending_verb=0; g_msg[0]=0; redraw=1; if(a=='y'||a=='Y') break; }   /* Esc's question: any other key stays */
                     else if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                    else if ((g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M') && (dx||dy)){ int pv=g_pending_verb;   /* Get, Use, Move: a direction acts on the next tile at once (DOS: cursor range 0xFF, usecode_use.md) */
+                        if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
+                        g_pending_verb=0; (void)resolve_target(&w,pv,dx,dy); g_pending_verb=g_next_verb; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; if(!g_casting) g_show_inv=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if ((g_pending_verb=='T'||g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||(g_pending_verb=='C'&&!(g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change")))) && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the verbs' crosshair walks the map window (usecode_use.md) */
                         if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
@@ -16822,6 +16967,10 @@ int main(int argc, char **argv)
         if (g_view_has_anim && (uint32_t)(now - last_anim) >= 33){ last_anim = now; g_anim_ctr++;
             g_idle_allow=1; compose_map(&w); g_idle_allow=0;   /* anim tick: view fixed, only animation changed -> idle-incremental */
             draw_border_tiles(); draw_status(&w,ink); anim_redraw=1; }
+
+        /* a wait's cursor steps (converse.md §6d): only its cell is drawn and shown */
+        if (g_tcur_x>=0 && ((g_talking && (talk_waiting()||g_await_input)) || g_msg_more) && (uint32_t)(now - last_tcur) >= 33){
+            last_tcur = now; g_tcur_frame++; tcur_glyph(); if(!redraw) present_panel_rect(g_tcur_x,g_tcur_y,8,8); }
 
         /* colour cycling: rotate the CLUT — no recompose/present needed, the shifter shows the
          * new colours straight away (cheap; runs every scene, even while idle / mouse-moving). */

@@ -5,18 +5,16 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-07 (conversation page waits found; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
+> - Last updated: 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
 
 ## Found, not yet built
-| Difference | Where |
-|---|---|
-| A conversation's `*` (and the WAIT op) should wait for a key and start a new page, and a reply longer than the panel should page. u6e prints the `*` and cuts a reply after 8 lines. DOS's text routine has `*` in its token table (U6 and SE alike; found 2026-11-07 reading SE's) | usecode_vm.md, converse.md §6c |
+None. (The conversation page waits, found 2026-11-07, are built: converse.md §6d.)
 
-## A choice for the user: DOS's own faults we don't copy
-| Difference | Where | Why it's a question |
+## Fixed by the user's choice (2026-11-07): DOS's own faults we don't copy
+| Difference | Where | DOS's fault |
 |---|---|---|
 | Help or the Avatar's death aboard a vessel leaves the vessel behind | combat.md §3d | DOS leaves the Avatar's figure a ship in the castle |
-| The Covetous switch (quality 113) finds its doorway of quality 0 | usecode_use.md (Levers) | DOS has no such rule, so its data can't open that door. Copying DOS would block the way |
+| The Covetous switch (quality 113) finds its doorway of quality 0 | usecode_use.md (Levers) | DOS has no such rule, so its data can't open that door, and the way is blocked |
 
 ## Kept by the user's choice (2026-11-05): things added to the original
 | Addition | Where |
@@ -41,4 +39,11 @@ register is empty. What's left is listed by why it's left.
 - The mealtime lasts 3 s from `Mealtime!`, a member every 4 ticks; u6e now paces it so.
 - X-ray holds 5.48 s (100 ticks), then `Done`; u6e now holds it so, and potions print nothing else, as in DOS.
 - (2026-11-07, read in GAME.EXE while reading Savage Empire's) Conversation stat changes: DOS caps STR, DEX and INT at 30 and EXP at 9999, compared unsigned; u6e capped at 255 and floored at 0. Now as DOS (usecode_vm.md §6c).
+- (2026-11-07, found by the bot, seen in DOSBox-X) The eight walking directions: DOS walks the diagonals
+  (Home PgUp End PgDn; the keypad); u6e had only the arrows. A diagonal step between two blocked tiles is
+  refused. A big object blocks on all its cells, not only its anchor. Alt+letter (A C T L G D M U R B)
+  sets that command as the default. G)et, U)se and M)ove act at once on a direction key (their cursor doesn't
+  walk). A thing may not be pushed onto the leader's own tile (`Blocked`, seen in DOS), as ours already had.
+  A mouse alone (Sherry in solo mode) goes through mouse holes; u6e walked every leader as the Avatar.
+  All now as DOS (movement_turns.md §4, tileflag.md, usecode_use.md).
 - The cast effect, found while timing X-ray, is built: the rattle, the view XORed with 0x0D while two sweeps play, for the sixteen spells DOS gives it (magic_skills.md §12).

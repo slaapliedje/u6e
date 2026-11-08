@@ -37,7 +37,8 @@ int plat_input_raw(void)
     long k  = Bconin(2);
     int  sc = (int)((k >> 16) & 0xFF);         /* scancode */
     int  a  = (int)(k & 0xFF);                 /* ASCII    */
-    return (sc << 8) | a;
+    int  alt = (Kbshift(-1) & 0x08) ? PLAT_KEY_ALT : 0;   /* BIOS 11 Kbshift(-1): bit 3 = Alternate held */
+    return alt | (sc << 8) | a;
 }
 
 plat_input_t plat_input_map(int key)
@@ -46,7 +47,8 @@ plat_input_t plat_input_map(int key)
     int a  = key & 0xFF;                       /* ASCII    */
     if (!key) return IN_NONE;
 
-    /* Movement is the ARROW KEYS (authentic U6; the numeric keypad too — TODO).
+    /* Movement is the ARROW KEYS and the numeric keypad, eight ways as DOS has them (Up Down Left Right
+     * Home PgUp End PgDn there; the keypad digits and Clr/Home here: docs/rules/movement_turns.md).
      * NO WASD: that convention postdates U6 by ~15 years AND U6 is keyboard-driven
      * with single-letter COMMANDS — A)ttack, G)et, K)limb, L)ook, S)ave, U)se, ... —
      * so hijacking letters for movement would clobber the command keys. Letters are
@@ -56,6 +58,9 @@ plat_input_t plat_input_map(int key)
     case 0x50: return IN_DOWN;
     case 0x4B: return IN_LEFT;
     case 0x4D: return IN_RIGHT;
+    case 0x68: return IN_UP;   case 0x6E: return IN_DOWN;  case 0x6A: return IN_LEFT;  case 0x6C: return IN_RIGHT;   /* keypad 8 2 4 6 */
+    case 0x67: case 0x47: return IN_UPLEFT;  case 0x69: return IN_UPRIGHT;                                            /* keypad 7 (Clr/Home) 9 */
+    case 0x6D: return IN_DOWNLEFT;            case 0x6F: return IN_DOWNRIGHT;                                          /* keypad 1 3 */
     default: break;
     }
     switch (a) {

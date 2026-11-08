@@ -62,7 +62,7 @@ void cvm_game_init(cvm_game_t*g,uint32_t seed){
         g->str[i]=g->dex[i]=g->intel[i]=0; g->level[i]=1; g->exp[i]=0; }
     for(int i=0;i<1024;i++){ g->player_obj[i]=0; g->player_objq[i]=0; }
     for(int i=0;i<16;i++){ g->party_actor[i]=0; g->party_name[i][0]=0; } g->nparty=0;
-    g->obj_weight=0; g->per_ten=0; g->dialect=0; g->event=0; for(int i=0;i<256;i++) g->talk_flags_hi[i]=0;
+    g->obj_weight=0; g->per_ten=0; g->inv_count=0; g->inv_new=0; g->inv_del=0; g->inv_give=0; g->inv_room=0; g->inv_seen=0; g->inv_resurrect=0; g->dialect=0; g->event=0; for(int i=0;i<256;i++) g->talk_flags_hi[i]=0;
     g->party_room=1000; g->lost_body=0; g->resurrect_req=0;
     for(int i=0;i<64;i++) g->var[i]=0;
     g->rng = seed ? seed : 0x1234567u;
@@ -387,6 +387,7 @@ static void do_ctrl(cvm_t*vm){
           vm->decl_v=ARG(); vm->decl_t=(uint8_t)ARG(); break;
       case OP_ASSIGN:{ uint32_t v=ARG();   /* string assign (decl_t 0xb3) already stored in svar[]; */
           if(vm->db_lvar) db_set_integer(vm,vm->db_loc,vm->db_off,v);
+          else if(vm->decl_t!=0xb3 && vm->decl_v==CVM_VAR_QUESTF){ vm->g->on_quest=(uint8_t)(v?1:0); vm->g->mutations++; }   /* the quest flag is the game's (usecode_vm.md) */
           else if(vm->decl_t!=0xb3 && vm->decl_v<64) vm->g->var[vm->decl_v]=(int32_t)v; } break;  /* don't clobber the int var */
       case OP_SETNAME1: if(vm->g->dialect!=CVM_DIALECT_SE) break;     /* SE: $Y = "you" for 1, else as SETNAME (§6c) */
           if(ai<vm->nin && npc_num(vm,vm->in[ai].v)==1){ set_svar(vm,CVM_SVAR_YSTR,"you"); break; }

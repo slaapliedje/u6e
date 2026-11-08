@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""run.py <drive folder> <out dir> [segment ...]: the bot's walkthrough, segment by segment.
+"""run.py <drive folder> <out dir> [--from <checkpoint>] [segment | save:<checkpoint> ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
 collect what looked wrong. Segments: castle, bridge, britain, shop, sell, death, healer, help, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
@@ -26,7 +26,7 @@ def seg_bridge(p, kw):
     """the crank opens the drawbridge; walk across the moat"""
     if p.g.state['foes'] and p.foes(): p.fight()                        # the opening gargoyles keep up with a walking party (movement_turns.md §3b)
     p.nav.goto(303, 384, adj=True); x, y = p.nav.pos()
-    p.key('u'); st = p.at(VDIR[(303 - x, 384 - y)], 'crank')
+    st = p.act('u', VDIR[(303 - x, 384 - y)], 'crank')
     if 'drawbridge' not in st['msg']: p.issue('bridge', 'crank said %r' % st['msg'])
     p.nav.refresh(); p.nav.goto(307, 395)
 
@@ -156,7 +156,7 @@ def seg_death(p, kw):
     if (b['x'], b['y']) != spot: p.log('  the body lies at (%d,%d), not %s' % (b['x'], b['y'], spot))
     p.nav.refresh(); x, y = p.nav.pos()
     if abs(b['x'] - x) + abs(b['y'] - y) != 1: p.nav.goto(b['x'], b['y'], adj=True); x, y = p.nav.pos()
-    p.key('g'); st = p.at(VDIR[(b['x'] - x, b['y'] - y)], 'get the body')
+    st = p.act('g', VDIR[(b['x'] - x, b['y'] - y)], 'get the body')
     held = [r for r in p.g.objects()[1] if r['obj'] == 339 and r['q'] == 4]
     p.log('  get: %r, carried %d' % (st['msg'], len(held)))
     if not held: p.log('  the body stays: %r' % st['msg']) if 'too heavy' in st['msg'] else p.issue('death', 'could not pick up the body: %r' % st['msg'])
@@ -245,7 +245,7 @@ def use_way(p, o):
         if o['obj'] in (326, 308): p.walk(o['x'], o['y'])
         if p.g.state['L'] == lv and o['obj'] != 326:
             p.walk(o['x'], o['y'], adj=True); x, y = p.nav.pos()
-            p.key('u'); p.at(VDIR[(o['x'] - x, o['y'] - y)], 'use %d' % o['obj'])
+            p.act('u', VDIR[(o['x'] - x, o['y'] - y)], 'use %d' % o['obj'])
     except Exception as e: p.log('  way %d at (%d,%d): %s' % (o['obj'], o['x'], o['y'], e))
     return p.g.state['L'] != lv
 
@@ -291,19 +291,39 @@ def seg_cave(p, kw):
     if st['L'] != 0: p.issue('cave', 'could not get back to the surface from L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
     else: p.log('  back on the surface at (%d,%d)' % (st['X'], st['Y']))
 
-ORB = {3: (435, 395), 8: (307, 352), 19: (923, 876)}     # moongates.md §3: position -> destination (surface)
+ORB = {1: (899, 499), 2: (935, 262), 3: (435, 395), 4: (503, 358), 5: (147, 883), 6: (919, 934), 8: (307, 352),
+       10: (159, 942), 11: (739, 699), 15: (227, 131), 19: (923, 876), 20: (295, 38), 21: (75, 507), 22: (327, 822),
+       16: (23, 22), 23: (387, 787), 24: (831, 166), 25: (667, 67)}   # moongates.md §3: position -> destination
+ORB_LEVEL = {16: 1}                                    # the destinations below the surface (the gargoyle ones come later)
 
 def orb_trip(p, pos, shot=False, quiet=False):
     """U)se the orb, walk its crosshair to the box tile of position pos, Enter, step into the red gate;
     True if the party arrived at that position's destination"""
-    dx, dy = pos % 5 - 3, pos // 5 - 2
-    x, y = p.nav.pos(); p.nav.refresh()
-    if p.nav.cost((x + dx) % p.nav.span, (y + dy) % p.nav.span) is None:     # the gate's tile must be open:
-        for cx, cy in [(x + a, y + b) for a in range(-6, 7) for b in range(-6, 7)]:   # find a spot where it is
-            if p.nav.cost(cx % p.nav.span, cy % p.nav.span) is not None and p.nav.cost((cx + dx) % p.nav.span, (cy + dy) % p.nav.span) is not None:
-                try: p.walk(cx, cy); break
-                except Exception: continue
-        x, y = p.nav.pos()
+    # the box is 6 wide (dx -3..+2, dy -2..+2) and numbered (3+dx)+5(2+dy): some positions have two tiles
+    offs = [(a, b) for b in range(-2, 3) for a in range(-3, 3) if (3 + a) + 5 * (2 + b) == pos]
+    p.nav.refresh(); S = p.nav.span
+    taken = {(a_['x'], a_['y']) for a_ in p.g.actors() if a_['id'] != 1}   # the Orb fails on a tile someone stands on
+    def walkable_to(sx, sy):                            # an offset whose gate tile the party can walk to from (sx,sy)
+        for a, b in offs:
+            g_ = ((sx + a) % S, (sy + b) % S)
+            if g_ in taken: continue
+            if p.nav.cost(*g_) is not None and p.nav.route(sx, sy, {g_}, limit=4000) is not None: return a, b
+        return None
+    x, y = p.nav.pos(); o = walkable_to(x, y)
+    if o is None and len(offs) == 1:                    # step toward the one gate tile: the followers fall in behind
+        a, b = offs[0]; d = (0, -1) if b < 0 else (0, 1) if b > 0 else ((1, 0) if a > 0 else (-1, 0))
+        for _ in range(3):
+            if p.nav.cost((x + d[0]) % S, (y + d[1]) % S) is None: break
+            p.key(VDIR[d], 'make room'); x, y = p.nav.pos()
+        taken = {(a_['x'], a_['y']) for a_ in p.g.actors() if a_['id'] != 1}; o = walkable_to(x, y)
+    if o is None:                                       # stand where a gate can be reached
+        for cx, cy in sorted([(x + a, y + b) for a in range(-6, 7) for b in range(-6, 7)], key=lambda t: abs(t[0] - x) + abs(t[1] - y)):
+            if p.nav.cost(cx % S, cy % S) is None or walkable_to(cx % S, cy % S) is None: continue
+            try: p.walk(cx % S, cy % S)
+            except Exception: continue
+            x, y = p.nav.pos(); o = walkable_to(x, y)
+            if o: break
+    dx, dy = o if o else offs[0]
     st = p.use_pack(87)
     if st is None or st['verb'] != 'O': p.issue('orb', 'U)se the orb: verb=%r msg=%r' % (st and st['verb'], st and st['msg'])); return False
     for _ in range(abs(dx)): p.key('right' if dx > 0 else 'left')
@@ -323,9 +343,36 @@ def orb_trip(p, pos, shot=False, quiet=False):
             p.key('space')
         if (p.g.state['X'], p.g.state['Y']) == (tx, ty): break
     st = p.g.state
-    if (st['L'], st['X'], st['Y']) != (0, tx, ty):
+    if (st['L'], st['X'], st['Y']) != (ORB_LEVEL.get(pos, 0), tx, ty):
         p.issue('orb', 'position %d: arrived at L%d (%d,%d), expected (%d,%d)' % (pos, st['L'], st['X'], st['Y'], tx, ty)); return False
     p.log('  orb position %d -> (%d,%d)' % (pos, tx, ty)); return True
+
+def orb_go(p, pos):
+    """the Orb to position pos, stepping aside when someone stands on the gate's tile; True if there"""
+    tx, ty = ORB[pos]; st = p.g.state
+    if st['L'] == ORB_LEVEL.get(pos, 0) and abs(st['X'] - tx) <= 12 and abs(st['Y'] - ty) <= 12: return True   # already there
+    for attempt in range(5):
+        if orb_trip(p, pos, quiet=attempt < 4): return True
+        if 'Failed' not in p.g.state['msg']: break
+        p.idle(); p.nav.refresh()
+        spot = p.open_spot(6 + 4 * attempt)                               # somewhere roomier, farther each time (out of a shop)
+        if spot:
+            try: p.nav.goto(*spot, max_steps=400)
+            except NavError: pass
+    p.issue('orb', 'no Orb trip to position %d from L%d (%d,%d): %r' % (pos, p.g.state['L'], p.g.state['X'], p.g.state['Y'], p.g.state['msg'][-60:]))
+    return False
+
+def carried(p, obj_n):
+    return any(r['obj'] == obj_n for r in p.g.objects()[1])
+
+def get_at(p, x, y, obj_n, tries=3):
+    """walk beside (x,y) and G)et until obj_n is in the pack (what lies on top comes first); True if got"""
+    for _ in range(tries):
+        p.walk(x, y, adj=True); px, py = p.nav.pos()
+        st = p.act('g', VDIR[(x - px, y - py)], 'get at (%d,%d)' % (x, y))
+        p.log('  get at (%d,%d): %r' % (x, y, st['msg'][-120:]))
+        if carried(p, obj_n): return True
+    p.issue('get', 'no obj %d from (%d,%d): %r' % (obj_n, x, y, p.g.state['msg'][-200:])); return False
 
 def seg_orb(p, kw):
     """the Orb of the Moons: to position 3, then 19, then home to the throne room (8); first a camp at
@@ -402,6 +449,390 @@ def seg_shrine(p, kw):
     p.log('  shrine: levels %s -> %s' % (lv0, lv1))
     if 'gained a level' in text and lv1.get(1) != lv0.get(1) + 1: p.issue('shrine', 'the shrine said a level was gained; Avatar %s -> %s' % (lv0.get(1), lv1.get(1)))
 
+def move_off(p, x, y):
+    """M)ove what lies on top at (x,y) to a neighbouring tile (taking it would be theft); the message"""
+    p.walk(x, y, adj=True); px, py = p.nav.pos(); d = (x - px, y - py)
+    for to in [d] + [v for v in DIRV.values() if v != d and v != (-d[0], -d[1])]:
+        p.act('m', VDIR[d], 'move at (%d,%d)' % (x, y)); st = p.key(VDIR[to], 'to')
+        p.log('  move off (%d,%d) %s: %r' % (x, y, VDIR[to], st['msg'][-100:]))
+        if 'Blocked' not in st['msg'] and 'not possible' not in st['msg'].lower(): return st['msg']
+        p.idle()
+    return p.g.state['msg']
+
+def seg_justice(p, kw):
+    """Yew: the rune of Justice lies under a potted plant in the Slaughtered Lamb (bot_walkthrough.md §3);
+    the plant is moved aside, not taken"""
+    if not orb_go(p, 15): return
+    move_off(p, 237, 156)
+    get_at(p, 237, 156, 245)
+    if 'Stealing' in p.g.state['msg']: p.issue('justice', 'the rune counted as theft')
+
+def seg_honor(p, kw):
+    """Trinsic: the rune of Honor on its pedestal; Whitsaber first (he lets it be taken)"""
+    if not orb_go(p, 23): return
+    p.talk_to(76, ['rune'], 'Whitsaber')
+    get_at(p, 411, 739, 247)
+
+def use_at(p, x, y):
+    """walk beside (x,y), U)se what is there; the state after"""
+    p.walk(x, y, adj=True); px, py = p.nav.pos()
+    return p.act('u', VDIR[(x - px, y - py)], 'use at (%d,%d)' % (x, y))
+
+def got_rune(p, rune, who):
+    if carried(p, rune): p.log('  rune %d: carried' % rune); return True
+    p.issue('rune', '%s: no rune %d' % (who, rune)); return False
+
+def seg_spirituality(p, kw):
+    """Skara Brae: Marney's poem and basket, then her hope chest holds the rune of Spirituality"""
+    if not orb_go(p, 21): return
+    p.talk_to(89, ['marn', 'poem', 'bask'], 'Marney')
+    st = use_at(p, 81, 493); p.log('  chest: %r' % st['msg'][-120:])
+    get_at(p, 81, 493, 248, tries=5)
+
+def seg_humility(p, kw):
+    """New Magincia: Antonio asks for the humblest; Conor"""
+    if not orb_go(p, 11): return
+    p.talk_to(92, ['humb', 'y', 'conor'], 'Antonio', yes=True)
+    got_rune(p, 249, 'Antonio')
+
+def seg_sacrifice(p, kw):
+    """the panpipes: a yew log from Ben (Yew), a board from Aaron (by Minoc), panpipes from Julia,
+    the tune from Gwenno; Selganor's guild takes the player and gives the rune of Sacrifice"""
+    if not orb_go(p, 15): return
+    p.talk_to(54, ['log', 'y', '1', 'y'], 'Ben', yes=True)
+    if not orb_go(p, 25): return
+    p.talk_to(69, ['log', 'y'], 'Aaron', yes=True)
+    p.talk_to(67, ['pipe', 'boar', 'y'], 'Julia', yes=True)
+    p.talk_to(66, ['ston'], 'Gwenno')
+    p.talk_to(64, ['rune', 'join', 'pipe', 'y', '6789878767653'], 'Selganor', yes=True)
+    got_rune(p, 246, 'Selganor')
+
+def give_to_avatar(p, obj_n, others=False):
+    """M)ove a carried thing to the Avatar: M, M through the pack to it, Enter, then the crosshair on the Avatar
+    (it starts on the leader) and Enter (usecode_use.md: "To " a party member). others: the first row someone
+    else holds (the pack steps in row order)"""
+    inv = p.g.objects()[1]
+    rows = [k for k, r in enumerate(inv) if r['obj'] == obj_n and (not others or r.get('own', 1) != 1)]
+    if not rows: return False
+    name = inv[rows[0]].get('name', '')
+    p.idle(); p.key('m', 'move')
+    for k in range(len(inv) + 2):
+        st = p.key('m', 'the pack')
+        if st['msg'].startswith('Move the ' + name) and (not others or k >= rows[0]): break
+    else: p.idle(); return False
+    st = p.key('ret', 'this one'); st = p.key('ret', 'to the Avatar'); p.log('  %s to the Avatar: %r' % (name, st['msg'][-50:]))
+    p.idle(); return True
+
+def seg_valor(p, kw):
+    """cheese from the castle kitchen for Sherry the mouse (9), who joins; Jhelom: the rune of Valor lies
+    behind the mouse hole (213) at (156,844) in the Sword and Keg; Sherry alone through it"""
+    if not orb_go(p, 8): return
+    if not carried(p, 132): get_at(p, 320, 351, 132)
+    if not carried(p, 63):                                             # lockpicks for Moonglow's tavern door: a chest by the Avatar's book
+        st = use_at(p, 298, 367); p.log('  chest: %r' % st['msg'][-120:]); get_at(p, 298, 367, 63, tries=4)
+    p.talk_to(9, ['chee', 'y', 'y', 'join', 'y'], 'Sherry', yes=True)
+    ids = [m['id'] for m in p.g.state['party']]
+    if 9 not in ids: p.issue('valor', 'Sherry did not join (party %s)' % ids); return
+    if not orb_go(p, 5): return
+    for _ in range(4):                                                 # the party two steps short, so Sherry can come by
+        p.walk(156, 846)
+        if p.nav.pos() == (156, 846): break
+    st = p.key(str(ids.index(9) + 1), 'solo Sherry'); p.log('  solo: %r at (%d,%d)' % (st['msg'][-60:], st['X'], st['Y']))
+    p.nav.refresh()
+    for _ in range(4):
+        p.walk(156, 844, adj=True); px, py = p.nav.pos(); d = (156 - px, 844 - py)
+        if d in DIRV.values(): break
+    else: p.issue('valor', 'Sherry could not stand beside the mouse hole: at (%d,%d)' % (px, py)); p.key('0'); return
+    st = p.key(VDIR[d], 'into the hole')
+    if (st['X'], st['Y']) != (156, 844): p.issue('valor', 'Sherry did not enter the hole: at (%d,%d) %r' % (st['X'], st['Y'], st['msg'][-80:]))
+    st = p.key('up', 'into the nook'); p.log('  Sherry at (%d,%d)' % (st['X'], st['Y']))
+    st = p.act('g', 'right', 'the rune'); p.log('  get: %r' % st['msg'][-80:])
+    st = p.act('g', 'up', 'the ring'); p.log('  get: %r' % st['msg'][-80:])      # the invisibility ring beside it, for the shrines
+    p.key('down'); p.key(VDIR[(-d[0], -d[1])])
+    st = p.key('0', 'party mode'); p.log('  party: %r at (%d,%d)' % (st['msg'][-60:], st['X'], st['Y']))
+    got_rune(p, 244, 'Sherry')
+    give_to_avatar(p, 244); give_to_avatar(p, 258)                      # a mouse dies easily: the Avatar keeps them
+
+_LADDERS = None
+def ladders():
+    """every ladder and hole in the new-game data: [(obj, frame, x, y, z)] (build/objfind; map_levels.md)"""
+    global _LADDERS
+    if _LADDERS is None:
+        import subprocess
+        exe = os.path.join(ROOT, 'build', 'objfind')
+        if not os.path.exists(exe): subprocess.run(['make', '-C', ROOT, 'objfind'], check=True, capture_output=True)
+        out = subprocess.run([exe, REF, '305', '106', '308'], check=True, capture_output=True, text=True).stdout
+        _LADDERS = [tuple(int(v) for v in (f[0], f[1], f[4], f[5], f[6])) for f in (l.split() for l in out.splitlines()) if f[7] == '-1']
+    return _LADDERS
+
+def reach_set(p):
+    """the tiles of this level the party can walk to from here (closed doors count as open)"""
+    p.nav.refresh(); x, y = p.nav.pos(); S = p.nav.span
+    seen, q = {(x, y)}, [(x, y)]
+    for cx, cy in q:
+        for dx, dy in DIRV.values():
+            t = ((cx + dx) % S, (cy + dy) % S)
+            if t not in seen and p.nav.cost(*t) is not None: seen.add(t); q.append(t)
+    return seen
+
+def beside(reach, x, y):
+    return any(((x + dx), (y + dy)) in reach for dx, dy in [(0, 0)] + list(DIRV.values()))
+
+def descend_to(p, tx, ty, tz, tried=None):
+    """from a dungeon level, take ladders down until (tx,ty) on level tz can be walked to; ladders nearest
+    the target first, climbing back to try the next when a level below leads nowhere. True if there"""
+    tried = set() if tried is None else tried
+    L = p.g.state['L']; reach = reach_set(p)
+    if L == tz: return beside(reach, tx, ty)
+    downs = [(o, fr, x, y) for o, fr, x, y, z in ladders() if z == L and ((o in (305, 106) and fr == 0) or o == 308)]
+    downs = sorted((d for d in downs if beside(reach, d[2], d[3]) and (d[2], d[3], L) not in tried), key=lambda d: abs(d[2] - tx) + abs(d[3] - ty))
+    for o, fr, x, y in downs[:6]:
+        tried.add((x, y, L))
+        p.log('  L%d: down at (%d,%d) toward (%d,%d,%d)' % (L, x, y, tx, ty, tz))
+        if not use_way(p, {'obj': o, 'x': x, 'y': y}) or p.g.state['L'] != L + 1: continue
+        if descend_to(p, tx, ty, tz, tried): return True
+        if p.g.state['L'] == L + 1:                                   # back up the way we came
+            up = [u for u in ladders() if u[4] == L + 1 and u[0] in (305, 106) and u[1] != 0]
+            up = sorted(up, key=lambda u: abs(u[2] - x) + abs(u[3] - y))
+            if not up or not use_way(p, {'obj': up[0][0], 'x': up[0][2], 'y': up[0][3]}): return False
+    return False
+
+def unlock_with_key(p, x, y):
+    """U)se each carried key on the locked door beside the leader at (x,y) until one fits (a lock's key is
+    the key with its quality, usecode_use.md); True when unlocked"""
+    px, py = p.nav.pos(); d = VDIR[(x - px, y - py)]
+    nkeys = sum(1 for r in p.g.objects()[1] if r['obj'] == 64)
+    for k in range(nkeys):
+        p.key('u'); seen = 0; st = p.g.state
+        for _ in range(len(p.g.objects()[1]) + 4):                    # the pack prompt: the k-th key
+            st = p.key('u')
+            if st['inv'] and st['msg'].startswith('Use the key'):
+                seen += 1
+                if seen > k: break
+        st = p.key('ret', 'the key'); st = p.at(d, 'the key on the door') if st['verb'] else st
+        p.log('  key %d on (%d,%d): %r' % (k, x, y, st['msg'][-60:]))
+        if 'unlocked' in st['msg']: return True
+        p.idle()
+    return False
+
+def blue_bottle(p):
+    """into the Moonglow catacombs: the Blue Bottle's locked door (Shamino's lockpick), the milk bottle onto the
+    table, L)ook finds the secret door, the east barrel onto the ladder, the middle one east, a plant into the
+    opened west barrel, the ladder's barrel into the plant's place, then U)se the ladder at (942,521) from the
+    corner (bot_walkthrough.md §3). The Avatar alone, so no one stands in the way"""
+    p.walk(938, 525)
+    for _ in range(8): p.key('space', 'the party gathers')               # party mode later needs everyone within 8 tiles
+    ids = [m['id'] for m in p.g.state['party']]                          # a pick breaks on d30 < (45-dex)/2: Shamino's hands
+    who = ids.index(3) + 1 if 3 in ids else 1
+    st = p.key(str(who), 'solo'); p.log('  solo %d: %r' % (who, st['msg'][-40:])); p.nav.refresh()
+    p.walk(938, 525)
+    for _ in range(5):                                                   # a pick may break
+        st = p.use_pack(63); st = p.at('right', 'the lockpick') if st and st['verb'] else st
+        p.log('  lockpick: %r' % (st and st['msg'][-60:]))
+        if st is None or 'unlocked' in st['msg'] or 'opened' in st['msg']: break
+    st = p.act('u', 'right', 'the door'); p.log('  door: %r' % st['msg'][-60:])
+    st = p.key('0', 'party mode')                                        # (in solo the roster shows the soloist first: back to the party, then 1)
+    if 'Party mode' not in st['msg']: p.issue('honesty', 'back to the party: %r' % st['msg'][-60:])
+    st = p.key('1', 'the Avatar alone')
+    p.nav.refresh(); p.walk(941, 525)                                    # the room is too small for a party
+    steps = [('move', 'up', 'right'),                                    # the milk bottle onto the table
+             ('key', 'up'), ('look', 'up'), ('key', 'up'),               # find the secret door, stand in it (941,523)
+             ('move', 'upright', 'up'),                                  # the east barrel onto the ladder's tile
+             ('move', 'up', 'right'),                                    # the middle barrel east, into its place
+             ('key', 'up'),                                              # (941,522)
+             ('use', 'left'),                                            # open the west barrel
+             ('move', 'up', 'downleft'),                                 # the plant north of us into it
+             ('move', 'upright', 'left')]                                # the barrel off the ladder, where the plant was
+    for s_ in steps:                                                     # (as done in DOS U6, 2026-11-07)
+        if s_[0] == 'key': st = p.key(s_[1])
+        elif s_[0] == 'look': p.key('l'); st = p.at(s_[1], 'look')
+        elif s_[0] == 'use': st = p.act('u', s_[1])
+        else: p.act('m', s_[1]); st = p.key(s_[2], 'to')
+        p.log('  %s: (%d,%d) %r' % ('/'.join(s_), st['X'], st['Y'], st['msg'][-60:]))
+    if (p.g.state['X'], p.g.state['Y']) != (941, 522): p.issue('honesty', 'the Blue Bottle way stopped at (%d,%d)' % (p.g.state['X'], p.g.state['Y'])); p.key('0'); return False
+    st = p.key('0', 'party mode')
+    if 'Party mode' not in st['msg']: p.issue('honesty', 'party mode at the ladder: %r' % st['msg'][-60:])
+    for _ in range(6): p.key('space', 'the party comes')                 # they walk in behind
+    st = p.act('u', 'upright', 'the ladder'); p.log('  ladder: L%d (%d,%d) %r' % (st['L'], st['X'], st['Y'], st['msg'][-60:]))
+    if st['L'] != 1: p.issue('honesty', 'the catacombs ladder did not lead down: %r' % st['msg'][-80:]); return False
+    p.nav.refresh(); return True
+
+def seg_honesty(p, kw):
+    """Moonglow: Manrel's crypt key; the catacombs (the Blue Bottle's back room) down to Beyvin's body on
+    level 2 at (219,147), which holds the rune of Honesty"""
+    if not orb_go(p, 1): return
+    p.talk_to(40, ['beyv', 'y', 'y'], 'Manrel', yes=True)
+    if not carried(p, 64): p.issue('honesty', 'Manrel gave no key')
+    if not blue_bottle(p): return
+    if not descend_to(p, 219, 151, 2): p.issue('honesty', 'no way down to the crypt door (219,150) level 2 from L%d (%d,%d)' % (p.g.state['L'], p.g.state['X'], p.g.state['Y'])); return
+    p.walk(219, 151)
+    if not unlock_with_key(p, 219, 150): p.issue('honesty', "the crypt door would not unlock with any key: %r" % p.g.state['msg'][-80:]); return
+    st = p.act('u', 'up', 'open the crypt'); p.log('  crypt: %r' % st['msg'][-60:]); p.nav.refresh()
+    p.walk(219, 147, adj=True); px, py = p.nav.pos()
+    st = p.use_pack(90); p.log('  torch: %r' % (st and st['msg'][-60:]))      # the crypt is dark: L)ook finds nothing in the dark
+    p.key('l', 'look'); st = p.at(VDIR[(219 - px, 147 - py)], 'search the body'); p.log('  body: %r' % st['msg'][-140:])
+    get_at(p, 219, 147, 242, tries=6)
+    got_rune(p, 242, 'Beyvin')
+
+# the eight shrines (usecode_use.md runes; moongates.md §3): virtue -> the field's tile (the moonstone lies under
+# it), its level, the Orb position, the mantra. The rune is 242 + virtue; the field (51) has quality = virtue.
+SHRINES = [(0, (935, 263), 0, 2, 'ahm'), (1, (503, 359), 0, 4, 'mu'), (2, (159, 943), 0, 10, 'ra'), (3, (295, 39), 0, 20, 'beh'),
+           (4, (831, 167), 0, 24, 'cah'), (5, (327, 823), 0, 22, 'summ'), (6, (23, 23), 1, 16, 'om'), (7, (919, 935), 0, 6, 'lum')]
+
+def ready(p, obj_n, member=1):
+    """E)quip: E steps through the pack until it names the thing, a digit readies it on that member (equipment.md)"""
+    names = [r.get('name', '') for r in p.g.objects()[1] if r['obj'] == obj_n]
+    if not names: return False
+    p.idle(); st = p.key('e', 'equip')
+    for _ in range(len(p.g.objects()[1]) + 2):
+        if names[0] and names[0] in st['msg']: break
+        st = p.key('e', 'next')
+    n0 = len(names)
+    st = p.key(str(member), 'ready'); p.idle(); p.log('  ready %s on %d: %r' % (names[0], member, st['msg'][-60:]))
+    return sum(1 for r in p.g.objects()[1] if r['obj'] == obj_n) < n0
+
+def seg_shrines(p, kw):
+    """every shrine: the Orb there, a step to the force field, the mantra on the rune, the moonstone, and away by
+    the next Orb trip before the guardians close in (the Avatar wears the invisibility ring from the mouse nook;
+    the walkthroughs: the guardians need not be fought)"""
+    ring = carried(p, 258) and ready(p, 258)
+    p.log('  invisibility ring readied: %s' % ring)
+    for v, (fx, fy), lv, pos, mantra in SHRINES:
+        def have(): return any(r['obj'] == 73 and r.get('fr', -1) == v for r in p.g.objects()[1])
+        for attempt in range(3):
+            if have(): break
+            p.log('  shrine %d: orb %d, field (%d,%d) L%d (try %d)' % (v, pos, fx, fy, lv, attempt + 1))
+            if not orb_go(p, pos): continue
+            def field(): return [o for o in p.g.objects()[0] if o['obj'] == 51 and (o['x'], o['y']) == (fx, fy)]
+            try:                                         # the field is a step from the gate: in, the mantra, the stone, out
+                if field():
+                    p.nav.goto(fx, fy, adj=True, max_steps=40)
+                    m = use_rune(p, 242 + v, mantra); p.log('  rune %d %r: %r' % (242 + v, mantra, m))
+                    if field(): p.issue('shrines', 'shrine %d: the field stayed after %r: %r' % (v, mantra, m))
+                if not field(): get_at(p, fx, fy, 73, tries=2)
+            except (NavError, Danger) as e: p.log('  shrine %d: %s' % (v, e))
+            if have(): break                             # leave the guardians be; the next Orb trip takes us away
+            if p.foes(): p.fight(); p.heal_up()
+            p.cure_up(); p.rest_if_hurt(0.7)
+    have = sorted(r.get('fr', -1) for r in p.g.objects()[1] if r['obj'] == 73)
+    p.log('  moonstones carried: %s' % have)
+    if len(have) != 8: p.issue('shrines', 'moonstones carried: %s' % have)
+
+def wait_until(p, h0, h1, what):
+    """pass turns (fighting what comes) until the clock is between h0 and h1 o'clock"""
+    for _ in range(1500):
+        if h0 <= p.g.state['min'] // 60 < h1: return True
+        if p.g.state['foes'] and p.foes(): p.fight(); p.heal_up(); continue
+        p.key('space', what)
+    return False
+
+def go_to_actor(p, aid, name):
+    """down (or across) to actor aid's level and beside them; True if near"""
+    w = p.g.where(aid)
+    if not w: p.issue('actor', '%s (%d) is nowhere' % (name, aid)); return False
+    x, y, z = w; p.log('  %s at (%d,%d) L%d' % (name, x, y, z))
+    if z != p.g.state['L'] and not descend_to(p, x, y, z):
+        p.issue('actor', 'no way to %s at (%d,%d) L%d from L%d (%d,%d)' % (name, x, y, z, p.g.state['L'], p.g.state['X'], p.g.state['Y'])); return False
+    return p.approach(aid) is not None
+
+def seg_gargish(p, kw):
+    """Hythloth (the cave at (948,930) by the Shrine of Humility) down to Captain John on level 4: his scroll
+    teaches Gargish; on to the way out into the Gargoyle lands (220,219) level 5, where Beh Lem waits at noon"""
+    if not orb_go(p, 6): return
+    if carried(p, 258): ready(p, 258)                                    # unseen, the Avatar walks past what lives in Hythloth
+    p.sneak = not carried(p, 258)
+    p.walk(948, 930)
+    if p.g.state['L'] != 1: p.issue('gargish', 'the Hythloth cave did not lead down: L%d (%d,%d)' % (p.g.state['L'], p.g.state['X'], p.g.state['Y'])); return
+    if not go_to_actor(p, 183, 'Captain John'): return
+    _, inv0 = p.g.objects(); before = {r['obj'] for r in inv0}
+    p.talk_to(183, ['lang', 'y', 'y'], 'Captain John', yes=True)
+    _, inv1 = p.g.objects(); new = [r for r in inv1 if r['obj'] not in before]
+    p.log('  from John: %s' % [(r['obj'], r.get('name')) for r in new])
+    for r in new: st = p.use_pack(r['obj']); p.log('  use %s: %r' % (r.get('name'), st and st['msg'][-120:]))
+    if not descend_to(p, 220, 219, 5): p.issue('gargish', 'no way down to the Gargoyle lands (220,219) L5'); return
+    p.walk(220, 219, near=2)
+    wait_until(p, 12, 14, 'wait for noon')
+    if not go_to_actor(p, 164, 'Beh Lem'): return
+    p.talk_to(164, ['join', 'y'], 'Beh Lem', yes=True)
+    p.sneak = False
+    if 164 not in [m['id'] for m in p.g.state['party']]: p.issue('gargish', 'Beh Lem did not join')
+
+def count(p, obj_n, own=None):
+    """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
+    return sum(r['qty'] or 1 for r in p.g.objects()[1] if r['obj'] == obj_n and (own is None or r.get('own', 1) == own))
+
+def restock(p, n=6):
+    """Rudyom in Cove (by the Compassion shrine) sells reagents in shop hours: ginseng, spider silk and garlic
+    for Heal and Dispel Magic. Each member pays from their own purse, so each is asked in turn"""
+    if not orb_go(p, 4): return
+    p.rest_if_hurt(0.8)
+    wait_until(p, 9, 16, 'shop hours')
+    if not go_to_actor(p, 128, 'Rudyom'): return
+    before = (count(p, 68), count(p, 71), count(p, 67))
+    for item, obj in ((3, 68), (5, 71), (2, 67)):                          # ginseng, spider silk, garlic (his list)
+        for m in range(1, len(p.g.state['party']) + 1):                    # whoever can pay
+            c0 = count(p, obj)
+            p.talk_to(128, ['buy', str(m), str(item), str(n)], 'Rudyom')
+            if count(p, obj) > c0: break
+    for obj in (68, 71, 67):                                              # the caster's own: they go to the Avatar
+        for _ in range(4):
+            if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
+    p.log('  restock: ginseng/silk/garlic %s -> %s, gold %s' % (before, (count(p, 68), count(p, 71), count(p, 67)), p.g.state.get('gold')))
+
+KEEP = {57, 60, 62, 63, 64, 73, 87, 88, 90, 128, 129, 130, 131, 132, 133, 209, 210, 258, 265, 275, 394, 395, 396} | set(range(65, 73)) | set(range(242, 250))
+def drop_junk(p):
+    """leave behind what the fights brought (spare weapons and armour, mugs, lutes): the party's load has a
+    limit and a moonstone must still fit. D)rop: D, D through the pack to it, Enter, Enter (at the feet)"""
+    if p.g.state['L'] != 0: return
+    for _ in range(40):
+        inv = p.g.objects()[1]
+        junk = [r for r in inv if r['obj'] not in KEEP and (r['obj'] < 57 or r['obj'] in (89, 114, 115, 116, 117, 118, 119, 120, 153, 158, 188, 191))]
+        if not junk: return
+        name = junk[0].get('name', '')
+        p.idle(); st = p.key('d', 'drop')
+        for _ in range(len(inv) + 2):
+            st = p.key('d', 'next')
+            if ('Drop-' + name) in st['msg']: break
+        else: p.idle(); return
+        p.key('ret'); st = p.key('ret', 'at the feet')
+        if 'How many' in st['msg'] or 'Location' in st['msg']: st = p.key('ret', 'all of it')
+        p.log('  drop %s: %r' % (name, st['msg'][-50:])); p.idle()
+        if any(r['obj'] == junk[0]['obj'] for r in p.g.objects()[1]) and len([r for r in p.g.objects()[1] if r['obj'] == junk[0]['obj']]) >= len([r for r in inv if r['obj'] == junk[0]['obj']]):
+            p.idle(); return
+
+def lb_heal(p):
+    """Lord British heals the whole party when asked ("any time thou dost need healing, do thou but ask me")"""
+    if not orb_go(p, 8): return
+    if p.foes(): p.fight()                                              # the throne room's egg (eggs.md)
+    p.talk_to(5, ['heal'], 'Lord British')
+    p.log('  Lord British: party %s' % ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in p.g.state['party']))
+
+def equip_party(p):
+    """ready what the pack holds to fight with (after the Avatar's death his readied things are in the pack,
+    combat.md §3d; a fallen companion's stay on the body): each weapon or armour, and the invisibility ring,
+    on the first member who takes it"""
+    n = len(p.g.state['party'])
+    for _ in range(30):
+        inv = p.g.objects()[1]
+        gear = [r for r in inv if (r['obj'] < 57 and r['obj'] not in (33, 56, 55)) or r['obj'] == 258]   # not slings and ammunition
+        gear = [r for r in gear if (r['obj'], r.get('name')) not in getattr(p, 'unfit', set())]
+        if not gear: return
+        r = gear[0]; got = False
+        for m in range(1, n + 1):
+            if ready(p, r['obj'], m): got = True; break
+            if sum(1 for q in p.g.objects()[1] if q['obj'] == r['obj']) < sum(1 for q in inv if q['obj'] == r['obj']): got = True; break
+        if not got: p.unfit = getattr(p, 'unfit', set()) | {(r['obj'], r.get('name'))}
+
+def keep_up(p):
+    """between chapters: rest off wounds where it may, buy reagents when Heal is about to run dry, and
+    go to Lord British when the party is hurt and Heal can't mend it"""
+    p.rest_if_hurt(0.6)
+    equip_party(p)
+    drop_junk(p)
+    if min(count(p, 68), count(p, 71)) < 3 and p.g.state.get('gold', 0) >= 20: restock(p)
+    if any(m['max'] and m['hp'] < m['max'] * 0.6 for m in p.g.state['party']) and min(count(p, 68, 1), count(p, 71, 1)) < 1: lb_heal(p)
+    if p.poisoned() and min(count(p, 67, 1), count(p, 68, 1)) < 1: lb_heal(p)
+
 def norm(name):
     """a merchant's item name and a look name compared alike: case, armour/armor, a leading article"""
     n = name.lower().replace('armour', 'armor').strip()
@@ -425,10 +856,11 @@ def seg_trade(p, kw):
                 if norm(name) in loose: return num
             return None
         gb = p.g.state['gold']
-        out = p.talk_to(18, ['sell', pick, 'y'], 'Max')
+        out = p.talk_to(18, ['sell', '1', pick, 'y'], 'Max')          # which of you: 1 (the Avatar holds the pooled pack, as seg_sell)
         if out is None: p.issue('trade', 'could not reach Max'); return
         text = ' '.join(r for _, r in out)
         m = re.search(r'take (\d+) gold for that ([^,?]+)', text)
+        if m and not any(w == 'y' for w, _ in out): m = None              # an offer it did not take is no sale
         if not m and 'open' in text and closed < 3:                   # the shop shut while we walked over: next opening
             closed += 1
             for _ in range(2500):                                     # his shop hours (6-12, 14-17)
@@ -511,7 +943,7 @@ def seg_book(p, kw):
     st = p.walk(300, 367, adj=True)
     d = (300 - st['X'], 367 - st['Y'])
     p.g.shot('table.png')
-    p.key('g', 'get'); st = p.at(VDIR[d], 'get the book')
+    st = p.act('g', VDIR[d], 'get the book')
     p.log('  got: %r, spells %d' % (st['msg'], st['spells']))
     if st['spells'] != 7: p.issue('book', 'the book gave %d spells, not 7 (%r)' % (st['spells'], st['msg']))
     st = p.key('c', 'cast')
@@ -539,7 +971,7 @@ def seg_parchment(p, kw):
     """the real rules of a bought spell (magic_skills.md §4): it waits in the pack until M M Enter puts it in the
     book, a known one stays out, and a parchment outlasts a save and a load. Run alone with PARCH.REQ = Xiao"""
     st = p.walk(300, 367, adj=True); d = (300 - st['X'], 367 - st['Y'])
-    p.key('g', 'get'); st = p.at(VDIR[d], 'get the book'); before = st['spells']
+    st = p.act('g', VDIR[d], 'get the book'); before = st['spells']
     st = p.key('e', 'equip')
     for _ in range(40):
         if 'spell' in st['msg'].lower(): break
@@ -580,7 +1012,7 @@ def seg_look(p, kw):
     if 'Searching' in st['msg']: p.issue('look', 'searched at two tiles: %r' % st['msg'])
     st = p.key('l', 'look'); st = p.key('esc', 'cancel')
     if st['verb']: p.issue('look', 'Esc left verb %r' % st['verb'])
-    st = p.key('g', 'get'); st = p.key('right'); st = p.key('right'); st = p.key('right'); st = p.key('ret', 'get far'); p.log('  get: %r' % st['msg'])
+    st = p.key('g', 'get'); st = p.key('right', 'get east'); p.log('  get: %r' % st['msg'])   # a direction acts at once (usecode_use.md)
     if 'Get-' not in st['msg']: p.issue('look', 'get echo: %r' % st['msg'])
     st = p.key('u', 'use'); st = p.key('ret', 'use here'); p.log('  use: %r' % st['msg'])
     x, y = p.nav.pos(); near = None
@@ -623,11 +1055,11 @@ def seg_usekit(p, kw):
     if 'Done' not in st['msg']: p.issue('usekit', 'telescope: %r' % st['msg'])
     st = p.use_pack(154, 'telescope'); st = p.key('f1' if 0 else 'ret', 'nowhere'); p.log('  telescope: %r' % st['msg'])
     if 'nowhere' not in st['msg']: p.issue('usekit', 'telescope nowhere: %r' % st['msg'])
-    st = p.key('u'); st = p.key('left'); st = p.key('ret', 'fountain'); p.log('  fountain: %r' % st['msg'])
+    st = p.act('u', 'left', 'fountain'); p.log('  fountain: %r' % st['msg'])
     st = p.g.char('y'); p.log('  wish: %r' % st['msg'])
     st = p.g.type('Food'); p.log('  wished: %r' % st['msg'])
     if 'Failed' not in st['msg'] and 'food' not in st['msg']: p.issue('usekit', 'wish: %r' % st['msg'])
-    st = p.key('u'); st = p.key('left'); st = p.key('ret'); st = p.g.char('n'); p.log('  no wish: %r' % st['msg'])
+    st = p.act('u', 'left'); st = p.g.char('n'); p.log('  no wish: %r' % st['msg'])
     st = p.use_pack(155, 'crystal'); p.log('  ball: %r' % st['msg'])
     if 'degrees' in st['msg']:
         st = p.g.type('200n'); p.log('  ball bad: %r' % st['msg'])
@@ -640,11 +1072,129 @@ def seg_usekit(p, kw):
     st = p.g.type('2'); p.log('  dropped: %r' % st['msg'])
     if 'bread' not in st['msg']: p.issue('usekit', 'drop: %r' % st['msg'])
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine)
+LEVEL_XP = (0, 100, 200, 400, 800, 1600, 3200, 6400)   # the shrine scripts' table, by current level (combat.md §3)
+def party_line(p):
+    return ' '.join('%d:L%d %d/%d xp%d' % (m['id'], m['lvl'], m['hp'], m['max'], m.get('exp', 0)) for m in p.g.state['party'])
+
+def can_level(m):
+    return 0 < m['lvl'] < 8 and m['hp'] > 0 and m.get('exp', 0) >= LEVEL_XP[m['lvl']]
+
+def meditate(p, v=1):
+    """every member with the experience for it meditates at shrine v (any shrine levels; each adds its own
+    gift): T)alk to the shrine, y, the member's number, the mantra (usecode_vm.md §6c)"""
+    _, (fx, fy), lv, pos, mantra = SHRINES[v]
+    if not any(can_level(m) for m in p.g.state['party']): return 0
+    if not orb_go(p, pos): return 0
+    if p.foes(): p.fight(); p.heal_up()
+    gained = 0
+    for _ in range(len(p.g.state['party'])):
+        ids = [m['id'] for m in p.g.state['party']]
+        due = [i + 1 for i, m in enumerate(p.g.state['party']) if can_level(m)]
+        if not due: break
+        p.walk(fx, fy, adj=True); lv0 = {m['id']: m['lvl'] for m in p.g.state['party']}
+        st = talk_object(p, fx, fy); out = [('', st['conv'])]
+        if not st['talk']: p.issue('train', 'T)alk to shrine %d: %r' % (v, st['msg'])); break
+        for _ in range(8):
+            st = p.g.state
+            if not st['ask']: break
+            a = 'y' if st.get('askc') else (str(due[0]) if st.get('num') else mantra)
+            st = p.say(a); out.append((a, st['conv']))
+        p.idle(); p.transcripts.setdefault('meditate%d' % v, []).append(out)
+        lv1 = {m['id']: m['lvl'] for m in p.g.state['party']}
+        up = [i for i in lv1 if lv1[i] > lv0.get(i, 99)]
+        p.log('  meditate at shrine %d, member %d (%d): %s' % (v, due[0], ids[due[0] - 1], party_line(p)))
+        if not up: p.issue('train', 'member %d had the experience but gained no level at shrine %d: %r' % (ids[due[0] - 1], v, ' '.join(r for _, r in out)[-300:])); break
+        gained += len(up)
+    return gained
+
+# where evil things hatch over and over on the surface (eggs.md §1-§2; the new-game egg list read with objfind):
+# a hatch needs the party within 20 tiles but farther than 8, and the egg re-arms beyond 20
+GRIND = [(521, 327), (569, 340), (913, 504), (936, 824), (283, 115), (131, 460), (424, 934)]   # each within ~60 of an Orb gate but the last
+
+GRIND_SKIP = set()
+def ring_spot(p, ex, ey, r0, r1):
+    """a reachable tile whose distance (the larger axis) to (ex,ey) is r0..r1, the nearest first"""
+    p.nav.refresh(); x, y = p.nav.pos(); S = p.nav.span
+    cand = [((ex + a) % S, (ey + b) % S) for a in range(-r1, r1 + 1) for b in range(-r1, r1 + 1) if r0 <= max(abs(a), abs(b))]
+    cand.sort(key=lambda t: max(abs(t[0] - x), abs(t[1] - y)))
+    for t in cand[:400]:
+        if p.nav.cost(*t) is not None and p.nav.route(x, y, {t}, limit=60000) is not None: return t
+    return None
+
+def grind(p, ex, ey, rounds=4):
+    """step in and out of the egg's range: each approach is one hatch roll; fight what comes"""
+    pos = min((k for k in ORB if ORB_LEVEL.get(k, 0) == 0), key=lambda k: max(abs(ORB[k][0] - ex), abs(ORB[k][1] - ey)))
+    xp0 = sum(m.get('exp', 0) for m in p.g.state['party'])
+    for r in range(rounds):
+        st = p.g.state
+        if st['L'] != 0 or max(abs(st['X'] - ex), abs(st['Y'] - ey)) > 70:   # first, or after the recall to the castle
+            if not orb_go(p, pos): return
+        try:
+            far = ring_spot(p, ex, ey, 22, 26)
+            if far: p.walk(*far)
+            near = ring_spot(p, ex, ey, 11, 15)
+            if not near: p.issue('train', 'no way near the egg at (%d,%d)' % (ex, ey)); return
+            p.walk(*near)
+            if r == 0:                                                   # what hatches there must be in walking reach
+                x, y = p.nav.pos()
+                if p.nav.route(x, y, {(ex + a, ey + b) for a in (-1, 0, 1) for b in (-1, 0, 1)}, limit=60000) is None:
+                    p.log('  grind (%d,%d): the egg is out of walking reach, skipped' % (ex, ey)); GRIND_SKIP.add((ex, ey)); return
+            for _ in range(20):                                          # let them come
+                if p.g.state['foes'] and p.foes(): break
+                p.key('space', 'wait for the hatch')
+            if p.foes(): p.fight()
+            p.cure_up(); p.heal_up(); p.rest_if_hurt(0.6)
+        except (NavError, Danger) as e: p.log('  grind (%d,%d): %s' % (ex, ey, e)); p.rest_if_hurt(0.9)
+        if p.g.state['over']: return
+    p.log('  grind (%d,%d) x%d: +%d xp: %s' % (ex, ey, rounds, sum(m.get('exp', 0) for m in p.g.state['party']) - xp0, party_line(p)))
+
+def seg_train(p, kw):
+    """earn the levels for the Gargoyle half (the user's choice, 2026-11-07): hunt at the egg sites, meditate
+    when anyone has the experience; until everyone is level TRAIN_TO (env, default 6) or the time runs out"""
+    goal = int(os.environ.get('TRAIN_TO', '6')); t_end = time.time() + 60 * float(os.environ.get('TRAIN_MIN', '60'))
+    p.log('  train from: %s' % party_line(p))
+    i = 0
+    while time.time() < t_end and not all(m['lvl'] >= goal for m in p.g.state['party']):
+        if not carried(p, 87): p.issue('train', 'the Orb of the Moons is no longer carried'); break
+        sites = [g_ for g_ in GRIND if g_ not in GRIND_SKIP]
+        if not sites: p.issue('train', 'no hunting site left'); break
+        ex, ey = sites[i % len(sites)]; i += 1
+        p.cure_up(); p.heal_up()
+        grind(p, ex, ey)
+        meditate(p)
+        keep_up(p)
+    p.log('  train to: %s' % party_line(p))
+
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, train=seg_train, meditate=lambda p, kw: meditate(p))
+
+QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
+CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
+
+def ckpt_dir(out, name):
+    return name if os.sep in name else os.path.join(os.environ.get('BOT_CKPT', os.path.join(out, 'ckpt')), name)
+
+def checkpoint(p, hd, out, name):
+    """S)ave to slot 1 and keep a copy of it on the host (bot_walkthrough.md §2)"""
+    import shutil
+    p.idle(); p.key('s', 'the slot page'); p.key('1', 'slot 1'); st = p.key('ret', 'save')
+    d = ckpt_dir(out, name); os.makedirs(d, exist_ok=True)
+    for f in CKPT_FILES: shutil.copyfile(os.path.join(hd, f), os.path.join(d, f))
+    p.log('  checkpoint %s: %r at L%d (%d,%d) day %d %02d:%02d' % (name, st['msg'], st['L'], st['X'], st['Y'], st['day'], st['min'] // 60, st['min'] % 60))
+
+def restore(p, name):
+    """after boot: Ctrl-R, slot 1, Enter (the checkpoint was copied into the drive folder before boot)"""
+    p.g.key('r', ctrl=True); p.key('1', 'slot 1'); st = p.key('ret', 'restore')
+    p.nav.refresh()
+    p.log('  restored %s: %r at L%d (%d,%d) day %d %02d:%02d' % (name, st['msg'], st['L'], st['X'], st['Y'], st['day'], st['min'] // 60, st['min'] % 60))
 
 def main():
-    hd, out = sys.argv[1], os.path.abspath(sys.argv[2]); segs = sys.argv[3:] or [s for s in SEGS if s not in ('book', 'parchment', 'usekit')]
+    import shutil
+    args = sys.argv[1:]; start = None
+    if '--from' in args: i = args.index('--from'); start = args[i + 1]; del args[i:i + 2]
+    hd, out = args[0], os.path.abspath(args[1]); segs = args[2:] or [s for s in SEGS if s not in ('book', 'parchment', 'usekit')]
     os.makedirs(out, exist_ok=True)
+    if start:                                                          # the checkpoint's slot into the drive folder
+        for f in CKPT_FILES: shutil.copyfile(os.path.join(ckpt_dir(out, start), f), os.path.join(hd, f))
     logf = open(os.path.join(out, 'run.log'), 'a')
     def log(s):
         line = '%s %s' % (time.strftime('%H:%M:%S'), s); print(line, flush=True); logf.write(line + '\n'); logf.flush()
@@ -656,9 +1206,13 @@ def main():
     g = Game(hd, out, machine=os.environ.get('BOT_MACHINE', 'falcon')); p = Player(g, out, REF, log)
     t0 = time.time()
     try:
+        if start: restore(p, start)
         for s in segs:
+            if s.startswith('save:'): checkpoint(p, hd, out, s[5:]); continue
             log('== segment %s' % s); ts = time.time()
             p.heal_up(); p.cure_up()
+            p.loot_ok = s not in QUEST
+            if s in QUEST: keep_up(p)
             try: SEGS[s](p, kw)
             except Danger as e: p.issue('danger', '%s: %s' % (s, e))
             except Exception as e: p.issue('crash', '%s: %s: %s' % (s, type(e).__name__, e)); raise

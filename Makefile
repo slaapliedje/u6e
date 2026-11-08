@@ -68,7 +68,7 @@ AUTO_PRG := c:\\$(notdir $(SELFTEST_PRG))
 # common Hatari invocation: mount build/ as C:, autostart the .PRG
 HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
-.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk
+.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk objfind
 
 all: $(SELFTEST_PRG)
 
@@ -397,6 +397,11 @@ $(BUILD)/convvm: tools/convvm.c dataformats/u6lzw.c dataformats/u6lzc.c engine/c
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
 convvm: $(BUILD)/convvm
 	$(BUILD)/convvm $(REFDATA)/CONVERSE.A 5
+# the new-game objects by number or tile (the bot's ladders and quest items, docs/design/bot_walkthrough.md)
+$(BUILD)/objfind: tools/objfind.c dataformats/u6lzw.c dataformats/u6obj.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+objfind: $(BUILD)/objfind
 $(BUILD)/convkw: tools/convkw.c dataformats/u6lzw.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^

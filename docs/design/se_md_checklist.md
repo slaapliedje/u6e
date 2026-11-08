@@ -62,3 +62,6 @@ list once SE's seams exist.
   at 30 and EXP at 9999 in conversations (now so). Open: '*' page waits and long replies (both games
   show '*' and cut a reply at 8 lines; DOS waits for a key); SE's other objlist fields still sit at
   U6's places (item 10); the spawned men and drones use U6's creature table (item 6). Item 4 next.
+- 2026-11-07: the page waits built for U6 and SE (converse.md §6d, read from both GAME.EXEs): the line
+  count, the page wait (Space/Enter/Esc/click, the arrow), `*` waits, the cursor glyphs (arrow; ankh in
+  U6, skull in SE); the message scroll pages the same way. MD's GAME.EXE pages differently (item 13).

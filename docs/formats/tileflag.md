@@ -121,7 +121,10 @@ figure sits *in* the throne instead of covering it.
   replace that heuristic later.
 
 ## Open questions
-- Object blocking (2026-10-26): an object blocks movement iff its tile's tileflags1 bit1
+- Object blocking (2026-10-26; parts 2026-11-07): an object blocks movement on each cell it covers
+  (the anchor and, by the size bits, T-1/T-2/T-3 at the cells above draw them) iff that cell's tile has
+  tileflags1 bit1 — seen in DOS: a 2×2 fountain blocks all four cells. Per cell, an object blocks
+  movement iff its tile's tileflags1 bit1
   (Impassable) is set — the reference's `tile.passable`. The Wall bit alone does NOT block: of
   the 19 tiles that carry Wall without Impassable, all belong to doorways (301), arches (302/304)
   and the OPEN secret door frames (334 f1/f3), all walked through. Terrain is unaffected (every

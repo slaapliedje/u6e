@@ -11,6 +11,7 @@
 typedef enum {
     IN_NONE = 0,
     IN_UP, IN_DOWN, IN_LEFT, IN_RIGHT,
+    IN_UPLEFT, IN_UPRIGHT, IN_DOWNLEFT, IN_DOWNRIGHT,   /* the keypad's 7 9 1 3 (and Clr/Home): DOS walks the diagonals */
     IN_TALK,          /* 'T': talk to an adjacent NPC */
     IN_QUIT
 } plat_input_t;
@@ -22,9 +23,10 @@ void         plat_input_init(void);
 plat_input_t plat_input_poll(void);
 
 /* Raw non-blocking key read for text entry (conversation keyword/number typing):
- * returns 0 if no key is waiting, else (scancode << 8) | ascii. The caller picks
+ * returns 0 if no key is waiting, else (scancode << 8) | ascii, | PLAT_KEY_ALT while Alternate is held. The caller picks
  * interpretation by mode — map it to a movement event with plat_input_map(), or
  * read the low byte as the typed character. */
+#define PLAT_KEY_ALT 0x10000   /* in a raw key: Alternate was held (Alt+letter picks a default command) */
 int          plat_input_raw(void);
 plat_input_t plat_input_map(int key);   /* classify a raw key as a movement event */
 

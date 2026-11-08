@@ -40,6 +40,7 @@ typedef struct {
     wobj_t        *objs;      /* borrowed, mutable (alive toggled on get)      */
     int            nobjs;
     const uint8_t *gettable;  /* [1024] by obj_n, 1 = pick-up-able             */
+    const uint8_t *stackable; /* [128] bitmap by obj_n, or NULL: what merges whatever its frame */
     invitem_t      inv[OBJ_INV_MAX];
     int            ninv;
     uint8_t        no_merge;      /* the next taken thing keeps its own row (a container) */
@@ -57,7 +58,7 @@ int  objworld_at(const objworld_t *o, int x, int y);
 int  objworld_can_get(const objworld_t *o, uint16_t obj_n);
 
 /* Pick up object index idx: clear it from the world and add it to the inventory
- * (stacks merge by obj_n + quality). Returns 1 on success, 0 if not gettable / inv full. */
+ * (stacks merge by obj_n + quality, and the same frame unless the object is stackable: two moonstones never merge). Returns 1 on success, 0 if not gettable / inv full. */
 int  objworld_get(objworld_t *o, int idx);
 
 /* 1 if the inventory holds an obj_n with the given quality (e.g. the KEY, obj 64,

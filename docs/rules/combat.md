@@ -127,6 +127,10 @@ the body is an ordinary container and is saved. The dead one leaves the roster; 
 is gone. Health 1, magic full, the conditions gone, experience × karma / 100 below karma 98. It stands on the first free tile of the
 rings around the body (out to 4), else on the body, and rejoins the roster at its end.
 
+**Poison** brings anyone to 0 the same way: a companion dies as above, the Avatar is recalled. (Until 2026-11-07
+poison killed the Avatar as if he were a creature: his whole pack went into a body where he fell, then the recall
+ran. Found by the bot.)
+
 **The recall** (the Avatar at 0 health at the end of its action, or the Help spell):
 1. At death only: "An unending darkness engulfs thee..." and the descending tones, the view blanks, a pause, then "A voice in the darkness
    intones, "KAL LOR!"". The Avatar's experience × karma / 100 below karma 98. Its readied things go into the pack,
