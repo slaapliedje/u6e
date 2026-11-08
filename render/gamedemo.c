@@ -12666,7 +12666,7 @@ static void bot_report(const world_t*w)
       n=bot_kv(n,"foes",foes); }
     n=bot_put(n," party=");
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(p) n=bot_put(n,",");
-        n=bot_num(n,a); n=bot_put(n,":"); n=bot_num(n,g_ahp[a]); n=bot_put(n,"/"); n=bot_num(n,g_amaxhp[a]);
+        n=bot_num(n,actor_real(a)); n=bot_put(n,":"); n=bot_num(n,g_ahp[a]); n=bot_put(n,"/"); n=bot_num(n,g_amaxhp[a]);   /* the real id while another member is played */
         n=bot_put(n,":"); n=bot_num(n,g_amana[a]); n=bot_put(n,":"); n=bot_num(n,g_alevel[a]);
         n=bot_put(n,":"); n=bot_num(n,g_poison[a]?1:0); n=bot_put(n,":"); n=bot_num(n,g_aexp[a]); }
     n=bot_put(n," msg="); n=bot_put(n,g_msg);
@@ -12687,7 +12687,7 @@ static void bot_trace(const world_t*w)
 static void bot_dump_actors(const world_t*w)
 {
     for(int i=1;i<U6_MAX_ACTORS;i++){ int ax,ay; if(i==1){ ax=(int)w->px; ay=(int)w->py; } else if(!actor_pos(i,&ax,&ay)) continue;
-        int n=bot_put(0,"@A"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",ax); n=bot_kv(n,"y",ay);
+        int n=bot_put(0,"@A"); n=bot_kv(n,"id",actor_real(i)); n=bot_kv(n,"x",ax); n=bot_kv(n,"y",ay);
         n=bot_kv(n,"hp",g_ahp[i]); n=bot_kv(n,"max",g_amaxhp[i]); n=bot_kv(n,"tile",g_atile[i]);
         n=bot_kv(n,"hostile",actor_hostile(i)); n=bot_kv(n,"wt",i>1?npc_live_worktype(i):0); bot_flush(n); }
     for(int i=2;i<U6_MAX_ACTORS;i++) if(g_atile[i]!=0xffff && (int)g_actz[i]!=g_cur_level){   /* the others, on other levels: "@B id x y z" */
