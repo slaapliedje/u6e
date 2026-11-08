@@ -794,9 +794,19 @@ def cast_light(p):
     st = p.g.type('il'); p.idle(); p.log('  light: %r' % st['msg'][-50:])
     return 'success' in st['msg'].lower()
 
+def avatar_leads(p, turns=30):
+    """wait (fighting what comes) until the Avatar is the one played again: asleep, paralyzed or knocked down, the
+    next member takes the keys, and a spell would be his (and his reagents)"""
+    for _ in range(turns):
+        party = p.g.state['party']
+        if party and party[0]['id'] == 1: return True
+        if p.g.state['foes'] and p.foes(): p.fight(); continue
+        p.key('space', 'the Avatar comes round')
+    return False
+
 def dispel_at(p, x, y, d):
     """from (x,y), C)ast Dispel Field (An Grav) on the next tile that way (magic_skills.md §5a)"""
-    p.walk(x, y)
+    p.walk(x, y); avatar_leads(p)
     st = p.key('c', 'cast')
     if not st['cast']: p.idle(); return False
     p.g.type('ag'); st = p.at(d, 'dispel the field'); p.idle()
@@ -1107,14 +1117,47 @@ def seg_sutek(p, kw):
     raised drawbridge, its cranks (785,959)/(789,959) on the far side: Telekinesis (Ort Por Ylem) works a crank
     from afar (magic_skills.md)"""
     p.loot_ok = False
-    p.walk(789, 962); cast_light(p)
-    st = p.key('c', 'cast')
+    p.walk(789, 962); cast_light(p); p.nav.refresh()
+    st = p.key('c', 'cast') if p.nav.route(*p.nav.pos(), {(787, 958)}) is None else p.g.state   # down already: a second turn raises it
     if st['cast']:
         p.g.type('opy'); st = p.g.state
         for _ in range(3): st = p.key('up', 'aim')
         st = p.key('ret', 'telekinesis'); p.idle(); p.log('  telekinesis on the crank: %r' % st['msg'][-60:])
     p.nav.refresh()
     if p.nav.route(*p.nav.pos(), {(787, 958)}) is None: p.issue('sutek', 'the drawbridge is still up: %r' % st['msg'][-60:]); return
+    # the castle (Fox Fire FAQ's order, our objects): the entry's north secret door; one of the two fields; the
+    # west hall's inner (east) wall hides a door; the fields before the levers; the left (q10) and middle (q9)
+    # levers open all four portcullises (doorways 9 and 10) of the upper hall; Unlock Magic on the outer door;
+    # its room's north wall hides a door; along the upper hall to the middle room (the hydra); its south wall
+    # hides the door to the ladder (787,948)
+    def search(x, y, d, what):
+        p.walk(x, y); p.key('l', 'look'); st = p.at(d, 'search'); p.idle(); p.nav.refresh()
+        p.log('  %s (%s of (%d,%d)): %r' % (what, d, x, y, st['msg'][-50:]))
+    p.walk(787, 957)
+    for _ in range(2):                                                   # a decorative sword and its mount hang on the hidden door: off the wall first
+        st = p.act('g', 'up', 'take it down'); p.log('  get (787,956): %r' % st['msg'][-50:])
+    search(787, 957, 'up', 'entry secret door')
+    dispel_at(p, 786, 955, 'left')
+    search(783, 953, 'right', 'west hall secret door')
+    avatar_leads(p, 120)
+    dispel_at(p, 785, 953, 'right')                                      # the corridor's own trap: sleep (786,788) and poison (787) fields on row 953
+    dispel_at(p, 786, 953, 'right')                                      # (black pearls are few: the fire field at 785 is walked through)
+    dispel_at(p, 787, 953, 'up')
+    p.cure_up(); p.heal_up(0.5)
+    p.walk(787, 952)
+    for d in ('upleft', 'up'):
+        st = p.act('u', d, 'lever'); p.log('  lever %s: %r' % (d, st['msg'][-50:]))
+    p.nav.refresh(); p.walk(779, 951); avatar_leads(p); st = p.key('c', 'cast')
+    if st['cast']:
+        p.g.type('ep'); st = p.at('up', 'unlock magic'); p.idle(); p.log('  unlock magic (779,950): %r' % st['msg'][-50:])
+        st = p.act('u', 'up', 'open'); p.log('  door: %r' % st['msg'][-40:]); p.nav.refresh()
+    search(779, 947, 'up', 'outer room secret door')
+    p.walk(787, 945)
+    if p.foes(): p.fight()
+    search(787, 945, 'down', 'middle room secret door')
+    p.walk(787, 947)
+    st = p.act('u', 'down', 'the ladder'); p.log('  ladder: L%d %r' % (st['L'], st['msg'][-40:])); p.nav.refresh()
+    if st['L'] != 1: p.issue('sutek', 'not down Sutek\'s ladder: L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
