@@ -6385,7 +6385,7 @@ static int wobj_boat_at(int obj_n,int x,int y)
 static int vehicle_exit(world_t*w)
 {   for(int d=0;d<4;d++){
         int lx=(w->px+VDX[d])&(U6_SURFACE_TILES-1), ly=(w->py+VDY[d])&(U6_SURFACE_TILES-1);
-        if(world_is_passable(w,lx,ly)){
+        if(world_is_passable(w,lx,ly) && !tile_is_water(w,lx,ly)){   /* land: not a boat moored on water (§3.1) */
             veh_show_party(w,lx,ly);
             g_veh_kind=0; g_avatar_ovr=0;
             w->px=(uint16_t)lx; w->py=(uint16_t)ly;

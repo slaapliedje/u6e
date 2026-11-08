@@ -49,7 +49,8 @@ the centre and the back one tile SOUTH (and rotated accordingly).
 ## 3. Boarding and exiting a boat (use_boat)
 
 (U)se on a skiff/ship — all checks in this order:
-1. If already aboard: find adjacent PASSABLE land, trying North, East, South, West of the
+1. If already aboard: find adjacent PASSABLE land (not a water tile — a boat moored beside
+   counts as passable but is water), trying North, East, South, West of the
    vehicle's position; found → the party disembarks there, the boat stays as map objects
    (ship keeps its hull strength in the centre object's qty); none → "Only next to land."
 2. A skiff/raft being boarded must sit on water ("You must place it in water first.").
