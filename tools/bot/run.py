@@ -1589,6 +1589,28 @@ def norm(name):
         if n.startswith(a): n = n[len(a):]
     return n
 
+def fill_cube(p, who=3):
+    """The moonstones go INTO the vortex cube (usecode_use.md cube; equipment.md, containers in the pack: M)ove a
+    moonstone, "To ", the cube). All eight and then the cube go to one lightly laden member, so the cube is the
+    newest thing, the first cell of his pack, and the moonstones sit on the same page; then per moonstone:
+    M, M through the pack to its row, Enter, Tab (the crosshair on the first cell), Enter"""
+    for _ in range(4):
+        give_to(p, 73, who)
+        if all(r.get('own') == who for r in p.g.objects()[1] if r['obj'] == 73): break
+    give_to(p, 62, who)
+    for _ in range(12):
+        inv = p.g.objects()[1]; cube = [r for r in inv if r['obj'] == 62]
+        if not cube or cube[0].get('own') != who: p.issue('ending', 'the cube is not with member %d' % who); return False
+        cid = cube[0].get('id', 0)
+        loose = [r for r in inv if r['obj'] == 73 and (not cid or r.get('in', 0) != cid)]
+        if not loose: return True
+        p.idle(); p.key('m', 'move'); st = p.key('m', 'the pack')
+        for _ in range(loose[0]['row']): st = p.key('m', 'next')
+        if not st['msg'].startswith('Move the moonstone'): p.issue('ending', 'the pack prompt: %r' % st['msg'][-40:]); p.idle(); return False
+        p.key('ret', 'this one'); p.key('tab', 'the panel'); st = p.key('ret', 'the first cell')
+        p.log('  moonstone %d: %r' % (loose[0]['fr'], st['msg'][-40:])); p.idle()
+    return False
+
 def seg_ending(p, kw):
     """The Codex (usecode_use.md vortex cube): the Orb to the shrine's isle (19), the Britannian lens down at
     (921,851) and the gargoyle lens at (925,851), then U)se the vortex cube with all eight moonstones carried:
@@ -1597,6 +1619,7 @@ def seg_ending(p, kw):
         if not carried(p, obj_n): p.issue('ending', 'no %s' % what); return
     phases = sorted({r['fr'] for r in p.g.objects()[1] if r['obj'] == 73})
     if phases != list(range(8)): p.issue('ending', 'moonstone phases carried: %r' % phases); return
+    if not fill_cube(p): p.issue('ending', 'the moonstones are not all in the cube'); return
     if not orb_go(p, 19): return
     avatar_leads(p)
     for (x, y), obj_n in (((921, 851), 394), ((925, 851), 396)):
