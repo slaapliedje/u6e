@@ -345,7 +345,8 @@ walkers (the terrain passability says so); only deep water tells a bird from a r
 > the weapon range table (a charge reaches 5), and the per-spell scripts for a non-player caster
 > (no Success / Failed lines; the effects print their own) — to understand; re-expressed. The
 > spell lists are in engine/monsters.c `monster_spells`. Confidence: probable. Validated by
-> FOESPELL.REQ (§9).
+> FOESPELL.REQ (§9). The charge roll CONFIRMED in DOS GAME.EXE 4.5 (2026-11-07: the weapon pick at image 0x1dcb7
+> takes the first readied charge 336 or spellbook 57 that wins rand(0..3) == 0 with no storm and rand(0..quality) < 16).
 
 Fifteen creature types cast: daemon, dragon, drake, winged gargoyle, gazer, ghost, hydra, mage,
 mimic, reaper, sea serpent, giant spider, giant squid, wisp, tangle-vine flower (the list per type

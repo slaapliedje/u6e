@@ -8,7 +8,13 @@ register is empty. What's left is listed by why it's left.
 > - Last updated: 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
 
 ## Found, not yet built
-None. (The conversation page waits, found 2026-11-07, are built: converse.md §6d.)
+| Difference | Where | DOS |
+|---|---|---|
+| A foe's spell prints "<creature> casts <spell>." (added as feedback, never registered; found 2026-11-07) | combat.md §7b | No such line: GAME.EXE has no "casts" text; the foe's cast shows only its effect. Awaiting the user's choice: keep as an addition, or drop |
+
+(The conversation page waits, found 2026-11-07, are built: converse.md §6d.) The foes' charge roll was read in DOS
+2026-11-07 (weapon pick at image 0x1dcb7: each readied charge or spellbook, 1 in 4 with no storm, then
+rand(0..spell) < 16): it matches combat.md §7b.
 
 ## Fixed by the user's choice (2026-11-07): DOS's own faults we don't copy
 | Difference | Where | DOS's fault |
