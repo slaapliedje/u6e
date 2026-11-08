@@ -740,7 +740,7 @@ def go_to_actor(p, aid, name):
 def seg_gargish(p, kw):
     """Hythloth (the cave at (948,930) by the Shrine of Humility) down to Captain John on level 4: his scroll
     teaches Gargish; on to the way out into the Gargoyle lands (220,219) level 5, where Beh Lem waits at noon"""
-    if min(count(p, 68), count(p, 71)) < 15 and p.g.state.get('gold', 0) >= 60: restock(p, 15)   # the Avatar's heals carry him through
+    if (min(count(p, 68), count(p, 71)) < 30 or count(p, 72) < 4) and p.g.state.get("gold", 0) >= 60: restock(p, 30)   # the Avatar's heals carry him through; ash for Light
     for obj in (68, 71, 67):
         for _ in range(4):
             if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
@@ -748,9 +748,10 @@ def seg_gargish(p, kw):
     p.log('  into Hythloth: %s; ginseng %d silk %d' % (party_line(p), count(p, 68, 1), count(p, 71, 1)))
     if not orb_go(p, 6): return
     if carried(p, 258): ready(p, 258)                                    # unseen, the Avatar walks past what lives in Hythloth
-    p.sneak = not carried(p, 258)
+    p.sneak = carried(p, 258)                                            # seen: fight the drakes, walking on under their fireballs kills the party
     p.walk(948, 930)
     if p.g.state['L'] != 1: p.issue('gargish', 'the Hythloth cave did not lead down: L%d (%d,%d)' % (p.g.state['L'], p.g.state['X'], p.g.state['Y'])); return
+    cast_light(p) or light_torch(p)                                      # the dungeon is dark: spells find 'nothing' on whom they can't see
     if not go_to_actor(p, 183, 'Captain John'): return
     _, inv0 = p.g.objects(); before = {r['obj'] for r in inv0}
     p.talk_to(183, ['lang', 'y', 'y'], 'Captain John', yes=True)
@@ -764,6 +765,41 @@ def seg_gargish(p, kw):
     p.talk_to(164, ['join', 'y'], 'Beh Lem', yes=True)
     p.sneak = False
     if 164 not in [m['id'] for m in p.g.state['party']]: p.issue('gargish', 'Beh Lem did not join')
+
+TWO_HANDED = {41, 42, 44, 45, 46, 47, 50, 54}                           # bows, crossbows, two-handed blades: both hands (equipment.md)
+
+def cast_light(p):
+    """C)ast Light (In Lor, sulfurous ash): 100 minutes of light (magic_skills.md timers)"""
+    if not count(p, 72, 1): return None
+    st = p.key('c', 'cast')
+    if not st['cast']: p.idle(); return None
+    st = p.g.type('il'); p.idle(); p.log('  light: %r' % st['msg'][-50:])
+    return 'success' in st['msg'].lower()
+
+def light_torch(p):
+    """a torch lit in a free hand: the member carrying it holds it (usecode_use.md), so the torches go first to
+    someone with a hand free (slots 3, 4 in @E), the whole stack by M)ove and the crosshair, then U)se"""
+    if not carried(p, 90): return None
+    eq = readied(p); ids = [m['id'] for m in p.g.state['party'] if m['hp'] > 0]
+    free = [i for i in ids if not ((eq.get((i, 3)) and eq.get((i, 4))) or eq.get((i, 3)) in TWO_HANDED) and i != 9]   # Sherry the mouse holds nothing
+    if not free: p.log('  torch: no free hand (%s)' % sorted(eq.items())); return None
+    who = free[0]
+    for _ in range(4):
+        rows = [r for r in p.g.objects()[1] if r['obj'] == 90 and r.get('own', 1) != who]
+        if not rows: break
+        inv = p.g.objects()[1]; name = rows[0].get('name', '')
+        p.idle(); p.key('m', 'move')
+        for _ in range(len(inv) + 2):
+            st = p.key('m', 'the pack')
+            if st['msg'].startswith('Move the ' + name): break
+        else: p.idle(); break
+        st = p.key('ret', 'this one')
+        if 'How many' in st['msg']: p.g.type(str(rows[0]['qty'] or 1))           # a stack asks first (usecode_use.md M)ove)
+        st = p.aim_at(who, 'to the holder'); p.idle()
+        p.log('  torches to %d: %r' % (who, st['msg'][-40:]))
+    st = p.use_pack(90)
+    p.log('  torch for %d (%d carried): %r' % (who, count(p, 90), st and st['msg'][-60:]))
+    return st
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -782,7 +818,11 @@ def restock(p, n=6):
             c0 = count(p, obj)
             p.talk_to(128, ['buy', str(m), str(item), str(n)], 'Rudyom')
             if count(p, obj) > c0: break
-    for obj in (68, 71, 67):                                              # the caster's own: they go to the Avatar
+    for item in (8, 7, 6, 4, 1):                                          # sulfurous ash for Light (In Lor): where it is in his list
+        if count(p, 72) >= n: break
+        c0 = count(p, 72); p.talk_to(128, ['buy', '1', str(item), str(n)], 'Rudyom')
+        if count(p, 72) > c0: p.log('  Rudyom: ash is item %d' % item); break
+    for obj in (68, 71, 67, 72):                                          # the caster's own: they go to the Avatar
         for _ in range(4):
             if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
     p.log('  restock: ginseng/silk/garlic %s -> %s, gold %s' % (before, (count(p, 68), count(p, 71), count(p, 67)), p.g.state.get('gold')))

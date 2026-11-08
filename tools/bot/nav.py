@@ -83,7 +83,7 @@ class Nav:
             if not st['ask']: return
             self.g.type('n', enter=False) if st.get('askc') else self.g.type('bye')
 
-    def goto(self, tx, ty, adj=False, keys=False, on_step=None, max_steps=3000, near=0):
+    def goto(self, tx, ty, adj=False, keys=False, on_step=None, max_steps=3000, near=0, on_block=None):
         """walk to (tx,ty); adj=True stops orthogonally next to it (to use / get); near=r stops anywhere
         within r tiles of it (to talk through the crosshair)"""
         st = self.g.state
@@ -126,6 +126,8 @@ class Nav:
                     if on_step and on_step(st): return st              # the caller takes over (foes near)
                     continue
                 fails += 1                                              # someone stood there, or it is shut
+                if on_step and on_step(st): return st                  # under fire: the caller heals or fights
+                if on_block and on_block(nx, ny): return self.g.state  # a foe in the way: the caller fights it
                 if 'denied' in st['msg'].lower():                       # the Codex's way, before the Sacred Quest
                     self.denied.add((self.level, nx, ny)); self.log('  (%d,%d): %r, keeping off it' % (nx, ny, st['msg'][-40:])); break
                 self.log('  step %s (%d,%d)->(%d,%d) failed: at (%d,%d) pm=%d door=%s msg=%r' % (d, x, y, nx, ny, st['X'], st['Y'],

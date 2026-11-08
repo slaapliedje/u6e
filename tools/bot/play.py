@@ -81,7 +81,13 @@ class Player:
         self.hp_seen = hp
 
     def near_death(self, frac=0.35):
-        return [m['id'] for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac]
+        return [m['id'] for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac and self.in_view(m['id'])]
+
+    def in_view(self, aid):
+        """is a member inside the 11x11 view? (a spell's crosshair finds 'nothing' beyond it, or in the dark)"""
+        if aid == 1: return True
+        a = self.actor(aid); x, y = self.nav.pos()
+        return a is not None and abs(a['x'] - x) <= 5 and abs(a['y'] - y) <= 5
 
     def check(self, what=''):
         st = self.g.state
@@ -364,7 +370,7 @@ class Player:
         stops when a cast does not succeed (mana, reagents)"""
         n = 0
         for _ in range(tries):
-            hurt = [m for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac]
+            hurt = [m for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac and self.in_view(m['id'])]
             if not hurt: break
             worst = min(hurt, key=lambda m: m['hp'] / m['max'])['id']
             st = self.key('c', 'cast')
@@ -475,7 +481,8 @@ class Player:
             hit = lambda s: s['foes'] or ' hits ' in s['msg'] or ' kills ' in s['msg']   # a foe out of view can still strike the rear
             sneak = getattr(self, 'sneak', False)
             near = (lambda: [i for i in self.near_death() if i == 1]) if sneak else self.near_death   # sneaking: only the Avatar's own danger stops the walk
-            try: st = self.nav.goto(tx, ty, on_step=lambda s: (s['foes'] > ignore and not sneak) or (hit(s) and near()), **kw)
+            blocker = lambda bx, by: not sneak and any(a.get('hostile') and a['hp'] > 0 and (a['x'], a['y']) == (bx, by) for a in self.g.actors())
+            try: st = self.nav.goto(tx, ty, on_step=lambda s: (s['foes'] > ignore and not sneak) or (hit(s) and near()), on_block=blocker, **kw)
             except NavError:
                 if not self.clear_chests(): raise
                 continue
@@ -484,7 +491,7 @@ class Player:
                 continue
             if self.g.state['foes'] > ignore and getattr(self, 'sneak', False):   # unseen (the invisibility ring): walk on, never strike
                 ignore = self.g.state['foes']; continue
-            if self.g.state['foes'] > ignore:
+            if self.g.state['foes'] > ignore or (self.g.state['foes'] and any(max(abs(a['x'] - self.nav.pos()[0]), abs(a['y'] - self.nav.pos()[1])) <= 1 for a in self.foes())):
                 if self.foes(): self.fight(); ignore = 0; self.heal_up(); self.cure_up(); self.rest_if_hurt()
                 else: ignore = self.g.state['foes']
                 if self.g.state['L'] != lv: return self.g.state     # the walk took us to another level
