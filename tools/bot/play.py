@@ -87,7 +87,7 @@ class Player:
         """is a member inside the 11x11 view? (a spell's crosshair finds 'nothing' beyond it, or in the dark)"""
         if aid == 1: return True
         a = self.actor(aid); x, y = self.nav.pos()
-        return a is not None and abs(a['x'] - x) <= 5 and abs(a['y'] - y) <= 5
+        return a is not None and abs(a['x'] - x) <= 5 and abs(a['y'] - y) <= 5 and (a['x'], a['y']) != (x, y)   # on his tile the crosshair finds the Avatar
 
     def check(self, what=''):
         st = self.g.state
@@ -418,7 +418,7 @@ class Player:
         """C)ast Dispel Magic on member i, the crosshair on them (magic_skills.md §6a); True if they are cured"""
         a = self.actor(i) if i != 1 else None; x, y = self.nav.pos()
         if i != 1 and not a: return False
-        if a and max(abs(a['x'] - x), abs(a['y'] - y)) > 5: return False
+        if a and (max(abs(a['x'] - x), abs(a['y'] - y)) > 5 or (a['x'], a['y']) == (x, y)): return False   # on his tile the crosshair finds the Avatar
         st = self.key('c', 'cast')
         if not st['cast']: self.idle(); return False
         st = self.g.type('ajo'); self.check('cast dispel magic')

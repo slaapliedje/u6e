@@ -722,8 +722,9 @@ def seg_shrines(p, kw):
 
 def wait_until(p, h0, h1, what):
     """pass turns (fighting what comes) until the clock is between h0 and h1 o'clock"""
-    for _ in range(1500):
+    for t in range(1500):
         if h0 <= p.g.state['min'] // 60 < h1: return True
+        if t % 20 == 0 and (p.poisoned() or p.near_death(0.5)): p.cure_up(); p.heal_up(0.5)   # poison eats away the waiting party
         if p.g.state['foes'] and p.foes(): p.fight(); p.heal_up(); continue
         p.key('space', what)
     return False
@@ -850,6 +851,52 @@ def seg_gargoyles(p, kw):
     if not go_to_actor(p, 168, 'Naxatilor'): return
     out = p.talk_to(168, ['y', 'lens', 'bye'], 'Naxatilor', yes=True)
     if out and not any('second lens' in r for _, r in out): p.issue('gargoyles', 'Naxatilor never asked for the second lens: %r' % out[-2:])
+
+def climb_out(p):
+    """up the nearest reachable ladder until the surface"""
+    for _ in range(6):
+        L = p.g.state['L']
+        if L == 0: return True
+        reach = reach_set(p); x, y = p.nav.pos()
+        up = sorted((u for u in ladders() if u[4] == L and u[0] in (305, 106) and u[1] != 0 and beside(reach, u[2], u[3])),
+                    key=lambda u: abs(u[2] - x) + abs(u[3] - y))
+        if not up or not use_way(p, {'obj': up[0][0], 'x': up[0][2], 'y': up[0][3]}): return False
+        p.nav.refresh()
+    return p.g.state['L'] == 0
+
+def seg_lenses(p, kw):
+    """Ephemerides the astronomer by the Lycaeum keeps the Gargoyle Lens to study and wants a glass sword to cast
+    a concave copy; the glass sword lies in remains at (201,135) on the Moonglow catacombs' first level (the Blue
+    Bottle's back room, opened in the honesty chapter); he returns both lenses (394 concave, 396 convex)"""
+    p.loot_ok = False
+    if not carried(p, 48):
+        if not orb_go(p, 1): return
+        p.walk(941, 522)                                                 # the back room is as the honesty chapter left it
+        for _ in range(6): p.key('space', 'the party comes')
+        st = p.act('u', 'upright', 'the ladder'); p.log('  ladder: L%d (%d,%d) %r' % (st['L'], st['X'], st['Y'], st['msg'][-60:]))
+        if st['L'] != 1: p.issue('lenses', 'the catacombs ladder did not lead down: %r' % st['msg'][-80:]); return
+        p.nav.refresh(); cast_light(p)
+        p.walk(201, 135, adj=True); px, py = p.nav.pos()
+        p.key('l', 'look'); st = p.at(VDIR[(201 - px, 135 - py)], 'search the remains'); p.log('  remains: %r' % st['msg'][-120:])
+        if not get_at(p, 201, 135, 48, tries=4): p.issue('lenses', 'no glass sword in the remains at (201,135) L1'); return
+        if not climb_out(p): p.issue('lenses', 'no way up from L%d (%d,%d)' % (p.g.state['L'], p.g.state['X'], p.g.state['Y'])); return
+        if p.nav.pos() == (942, 521):                                    # the ladder's tile: barrels west and south, and no diagonal between them
+            ids = [m['id'] for m in p.g.state['party']]
+            seq = [('k', str(ids.index(2) + 1) if 2 in ids else '2')]   # Dupre alone out of the corner first: he stands where the barrel must pass
+            seq += [('k', 'down')] * 3 + [('k', 'left'), ('k', '0'), ('k', '1')]   # down the passage to (940,525); party, then the Avatar alone
+            seq += [('m', 'down', 'downleft'), ('k', 'down'), ('k', 'left')] + [('m', 'down', 'down'), ('k', 'down')] * 3 + [('k', '0')]
+            for s_ in seq:                                               # the south barrel into the secret doorway, then south down the passage
+                if s_[0] == 'm': p.act('m', s_[1]); st = p.key(s_[2], 'push')
+                else: st = p.key(s_[1])
+                p.log('  %s: (%d,%d) %r' % ('/'.join(s_), st['X'], st['Y'], st['msg'][-40:]))
+            p.idle(); p.nav.refresh()
+    wait_until(p, 15, 20, 'Ephemerides is up 15-20')                     # SCHEDULE: asleep 5-15, at his telescope by night
+    if not go_to_actor(p, 35, 'Ephemerides'): return
+    p.talk_to(35, ['lens', 'bye'], 'Ephemerides', yes=True)
+    p.log('  lens kept: %s' % (not carried(p, 396)))
+    out = p.talk_to(35, ['swor', 'bye'], 'Ephemerides', yes=True)
+    p.log('  lenses now: concave %s convex %s, sword %s' % (carried(p, 394), carried(p, 396), carried(p, 48)))
+    if not (carried(p, 394) and carried(p, 396)): p.issue('lenses', 'Ephemerides did not give both lenses: %r' % (out and out[-2:]))
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1371,7 +1418,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
