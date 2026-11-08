@@ -194,15 +194,17 @@ containers (jars/buckets/vases/casks). Hook: PERSIST.REQ '4' (below).
   (145), brazier (206): frame 0↔1; a brazier at frame 2 is a holy flame and cannot be doused.
   U)se toggles: "<name> is lit." / "<name> is doused.". The lit frame's tile is the light
   emitter (tileflags2 bits 0-1), so the lighting follows the frame at once.
-- **Torch (90).** U)se a torch from the pack: one torch is READIED into a free hand (ARM, else
-  ARM2 — "No free hand to hold the torch." when both are taken) and lit: "Torch is lit."; the
+- **Torch (90).** U)se a torch from the pack: one torch is READIED into a free hand of the member
+  who carries it (ARM, else ARM2 — "No free hand to hold the torch." when both are taken; the
+  reference readies it on the actor holding the object) and lit: "Torch is lit."; the
   holder sheds light level 3 (the brightest emitter class) while it burns. It burns for
   200 turns of fuel, losing one each turn with probability 1/2 (≈400 turns): "A torch burned
   out." — the torch is gone. U)se the pack's torch again while one is lit, or unready the lit
-  torch: it is extinguished and used up (the original destroys an extinguished torch).
+  torch: it is extinguished and used up (the original destroys an extinguished torch); that is
+  per member, so U)se of a torch Dupre carries puts out Dupre's lit one.
   U)se a torch lying on the map lights it in place (frame 1: a light source on the ground);
-  U)se it again and it burns out (removed). Only the Avatar's torch is modelled (companions
-  and NPCs do not light theirs).
+  U)se it again and it burns out (removed). A companion's torch burns like the Avatar's; NPC
+  torches follow the hours (below).
 - **Powder keg (223).** U)se a keg (on the map or carried): "Powder lit!" — frame 1 and a
   3-turn fuse (one fuse at a time: "Not now" while one burns; a lit keg: "No effect"). When the
   fuse runs out every lit keg on the level explodes (a carried one at the party's feet): the keg
@@ -230,7 +232,8 @@ it ("Searching here, you find a secret door.", frame 1, now passable), U)se clos
 frame 0 — found by type, since a floor object shares its tile; '3' a brazier: "brazier is doused."
 (frame 0, emitter 0) then "flaming brazier is lit." (frame 1, emitter 3); '4' a pack torch: "Torch is
 lit.", fuel 200, in hand, one torch fewer in the pack, burned out after 411 turns with the hand
-free; '5' a lit keg: "Powder lit!", three turns later the keg and the door beside it are gone,
+free; then a torch a companion carries: "Torch is lit." in the companion's hand, fuel 200, the
+Avatar's unlit (TT 2026-11-08); '5' a lit keg: "Powder lit!", three turns later the keg and the door beside it are gone,
 "The door is blown up!", the gargoyle two tiles away hurt (200 → 194), the party 3 tiles away unhurt.
 Found on the way: object blocking used Impassable|Wall; the reference blocks on Impassable only, and
 the Wall-only tiles are doorways, arches and the open secret door frames — fixed (tileflag.md).

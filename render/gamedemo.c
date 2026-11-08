@@ -6658,12 +6658,17 @@ static int u6_use_pack(world_t*w,int on)
     if(on==77){                                                /* the gem: peer at the land around (a key closes it) */
         if(g_use_idx>=0){ obj_destroy(g_use_idx); build_blocked(); } else objworld_consume(&g_ow,77,1);
         g_peer_on=1; msgcat(0,"You peer into the gem."); return 1; }
-    if(on==90){                                                /* a torch from the pack (usecode_use.md) */
-        if(g_torch_fuel[1]>0){ for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==90){ (void)equip_unready(g_aready[1],sl); break; }
-            g_torch_fuel[1]=0; equip_refold(1); msgcat(0,"A torch burned out."); return 1; }   /* put out = used up */
-        if(objworld_count(&g_ow,90)<=0){ msgcat(0,"Nothing happens."); return 0; }
-        if(equip_ready(g_aready[1],90)<0){ msgcat(0,"No free hand to hold the torch."); return 0; }
-        objworld_consume(&g_ow,90,1); equip_refold(1); g_torch_fuel[1]=200; msgcat(0,"Torch is lit."); return 1; }
+    if(on==90){                                                /* a torch from the pack: the one carrying it holds it (usecode_use.md) */
+        int row=(g_inv_sel>=0&&g_inv_sel<g_ow.ninv&&g_ow.inv[g_inv_sel].obj_n==90)?g_inv_sel:-1;
+        for(int k=0;k<g_ow.ninv&&row<0;k++) if(g_ow.inv[k].obj_n==90) row=k;
+        if(row<0){ msgcat(0,"Nothing happens."); return 0; }
+        int a=g_ow.inv[row].owner?g_ow.inv[row].owner:1; if(a<1||a>=U6_MAX_ACTORS) a=1;
+        if(g_torch_fuel[a]>0){ for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]==90){ (void)equip_unready(g_aready[a],sl); break; }
+            g_torch_fuel[a]=0; equip_refold(a); msgcat(0,"A torch burned out."); return 1; }   /* put out = used up */
+        if(equip_ready(g_aready[a],90)<0){ msgcat(0,"No free hand to hold the torch."); return 0; }
+        if(g_ow.inv[row].qty>1) g_ow.inv[row].qty--;
+        else { for(int k=row;k<g_ow.ninv-1;k++) g_ow.inv[k]=g_ow.inv[k+1]; g_ow.ninv--; if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0; }
+        equip_refold(a); g_torch_fuel[a]=200; msgcat(0,"Torch is lit."); return 1; }
     if(on==223){                                               /* a carried keg: the fuse burns in the pack */
         if(g_keg_timer>0){ msgcat(0,"Not now."); return 0; }
         if(objworld_count(&g_ow,223)<=0) return 0;
@@ -14937,12 +14942,21 @@ int main(int argc, char **argv)
             }
             if(mode=='4'){
                 inv_add_objn(90,1); int n0=objworld_count(&g_ow,90);
+                g_inv_sel=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==90&&(g_ow.inv[k].owner|1)==1) g_inv_sel=k;   /* the Avatar's own */
+                dbg_num("DU torch rows=", g_ow.ninv); dbg_num("DU torch sel=", g_inv_sel);
                 (void)use_pack_item(&w,90); Cconws(g_msg); Cconws("\r\n");
                 dbg_num("DU torch fuel=", g_torch_fuel[1]); dbg_num("DU torch in hand=", g_aready[1][EQ_ARM]==90||g_aready[1][EQ_ARM2]==90);
                 dbg_num("DU torch pack delta=", n0-objworld_count(&g_ow,90));
                 int turns=0; while(g_torch_fuel[1]>0 && turns<2000){ dunguse_tick(&w); turns++; }
                 dbg_num("DU torch burned after turns=", turns); dbg_num("DU torch hand free=", g_aready[1][EQ_ARM]!=90&&g_aready[1][EQ_ARM2]!=90);
                 Cconws(g_msg); Cconws("\r\n");
+                {   int c=g_nparty>1?g_party[1].actor:-1;                   /* a companion's torch lights in the companion's hand */
+                    if(c>0){ for(int sl=EQ_ARM;sl<=EQ_ARM2;sl++) if(g_aready[c][sl]){ g_add_to=c; inv_add_objn(g_aready[c][sl],1); g_add_to=1; g_aready[c][sl]=0; }
+                        g_add_to=c; inv_add_objn(90,1); g_add_to=1; g_inv_sel=-1;
+                        for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==90&&g_ow.inv[k].owner==c) g_inv_sel=k;
+                        (void)use_pack_item(&w,90); Cconws(g_msg); Cconws("\r\n");
+                        dbg_num("DU companion torch fuel=", g_torch_fuel[c]); dbg_num("DU companion torch in hand=", g_aready[c][EQ_ARM]==90||g_aready[c][EQ_ARM2]==90);
+                        dbg_num("DU avatar torch unlit=", g_torch_fuel[1]==0); } }
             }
             if(mode=='5'){
                 int kx=(w.px+3)&(U6_SURFACE_TILES-1), ky=w.py, dx_=(w.px+4)&(U6_SURFACE_TILES-1);
