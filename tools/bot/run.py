@@ -1223,6 +1223,8 @@ def seg_train(p, kw):
     goal = int(os.environ.get('TRAIN_TO', '6')); t_end = time.time() + 60 * float(os.environ.get('TRAIN_MIN', '60'))
     p.log('  train from: %s' % party_line(p))
     ROSTER.update(m['id'] for m in p.g.state['party'])
+    p.g.actors(); ROSTER.update(kv(l)['id'] for l in p.g.got if l.startswith('@L '))   # the fallen still belong (F2 dump)
+    raise_dead(p)
     global GRIND
     GRIND = hunt_sites(p) or GRIND
     i = 0

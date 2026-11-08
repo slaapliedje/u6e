@@ -13,7 +13,7 @@ class NavError(Exception): pass
 class Nav:
     def __init__(self, game, log=print):
         self.g, self.log = game, log
-        self.level = None; self.temp = {}; self.denied = set()    # tiles a guard refuses ("Passage denied!") stay shut
+        self.level = None; self.temp = {}; self.denied = set(); self.goal_tile = None    # tiles a guard refuses ("Passage denied!") stay shut
         self.keyfn = game.key                                  # Player routes it through its checks
 
     def refresh(self):
@@ -34,6 +34,7 @@ class Nav:
             if fr < 12 and keys: return 4
             return None
         v = self.pm[y * self.span + x]
+        if v & 0x10 and (x, y) != self.goal_tile: return None          # a cave mouth or hole changes the level: only when it is the goal
         return (25 if v & 4 else 1) if v & 1 else None              # ground that hurts (lava, fire, swamp): only when there's no other way
 
     def route(self, sx, sy, goal, keys=False, limit=400000):
@@ -86,6 +87,7 @@ class Nav:
         """walk to (tx,ty); adj=True stops orthogonally next to it (to use / get); near=r stops anywhere
         within r tiles of it (to talk through the crosshair)"""
         st = self.g.state
+        self.goal_tile = (tx, ty)
         self.dismiss()
         if st['ask'] or st['cast'] or st['mantra'] or st['verb']:
             raise NavError('cannot walk: in a prompt (ask=%s cast=%s mantra=%s verb=%r)' % (st['ask'], st['cast'], st['mantra'], st['verb']))

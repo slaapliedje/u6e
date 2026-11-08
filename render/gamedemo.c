@@ -12704,7 +12704,7 @@ static void bot_dump_objects(const world_t*w)
     bot_flush(bot_put(0,"@O end"));
 }
 /* F4: BOTPASS.BIN = one byte per tile of this level, row-major (span x span): bit0 walkable,
- * bit1 a closed door, bit2 the door is locked (key / magic), bit3 water. GEMDOS Fcreate 0x3C /
+ * bit2 damaging, bit3 water, bit4 a step there changes the level (a cave mouth, a hole). GEMDOS Fcreate 0x3C /
  * Fwrite 0x40 / Fclose 0x3E through plat_f*. */
 static void bot_dump_pass(const world_t*w)
 {
@@ -12717,6 +12717,7 @@ static void bot_dump_pass(const world_t*w)
         for(int x=0;x<span;x++){ int t=world_tile(w,x,y);
             row[x]=(uint8_t)((world_is_passable(w,x,y)?1:0)|((t>=0&&t<2048&&(g_tflags1[t]&8))?4:0)|(tile_is_water(w,x,y)?8:0)); }
         for(int k=0;k<nh;k++) if(hy[k]==y && hx[k]<span) row[hx[k]]|=4;
+        for(int x=0;x<span;x++) if((row[x]&1) && ((g_on.cave&&obj_idx_at(x,y,g_on.cave)>=0)||(g_on.hole&&obj_idx_at(x,y,g_on.hole)>=0))) row[x]|=0x10;
         plat_fwrite(f,row,span);
     }
     plat_fclose(f);
