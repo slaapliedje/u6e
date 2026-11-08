@@ -492,7 +492,11 @@ class Player:
             if self.g.state['foes'] > ignore and getattr(self, 'sneak', False):   # unseen (the invisibility ring): walk on, never strike
                 ignore = self.g.state['foes']; continue
             if self.g.state['foes'] > ignore or (self.g.state['foes'] and any(max(abs(a['x'] - self.nav.pos()[0]), abs(a['y'] - self.nav.pos()[1])) <= 1 for a in self.foes())):
-                if self.foes(): self.fight(); ignore = 0; self.heal_up(); self.cure_up(); self.rest_if_hurt()
+                fs = self.foes(); sig = sorted((a['id'], a['hp']) for a in fs)
+                if fs:
+                    self.fight(); self.heal_up(); self.cure_up(); self.rest_if_hurt()
+                    after = sorted((a['id'], a['hp']) for a in self.foes())
+                    ignore = self.g.state['foes'] if after and after == sig else 0   # a fight that changed nothing: walk on past them
                 else: ignore = self.g.state['foes']
                 if self.g.state['L'] != lv: return self.g.state     # the walk took us to another level
                 continue

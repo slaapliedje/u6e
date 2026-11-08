@@ -1159,6 +1159,42 @@ def seg_sutek(p, kw):
     st = p.act('u', 'down', 'the ladder'); p.log('  ladder: L%d %r' % (st['L'], st['msg'][-40:])); p.nav.refresh()
     if st['L'] != 1: p.issue('sutek', 'not down Sutek\'s ladder: L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
 
+def seg_catacombs(p, kw):
+    """Sutek's catacombs to the balloonist's body: level 1, the far-right wall switch (174 q104 at (189,224)) drops
+    the electric field (doorway 104) south of the entrance ladder before the ladder down (195,251); level 2, the
+    north wall's hidden door (195,248), a bear trap behind it (a damaging tile, walked over), on down; level 4,
+    the body at (179,221) holds the balloon plans (270)"""
+    p.loot_ok = False
+    if p.g.state['L'] == 0 and not (770 <= p.nav.pos()[0] <= 805 and 935 <= p.nav.pos()[1] <= 980):   # recalled to the castle: back by skiff
+        lb_heal(p)
+        if min(count(p, 68), count(p, 71)) < 30 and p.g.state.get('gold', 0) >= 60: restock(p, 30)   # Heal's reagents ran out in the castle
+        if not orb_go(p, 25): return
+        if not board_skiff(p, (597, 118)): return                          # the deed fits both of Trebor's skiffs (quality 132)
+        if not sail_to(p, {t for t in region(p, 787, 970) if abs(t[0] - 787) + abs(t[1] - 970) <= 20}): return
+    if p.g.state['L'] == 0:
+        p.sneak = True                                                   # past the moat's creatures into the entry: walk on
+        try: p.walk(787, 957)
+        finally: p.sneak = False
+        p.walk(787, 947)                                                 # inside, what stands in the way is fought
+        st = p.act('u', 'down', 'Sutek\'s ladder'); p.log('  ladder: L%d %r' % (st['L'], st['msg'][-40:])); p.nav.refresh()
+    if p.g.state['L'] == 1:
+        cast_light(p)
+        if p.nav.route(*p.nav.pos(), {(195, 250)}) is None:              # the electric field (doorway 104) stands: the far-right wall switch
+            p.walk(189, 225); st = p.act('u', 'up', 'switch'); p.log('  switch (189,224): %r' % st['msg'][-50:]); p.nav.refresh()
+        p.walk(195, 250); st = p.act('u', 'down', 'ladder'); p.log('  ladder (195,251): L%d %r' % (st['L'], st['msg'][-40:])); p.nav.refresh()
+    if p.g.state['L'] == 2:
+        cast_light(p)
+        if p.nav.route(*p.nav.pos(), {(195, 247)}) is None:
+            p.walk(195, 249); p.key('l', 'look'); st = p.at('up', 'search'); p.idle(); p.nav.refresh()
+            p.log('  hidden door (195,248): %r' % st['msg'][-50:])
+        p.walk(203, 227, adj=True); st = use_way(p, {'obj': 305, 'x': 203, 'y': 227}); p.nav.refresh()   # the FAQ's way: right, then down
+        p.log('  ladder (203,227): L%d' % p.g.state['L'])
+    if not descend_to(p, 179, 221, 4): p.issue('catacombs', 'no way down to the body (179,221) L4 from L%d (%d,%d)' % (p.g.state['L'], *p.nav.pos())); return
+    cast_light(p); p.heal_up(0.5)
+    p.walk(179, 221, adj=True); px, py = p.nav.pos()
+    p.key('l', 'look'); st = p.at(VDIR[(179 - px, 221 - py)], 'search the body'); p.idle(); p.log('  body: %r' % st['msg'][-140:])
+    if not get_at(p, 179, 221, 270, tries=6): p.issue('catacombs', 'no balloon plans at (179,221) L4'); return
+
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
     return sum(r['qty'] or 1 for r in p.g.objects()[1] if r['obj'] == obj_n and (own is None or r.get('own', 1) == own))
@@ -1679,7 +1715,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
