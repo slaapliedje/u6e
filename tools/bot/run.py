@@ -1169,6 +1169,20 @@ def ring_spot(p, ex, ey, r0, r1):
         if p.nav.cost(*t) is not None and p.nav.route(x, y, {t}, limit=60000) is not None: return t
     return None
 
+ROSTER = set()                                                         # who trains (seg_train): the fallen are raised
+
+def raise_dead(p):
+    """a companion fell: C)ast Help (Kal Lor, no reagents), Lord British raises the dead with their gear and
+    recalls the party to the castle (combat.md §3d, the recall)"""
+    gone = sorted(ROSTER - {m['id'] for m in p.g.state['party']})
+    if not gone or p.foes(): return
+    st = p.key('c', 'cast')
+    if not st['cast']: p.idle(); return
+    st = p.g.type('kl'); p.idle()
+    left = sorted(ROSTER - {m['id'] for m in p.g.state['party']})
+    p.log('  help for %s: %r at (%d,%d), still gone %s' % (gone, st['msg'][-60:], st['X'], st['Y'], left))
+    if left: p.issue('train', 'Help did not raise %s: %r' % (left, st['msg'][-80:]))
+
 def grind(p, ex, ey, rounds=4):
     """step in and out of the egg's range: each approach is one hatch roll; fight what comes"""
     pos = SITE_GATE.get((ex, ey)) or min((k for k in ORB if ORB_LEVEL.get(k, 0) == 0), key=lambda k: max(abs(ORB[k][0] - ex), abs(ORB[k][1] - ey)))
@@ -1197,6 +1211,7 @@ def grind(p, ex, ey, rounds=4):
                     try: p.nav.goto(ex, ey, near=5, on_step=lambda s_: s_['foes'] > 0, max_steps=40)
                     except NavError as e: p.log('  to the hatchlings: %s' % e)
             if p.foes(): p.fight()
+            raise_dead(p)
             p.cure_up(); p.heal_up(); p.rest_if_hurt(0.6)
         except (NavError, Danger) as e: p.log('  grind (%d,%d): %s' % (ex, ey, e)); p.rest_if_hurt(0.9)
         if p.g.state['over']: return
@@ -1207,6 +1222,7 @@ def seg_train(p, kw):
     when anyone has the experience; until everyone is level TRAIN_TO (env, default 6) or the time runs out"""
     goal = int(os.environ.get('TRAIN_TO', '6')); t_end = time.time() + 60 * float(os.environ.get('TRAIN_MIN', '60'))
     p.log('  train from: %s' % party_line(p))
+    ROSTER.update(m['id'] for m in p.g.state['party'])
     global GRIND
     GRIND = hunt_sites(p) or GRIND
     i = 0
@@ -1220,6 +1236,7 @@ def seg_train(p, kw):
                 if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
         p.cure_up(); p.heal_up()
         grind(p, ex, ey)
+        raise_dead(p)
         lv = sum(m['lvl'] for m in p.g.state['party'])
         meditate(p)
         keep_up(p)

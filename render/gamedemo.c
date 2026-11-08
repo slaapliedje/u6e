@@ -11217,9 +11217,11 @@ static void body_returns(int id)
         for(int m=k;m<g_ow.ninv-1;m++) g_ow.inv[m]=g_ow.inv[m+1]; g_ow.ninv--;
         if(g_inv_sel>=g_ow.ninv) g_inv_sel=g_ow.ninv?g_ow.ninv-1:0;
         return; }
-    for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
-        if(o->alive && o->quality==(uint8_t)id && (on_body(o->obj_n)||(g_on.mouse&&o->obj_n==g_on.mouse))){
-            g_ow.add_owner=(uint8_t)id; pack_takes_children(j,0,0); g_ow.add_owner=(uint8_t)a0; obj_destroy(j); break; } } }
+    for(int pass=0;pass<2;pass++) for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; int full=0;   /* one that holds something first */
+        if(!o->alive || o->quality!=(uint8_t)id || !(on_body(o->obj_n)||(g_on.mouse&&o->obj_n==g_on.mouse))) continue;
+        for(int k=0;k<g_ow.nobjs&&!full;k++) if(g_wobj[k].parent==(uint16_t)j) full=1;
+        if(!pass && !full) continue;
+        g_ow.add_owner=(uint8_t)id; pack_takes_children(j,0,0); g_ow.add_owner=(uint8_t)a0; obj_destroy(j); return; } }
 /* a dead companion stands up; what it had comes back */
 static void companion_revive(world_t*w,int id){
     int x=(int)w->px, y=(int)w->py; { const wobj_t*b=0; for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(o->alive&&o->quality==(uint8_t)id&&on_body(o->obj_n)){ b=o; break; } } if(b&&(int)g_actz[id]==w->level){ x=b->x; y=b->y; } }
@@ -11300,10 +11302,18 @@ static void arrest_no(world_t*w){
  * hunters forget the party (the Avatar's death, not Help) */
 static void draw_status(const world_t*w,uint8_t col);
 static void present_frame(void);
+static int remains_of_member(int on){ return on_body(on)||(g_on.mouse&&on==g_on.mouse); }
 static void lb_recall(world_t*w,int forget){
     if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
     else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
-    if(!g_armageddon) for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]) companion_revive(w,i);   /* the dead rise where they fell, with what their bodies hold, before the move (combat.md §3d steps 2, 6) */
+    if(!g_armageddon) for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]){   /* the dead rise where they fell, with what their bodies hold, before the move (combat.md §3d steps 2, 6) */
+        int here=0, bx, by, bz;
+        for(int k=0;k<g_ow.ninv;k++) if((on_body(g_ow.inv[k].obj_n)||(g_on.mouse&&g_ow.inv[k].obj_n==g_on.mouse))&&g_ow.inv[k].quality==(uint8_t)i) here=1;
+        for(int j=0;j<g_ow.nobjs&&!here;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive||o->quality!=(uint8_t)i||!remains_of_member(o->obj_n)) continue;
+            for(int k=0;k<g_ow.nobjs&&!here;k++) if(g_wobj[k].parent==(uint16_t)j) here=1; }   /* one that holds something (an older empty one may linger) */
+        if(!here && g_savetmpl && (objects_reconcile(w),1) && sav_find_onmap(g_savetmpl,g_savetmpl_len,i,remains_of_member,w->level,&bx,&by,&bz))
+            (void)travel_to(w,bx,by,bz);                          /* its body on another level: DOS holds every level at once */
+        companion_revive(w,i); }
     (void)travel_to(w,307,352,0);                                 /* the throne room, on the surface */
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
         g_ahp[a]=g_amaxhp[a]?g_amaxhp[a]:30; g_asleep[a]=g_paralyze[a]=g_poison[a]=0; g_charm[a]=g_ally[a]=0; g_protect[a]=g_curse[a]=0; g_ainvis[a]=0;
@@ -12673,6 +12683,8 @@ static void bot_dump_actors(const world_t*w)
         n=bot_kv(n,"hostile",actor_hostile(i)); n=bot_kv(n,"wt",i>1?npc_live_worktype(i):0); bot_flush(n); }
     for(int i=2;i<U6_MAX_ACTORS;i++) if(g_atile[i]!=0xffff && (int)g_actz[i]!=g_cur_level){   /* the others, on other levels: "@B id x y z" */
         int n=bot_put(0,"@B"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",g_actx[i]); n=bot_kv(n,"y",g_acty[i]); n=bot_kv(n,"z",g_actz[i]); bot_flush(n); }
+    for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]){                                          /* the fallen companions: "@L id x y z" where they fell */
+        int n=bot_put(0,"@L"); n=bot_kv(n,"id",i); n=bot_kv(n,"x",g_actx[i]); n=bot_kv(n,"y",g_acty[i]); n=bot_kv(n,"z",g_actz[i]); bot_flush(n); }
     bot_flush(bot_put(0,"@A end"));
 }
 /* F3: on-map objects within 24 tiles + the party's pack  "@O idx obj frame x y qty q name" / "@I ..." / readied "@E ..." */

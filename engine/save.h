@@ -34,6 +34,12 @@ int32_t sav_surface_end(const uint8_t *d, int32_t n);
  * Returns 1 and fills [*off, *end), or 0 if the layout doesn't parse. */
 int sav_level_span(const uint8_t *d, int32_t n, int level, int32_t *off, int32_t *end);
 
+/* Find an ON-MAP record (location bits 0) whose quality is `quality` and whose obj_n passes `ok`, in the 64
+ * surface chunks then the 5 dungeon chunks, skipping level `skip_level`: its x, y and level, the first one that
+ * holds something (a contained record links to it), else the first. 1 if found (combat.md §3d: a fallen
+ * companion's body on another level). */
+int sav_find_onmap(const uint8_t *d, int32_t n, int quality, int (*ok)(int obj_n), int skip_level, int *x, int *y, int *level);
+
 /* Every on-map patcher below addresses a record by its LEVEL: a surface record (level 0) lives in
  * super-chunk (y>>7)*8+(x>>7), a dungeon record (level 1..5) in dungeon chunk level-1. */
 

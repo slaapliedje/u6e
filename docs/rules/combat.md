@@ -147,6 +147,13 @@ ran. Found by the bot.)
 (Until 2026-11-07 ours moved the party first and raised the dead after, on the surface: a companion who fell in a
 dungeon rose without the gear in its body, which stayed below. Found by the bot: the party had lost its armour
 and weapons over a few deaths in Hythloth.)
+(DOS holds the objects of every level in one list, so a member who fell on another level rises with what its body
+holds there. Ours keeps one level in memory: the recall finds each such body (in the pack, on this level, else in the save
+template's records of the other levels: an on-map remains record whose quality is the member, one that holds something
+first, since saves made before the fix of the recall order may still keep an empty older body) and visits its level
+first (map_levels.md §4b), then moves the party. The member's own position cannot say where: a save parks the slain at
+(0,0,0), as the reference does. Until 2026-11-07 a companion who fell in the Ant Mound rose empty-handed when Help was cast on the
+surface. Found by the bot.)
 
 ## 3e. What some creatures' blows do (DOS GAME.EXE 4.5, read 2026-11-05)
 After a blow lands on an actor that lives through it:

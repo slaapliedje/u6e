@@ -61,6 +61,25 @@ int sav_level_span(const uint8_t *d, int32_t n, int level, int32_t *off, int32_t
     return *end > 0;
 }
 
+int sav_find_onmap(const uint8_t *d, int32_t n, int quality, int (*ok)(int obj_n), int skip_level, int *x, int *y, int *level)
+{
+    int32_t pos = sav_surface_off(d, n); int found = 0;
+    if (pos < 0) return 0;
+    for (int c = 0; c < 64 + 5; c++){
+        int32_t next = skip_chunk(d, n, pos); if (next < 0) return found;
+        int lv = c < 64 ? 0 : c - 63, cnt = le16(d + pos);
+        for (int i = 0; i < cnt && lv != skip_level; i++){
+            const uint8_t *r = d + pos + 2 + i * 8; int full = 0;
+            if ((r[0] & 0x18) || r[7] != (uint8_t)quality || !ok(r[4] | ((r[5] & 3) << 8))) continue;
+            for (int k = i + 1; k < cnt && !full; k++){ const uint8_t *q = d + pos + 2 + k * 8;   /* something inside it (objblk.md: parent link) */
+                full = (q[0] & 0x18) == 0x08 && (q[1] | ((q[2] & 3) << 8) | ((q[2] >> 2 & 0x3f) << 10)) == i; }
+            if (found && !full) continue;
+            *x = r[1] | ((r[2] & 3) << 8); *y = (r[2] >> 2) | ((r[3] & 0xf) << 6); *level = lv; found = 1;
+            if (full) return 1; }
+        pos = next; }
+    return found;
+}
+
 /* start (count word) of the chunk holding an on-map record of `level` at (x,y): a surface
  * record's row-major super-chunk, or dungeon chunk level-1; -1 if the layout doesn't parse */
 static int32_t chunk_of(const uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y)
