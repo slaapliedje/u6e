@@ -10605,7 +10605,7 @@ static void rest_start(world_t*w,int hours,int guard)
     g_rest_fire=temp_obj_new(253,1,fx,fy,0); build_blocked();
     for(int round=0;round<20;round++){ int any=0;                /* up to 20 rounds of walking to their places (rest.md §3) */
         for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor, tx=fx+SX[p], ty=fy+SY[p]; if(a<1||a>=U6_MAX_ACTORS) continue;
-            if(a==1){ if(round==0&&!npc_occupied(1,tx,ty)&&world_is_passable(w,tx,ty)){ w->px=(uint16_t)tx; w->py=(uint16_t)ty; any=1; } g_facing[1]=FACE[p]; continue; }
+            if(a==1){ if(((int)w->px!=tx||(int)w->py!=ty)&&!npc_occupied(1,tx,ty)&&world_is_passable(w,tx,ty)){ w->px=(uint16_t)tx; w->py=(uint16_t)ty; any=1; } g_facing[1]=FACE[p]; continue; }   /* every round, as the others: off the fire once a follower clears the place (DOS walks slot 0 too) */
             if(g_actx[a]==tx&&g_acty[a]==ty){ g_facing[a]=FACE[p]; continue; }
             g_mover=a; g_amoved[a]=0; g_pts[a]=127; if(walk_to(w,a,tx,ty)) any=1; else g_facing[a]=FACE[p]; g_mover=-1; }
         if(!any) break;
@@ -12653,7 +12653,8 @@ static void bot_trace(const world_t*w)
     for(int p=0;p<g_nparty;p++) hp+=g_ahp[g_party[p].actor];
     if(!strcmp(last,g_msg) && hp==lhp) return;
     strcpy(last,g_msg); lhp=hp;
-    int n=bot_put(0,"@M"); n=bot_kv(n,"min",clock_minutes(w)); n=bot_kv(n,"rest",g_resting); n=bot_kv(n,"hp1",g_ahp[1]); n=bot_kv(n,"sleep1",g_asleep[1]);
+    int n=bot_put(0,"@M"); n=bot_kv(n,"min",clock_minutes(w)); n=bot_kv(n,"rest",g_resting); n=bot_kv(n,"hp1",g_ahp[1]); n=bot_kv(n,"sleep1",g_asleep[1]); n=bot_kv(n,"X",(long)w->px); n=bot_kv(n,"Y",(long)w->py);
+    if(g_resting&&g_rest_fire>=0) { n=bot_kv(n,"fx",g_wobj[g_rest_fire].x); n=bot_kv(n,"fy",g_wobj[g_rest_fire].y); }
     n=bot_kv(n,"party",hp); n=bot_put(n," msg="); n=bot_put(n,g_msg); bot_flush(n); }
 /* F2: every actor on this level  "@A id x y hp max tile hostile wt" (wt = the live worktype) */
 static void bot_dump_actors(const world_t*w)
