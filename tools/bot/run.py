@@ -776,6 +776,33 @@ def cast_light(p):
     st = p.g.type('il'); p.idle(); p.log('  light: %r' % st['msg'][-50:])
     return 'success' in st['msg'].lower()
 
+def dispel_at(p, x, y, d):
+    """from (x,y), C)ast Dispel Field (An Grav) on the next tile that way (magic_skills.md §5a)"""
+    p.walk(x, y)
+    st = p.key('c', 'cast')
+    if not st['cast']: p.idle(); return False
+    p.g.type('ag'); st = p.at(d, 'dispel the field'); p.idle()
+    p.log('  dispel field %s of (%d,%d): %r' % (d, x, y, st['msg'][-60:])); p.nav.refresh()
+    return 'Success' in st['msg']
+
+def give_to(p, obj_n, who):
+    """M)ove every row of obj_n someone else carries to member who: M through the pack, Enter, the count for a
+    stack, the crosshair on them, Enter (equipment.md §5 M)ove)"""
+    for _ in range(4):
+        rows = [r for r in p.g.objects()[1] if r['obj'] == obj_n and r.get('own', 1) != who]
+        if not rows: return True
+        inv = p.g.objects()[1]; name = rows[0].get('name', ''); at = rows[0].get('row', 0)
+        p.idle(); p.key('m', 'move')
+        for k in range(len(inv) + 2):                                    # the pack steps in row order: to that row, not an earlier one
+            st = p.key('m', 'the pack')
+            if st['msg'].startswith('Move the ' + name) and k >= at: break
+        else: p.idle(); return False
+        st = p.key('ret', 'this one')
+        if 'How many' in st['msg']: p.g.type(str(rows[0]['qty'] or 1))
+        st = p.aim_at(who, 'to the holder'); p.idle()
+        p.log('  %s to %d: %r' % (name, who, st['msg'][-40:]))
+    return False
+
 def light_torch(p):
     """a torch lit in a free hand: the member carrying it holds it (usecode_use.md), so the torches go first to
     someone with a hand free (slots 3, 4 in @E), the whole stack by M)ove and the crosshair, then U)se"""
@@ -784,22 +811,45 @@ def light_torch(p):
     free = [i for i in ids if not ((eq.get((i, 3)) and eq.get((i, 4))) or eq.get((i, 3)) in TWO_HANDED) and i != 9]   # Sherry the mouse holds nothing
     if not free: p.log('  torch: no free hand (%s)' % sorted(eq.items())); return None
     who = free[0]
-    for _ in range(4):
-        rows = [r for r in p.g.objects()[1] if r['obj'] == 90 and r.get('own', 1) != who]
-        if not rows: break
-        inv = p.g.objects()[1]; name = rows[0].get('name', '')
-        p.idle(); p.key('m', 'move')
-        for _ in range(len(inv) + 2):
-            st = p.key('m', 'the pack')
-            if st['msg'].startswith('Move the ' + name): break
-        else: p.idle(); break
-        st = p.key('ret', 'this one')
-        if 'How many' in st['msg']: p.g.type(str(rows[0]['qty'] or 1))           # a stack asks first (usecode_use.md M)ove)
-        st = p.aim_at(who, 'to the holder'); p.idle()
-        p.log('  torches to %d: %r' % (who, st['msg'][-40:]))
+    give_to(p, 90, who)
     st = p.use_pack(90)
     p.log('  torch for %d (%d carried): %r' % (who, count(p, 90), st and st['msg'][-60:]))
     return st
+
+def seg_gargoyles(p, kw):
+    """the Gargoyle lands, Beh Lem along: Draxinusom (surrender; the Amulet of Submission), Naxatilor (the
+    Vortex Lens and the Book of Ritual), the Hall of Knowledge south of them (the broken lens 395 at (124,194),
+    the four books in the Librum chamber), the lensmaker Lor-wis-lem to the north-east (he mends it), and
+    Naxatilor again: a second, human-made concave lens is needed (Ephemerides)"""
+    p.loot_ok = False
+    if not go_to_actor(p, 167, 'Draxinusom'): return
+    p.talk_to(167, ['surr', 'y', 'y', 'y', 'sacr', 'y'], 'Draxinusom', yes=True)
+    eq = readied(p)
+    p.log('  amulet: readied %s, carried %s' % (any(v == 76 for v in eq.values()), carried(p, 76)))
+    if not carried(p, 76) and not any(v == 76 for v in eq.values()): p.issue('gargoyles', 'no Amulet of Submission from Draxinusom'); return
+    if carried(p, 76): ready(p, 76)                                     # worn, the gargoyles talk
+    if not go_to_actor(p, 168, 'Naxatilor'): return
+    p.talk_to(168, ['vort', 'lens', 'bye'], 'Naxatilor', yes=True)
+    dispel_at(p, 127, 183, 'down')                                       # the Hall's door holds a protection field (319)
+    drop_junk(p)                                                         # room for the lens: the Avatar carries at most twice his strength
+    for obj in (73, 90): give_to(p, obj, 2)                              # the moonstones and torches go to Dupre
+    if not carried(p, 395) and not get_at(p, 124, 194, 395): p.issue('gargoyles', 'no broken lens at (124,194) L5'); return
+    dispel_at(p, 124, 181, 'left')                                       # the Librum chamber's door holds a field too (123,181)
+    for bx, by in ((115, 183), (120, 183), (115, 187), (120, 187)):        # the Librum chamber: the Book of Ritual is one of them
+        p.walk(bx, by, adj=True); px, py = p.nav.pos()
+        p.key('l', 'look'); st = p.at(VDIR[(bx - px, by - py)], 'read the book')
+        p.log('  book (%d,%d): %r' % (bx, by, st['msg'][:100])); p.idle()
+        for _ in range(12):                                              # a long text pages on with a key
+            if not p.g.state.get('more'): break
+            p.key('space', 'page')
+    if not go_to_actor(p, 170, 'the lensmaker'): return
+    p.talk_to(170, ['lens', 'bye'], 'the lensmaker', yes=True)
+    lens = [o for o in (394, 396) if carried(p, o)]
+    p.log('  lenses: %s, broken %s' % (lens, carried(p, 395)))
+    if not lens: p.issue('gargoyles', 'the lensmaker did not mend the lens'); return
+    if not go_to_actor(p, 168, 'Naxatilor'): return
+    out = p.talk_to(168, ['y', 'lens', 'bye'], 'Naxatilor', yes=True)
+    if out and not any('second lens' in r for _, r in out): p.issue('gargoyles', 'Naxatilor never asked for the second lens: %r' % out[-2:])
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1321,7 +1371,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)

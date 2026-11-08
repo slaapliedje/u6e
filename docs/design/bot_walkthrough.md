@@ -77,6 +77,13 @@ replaced by the Wind Change spell. If a conversation later turns out to need it,
   record left its host hooks unset). Checked in the game by the `cheat` segment: the menu reads the flag back
   and the way to the Codex then lets the party by.
 
+- U)se of a pack torch always put it in the Avatar's hand, whoever carried it; with sword and shield he had no
+  hand free, the dungeon stayed dark, and a spell's crosshair found "nothing" on a companion. The reference lights
+  it in the carrier's hand (usecode_use.md). In Hythloth the bot casts Light (sulfurous ash from Rudyom).
+- Dispel Field saw only fields made by spells: the protection field in the Hall of Knowledge's door (127,184,
+  level 5) stayed, and the Vortex Lens was out of reach. DOS removes a fire, poison, protection or sleep field
+  object lying on the tile (magic_skills.md §5a).
+
 ## 5. Open
 - Strength for the Gargoyle half: a level-3 party dies in Hythloth (drakes cast Fireball). The user's choice
   (2026-11-07): earn it. The `train` chapter hunts at surface eggs of evil creatures (only an evil kill
@@ -84,7 +91,9 @@ replaced by the Wind Change spell. If a conversation later turns out to need it,
   worked out at the start: the new-game eggs (objfind) of creatures worth experience, reachable on foot within 90
   steps of an Orb gate (a walk over the game's own pass map). What hatches keeps to its egg, so the bot goes to it.
   It camps with a guard: an unguarded camp that is ambushed sleeps on and the Avatar dies in his sleep (rest.md §7).
-  First hour: Dupre to level 4, Sherry to 2, about 40 experience per site visit.
+  First hour: Dupre to level 4, Sherry to 2, about 40 experience per site visit. After 2.5 hours (2026-11-08) the
+  Avatar at 7, Dupre 4, Iolo and Shamino 3 was enough: with Light, 30 reagents and fighting rather than sneaking,
+  the party reached Captain John and Beh Lem, losing only Sherry.
 - The party's healing on a long run: the test stock's reagents run out; a restock (Xiao, Nicodemus,
   Horance, Rudyom sell them) or a healer is needed between chapters.
 
