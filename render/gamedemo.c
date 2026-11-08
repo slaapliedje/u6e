@@ -6724,6 +6724,14 @@ static const RuleSet g_game_rules={game_move_cost};
 static void vehicle_turns(world_t*w,int cost)
 {   pay(1,cost); sched_run(w); }
 
+/* is someone in the Avatar's way on (x,y)? Only party members give way, and the small creatures anyone
+ * may share a tile with (movement_turns.md §2, DOS seen 2026-11-07) */
+static int avatar_way_blocked(int x,int y)
+{   for(int j=2;j<U6_MAX_ACTORS;j++){
+        if(g_atile[j]==0xffff||(int)g_actz[j]!=g_cur_level||g_actx[j]!=x||g_acty[j]!=y||is_party_member(j)) continue;
+        if(on_in(g_on.small,5,actor_objn(j)) && actor_objn(1)!=actor_objn(j)) continue;
+        return 1; }
+    return 0; }
 /* one player step by (dx,dy): on foot, mounted, or steering a vessel. Advances the world by the
  * step's movement cost (a walked step = one turn; vehicles per wind.md §2) and runs the step
  * triggers. Returns 1 if the party moved. */
@@ -6734,7 +6742,7 @@ static int player_step(world_t*w,int dx,int dy)
         if(g_alcohol>3 && rng_range(&g_crng,4)!=0){ dx=(int)rng_range(&g_crng,3)-1; dy=(int)rng_range(&g_crng,3)-1; msgcat(0,"Hic!"); }   /* drunk (usecode_use.md Food) */
         if((dx||dy) && g_on.codex_way && !g_cg.on_quest && w->level==0 && obj_idx_at((w->px+dx)&(U6_SURFACE_TILES-1),(w->py+dy)&(U6_SURFACE_TILES-1),g_on.codex_way)>=0){   /* the way to the Codex (usecode_use.md) */
             msgcat(0,"\"Thou art not upon a Sacred Quest!\nPassage denied!\""); return 0; }
-        stepped=(dx||dy) ? world_try_move(w,dx,dy) : 0;
+        stepped=(dx||dy) && !avatar_way_blocked((int)((w->px+dx)&(U6_SURFACE_TILES-1)),(int)((w->py+dy)&(U6_SURFACE_TILES-1))) ? world_try_move(w,dx,dy) : 0;
         if(!stepped && (dx||dy) && g_solo_m && g_on.mouse && actor_objn(1)==g_on.mouse){   /* a mouse alone goes by its holes, as its walker rule has it (combat.md §7c) */
             int nx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ny=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), hole=0;
             for(int k=0;k<3;k++) if(g_on.mouse_hole[k] && obj_idx_at(nx,ny,g_on.mouse_hole[k])>=0) hole=1;

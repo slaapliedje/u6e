@@ -17,7 +17,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M5
 >                  deterministic RNG. All pass.
 > - Confidence   : confirmed (movement mechanics) / PLACEHOLDER (passability
 >                  source) / guessed (exact turn-cost value).
-> - Last updated : 2026-11-04
+> - Last updated : 2026-11-07
 
 ## 1. System
 The player occupies one surface tile (0..1023 on each axis, toroidal wrap). A
@@ -30,6 +30,15 @@ and a successful step advances the game clock by the move's turn cost.
 | step onto passable tile  | player moves; turns += 1; clock += turn cost      |
 | step onto blocked tile   | no move; no turn; clock unchanged                 |
 | step off an edge         | wraps to the opposite edge (toroidal, 1024 = 2^10)|
+| step onto another actor  | no move, as a blocked tile (DOS, seen 2026-11-07) |
+| step onto a party member | the Avatar moves; the member steps aside (DOS)    |
+
+**Someone in the way (DOS U6 4.5, observed 2026-11-07 in DOSBox).** The Avatar at (305,350) pressed Up
+into Nystul's chair at (305,349): the Avatar stayed where he was. The same Avatar pressed down-right into
+Dupre at (306,351): the Avatar took Dupre's tile and Dupre moved to (307,351), aside, not back onto the
+Avatar's old tile. So only party members give way. The small creatures that anyone may share a tile with
+(combat.md §7c) are let through for the Avatar as for everyone else. Until 2026-11-07 u6e let the Avatar walk onto
+anyone: the bot found him standing on a giant ant in the Ant Mound, where the fight could no longer go on.
 
 ## 3. Turn cost and the clock (RuleSet hook)
 `move_turn_cost(world, dx, dy)` → the step's **movement points**; U6 = **5** for a walking step.
