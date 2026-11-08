@@ -10875,7 +10875,8 @@ static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only)
           else { it.qty = b[6] ? b[6] : 1; it.quality = b[7]; }
           if(ON_IS(on,g_wko.spellbook)){ it.qty = 1; it.quality = 0; for(int bi=0;bi<nbr;bi++) if(bookrec[bi]==o) it.quality=bookrs[bi]; }
           int done = 0;
-          if(!it.id) for(int k = 0; k < g_ow.ninv; k++) if(g_ow.inv[k].in == it.in && g_ow.inv[k].obj_n == it.obj_n && g_ow.inv[k].quality == it.quality && g_ow.inv[k].owner == it.owner){
+          if(!it.id) for(int k = 0; k < g_ow.ninv; k++) if(g_ow.inv[k].in == it.in && g_ow.inv[k].obj_n == it.obj_n && g_ow.inv[k].quality == it.quality && g_ow.inv[k].owner == it.owner
+                                                            && (g_ow.inv[k].tile == it.tile || is_stackable(it.obj_n))){   /* a moonstone's frame is its phase (save_load.md) */
               g_ow.inv[k].qty = (uint16_t)(g_ow.inv[k].qty + it.qty); done = 1; break; }
           if(!done && g_ow.ninv < OBJ_INV_MAX) g_ow.inv[g_ow.ninv++] = it; } }
     for(int p = 0; p < g_nparty; p++){ int a = g_party[p].actor; if(a >= 0 && a < U6_MAX_ACTORS) equip_refold(a); }

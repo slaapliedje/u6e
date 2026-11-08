@@ -44,6 +44,10 @@ nuvie_save.md) and rebuilds the LIVE state:
   (status 0x10) party items → the pooled pack (nested container contents flattened by
   walking the record-index chain, ≤8 hops); readied (0x18) items → the owner's slot set
   (equipment.md), re-folded to weapon/AC; coins (obj 88) summed into the gold pool.
+  Records fold into one pack row only under the pick-up rule (same object, quality, owner
+  and holder, AND the same frame unless the object stacks): a moonstone's frame is its
+  phase, so the eight moonstones stay eight rows over a save and a load (2026-11-08: they
+  had folded into eight frame-0 stones, and the cube's endgame could never be met).
   The inventory chunk's ON-MAP records (an item dropped from the pack, §5) join the world
   objects: every loader places a record by its own x/y, not by the chunk it sits in.
 - **Vehicle state** (vehicles.md §6): the party saved on a boat's tile is aboard it again
