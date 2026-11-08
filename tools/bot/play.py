@@ -437,11 +437,11 @@ class Player:
                 st = self.key('r', 'rest')
         if st.get('rest') != 1:
             self.log('  rest refused: %r' % st['msg']); self.idle(); return st['msg']
-        st = self.g.type(str(hours))
+        st = self.g.type(str(hours), enter=False)                       # one key, no Enter: Enter at "Who will guard?" names the Avatar
         if st.get('rest') == 2:                                          # a guard: unguarded sleepers are slain in their sleep (rest.md §4b)
             alive = [i for i, m in enumerate(st['party']) if m['id'] != 1 and m['hp'] > 0 and i + 1 < len(st['party'])]   # a digit up to the size less one (rest.md §7)
             g_ = max(alive, key=lambda i: st['party'][i]['hp']) + 1 if alive else 0
-            st = self.g.type(str(g_))
+            st = self.g.type(str(g_), enter=False)
         for _ in range(400):                                             # the camp runs on its own; wait it out
             if not self.g.state['busy']: break
             self.key('space', 'resting')

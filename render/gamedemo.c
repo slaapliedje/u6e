@@ -12647,6 +12647,14 @@ static void bot_report(const world_t*w)
     if(g_await_input||g_casting||g_mantra){ n=bot_put(n," typed="); n=bot_put(n,g_inbuf); }
     bot_flush(n);
 }
+/* while a camp runs (no keys, no reports): each new message and the party's health as "@M" lines */
+static void bot_trace(const world_t*w)
+{   static char last[sizeof g_msg]; static int lhp=-1; int hp=0;
+    for(int p=0;p<g_nparty;p++) hp+=g_ahp[g_party[p].actor];
+    if(!strcmp(last,g_msg) && hp==lhp) return;
+    strcpy(last,g_msg); lhp=hp;
+    int n=bot_put(0,"@M"); n=bot_kv(n,"min",clock_minutes(w)); n=bot_kv(n,"rest",g_resting); n=bot_kv(n,"hp1",g_ahp[1]); n=bot_kv(n,"sleep1",g_asleep[1]);
+    n=bot_kv(n,"party",hp); n=bot_put(n," msg="); n=bot_put(n,g_msg); bot_flush(n); }
 /* F2: every actor on this level  "@A id x y hp max tile hostile wt" (wt = the live worktype) */
 static void bot_dump_actors(const world_t*w)
 {
@@ -16932,7 +16940,8 @@ int main(int argc, char **argv)
         if (g_resting) { uint32_t t=plat_ticks_200hz();                               /* the camp: a rest turn per 1/8 s (rest.md §3) */
             int due = g_rest_meal>=1 && g_rest_meal<=g_nparty ? t-g_rest_tick>=MEAL_LINE_TICKS     /* the mealtime as DOS paces it */
                     : g_rest_meal==g_nparty+1 ? t-g_rest_meal_t0>=MEAL_TICKS : t-g_rest_tick>=REST_TURN_TICKS;
-            if (due) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1; } }
+            if (due) { g_rest_tick=t; rest_tick(&w); compose_map(&w); draw_border_tiles(); redraw=1;
+                if (g_bot) bot_trace(&w); } }
         if (g_travel_active && !key && !g_talking && !g_show_inv && !g_casting && !g_save_menu && !g_pending_verb) {
             if ((int)w.px==g_travel_tx && (int)w.py==g_travel_ty) g_travel_active=0;   /* arrived */
             else { int sx,sy;
