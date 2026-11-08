@@ -1220,8 +1220,10 @@ def seg_train(p, kw):
                 if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
         p.cure_up(); p.heal_up()
         grind(p, ex, ey)
+        lv = sum(m['lvl'] for m in p.g.state['party'])
         meditate(p)
         keep_up(p)
+        if sum(m['lvl'] for m in p.g.state['party']) > lv: checkpoint(p, p.g.hd, p.out, 'trainauto')   # a crash keeps the levels
     p.log('  train to: %s' % party_line(p))
 
 def seg_camp(p, kw):
