@@ -354,7 +354,7 @@ def orb_go(p, pos):
     tx, ty = ORB[pos]; st = p.g.state
     if st['L'] == ORB_LEVEL.get(pos, 0) and abs(st['X'] - tx) <= 12 and abs(st['Y'] - ty) <= 12: return True   # already there
     for attempt in range(5):
-        if orb_trip(p, pos, quiet=attempt < 4): return True
+        if orb_trip(p, pos, quiet=attempt < 4): p.nav.refresh(); return True   # a new place: its doors weren't in the old map
         if 'Failed' not in p.g.state['msg']: break
         p.idle(); p.nav.refresh()
         spot = p.open_spot(6 + 4 * attempt)                               # somewhere roomier, farther each time (out of a shop)
@@ -932,9 +932,15 @@ def sail_to(p, land, tries=8):
     it) is routed around; True when ashore on `land`"""
     import collections
     S, pm = p.nav.span, p.nav.pm
-    stop = {(o['x'], o['y']) for o in p.g.objects()[0] if o['obj'] in (412, 414, 415)}
+    land = {t for t in land if not pm[t[1] * S + t[0]] & 8}           # a boat moored on water is walkable, but not land
+    stop = set()
     for _ in range(tries):
+        stop |= {(o['x'], o['y']) for o in p.g.objects()[0] if o['obj'] in (412, 414, 415)}   # boats near us now (the dump reaches 24 tiles)
         x0, y0 = p.nav.pos(); stop.discard((x0, y0))
+        if any(((x0 + a) % S, (y0 + b) % S) in land for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1))):   # beside the shore already
+            p.key('u'); st = p.key('ret', 'ashore'); p.log('  ashore: %r at (%d,%d)' % (st['msg'][-40:], st['X'], st['Y'])); p.nav.refresh()
+            if p.nav.pos() not in land: p.issue('sail', 'not ashore at (%d,%d): %r' % (st['X'], st['Y'], st['msg'][-60:]))
+            return p.nav.pos() in land
         came = {(x0, y0): None}; q = collections.deque([(x0, y0)]); end = None
         while q and end is None:
             x, y = q.popleft()
@@ -1021,6 +1027,44 @@ def seg_cube(p, kw):
     dispel_at(p, 147, 59, 'up')                                          # protection fields (319) ring the cube: one dispelled opens it
     if not get_at(p, 147, 57, 62, tries=4): p.issue('cube', 'no vortex cube at (147,57) L4'); return
     climb_out(p)
+
+def board_skiff(p, near=None):
+    """walk to the nearest skiff (414) beside our land and U)se it (vehicles.md §3); near: where it was left (the
+    object dump reaches 24 tiles); True if aboard"""
+    if p.g.state.get('veh'): return True
+    if near: p.walk(*near)
+    x, y = p.nav.pos(); here = region(p, x, y)
+    boats = sorted((o for o in p.g.objects()[0] if o['obj'] == 414), key=lambda o: abs(o['x'] - x) + abs(o['y'] - y))
+    for b in boats:
+        side = [(b['x'] + a, b['y'] + c) for a, c in ((1, 0), (-1, 0), (0, 1), (0, -1)) if (b['x'] + a, b['y'] + c) in here]
+        if not side: continue
+        p.walk(*side[0]); px, py = p.nav.pos()
+        st = p.act('u', VDIR[(b['x'] - px, b['y'] - py)], 'board the skiff'); p.log('  skiff (%d,%d): %r' % (b['x'], b['y'], st['msg'][-40:]))
+        if p.g.state.get('veh'): return True
+    p.issue('sail', 'no skiff to board near (%d,%d)' % (x, y)); return False
+
+def seg_keg(p, kw):
+    """to Sutek's island (east of Serpent's Hold) with a powder keg for its locked gate. A keg lying in a town is
+    someone's (taking it is theft: the guards come, usecode_use.md), so Efram in Britain sells one. The skiff
+    sails from Stonegate's shore to Minoc and waits there; the Orb to Britain and back; then the skiff south round
+    the coast to the beach below the castle"""
+    p.loot_ok = False
+    minoc = lambda: {t for t in region(p, 601, 106) if abs(t[0] - 601) + abs(t[1] - 105) <= 20}
+    if not carried(p, 223):
+        if p.g.state['L'] == 0 and p.nav.pos() in region(p, 607, 296):     # in Stonegate's valley: the skiff to Minoc first
+            if not board_skiff(p, (597, 202)): return
+            if not sail_to(p, minoc()): return
+            p.skiff_at = p.nav.pos()
+        if not orb_go(p, 3): return                                       # east of Britain: the castle's gate (a portcullis, its lever behind a locked door) shuts the throne room in
+        wait_until(p, 6, 19, 'Efram keeps shop 6-20')
+        if not go_to_actor(p, 22, 'Efram'): return
+        lighten(p)                                                        # the gold is the Avatar's purse: he buys, so room for three stones
+        out = p.talk_to(22, ['buy', 'powd', '1', '1', 'bye'], 'Efram')
+        p.log('  keg: %s (%r)' % (carried(p, 223), out and out[-2:]))
+        if not carried(p, 223): p.issue('keg', 'Efram sold no powder keg'); return
+        if not orb_go(p, 25): return
+    if not board_skiff(p, getattr(p, 'skiff_at', (605, 119))): return
+    sail_to(p, {t for t in region(p, 787, 970) if abs(t[0] - 787) + abs(t[1] - 970) <= 20})   # the beach below the gate
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1542,7 +1586,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
