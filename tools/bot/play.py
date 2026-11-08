@@ -170,6 +170,16 @@ class Player:
             if len(qq) > 12 and qq[-30:] in tail and kws: return kws[0]
         return None
 
+    def talk_at(self, x, y, tid, words=None, name='', yes=False):
+        """T)alk to a statue or shrine object at (x,y) whose script is tid (no actor behind it, usecode_use.md)"""
+        self.walk(x, y, adj=True); px, py = self.nav.pos()
+        st = self.key('t', 'talk')
+        for _ in range(abs(x - px)): self.key('right' if x > px else 'left')
+        for _ in range(abs(y - py)): self.key('down' if y > py else 'up')
+        st = self.key('ret', 'talk %d' % tid)
+        if st['talk'] != tid: self.issue('talk', 'T)alk to %s at (%d,%d) gave talk=%s msg=%r' % (name, x, y, st['talk'], st['msg'])); return None
+        return self._converse(tid, st, words, name, yes)
+
     def talk_to(self, aid, words=None, name='', yes=False):
         """talk to actor aid and say each word (a callable word picks one from the transcript so far, None
         ends); returns [(word, reply)] or None if not reached. A y/n prompt pending before a word is
@@ -188,6 +198,10 @@ class Player:
             if not (a and a.get('wt') == 0x91 and 'No response' in st['msg']):                  # a sleeper doesn't answer (usecode_use.md)
                 self.issue('talk', 'T)alk to %d %s (%s) gave talk=%s msg=%r' % (aid, name, d, st['talk'], st['msg']))
             return None
+        return self._converse(aid, st, words, name, yes)
+
+    def _converse(self, aid, st, words, name, yes):
+        """the conversation once it has begun: the script's questions, each word, the y/n prompts after"""
         out = [('', st['conv'])]; self.numtry = {}
         for _ in range(6):                                      # the script poses questions first
             ans = self.answer(aid, st['conv'])

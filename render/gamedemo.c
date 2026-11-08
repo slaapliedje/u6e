@@ -12728,6 +12728,8 @@ static void bot_dump_pass(const world_t*w)
             row[x]=(uint8_t)((world_is_passable(w,x,y)?1:0)|((t>=0&&t<2048&&(g_tflags1[t]&8))?4:0)|(tile_is_water(w,x,y)?8:0)); }
         for(int k=0;k<nh;k++) if(hy[k]==y && hx[k]<span) row[hx[k]]|=4;
         for(int x=0;x<span;x++) if((row[x]&1) && ((g_on.cave&&obj_idx_at(x,y,g_on.cave)>=0)||(g_on.hole&&obj_idx_at(x,y,g_on.hole)>=0))) row[x]|=0x10;
+        if(w->level==5 || (w->level==0 && y-(int)w->py<=64 && (int)w->py-y<=64))   /* the balloon may fly here (wind.md §4); the surface only near the party (cost) */
+            for(int x=0;x<span;x++) if((w->level==5 || (x-(int)w->px<=64 && (int)w->px-x<=64)) && air_low_can_enter(w,x,y,-1)) row[x]|=0x20;
         plat_fwrite(f,row,span);
     }
     plat_fclose(f);

@@ -294,7 +294,8 @@ def seg_cave(p, kw):
 ORB = {1: (899, 499), 2: (935, 262), 3: (435, 395), 4: (503, 358), 5: (147, 883), 6: (919, 934), 8: (307, 352),
        10: (159, 942), 11: (739, 699), 15: (227, 131), 19: (923, 876), 20: (295, 38), 21: (75, 507), 22: (327, 822),
        16: (23, 22), 23: (387, 787), 24: (831, 166), 25: (667, 67)}   # moongates.md §3: position -> destination
-ORB_LEVEL = {16: 1}                                    # the destinations below the surface (the gargoyle ones come later)
+ORB.update({7: (68, 45), 9: (188, 45), 17: (128, 86), 18: (108, 221)})   # the gargoyle world (moongates.md §3)
+ORB_LEVEL = {16: 1, 7: 5, 9: 5, 17: 5, 18: 5}           # the destinations below the surface
 
 def orb_trip(p, pos, shot=False, quiet=False):
     """U)se the orb, walk its crosshair to the box tile of position pos, Enter, step into the red gate;
@@ -1314,6 +1315,62 @@ def pick_heavy(p, x, y, obj_n):
     if who != 1: p.key('0', 'party mode'); p.nav.refresh()
     return carried(p, obj_n)
 
+def wind_to(p, d):
+    """C)ast Wind Change (Rel Hur): the wind goes the way asked (magic_skills.md)"""
+    st = p.key('c', 'cast')
+    if not st['cast']: p.idle(); return False
+    p.g.type('rh'); st = p.key(d, 'the wind'); p.idle(); p.log('  wind %s: %r' % (d, st['msg'][-40:]))
+    return True
+
+def fly_to(p, tx, ty, near=2):
+    """the balloon (wind.md §4): U)se it to inflate beside the party, U)se it to board; aboard it goes where the
+    wind blows a tile a turn, Wind Change turns it; U)se to land beside"""
+    if not p.g.state.get('veh'):
+        st = p.use_pack(420); p.log('  balloon: %r' % (st and st['msg'][-40:]))
+        b = [o for o in p.g.objects()[0] if o['obj'] == 423]
+        if not b: p.issue('fly', 'no inflated balloon'); return False
+        p.walk(b[0]['x'], b[0]['y'], adj=True); px, py = p.nav.pos()
+        st = p.act('u', VDIR[(b[0]['x'] - px, b[0]['y'] - py)], 'board'); p.log('  board: %r veh=%s' % (st['msg'][-40:], st.get('veh')))
+        if not p.g.state.get('veh'): p.issue('fly', 'could not board the balloon'); return False
+    import collections
+    for _ in range(12):                                                  # a route over the tiles it may fly (pass-map bit 0x20), in straight runs: a Wind Change each
+        p.nav.refresh(); pm, S = p.nav.pm, p.nav.span; x0, y0 = p.nav.pos()
+        if abs(x0 - tx) <= near and abs(y0 - ty) <= near: break
+        came = {(x0, y0): None}; q = collections.deque([(x0, y0)]); end = None
+        while q:
+            x, y = q.popleft()
+            if abs(x - tx) <= near and abs(y - ty) <= near: end = (x, y); break
+            for dx, dy in ((0, -1), (0, 1), (1, 0), (-1, 0)):
+                n = (x + dx, y + dy)
+                if n not in came and 0 <= n[0] < S and 0 <= n[1] < S and pm[n[1] * S + n[0]] & 0x20: came[n] = (x, y); q.append(n)
+        if end is None: p.issue('fly', 'no air route from (%d,%d) to (%d,%d)' % (x0, y0, tx, ty)); break
+        path = []; c = end
+        while c != (x0, y0): path.append(c); c = came[c]
+        path.reverse()
+        runs = []; px, py = x0, y0
+        for nx, ny in path:
+            d = VDIR[(nx - px, ny - py)]
+            if runs and runs[-1][0] == d: runs[-1][1] += 1
+            else: runs.append([d, 1])
+            px, py = nx, ny
+        p.log('  flight plan: %s' % runs)
+        d, n = runs[0]
+        wind_to(p, {'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left'}[d])   # the wind blows FROM the way asked (magic_skills.md)
+        for _ in range(n): p.key(d, 'fly')
+    p.key('u'); st = p.key('ret', 'land'); p.nav.refresh(); p.log('  landed: %r at (%d,%d)' % (st['msg'][-40:], *p.nav.pos()))
+    return not p.g.state.get('veh')
+
+def seg_singularity(p, kw):
+    """the Temple of Singularity (127,47) level 5, mountain-locked: the balloon from the Orb's gate (128,86) north.
+    The Singularity asks for whom the Codex is sought: all; then the three catacombs' statues (Mondain, Minax,
+    Exodus: their mantras UN, OR, US), and the temple again: the Mantra of Singularity, unorus"""
+    p.loot_ok = False
+    if not carried(p, 420): p.issue('singularity', 'no balloon'); return
+    if not orb_go(p, 17): return
+    if not fly_to(p, 128, 49): return
+    out = p.talk_at(127, 48, 200, ['sacr', 'all', 'bye'], 'the Singularity', yes=True)
+    p.log('  singularity: %r' % (out and out[-3:]))
+
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
     return sum(r['qty'] or 1 for r in p.g.objects()[1] if r['obj'] == obj_n and (own is None or r.get('own', 1) == own))
@@ -1834,7 +1891,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
