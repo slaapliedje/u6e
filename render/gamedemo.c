@@ -11295,8 +11295,8 @@ static void present_frame(void);
 static void lb_recall(world_t*w,int forget){
     if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
     else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
+    if(!g_armageddon) for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]) companion_revive(w,i);   /* the dead rise where they fell, with what their bodies hold, before the move (combat.md §3d steps 2, 6) */
     (void)travel_to(w,307,352,0);                                 /* the throne room, on the surface */
-    if(!g_armageddon) for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]) companion_revive(w,i);
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
         g_ahp[a]=g_amaxhp[a]?g_amaxhp[a]:30; g_asleep[a]=g_paralyze[a]=g_poison[a]=0; g_charm[a]=g_ally[a]=0; g_protect[a]=g_curse[a]=0; g_ainvis[a]=0;
         g_pts[a]=(int8_t)(g_adex[a]?g_adex[a]:1); }

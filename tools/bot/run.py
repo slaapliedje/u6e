@@ -5,7 +5,7 @@ Each segment plays part of the game with the real keyboard; issues.jsonl and tra
 collect what looked wrong. Segments: castle, bridge, britain, shop, sell, death, healer, help, cave, orb, shrine (default: all, in order)."""
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from u6bot import Game
+from u6bot import Game, kv
 from play import Player, keywords, Danger
 from nav import VDIR, DIRV, NavError
 
@@ -738,6 +738,12 @@ def go_to_actor(p, aid, name):
 def seg_gargish(p, kw):
     """Hythloth (the cave at (948,930) by the Shrine of Humility) down to Captain John on level 4: his scroll
     teaches Gargish; on to the way out into the Gargoyle lands (220,219) level 5, where Beh Lem waits at noon"""
+    if min(count(p, 68), count(p, 71)) < 15 and p.g.state.get('gold', 0) >= 60: restock(p, 15)   # the Avatar's heals carry him through
+    for obj in (68, 71, 67):
+        for _ in range(4):
+            if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
+    lb_heal(p)                                                           # in at full health
+    p.log('  into Hythloth: %s; ginseng %d silk %d' % (party_line(p), count(p, 68, 1), count(p, 71, 1)))
     if not orb_go(p, 6): return
     if carried(p, 258): ready(p, 258)                                    # unseen, the Avatar walks past what lives in Hythloth
     p.sneak = not carried(p, 258)
@@ -1241,7 +1247,18 @@ def seg_cheat(p, kw):
     p.log('  Codex way: at (%d,%d) msg=%r' % (st['X'], st['Y'], st['msg'][-80:]))
     if 'denied' in st['msg'].lower(): p.issue('cheat', 'on the quest, the way to the Codex still refused')
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, train=seg_train, camp=seg_camp, cheat=seg_cheat, meditate=lambda p, kw: meditate(p))
+def readied(p):
+    """the party's readied things: {(actor, slot): obj} from the F3 dump's @E lines"""
+    p.g.objects(); return {(kv_['id'], kv_['slot']): kv_['obj'] for kv_ in (kv(l) for l in p.g.got if l.startswith('@E '))}
+
+def seg_eqcheck(p, kw):
+    """S)ave and restore in place: what the party has readied must come back (save_load.md; a check)"""
+    equip_party(p); e0 = readied(p)
+    hd = p.g.hd; checkpoint(p, hd, p.out, 'eqcheck'); restore(p, 'eqcheck'); e1 = readied(p)
+    p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
+    if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
+
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)

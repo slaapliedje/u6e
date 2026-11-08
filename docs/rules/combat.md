@@ -144,6 +144,9 @@ ran. Found by the bot.)
 8. A view refresh and sound 21.
 
 (Ours: aboard a vessel it is left where it is. DOS leaves the Avatar's figure a ship in the castle.)
+(Until 2026-11-07 ours moved the party first and raised the dead after, on the surface: a companion who fell in a
+dungeon rose without the gear in its body, which stayed below. Found by the bot: the party had lost its armour
+and weapons over a few deaths in Hythloth.)
 
 ## 3e. What some creatures' blows do (DOS GAME.EXE 4.5, read 2026-11-05)
 After a blow lands on an actor that lives through it:

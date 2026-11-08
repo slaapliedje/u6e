@@ -69,6 +69,8 @@ replaced by the Wind Change spell. If a conversation later turns out to need it,
   Avatar died at 90 HP beside a vine patch. It now strikes only what its weapon reaches (eggs.md §3b).
 - Poison that took the Avatar to 0 killed him as a creature: his pack (the Orb, the moonstones, the runes)
   went into a body far away and only then did Lord British recall him (combat.md §3d).
+- The recall moved the party to the surface before raising the dead, so a companion who fell in a dungeon
+  rose without what its body held: the party lost its armour and weapons in Hythloth (combat.md §3d).
 - A script's write to the quest flag (var 0x1A) was kept in a local variable: the Singularity's "Your final
   quest has begun!" never opened the way to the Codex (usecode_vm.md). Found by trying Iolo's cheat menu,
   whose "Set Quest Flag" read back 0; the menu's "Get items" also crashed the host test tool (the VM's game
