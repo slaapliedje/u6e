@@ -12668,7 +12668,8 @@ static void bot_report(const world_t*w)
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(p) n=bot_put(n,",");
         n=bot_num(n,actor_real(a)); n=bot_put(n,":"); n=bot_num(n,g_ahp[a]); n=bot_put(n,"/"); n=bot_num(n,g_amaxhp[a]);   /* the real id while another member is played */
         n=bot_put(n,":"); n=bot_num(n,g_amana[a]); n=bot_put(n,":"); n=bot_num(n,g_alevel[a]);
-        n=bot_put(n,":"); n=bot_num(n,g_poison[a]?1:0); n=bot_put(n,":"); n=bot_num(n,g_aexp[a]); }
+        n=bot_put(n,":"); n=bot_num(n,g_poison[a]?1:0); n=bot_put(n,":"); n=bot_num(n,g_aexp[a]);
+        n=bot_put(n,":"); n=bot_num(n,actor_carried(a)); n=bot_put(n,":"); n=bot_num(n,(int32_t)g_astr[a]*20); }   /* load and limit, tenths of a stone */
     n=bot_put(n," msg="); n=bot_put(n,g_msg);
     if(g_talking){ n=bot_put(n," conv="); n=bot_put(n,g_transcript); }
     if(g_await_input||g_casting||g_mantra){ n=bot_put(n," typed="); n=bot_put(n,g_inbuf); }

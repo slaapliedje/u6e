@@ -68,6 +68,8 @@ class Nav:
     def open_door(self, x, y, d):
         st = self.keyfn('u'); st = self.keyfn(d)                   # U)se acts at once on a direction (usecode_use.md)
         self.log('  door (%d,%d): %s' % (x, y, st['msg']))
+        if 'locked' in st['msg'].lower() and 'magic' not in st['msg'].lower() and getattr(self, 'unlock', None) and self.unlock(x, y):
+            st = self.keyfn('u'); st = self.keyfn(d); self.log('  door (%d,%d) unlocked: %s' % (x, y, st['msg']))
         fr = self.doors.get((x, y))
         m = st['msg'].lower()
         if fr is not None and 4 <= fr < 8 and 'nothing' not in m and 'lock' not in m and 'not' not in m:

@@ -367,16 +367,17 @@ def orb_go(p, pos):
 def carried(p, obj_n):
     return any(r['obj'] == obj_n for r in p.g.objects()[1])
 
-HEAVY = (73, 90, 394, 396, 62, 48, 149)                                  # moonstones, torches, the lenses, the cube, glass sword, deed
+HEAVY = (73, 90, 394, 396, 62, 48, 149, 422, 421, 284, 264, 141, 140)    # moonstones, torches, lenses, cube, glass sword, deed, balloon parts, pole, decorations
 
 def lighten(p):
     """the Avatar carries at most twice his strength (G)et says 'The total is too heavy.'): his heavy quest
     things go to the strongest-backed companion, Dupre, else the next"""
-    ids = [m['id'] for m in p.g.state['party'] if m['id'] != 1 and m['hp'] > 0 and m['id'] != 9]
+    for _ in range(4): p.key('space', 'the party gathers')               # the crosshair finds only who is in view (dark, strung out: "To nobody.")
+    ids = [m['id'] for m in p.g.state['party'] if m['id'] != 1 and m['hp'] > 0 and m['id'] != 9 and p.in_view(m['id'])]
     if not ids: return
-    who = 2 if 2 in ids else ids[0]
-    for obj in HEAVY:
-        if count(p, obj, 1): give_to(p, obj, who)
+    k = 0
+    for obj in HEAVY:                                                    # spread over the companions, Dupre first
+        if count(p, obj, 1): give_to(p, obj, ids[k % len(ids)]); k += 1
 
 def get_at(p, x, y, obj_n, tries=3):
     """walk beside (x,y) and G)et until obj_n is in the pack (what lies on top comes first); True if got"""
@@ -385,7 +386,8 @@ def get_at(p, x, y, obj_n, tries=3):
         st = p.act('g', VDIR[(x - px, y - py)], 'get at (%d,%d)' % (x, y))
         p.log('  get at (%d,%d): %r' % (x, y, st['msg'][-120:]))
         if carried(p, obj_n): return True
-        if 'too heavy' in st['msg']: lighten(p)
+        if 'too heavy' in st['msg']:
+            p.log('  loads: %s' % ' '.join('%d:%s/%s' % (m['id'], m.get('wt'), m.get('lim')) for m in p.g.state['party'])); lighten(p)
     p.issue('get', 'no obj %d from (%d,%d): %r' % (obj_n, x, y, p.g.state['msg'][-200:])); return False
 
 def seg_orb(p, kw):
@@ -829,6 +831,7 @@ def give_to(p, obj_n, who):
         if 'How many' in st['msg']: p.g.type(str(rows[0]['qty'] or 1))
         st = p.aim_at(who, 'to the holder'); p.idle()
         p.log('  %s to %d: %r' % (name, who, st['msg'][-40:]))
+        if 'nobody' in st['msg']: return False
     return False
 
 def light_torch(p):
@@ -1076,8 +1079,20 @@ def seg_keg(p, kw):
     if not board_skiff(p, getattr(p, 'skiff_at', (605, 119))): return
     sail_to(p, {t for t in region(p, 787, 970) if abs(t[0] - 787) + abs(t[1] - 970) <= 20})   # the beach below the gate
 
-def drop_here(p, obj_n):
-    """D)rop one obj_n at the leader's feet: D, D through the pack to it, Enter, Enter"""
+def shed(p):
+    """leave what the quest no longer needs (the load limit is twice strength, reagents a tenth of a stone each):
+    the decorations from Sutek's wall, flowers, the fishing pole, oil, torches beyond four, garlic beyond twenty"""
+    spot = p.open_spot(4)                                                # somewhere a thing can land (not the Orb's gate in the throne room)
+    if spot: p.walk(*spot)
+    for obj, keep in ((141, 0), (140, 0), (139, 0), (264, 0), (83, 0), (90, 4), (67, 20)):
+        for _ in range(4):
+            rows = [r for r in p.g.objects()[1] if r['obj'] == obj and r.get('own', 1) == 1]
+            n = sum(r['qty'] or 1 for r in rows)
+            if n <= keep: break
+            if not drop_here(p, obj, min(n - keep, rows[0]['qty'] or 1)): break
+
+def drop_here(p, obj_n, n=1):
+    """D)rop n of obj_n at the leader's feet: D, D through the pack to it, Enter, Enter (a stack asks how many)"""
     inv = p.g.objects()[1]; rows = [r for r in inv if r['obj'] == obj_n]
     if not rows: return False
     name = rows[0].get('name', ''); n0 = count(p, obj_n)
@@ -1087,7 +1102,7 @@ def drop_here(p, obj_n):
         if ('Drop-' + name) in st['msg']: break
     else: p.idle(); return False
     p.key('ret'); st = p.key('ret', 'at the feet')
-    if 'How many' in st['msg']: p.g.type('1'); st = p.g.state
+    if 'How many' in st['msg']: p.g.type(str(n)); st = p.g.state
     if 'Location' in st['msg']: st = p.key('ret', 'here')
     p.log('  drop %s: %r' % (name, st['msg'][-50:])); p.idle()
     return count(p, obj_n) < n0
@@ -1194,6 +1209,110 @@ def seg_catacombs(p, kw):
     p.walk(179, 221, adj=True); px, py = p.nav.pos()
     p.key('l', 'look'); st = p.at(VDIR[(179 - px, 221 - py)], 'search the body'); p.idle(); p.log('  body: %r' % st['msg'][-140:])
     if not get_at(p, 179, 221, 270, tries=6): p.issue('catacombs', 'no balloon plans at (179,221) L4'); return
+
+def seg_balloon(p, kw):
+    """the balloon from its plans (270): out of the catacombs by Help; Michelle in Minoc weaves the basket (422,
+    300 gold, she needs the plans); Arbeth in Paws spins 40 spider silk into a spool (226) once the town has
+    spoken of him (Marissa, Thindle); Charlotte in New Magincia weaves the spool into silk cloth (241); Marissa
+    sews the bag (421) from the cloth and the plans; Mortude in Paws sells rope (284); a cauldron (147) lies in
+    the castle's cellar (108,82) level 1; U)se the plans: the balloon (420)"""
+    p.loot_ok = False
+    near = [o for o in p.g.objects()[0] if o['obj'] == 420]               # made already: it lies where the plans were used
+    if carried(p, 420) or near:
+        if near and not carried(p, 420): pick_heavy(p, near[0]['x'], near[0]['y'], 420)
+        if not carried(p, 420): p.issue('balloon', 'no balloon in the pack')
+        return
+    if not carried(p, 270): p.issue('balloon', 'no balloon plans'); return
+    if p.g.state['L'] >= 2:                                              # out of Sutek's catacombs by Help: the party back at the castle
+        st = p.key('c', 'cast'); st = p.g.type('kl'); p.idle(); p.log('  help: %r at L%d (%d,%d)' % (st['msg'][-40:], st['L'], st['X'], st['Y']))
+        p.nav.refresh()
+    if count(p, 71) < 40 and not carried(p, 226) and not carried(p, 241) and not carried(p, 421):
+        restock(p, 20)
+        p.log('  spider silk: %d' % count(p, 71))
+    if not carried(p, 422):                                              # the basket
+        if not orb_go(p, 25): return
+        wait_until(p, 7, 16, 'Michelle weaves 7-17')
+        if not go_to_actor(p, 68, 'Michelle'): return
+        lighten(p)
+        out = p.talk_to(68, ['job', 'fath', 'plan', 'buy', 'y', '1', '3', 'y', 'y', 'to fly', 'bye'], 'Michelle', yes=True)
+        p.log('  basket: %s (%r)' % (carried(p, 422), out and out[-3:]))
+        if not carried(p, 422): p.issue('balloon', 'Michelle wove no basket'); return
+    if not carried(p, 226) and not carried(p, 241) and not carried(p, 421):   # the silk: Paws
+        if not orb_go(p, 3): return
+        wait_until(p, 7, 14, 'Paws by day')
+        if go_to_actor(p, 102, 'Marissa'): p.talk_to(102, ['arbe', 'bolt', 'ball', 'bye'], 'Marissa', yes=True)
+        if go_to_actor(p, 100, 'Thindle'): p.talk_to(100, ['silk', 'ball', 'bye'], 'Thindle', yes=True)
+        if not go_to_actor(p, 103, 'Arbeth'): return
+        out = p.talk_to(103, ['timo', 'silk', 'y', '1', 'y', 'bye'], 'Arbeth', yes=True)
+        p.log('  spool: %s (%r)' % (carried(p, 226), out and out[-3:]))
+        if not carried(p, 226): p.issue('balloon', 'Arbeth spun no silk'); return
+    if carried(p, 226) and not carried(p, 241):                          # the cloth: New Magincia
+        if not orb_go(p, 11): return
+        wait_until(p, 11, 14, 'Charlotte weaves 11-14')
+        if not go_to_actor(p, 95, 'Charlotte'): return
+        out = p.talk_to(95, ['silk', '1', 'y', 'buy', '1', 'y', 'bye'], 'Charlotte', yes=True)
+        p.log('  cloth: %s (%r)' % (carried(p, 241), out and out[-3:]))
+        if not carried(p, 241): p.issue('balloon', 'Charlotte wove no cloth'); return
+    if carried(p, 241) and not carried(p, 421):                          # the bag: Marissa, 75 gold from the Avatar's purse
+        equip_party(p)                                                   # (a wipe left the Avatar's gear in the pack)
+        give_to(p, 88, 1)
+        for _ in range(4):                                               # short of gold: Max buys a weapon
+            if count(p, 88, 1) >= 75: break
+            if not orb_go(p, 3) or not wait_for_work(p, 18, 'Max'): break
+            out = p.talk_to(18, ['sell', '1', '1', 'y', 'bye'], 'Max'); p.log('  Max: %r, gold %d' % (out and out[-2:], count(p, 88, 1)))
+        if not orb_go(p, 3): return
+        h = p.g.state['min'] // 60
+        wait_until(p, 15, 19, 'Marissa sews 15-20') if h >= 13 else wait_until(p, 6, 12, 'Marissa sews 6-13')
+        if not go_to_actor(p, 102, 'Marissa'): return
+        out = p.talk_to(102, ['ball', 'y', '1', 'y', 'bye'], 'Marissa', yes=True)
+        p.log('  bag: %s (%r)' % (carried(p, 421), out and out[-3:]))
+        if not carried(p, 421): p.issue('balloon', 'Marissa sewed no bag'); return
+    if not carried(p, 284):                                              # the rope: Mortude
+        if not orb_go(p, 3): return
+        wait_until(p, 8, 17, 'Mortude by day')
+        if go_to_actor(p, 101, 'Mortude'):
+            out = p.talk_to(101, ['buy', 'rope', '1', 'y', 'bye'], 'Mortude', yes=True)
+            p.log('  rope: %s (%r)' % (carried(p, 284), out and out[-3:]))
+        if not carried(p, 284): p.issue('balloon', 'no rope from Mortude'); return
+    if not carried(p, 147):                                              # the cauldron (108,82) level 1: the castle's cellar, past a door locked with key 1 (86,83)
+        if p.g.state['L'] != 0: climb_out(p)
+        if not orb_go(p, 8): return
+        shed(p); lighten(p)                                              # in the light, together: the Avatar needs room for sixteen stones
+        p.walk(291, 379, adj=True); use_way(p, {'obj': 305, 'x': 291, 'y': 379}); p.nav.refresh()
+        cast_light(p)
+        if p.g.state['L'] != 1: p.issue('balloon', 'the castle ladder (291,379) did not lead down'); return
+        p.nav.unlock = lambda x, y: unlock_with_key(p, x, y)             # the cellar's rooms are locked too (key 1)
+        try: p.walk(85, 83, keys=True)
+        finally: p.nav.unlock = None
+        if unlock_with_key(p, 86, 83):
+            st = p.act('u', 'right', 'open'); p.log('  cellar door (86,83): %r' % st['msg'][-40:]); p.nav.refresh()
+        if not beside(reach_set(p), 108, 82): p.issue('balloon', 'no way to the cauldron (108,82) L1 from (%d,%d)' % p.nav.pos()); return
+        cast_light(p)
+        if not get_at(p, 108, 82, 147):                                  # sixteen stones: Dupre, played alone, takes it (a thing got goes to the one played)
+            party = p.g.state['party']; ids = [m['id'] for m in party]
+            room = sorted((m.get('lim', 0) - m.get('wt', 0), m['id']) for m in party if m['id'] not in (1, 9) and m['hp'] > 0)
+            if room and room[-1][0] >= 160:                                  # the member with the most room, played alone, takes it
+                who = room[-1][1]
+                st = p.key(str(ids.index(who) + 1), 'alone'); p.log('  solo %d (room %d): %r' % (who, room[-1][0], st['msg'][-30:])); p.nav.refresh()
+                p.walk(108, 82, adj=True); px, py = p.nav.pos()
+                st = p.act('g', VDIR[(108 - px, 82 - py)], 'takes it'); p.log('  %d gets: %r' % (who, st['msg'][-60:]))
+                p.key('0', 'party mode'); p.nav.refresh()
+            if not carried(p, 147): p.issue('balloon', 'no cauldron at (108,82) L1'); return
+        climb_out(p)
+    st = p.use_pack(270); p.log('  plans: %r' % (st and st['msg'][-60:]))   # "Done!": the balloon lies at the party's feet (usecode_use.md)
+    x, y = p.nav.pos(); pick_heavy(p, x, y, 420)
+    if not carried(p, 420): p.issue('balloon', 'no balloon in the pack')
+
+def pick_heavy(p, x, y, obj_n):
+    """G)et a heavy thing at (x,y) with the member who has the most room (load/limit in the report), played alone"""
+    party = p.g.state['party']; ids = [m['id'] for m in party]
+    room = sorted((m.get('lim', 0) - m.get('wt', 0), m['id']) for m in party if m['id'] != 9 and m['hp'] > 0)
+    who = room[-1][1] if room else 1
+    if who != 1: p.key(str(ids.index(who) + 1), 'alone'); p.nav.refresh(); p.log('  solo %d (room %d)' % (who, room[-1][0]))
+    p.walk(x, y, adj=True); px, py = p.nav.pos()
+    st = p.act('g', VDIR[(x - px, y - py)], 'get it'); p.log('  %d gets %d: %r' % (who, obj_n, st['msg'][-40:]))
+    if who != 1: p.key('0', 'party mode'); p.nav.refresh()
+    return carried(p, obj_n)
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1715,7 +1834,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)

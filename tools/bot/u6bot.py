@@ -31,7 +31,7 @@ def parse_state(line):
         if '=' not in tok: continue
         k, v = tok.split('=', 1)
         if k == 'party':
-            st[k] = [dict(zip(('id', 'hp', 'max', 'mp', 'lvl', 'psn', 'exp'), map(int, m.replace('/', ':').split(':')))) for m in v.split(',') if m]
+            st[k] = [dict(zip(('id', 'hp', 'max', 'mp', 'lvl', 'psn', 'exp', 'wt', 'lim'), map(int, m.replace('/', ':').split(':')))) for m in v.split(',') if m]
         elif k in ('verb', 'askc'): st[k] = '' if v == '-' else v
         else:
             try: st[k] = int(v)
@@ -173,8 +173,13 @@ class Game:
         return [r for r in rows if 'i' in r], [r for r in rows if 'row' in r]
 
     def passmap(self):
-        self.key('f4', timeout=180)
-        s = next((l for l in self.got if l.startswith('@P')), '')
+        for _ in range(3):                                   # the report can come before the dump's line (just after a restore): ask again
+            self.key('f4', timeout=180)
+            s = next((l for l in self.got if l.startswith('@P')), '')
+            if not s:
+                try: s = self.wait(lambda l: l.startswith('@P'), 10)
+                except TimeoutError: s = ''
+            if 'span=' in s: break
         m = re.search(r'span=(\d+)', s)
         if not m: raise RuntimeError('pass dump failed: ' + s)
         span = int(m.group(1)); data = open(os.path.join(self.hd, 'BOTPASS.BIN'), 'rb').read()
