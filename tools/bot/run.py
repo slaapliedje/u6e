@@ -337,7 +337,9 @@ def orb_trip(p, pos, shot=False, quiet=False):
     tx, ty = ORB[pos]
     for _ in range(3):                                  # walk into the gate (the party follows over a few turns)
         try: p.nav.goto(x + dx, y + dy, on_step=lambda s: (s['X'], s['Y']) == (tx, ty))
-        except Exception as e: p.log('  into the gate: %s' % e)
+        except Exception as e:
+            p.log('  into the gate: %s' % e)
+            if p.foes(): p.fight()                      # someone stands in the gate: fight it off, then walk in
         for _ in range(8):
             if (p.g.state['X'], p.g.state['Y']) == (tx, ty) or p.g.state['busy'] == 0: break
             p.key('space')
