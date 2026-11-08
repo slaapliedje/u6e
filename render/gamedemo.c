@@ -6423,7 +6423,7 @@ static int use_boat(world_t*w,int idx)
     if(c->quality!=0){                             /* for sale: needs the matching SHIP DEED (§3.4) */
         if(!objworld_has(&g_ow,149,c->quality)){ msgcat(0,"A deed is required."); return 1; }
         c->quality=0; c->dirty=1; }
-    int face=(((int)c->tile-basetile(on))&7)/2, fi=-1, bi=-1;
+    int face=on==414?(((int)c->tile-basetile(on))&3):(((int)c->tile-basetile(on))&7)/2, fi=-1, bi=-1;   /* a skiff's frame is its facing (§1) */
     if(on==412){
         fi=wobj_boat_at(412,c->x+VDX[face],c->y+VDY[face]);
         bi=wobj_boat_at(412,c->x-VDX[face],c->y-VDY[face]);

@@ -91,6 +91,30 @@ static int32_t chunk_of(const uint8_t *d, int32_t n, int32_t surf_off, int level
     return pos;
 }
 
+/* The on-map record at (x,y,obj_n) of `level`: in that position's super-chunk, else (a boat that
+ * sailed across a chunk border keeps its record in the chunk it was first written in — records are
+ * patched in place, save_load.md §5) in any surface chunk. NULL if none. */
+static uint8_t *onmap_rec(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n)
+{
+    int32_t home = chunk_of(d, n, surf_off, level, x, y);
+    for (int c = -1; c < (level == 0 ? 64 : 0); c++){
+        int32_t pos = home;
+        if (c >= 0){ pos = surf_off; for (int i = 0; i < c && pos >= 0; i++) pos = skip_chunk(d, n, pos); if (pos == home) continue; }
+        if (pos < 0 || pos + 2 > n) continue;
+        int cnt = le16(d + pos); pos += 2;
+        for (int k = 0; k < cnt; k++){
+            if (pos + 8 > n) break;
+            uint8_t *r = d + pos; pos += 8;
+            if ((r[0] & 0x18) != 0) continue;              /* only on-map records (location bits clear) */
+            int rx = r[1] | ((r[2] & 3) << 8);
+            int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
+            int ron = r[4] | ((r[5] & 3) << 8);
+            if (rx == x && ry == y && ron == obj_n) return r;
+        }
+    }
+    return 0;
+}
+
 /* Patch the STATE of the on-map object whose record sits at its ORIGINAL position (ox,oy) with
  * the given obj_n, in that position's row-major super-chunk. The object database is a flat fixed
  * record set — a door toggle, a sailed boat or a bought boat changes only the record's frame /
@@ -101,47 +125,25 @@ static int32_t chunk_of(const uint8_t *d, int32_t n, int32_t surf_off, int level
 int sav_patch_obj_state(uint8_t *d, int32_t n, int32_t surf_off, int level, int ox, int oy, int obj_n,
                         int x, int y, int frame, int quality, int new_obj_n)
 {
-    int32_t pos = chunk_of(d, n, surf_off, level, ox, oy);
-    if (pos < 0 || pos + 2 > n) return 0;
-    int cnt = le16(d + pos); pos += 2;
-    for (int k = 0; k < cnt; k++){
-        if (pos + 8 > n) return 0;
-        uint8_t *r = d + pos; pos += 8;
-        if ((r[0] & 0x18) != 0) continue;              /* only on-map records (location bits clear) */
-        int rx = r[1] | ((r[2] & 3) << 8);
-        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
-        int ron = r[4] | ((r[5] & 3) << 8);
-        if (rx == ox && ry == oy && ron == obj_n){
-            int won = (new_obj_n >= 0) ? new_obj_n : ron;
-            r[1] = (uint8_t)(x & 0xff);
-            r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
-            r[3] = (uint8_t)((r[3] & 0xf0) | ((y >> 6) & 0x0f));
-            r[4] = (uint8_t)(won & 0xff);
-            r[5] = (uint8_t)((won >> 8) & 3) | (uint8_t)((frame & 0x3f) << 2);  /* obj_n (maybe retyped) + frame */
-            if (quality >= 0) r[7] = (uint8_t)quality;    /* <0 = keep (a stackable's byte 7 is its count's high byte) */
-            return 1;
-        }
-    }
-    return 0;
+    uint8_t *r = onmap_rec(d, n, surf_off, level, ox, oy, obj_n);
+    if (!r) return 0;
+    int won = (new_obj_n >= 0) ? new_obj_n : obj_n;
+    r[1] = (uint8_t)(x & 0xff);
+    r[2] = (uint8_t)(((x >> 8) & 3) | ((y & 0x3f) << 2));
+    r[3] = (uint8_t)((r[3] & 0xf0) | ((y >> 6) & 0x0f));
+    r[4] = (uint8_t)(won & 0xff);
+    r[5] = (uint8_t)((won >> 8) & 3) | (uint8_t)((frame & 0x3f) << 2);  /* obj_n (maybe retyped) + frame */
+    if (quality >= 0) r[7] = (uint8_t)quality;    /* <0 = keep (a stackable's byte 7 is its count's high byte) */
+    return 1;
 }
 
 /* Hull strength write-back (docs/rules/cannons.md §4): the qty byte of the on-map record at
  * (x,y,obj_n) of `level`. Returns 1 if patched. */
 int sav_patch_obj_qty(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int qty)
 {
-    int32_t pos = chunk_of(d, n, surf_off, level, x, y);
-    if (pos < 0 || pos + 2 > n) return 0;
-    int cnt = le16(d + pos); pos += 2;
-    for (int k = 0; k < cnt; k++){
-        if (pos + 8 > n) return 0;
-        uint8_t *r = d + pos; pos += 8;
-        if ((r[0] & 0x18) != 0) continue;
-        int rx = r[1] | ((r[2] & 3) << 8);
-        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
-        int ron = r[4] | ((r[5] & 3) << 8);
-        if (rx == x && ry == y && ron == obj_n){ r[6] = (uint8_t)qty; return 1; }
-    }
-    return 0;
+    uint8_t *r = onmap_rec(d, n, surf_off, level, x, y, obj_n);
+    if (!r) return 0;
+    r[6] = (uint8_t)qty; return 1;
 }
 
 /* DESTROY (docs/rules/cannons.md §4): delete the on-map record at (x,y,obj_n) of `level` from the
@@ -368,24 +370,12 @@ int sav_drop_item(uint8_t *d, int32_t n, int obj_n, int quality, int x, int y, i
  * so it safely no-ops for contained/spilled items (their record isn't on-map). Returns 1 if patched. */
 int sav_patch_obj_taken(uint8_t *d, int32_t n, int32_t surf_off, int level, int x, int y, int obj_n, int owner)
 {
-    int32_t pos = chunk_of(d, n, surf_off, level, x, y);
-    if (pos < 0 || pos + 2 > n) return 0;
-    int cnt = le16(d + pos); pos += 2;
-    for (int k = 0; k < cnt; k++){
-        if (pos + 8 > n) return 0;
-        uint8_t *r = d + pos; pos += 8;
-        if ((r[0] & 0x18) != 0) continue;              /* only on-map records */
-        int rx = r[1] | ((r[2] & 3) << 8);
-        int ry = (r[2] >> 2) | ((r[3] & 0x0f) << 6);
-        int ron = r[4] | ((r[5] & 3) << 8);
-        if (rx == x && ry == y && ron == obj_n){
-            r[0] = (uint8_t)((r[0] & ~0x18) | 0x10);   /* location -> in-inventory */
-            r[1] = (uint8_t)(owner & 0xff);            /* x field -> owner actor */
-            r[2] = (uint8_t)(r[2] & ~0x03) | (uint8_t)((owner >> 8) & 3);
-            return 1;
-        }
-    }
-    return 0;
+    uint8_t *r = onmap_rec(d, n, surf_off, level, x, y, obj_n);
+    if (!r) return 0;
+    r[0] = (uint8_t)((r[0] & ~0x18) | 0x10);   /* location -> in-inventory */
+    r[1] = (uint8_t)(owner & 0xff);            /* x field -> owner actor */
+    r[2] = (uint8_t)(r[2] & ~0x03) | (uint8_t)((owner >> 8) & 3);
+    return 1;
 }
 
 /* Persist a TAKEN CONTAINED item (opened a container, took a spilled child). The child's

@@ -153,7 +153,11 @@ in this order (each later step looks for what an earlier one produced):
 2. **Changed map objects** (dirty, alive): frame, position and — for boats — quality are
    written into the record found at its ORIGINAL position. Boats are the only objects that
    move: boarding registers each part's record position (a small table), the patch re-anchors
-   it, and a load clears the table (positions match the save again).
+   it, and a load clears the table (positions match the save again). A record is patched in
+   place, so it stays in the super-chunk it was first written in: a boat sailed across a chunk
+   border is found by its position in any surface chunk when its position's chunk hasn't it
+   (2026-11-08: a skiff sailed from Minoc to Stonegate's shore loaded back there after every
+   later save, the party left on open water).
 3. **Readied gear**: every readied record (0x18) owned by a party actor is first demoted to
    carried (0x10); then, per party actor and slot, ONE carried record of that obj_n owned by
    any party actor (own records preferred, single items preferred, a bag's contents accepted)
