@@ -1411,6 +1411,22 @@ def seg_singularity(p, kw):
     if not (p.g.state['L'] == 5 and abs(p.nav.pos()[1] - 48) < 6):
         if not carried(p, 420): p.issue('singularity', 'no balloon'); return
         if not orb_go(p, 17): return
+        for _ in range(3):                                                  # each Wind Change costs mana: a camp first (no camp with foes in view)
+            if p.g.state['party'][0].get('mp', 0) >= 40: break
+            if p.g.state['foes']:                                          # gargoyles that keep their distance: walk out of their sight
+                fs = p.foes(); x, y = p.nav.pos()
+                if fs:
+                    cx = sum(a['x'] for a in fs) / len(fs); cy = sum(a['y'] for a in fs) / len(fs)
+                    far = sorted(((x + a, y + b) for a in range(-12, 13) for b in range(-12, 13) if p.nav.cost(x + a, y + b) is not None),
+                                 key=lambda t: -((t[0] - cx) ** 2 + (t[1] - cy) ** 2))
+                    for t in far[:5]:
+                        try: p.nav.goto(*t, max_steps=80); break
+                        except NavError: pass
+                for _ in range(3): p.key('space', 'let them lose sight')
+            m = p.rest_if_hurt(1.01)
+            if p.g.state['party'][0].get('mp', 0) < 40 and 'wilderness' in p.g.state['msg'].lower():
+                if not orb_go(p, 9): return                                    # walls near the gate count as town (rest.md §1): camp by Minax's gate
+        if not orb_go(p, 17): return                                       # back to the balloon
         if not fly_to(p, 128, 49): return
     words = ['y', 'unorus', 'bye'] if second else ['sacr', 'all', 'bye']
     out = p.talk_at(127, 48, 200, words, 'the Singularity', yes=True)
@@ -1458,6 +1474,7 @@ def seg_statues(p, kw):
         if any(m['hp'] < m['max'] * 0.8 or m.get('psn') for m in p.g.state['party'] if m['id'] != 9) or (p.g.state['L'] == 0 and abs(p.g.state['X'] - 307) < 20):
             lb_heal(p); ready_up()                                       # no reagents for Heal: Lord British, before each catacomb
         if not orb_go(p, pos): return
+        if p.g.state['party'][0].get('mp', 0) < 20: p.rest_if_hurt(1.01)    # Light and Mass Invisibility need mana: a camp restores it (Lord British doesn't)
         p.walk(*cave); p.nav.refresh(); cast_light(p)
         st = p.g.state; p.log('  %s cave (%d,%d): L%d (%d,%d)' % (name, cave[0], cave[1], st['L'], st['X'], st['Y']))
         if p.g.state['L'] == sz and not beside(reach_set(p), sx, sy): open_barriers(p, sx, sy)   # the catacomb's lever room
@@ -1571,6 +1588,28 @@ def norm(name):
     for a in ('the ', 'a ', 'an '):
         if n.startswith(a): n = n[len(a):]
     return n
+
+def seg_ending(p, kw):
+    """The Codex (usecode_use.md vortex cube): the Orb to the shrine's isle (19), the Britannian lens down at
+    (921,851) and the gargoyle lens at (925,851), then U)se the vortex cube with all eight moonstones carried:
+    "The Codex has vanished!" and the ending plays"""
+    for obj_n, what in ((62, 'vortex cube'), (394, 'Britannian lens'), (396, 'gargoyle lens')):
+        if not carried(p, obj_n): p.issue('ending', 'no %s' % what); return
+    phases = sorted({r['fr'] for r in p.g.objects()[1] if r['obj'] == 73})
+    if phases != list(range(8)): p.issue('ending', 'moonstone phases carried: %r' % phases); return
+    if not orb_go(p, 19): return
+    avatar_leads(p)
+    for (x, y), obj_n in (((921, 851), 394), ((925, 851), 396)):
+        try: p.walk(x, y)
+        except NavError as e: p.issue('ending', 'to the lens tile (%d,%d): %s' % (x, y, e)); return
+        if not drop_here(p, obj_n): p.issue('ending', 'lens %d not set down at (%d,%d)' % (obj_n, x, y)); return
+    p.walk(923, 853)
+    st = p.use_pack(62, 'cube')
+    for _ in range(60):
+        if st is None or 'vanished' in st['msg'].lower(): break
+        st = p.key('space', 'the cube')
+    msg = (st or p.g.state)['msg']; p.log('  the cube: %r' % msg[-120:]); p.g.shot('ending')
+    if 'vanished' not in msg.lower(): p.issue('ending', 'the cube did not take the Codex: %r' % msg[-80:])
 
 def seg_trade(p, kw):
     """sell Max (18) the loot the fights brought (eggs.md §3c), never what the party has readied: one
@@ -2004,7 +2043,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
