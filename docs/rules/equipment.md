@@ -103,7 +103,7 @@ member's sprite and its name the member's; a locked chest (frame bit 1) says `It
 back up a level. M)ove's `To ` on a thing in the pack: `not a container`; `Can't move to another person's bag.`; `How can a container go
 into itself!`; `Only spells can go into the spellbook.`; `Only moonstones can go into the vortex cube.`; from inside it: `Spells are not suppose to be
 taken out from the Spellbook.`, else `To out of bag.`, one level up; else `To into bag.`; 5 points. On the picture of the open one: out of it.
-A container taken from the map keeps what it holds and weighs what it holds; dropped, it keeps it too. **New things go to the front of a list,** the order of the pack and of the weapons in A)ttack.
+A container taken from the map keeps what it holds and weighs what it holds; dropped, it keeps it too. **New things go to the front of a list,** the order of the pack and of the weapons in A)ttack; a thing handed to another member (M)ove's `To ` a member) is new to that member's list and goes to its front (2026-11-08: it had kept its old place).
 Each member's arrows and bolts are its own. A person outside the party has a pack too, read in when it first needs it (`npc_pack`).
 
 **Weight:** G)et refuses at `The total is too heavy.` when what the leader carries plus the thing passes 2 stones per point of

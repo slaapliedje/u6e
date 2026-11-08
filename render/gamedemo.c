@@ -10426,18 +10426,18 @@ static void pick_take(world_t*w,int row,int sl)
       if(row<0&&ON_IS(on,g_on.torch)&&g_torch_fuel[from]){ g_aready[from][sl]=0; g_torch_fuel[from]=0; equip_refold(from); msgcat(0,"A torch burned out."); return; }
       if(g_weights&&(int32_t)g_astr[to]*20<actor_carried(to)+obj_weight10(on,1)){ msgcat(0,"Can't carry!"); return; }
       { int fx=g_actx[from], fy=g_acty[from]; if(actor_where(from,&fx,&fy)) (void)spell_flight(w,fx,fy,basetile(on)+fr); }
-      if(row>=0){ if(g_ow.inv[row].id||g_ow.inv[row].qty<=1){ g_ow.inv[row].owner=(uint8_t)to; g_ow.inv[row].in=0; if(g_ow.inv[row].id) rows_rehome(g_ow.inv[row].id,to); }
+      if(row>=0){ if(g_ow.inv[row].id||g_ow.inv[row].qty<=1){ g_ow.inv[row].owner=(uint8_t)to; g_ow.inv[row].in=0; g_ow.inv[row].seq=0;   /* new to their list: its front (equipment.md) */ if(g_ow.inv[row].id) rows_rehome(g_ow.inv[row].id,to); }
           else { g_add_to=to; g_cg.player_objq[on<1024?on:0]=g_ow.inv[row].quality; inv_add_objn(on,1); g_cg.player_objq[on<1024?on:0]=0; g_add_to=1; g_ow.inv[row].qty--; } }
       else { g_aready[from][sl]=0; ready_fx_off(from,on); equip_refold(from); g_add_to=to; inv_add_objn(on,1); g_add_to=1; }
       msgcat(0,"Success"); g_cg.karma=(int16_t)((g_cg.karma-5)&0xff); } }
 /* a thing in the pack chosen in the status display: the armed verb acts on it; with none, it is readied */
 static int panel_select_pack(world_t*w,int row)
-{   int v=g_pending_verb, r=0; g_inv_sel=row;
+{   int v=g_pending_verb, r=0; if(v=='W'){ g_pending_verb=0; g_pan_focus=0; return pack_move_into(w,row); }   /* "To ": the cell is the target; the thing moved stays selected; the crosshair goes back to the map as after M / D */
+    g_inv_sel=row;
     if(v=='L'){ g_pending_verb=0; g_look_pack=0; look_pack_item(&g_ow.inv[row]); return 1; }
     if(v=='U'){ int pr=use_pack_item(w,g_ow.inv[row].obj_n); g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_use_pack=0; return 1; }
     if(v=='M'){ move_pack_item(); g_pending_verb=g_next_verb; g_next_verb=0; g_move_pack=0; g_pan_focus=0; return 1; }
     if(v=='D'){ g_pan_focus=0; if(ask_count('D')) return 1; g_drop_pick=0; g_tcur_dx=g_tcur_dy=0; drop_prompt(); return 1; }   /* then "Location: " on the map */
-    if(v=='W'){ g_pending_verb=0; return pack_move_into(w,row); }           /* "To ": a container in the pack */
     if(v=='I'){ g_pending_verb=0; pick_take(w,row,-1); return 1; }           /* Pickpocket's "Which object: " */
     if(v=='C'){ const char*nm=g_cast_spell>=0?g_spells[g_cast_spell].name:"";  /* the spells that take a thing in the pack */
         if(!strcmp(nm,"Detect Magic")||!strcmp(nm,"Detect Trap")||!strcmp(nm,"Enchant")||!strcmp(nm,"Resurrect")){ g_pending_verb=0; g_cast_row=row; g_pan_focus=0; (void)cast_aimed(w,0,0); return 1; }
@@ -12708,7 +12708,7 @@ static void bot_dump_objects(const world_t*w)
         n=bot_kv(n,"x",o->x); n=bot_kv(n,"y",o->y); n=bot_kv(n,"qty",o->qty); n=bot_kv(n,"q",o->quality);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
     for(int i=0;i<g_ow.ninv;i++){ const invitem_t*it=&g_ow.inv[i]; char nm[40]; obj_name(it->tile,nm,sizeof nm);
-        int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"fr",(int)it->tile-basetile(it->obj_n)); n=bot_kv(n,"own",actor_real(it->owner?it->owner:1)); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality);
+        int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"fr",(int)it->tile-basetile(it->obj_n)); n=bot_kv(n,"own",actor_real(it->owner?it->owner:1)); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality); n=bot_kv(n,"in",it->in); n=bot_kv(n,"id",it->id);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;   /* readied things "@E id slot obj" */
         for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]){ int n=bot_put(0,"@E"); n=bot_kv(n,"id",a); n=bot_kv(n,"slot",sl); n=bot_kv(n,"obj",g_aready[a][sl]); bot_flush(n); } }

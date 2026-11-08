@@ -395,8 +395,8 @@ ScummVM's hatches it again.
   deviation). The staff at (915,410) in the starting data holds five charges.
 - **Vortex cube** (62) U)se: the endgame. Needs the Codex (59, quality 128) within 11 tiles on the
   current level, the Britannian lens (394) at (921,851) and the gargoyle lens (396) at (925,851) on
-  the surface, and all EIGHT moonstones (73, frames 0..7) carried along with the cube (the pool
-  stands for the cube's contents) → "The Codex has vanished!": the Codex is removed (destroyed in
+  the surface, and all EIGHT moonstones (73, frames 0..7) INSIDE the cube (M)ove's "To " the cube
+  in the pack, equipment.md; DOS, read 2026-11-05; the earlier reading's "carried along" is wrong) → "The Codex has vanished!": the Codex is removed (destroyed in
   the save) and the game is won — the ending cutscene plays (docs/design/ending.md; without its
   assets a short notice in our own words) and a key returns to the desktop. Else "No Effect!".
 - **White potion** (275 frame 7): x-ray sight — see through walls for 30 turns (the X-ray spell's
