@@ -1225,7 +1225,23 @@ def seg_camp(p, kw):
         msg = p.rest_if_hurt(1.01)
         p.log('  camp: %r' % msg)
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, train=seg_train, camp=seg_camp, meditate=lambda p, kw: meditate(p))
+def seg_cheat(p, kw):
+    """Iolo's own cheat menu (usecode_vm.md): spam x3, humbug, Edit player, Set Quest Flag 1; the menu must read
+    the flag back, and the way to the Codex then lets the party by (a check; never saved)"""
+    out = p.talk_to(4, ['spam', 'spam', 'spam', 'humbug', '5', '1', '1'], 'Iolo') or []
+    text = ' '.join(r for _, r in out)
+    p.log('  cheat menu: %r' % text[-300:])
+    if 'Cheaters Menu' not in text: p.issue('cheat', 'no cheat menu: %r' % text[-200:]); return
+    if 'Quest flag = 1' not in text: p.issue('cheat', 'Set Quest Flag did not read back: %r' % text[-200:])
+    while p.g.state['talk']: p.key('esc', 'leave the talk')
+    if not orb_go(p, 19): return
+    try: p.nav.goto(923, 872)
+    except NavError as e: p.log('  to the Codex way: %s' % e)
+    st = p.g.state
+    p.log('  Codex way: at (%d,%d) msg=%r' % (st['X'], st['Y'], st['msg'][-80:]))
+    if 'denied' in st['msg'].lower(): p.issue('cheat', 'on the quest, the way to the Codex still refused')
+
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, train=seg_train, camp=seg_camp, cheat=seg_cheat, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)

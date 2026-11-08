@@ -72,7 +72,8 @@ replaced by the Wind Change spell. If a conversation later turns out to need it,
 - A script's write to the quest flag (var 0x1A) was kept in a local variable: the Singularity's "Your final
   quest has begun!" never opened the way to the Codex (usecode_vm.md). Found by trying Iolo's cheat menu,
   whose "Set Quest Flag" read back 0; the menu's "Get items" also crashed the host test tool (the VM's game
-  record left its host hooks unset).
+  record left its host hooks unset). Checked in the game by the `cheat` segment: the menu reads the flag back
+  and the way to the Codex then lets the party by.
 
 ## 5. Open
 - Strength for the Gargoyle half: a level-3 party dies in Hythloth (drakes cast Fireball). The user's choice
