@@ -111,7 +111,11 @@ Portable C — the SAME VM runs on the host (tests) and the 68000.
   take an item number, and quote the DATA-integer price (Gwenneth's bow shop:
   "1) Bow 2) Crossbow ..." → pick 1 → "30 gold").
 - Text tokens resolved: `$P` player, `$G` gender title, `$N` NPC name, `$n`
-  string var, `$Y` Y-string (svar 0x22), `$Z` previous input (svar 0x23),
+  string var, `$Y` Y-string (svar 0x22), `$Z` previous input (svar 0x23; a string ASSIGN to svar 0x23 also
+  sets the input the next KEYWORDS compare against, as a new question would (an answer already given in an
+  enclosing block doesn't stop them) — the statues of Mondain, Minax and Exodus read the mantra
+  with INPUTSTR into `$0`, copy it to 0x23, and test it with `un`/`*` keywords: "I can teach thee no more."
+  or "Thy understanding is flawed..."; found 2026-11-08 when any answer fell through to the farewell),
   `#n` numeric var.
 
 ### System numeric vars (IMPLEMENTED)

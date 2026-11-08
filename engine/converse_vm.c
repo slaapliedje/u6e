@@ -386,6 +386,9 @@ static void do_ctrl(cvm_t*vm){
           else if(vm->nin>=4 && vm->in[3].v==OP_DATA && !vm->in[3].d){ vm->db_lvar=1; vm->db_loc=vm->in[1].v; vm->db_off=vm->in[2].v; }
           vm->decl_v=ARG(); vm->decl_t=(uint8_t)ARG(); break;
       case OP_ASSIGN:{ uint32_t v=ARG();   /* string assign (decl_t 0xb3) already stored in svar[]; */
+          if(vm->decl_t==0xb3 && vm->decl_v==CVM_SVAR_INPUT){         /* $Z: the input the next KEYWORDS compare against (usecode_vm.md) */
+              int o=0; while(vm->svar[CVM_SVAR_INPUT][o] && o<CVM_INPUT-1){ vm->input[o]=vm->svar[CVM_SVAR_INPUT][o]; o++; } vm->input[o]=0;
+              vm->answer_mode=0; }                                     /* a fresh match: the keywords after it are tested again */
           if(vm->db_lvar) db_set_integer(vm,vm->db_loc,vm->db_off,v);
           else if(vm->decl_t!=0xb3 && vm->decl_v==CVM_VAR_QUESTF){ vm->g->on_quest=(uint8_t)(v?1:0); vm->g->mutations++; }   /* the quest flag is the game's (usecode_vm.md) */
           else if(vm->decl_t!=0xb3 && vm->decl_v<64) vm->g->var[vm->decl_v]=(int32_t)v; } break;  /* don't clobber the int var */
