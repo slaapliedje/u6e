@@ -31,6 +31,9 @@ no pack change (tileflags1 already ships as U6WG).
 
 Ship frames encode the part + facing: frame 0-7 = front, 8-15 = centre, 16-23 = back;
 `direction = (frame % 8) / 2` (0 N, 1 E, 2 S, 3 W); +1 within the pair = the animation phase.
+The **skiff** (414) has four tiles, one per facing: `frame = direction` (0 N, 1 E, 2 S, 3 W), no
+animation phase (BASETILE: 414 at 1872, 415 at 1876; read 2026-11-08 after a skiff sailed south drew
+as the raft and named itself "nothing").
 The three parts line up along the facing axis: facing N, the front part is one tile NORTH of
 the centre and the back one tile SOUTH (and rotated accordingly).
 

@@ -6355,7 +6355,7 @@ static int veh_can_enter(const world_t*w,int x,int y,int deep)
 /* re-derive the part frames from facing + phase (§1: front 0-7, centre 8-15, back 16-23) */
 static void veh_set_tiles(void)
 {   if(g_veh_kind==414){ wobj_t*o=&g_wobj[g_veh_o[0]];
-        o->tile=(uint16_t)(basetile(414)+g_veh_face*2+g_veh_phase); o->dirty=1; }
+        o->tile=(uint16_t)(basetile(414)+g_veh_face); o->dirty=1; }   /* four tiles, one per facing (vehicles.md §1) */
     else if(g_veh_kind==415||g_veh_kind==423){ wobj_t*o=&g_wobj[g_veh_o[0]]; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; }   /* raft / balloon: one frame (a never-saved inflated balloon stays DROPPED) */
     else if(g_veh_kind==412){ int bt=basetile(412);
         g_wobj[g_veh_o[1]].tile=(uint16_t)(bt+   g_veh_face*2+g_veh_phase);
@@ -13588,6 +13588,8 @@ int main(int argc, char **argv)
                             for(int d=0;d<4;d++) if(vehicle_try_move(&w,VDX[d],VDY[d])){ steps++; break; }
                         dbg_num("VEH sailed=", steps);
                         dbg_num("VEH x=", w.px); dbg_num("VEH y=", w.py);
+                        { int fmax=0; for(int d=0;d<4;d++) if(vehicle_try_move(&w,VDX[d],VDY[d])){ int f=(int)g_wobj[g_veh_o[0]].tile-basetile(414); if(f>fmax) fmax=f; }
+                          dbg_num("VEH skiff frames 0-3=", fmax<=3); }   /* one tile per facing (vehicles.md §1) */
                     } else {
                         dbg_num("VEH onto land blocked=", !vehicle_try_move(&w,lx-(int)w.px,ly-(int)w.py));
                         (void)vehicle_exit(&w);
