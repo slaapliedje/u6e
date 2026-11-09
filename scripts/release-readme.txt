@@ -35,7 +35,8 @@ TRANSFER A CHARACTER
   (Ultima IV, ST) or PARTY.SAV (Ultima IV, DOS).
 
 SOUND
-  Ctrl-Z turns the sound off and on, as in the original. F1 picks the
+  Ctrl-Z turns the sound off and on, as in the original. F9 (F1 in the
+  menus) picks the
   music source.
 
 SAVED GAMES
