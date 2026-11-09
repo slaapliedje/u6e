@@ -298,6 +298,8 @@ class Player:
                 else: self.issue('combat', 'no foe hurt in 40 turns (%s)' % who)
                 break
             f = fs[0]; x, y = self.nav.pos(); dx, dy = f['x'] - x, f['y'] - y
+            if max(abs(dx), abs(dy)) <= 5 and self.attack_cast(f):          # a spell first while the mana and reagents last
+                turns += 1; continue
             if max(abs(dx), abs(dy)) <= 1:
                 self.key('a', 'attack')
                 if self.g.state['verb'] != 'A': self.issue('combat', 'A did not arm Attack- (verb=%r)' % self.g.state['verb']); break
@@ -318,6 +320,24 @@ class Player:
             if self.foes(): self.log('  no loot: foes still near')
             else: self.loot(before)
         return True
+
+    ATTACK = ((34, 'pf', 3, (72, 65)), (17, 'oj', 2, (72, 65)))         # Fireball, Magic Arrow: number, words, mana, reagents (magic_skills.md §5)
+
+    def attack_cast(self, f):
+        """C)ast the strongest attack spell the Avatar knows, has the mana and his own reagents for, at foe f; True if cast"""
+        st = self.g.state
+        if st['party'][0]['id'] != 1 or not st.get('book'): return False
+        known = {int(x) for x in str(st.get('sk', '')).split(',') if x.strip().isdigit()}
+        mine = {}
+        for r in self.g.objects()[1]:
+            if r.get('own', 1) == 1: mine[r['obj']] = mine.get(r['obj'], 0) + (r['qty'] or 1)
+        for num, words, mana, rg in self.ATTACK:
+            if num in known and st['party'][0]['mp'] >= mana and all(mine.get(o, 0) for o in rg) and st['party'][0]['lvl'] >= num // 16 + 1:
+                st = self.cast_open()
+                if not st['cast']: self.idle(); return False
+                self.g.type(words); st = self.aim_at(f['id'], 'cast at %d' % f['id']); self.idle()
+                return True
+        return False
 
     HOLDERS = (98, 168, 211, 339, 340, 341, 347, 350, 354, 369, 372)   # searchable remains and chests (usecode_use.md)
 

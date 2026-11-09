@@ -200,11 +200,11 @@ def seg_help(p, kw):
     if left: p.issue('help', 'the bodies of %s still in the pack after they rose' % left)
     p.meant.clear()
 
-def wait_for_work(p, aid, name, limit=1000):   # through a night: a shop opens in the morning
-    """pass turns (space) until actor aid is at work (worktype 0x90); False if it never is"""
+def wait_for_work(p, aid, name, limit=1000, wt=0x90):   # through a night: a shop opens in the morning
+    """pass turns (space) until actor aid is at work (worktype wt, 0x90 unless the schedule says otherwise); False if never"""
     for i in range(limit):
         a = p.actor(aid) if i % 10 == 0 else a
-        if a and a.get('wt') == 0x90: return True
+        if a and a.get('wt') == wt: return True
         p.key('space', 'wait for %s' % name)
     p.log('  %s never came to work (wt=%s, %02d:%02d)' % (name, a and a.get('wt'), p.g.state['min'] // 60, p.g.state['min'] % 60))
     return False
@@ -536,11 +536,17 @@ def seg_sacrifice(p, kw):
     """the panpipes: a yew log from Ben (Yew), a board from Aaron (by Minoc), panpipes from Julia,
     the tune from Gwenno; Selganor's guild takes the player and gives the rune of Sacrifice"""
     if not orb_go(p, 15): return
-    p.talk_to(54, ['log', 'y', payer(p), 'y'], 'Ben', yes=True)
+    wait_for_work(p, 54, 'Ben', wt=0x8f)                                 # his script talks only while he wanders (12:00-19:00, SCHEDULE); at home he takes up his axe
+    go_to_actor(p, 54, 'Ben')                                   # wherever the schedule has them now
+    out = p.talk_to(54, ['log', 'y', payer(p), 'y'], 'Ben', yes=True); p.log('  Ben: %r' % (out and out[-3:],))
     if not orb_go(p, 25): return
+    go_to_actor(p, 69, 'Aaron')                                   # wherever the schedule has them now
     p.talk_to(69, ['log', 'y'], 'Aaron', yes=True)
+    go_to_actor(p, 67, 'Julia')                                   # wherever the schedule has them now
     p.talk_to(67, ['pipe', 'boar', 'y'], 'Julia', yes=True)
+    go_to_actor(p, 66, 'Gwenno')                                   # wherever the schedule has them now
     p.talk_to(66, ['ston'], 'Gwenno')
+    go_to_actor(p, 64, 'Selganor')                                   # wherever the schedule has them now
     p.talk_to(64, ['rune', 'join', 'pipe', 'y', '6789878767653'], 'Selganor', yes=True)
     got_rune(p, 246, 'Selganor')
 
@@ -1610,10 +1616,11 @@ def keep_up(p):
     if p.poisoned() and min(count(p, 67, 1), count(p, 68, 1)) < 1: lb_heal(p)
 
 REAL_MAGIC = os.environ.get('BOT_REAL_MAGIC') == '1'                 # the original start: no test stock (magic_skills.md §4)
-SPELL_SHOP = {33: (36, 3, 1), 21: (36, 2, 3), 57: (36, 4, 7), 23: (58, 2, 2), 103: (58, 7, 2)}   # spell number: (mage, circle, item in his list)
+SPELL_SHOP = {33: (36, 3, 1), 21: (36, 2, 3), 57: (36, 4, 7), 23: (58, 2, 2), 103: (58, 7, 2), 17: (88, 2, 1), 34: (88, 3, 2)}   # spell number: (mage, circle, item in his list)
 MAGE = {36: ('Xiao', 2), 58: ('Nicodemus', 8), 88: ('Horance', 21)}       # name, the orb position to walk from
 SEG_SPELLS = {'gargoyles': [33, 21, 57], 'cube': [33], 'sutek': [23, 21, 33, 103], 'balloon': [57], 'statues': [103, 23, 33]}
 REAGENT_MENU = {88: {65: 1, 66: 2, 69: 3, 70: 4, 71: 5, 72: 6}, 36: {65: 1, 67: 2, 68: 3, 69: 4, 70: 5, 71: 6, 72: 7}}
+STOCK_FOR = {'train4': {65: 10, 72: 12}}                                 # Magic Arrow and Fireball: ash and pearl
 REAGENT_WANT = {65: 8, 66: 10, 69: 6, 70: 4, 71: 10, 72: 14}               # pearl, moss, mandrake, nightshade, silk, ash
 
 def known(p):
@@ -1637,7 +1644,7 @@ def put_parchments(p):
 
 def learn(p, spells):
     """buy the spells the book lacks from the mage who teaches them, gold permitting"""
-    for aid in (36, 58):
+    for aid in (88, 36, 58):
         need = [q for q in spells if q not in known(p) and SPELL_SHOP[q][0] == aid]
         if not need: continue
         if not to_mage(p, aid): continue
@@ -1648,10 +1655,10 @@ def learn(p, spells):
             put_parchments(p)
             if q not in known(p): p.issue('magic', 'spell %d not learned from %s (gold %d)' % (q, MAGE[aid][0], p.g.state.get('gold', 0)))
 
-def stock_reagents(p, aid=88):
+def stock_reagents(p, aid=88, want=None):
     """top the reagents up at a mage's shop (Horance by default: all but garlic and ginseng); the Avatar casts, so
     his own; a "Which of you?" first is answered with 1"""
-    want = {o: n - count(p, o, 1) for o, n in REAGENT_WANT.items() if o in REAGENT_MENU[aid] and count(p, o, 1) < n // 2}
+    want = {o: n - count(p, o, 1) for o, n in (want or REAGENT_WANT).items() if o in REAGENT_MENU[aid] and count(p, o, 1) < n // 2}
     if not want: return
     if not to_mage(p, aid): return
     for o, n in want.items():
@@ -2019,7 +2026,10 @@ def hunt_sites(p, reach=90):
         if (x, y) in bad or q % 10 in (1, 3) or not ch: continue          # neutral or good hatchlings are no foes
         v = sum(EGG_XP.get(o, 0) * (n + 1) / 2 for o, n in e) * min(ch, 100) / 100
         near = [dist[(x + a, y + b)] for a in (-1, 0, 1) for b in (-1, 0, 1) if (x + a, y + b) in dist]
-        if v >= 8 and near: d, k = min(near); sites.append((round(v), x, y, k, d))
+        if v >= 8 and near:
+            d, k = min(near); gx, gy = ORB[k]
+            if any(abs(bx - gx) <= 12 and abs(by - gy) <= 12 for bx, by in bad): continue   # the gate itself is guarded (gargoyles at Cove, gate 24)
+            sites.append((round(v), x, y, k, d))
     sites.sort(key=lambda t: -t[0] / (30 + t[4]))
     p.log('  hunting sites: %s' % sites[:12])
     SITE_GATE.update({(x, y): k for _, x, y, k, _ in sites})
@@ -2192,7 +2202,7 @@ def seg_eqcheck(p, kw):
 
 SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, train4=seg_train4, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, givetest=seg_givetest, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
-LATE = ('gargoyles', 'lenses', 'cube', 'keg', 'gate', 'sutek', 'catacombs', 'balloon', 'singularity', 'statues', 'ending')
+LATE = ('train4', 'gargoyles', 'lenses', 'cube', 'keg', 'gate', 'sutek', 'catacombs', 'balloon', 'singularity', 'statues', 'ending')
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
 
@@ -2247,8 +2257,8 @@ def main():
             p.loot_ok = s not in QUEST
             try:
                 if s in QUEST: keep_up(p)
-                if REAL_MAGIC and s in LATE and p.g.state.get('gold', 0) >= 80: stock_reagents(p)
-                if REAL_MAGIC and s in SEG_SPELLS: learn(p, SEG_SPELLS[s])
+                if REAL_MAGIC and s in SEG_SPELLS: learn(p, SEG_SPELLS[s])     # the spells first, then what gold is left on reagents
+                if REAL_MAGIC and s in LATE and p.g.state.get('gold', 0) >= 20: stock_reagents(p, want=STOCK_FOR.get(s))
             except Danger as e: p.issue('danger', 'before %s: %s' % (s, e)); p.rest_if_hurt(0.6)
             try: SEGS[s](p, kw)
             except Danger as e: p.issue('danger', '%s: %s' % (s, e))

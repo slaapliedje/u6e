@@ -63,7 +63,8 @@ int main(int argc,char**argv)
 
     cvm_game_t g; cvm_game_init(&g,0xC0FFEE);
     if(se){ g.dialect=CVM_DIALECT_SE; g.event=on_event; }
-    { const char*e=getenv("CVM_GOLD"); if(e) g.gold=atoi(e); }          /* seed the player: gold, carried obj_n list */
+    { const char*e=getenv("CVM_GOLD"); if(e) g.gold=atoi(e); }
+    { const char*e=getenv("CVM_WT"); if(e) g.worktype[npc&0xff]=(uint8_t)strtol(e,0,0); }   /* the speaker's live worktype */          /* seed the player: gold, carried obj_n list */
     { const char*e=getenv("CVM_INV"); while(e&&*e){ int o=atoi(e); if(o>0&&o<1024) g.player_obj[o]++; e=strchr(e,','); if(e) e++; } }
     cvm_t vm; cvm_init(&vm,d,len,&g,npc,"Avatar","milord");
 
