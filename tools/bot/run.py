@@ -408,7 +408,11 @@ def get_at(p, x, y, obj_n, tries=3):
         p.log('  get at (%d,%d): %r' % (x, y, st['msg'][-120:]))
         if carried(p, obj_n): return True
         if 'too heavy' in st['msg']:
-            p.log('  loads: %s' % ' '.join('%d:%s/%s' % (m['id'], m.get('wt'), m.get('lim')) for m in p.g.state['party'])); lighten(p)
+            p.log('  loads: %s' % ' '.join('%d:%s/%s' % (m['id'], m.get('wt'), m.get('lim')) for m in p.g.state['party']))
+            top = [o for o in p.g.objects()[0] if (o['x'], o['y']) == (x, y)]
+            if top and top[-1]['obj'] != obj_n:                         # something heavy lies on it: M)ove it off, onward (usecode_use.md M)ove)
+                d = VDIR[(x - px, y - py)]; p.act('m', d, 'move it off'); st = p.key(d, 'onward'); p.log('  moved %s off: %r' % (top[-1].get('name'), st['msg'][-40:]))
+            else: lighten(p)
     p.issue('get', 'no obj %d from (%d,%d): %r' % (obj_n, x, y, p.g.state['msg'][-200:])); return False
 
 def seg_orb(p, kw):
@@ -765,8 +769,14 @@ def seg_honesty(p, kw):
     p.walk(219, 151)
     if not unlock_with_key(p, 219, 150): p.issue('honesty', "the crypt door would not unlock with any key: %r" % p.g.state['msg'][-80:]); return
     st = p.act('u', 'up', 'open the crypt'); p.log('  crypt: %r' % st['msg'][-60:]); p.nav.refresh()
+    honesty_rune(p)
+
+def honesty_rune(p):
+    """the crypt: the rune lies inside Beyvin's body (339): light (the crypt is dark, L)ook finds nothing in the dark),
+    search the body, G)et the rune"""
     p.walk(219, 147, adj=True); px, py = p.nav.pos()
-    st = p.use_pack(90); p.log('  torch: %r' % (st and st['msg'][-60:]))      # the crypt is dark: L)ook finds nothing in the dark
+    st = light_torch(p); p.log('  torch: %r' % (st and st['msg'][-60:]))
+    if not (st and 'lit' in st['msg'].lower()): cast_light(p)
     p.key('l', 'look'); st = p.at(VDIR[(219 - px, 147 - py)], 'search the body'); p.log('  body: %r' % st['msg'][-140:])
     get_at(p, 219, 147, 242, tries=6)
     got_rune(p, 242, 'Beyvin')
@@ -1617,10 +1627,11 @@ def keep_up(p):
 
 REAL_MAGIC = os.environ.get('BOT_REAL_MAGIC') == '1'                 # the original start: no test stock (magic_skills.md §4)
 SPELL_SHOP = {33: (36, 3, 1), 21: (36, 2, 3), 57: (36, 4, 7), 23: (58, 2, 2), 103: (58, 7, 2), 17: (88, 2, 1), 34: (88, 3, 2)}   # spell number: (mage, circle, item in his list)
-MAGE = {36: ('Xiao', 2), 58: ('Nicodemus', 8), 88: ('Horance', 21)}       # name, the orb position to walk from
+MAGE = {36: ('Xiao', 1), 58: ('Nicodemus', 8), 88: ('Horance', 21)}       # name, the orb position to walk from
 SEG_SPELLS = {'gargoyles': [33, 21, 57], 'cube': [33], 'sutek': [23, 21, 33, 103], 'balloon': [57], 'statues': [103, 23, 33]}
 REAGENT_MENU = {88: {65: 1, 66: 2, 69: 3, 70: 4, 71: 5, 72: 6}, 36: {65: 1, 67: 2, 68: 3, 69: 4, 70: 5, 71: 6, 72: 7}}
-STOCK_FOR = {'train4': {65: 10, 72: 12}}                                 # Magic Arrow and Fireball: ash and pearl
+STOCK_FOR = {'train4': {65: 10, 72: 12}}
+PRE_STOCK = {'honesty': (36, {72: 12})}                                     # Light for the dark crypt: Xiao sells ash (Rudyom does not)
 REAGENT_WANT = {65: 8, 66: 10, 69: 6, 70: 4, 71: 10, 72: 14}               # pearl, moss, mandrake, nightshade, silk, ash
 
 def known(p):
@@ -2166,12 +2177,16 @@ def seg_probe(p, kw):
     p.log('  objects at (304,382): %s' % [o for o in p.g.objects()[0] if (o['x'], o['y']) == (304, 382)])
 
 def seg_givetest(p, kw):
-    """the companions' gold to the Avatar by give_to_avatar"""
-    rows = lambda: [(r.get('own'), r['qty']) for r in p.g.objects()[1] if r['obj'] == 88]
-    p.log('  gold before: %s' % rows())
-    for _ in range(4):
-        if count(p, 88) == count(p, 88, 1) or not give_to_avatar(p, 88, others=True): break
-    p.log('  gold after: %s' % rows())
+    """probe: what lies on (219,147) and what M)ove does to the top of it"""
+    x, y = 219, 147
+    p.log('  pos %s; on the tile: %s' % (p.nav.pos(), [(o['obj'], o.get('name'), o['i']) for o in p.g.objects()[0] if (o['x'], o['y']) == (x, y)]))
+    px, py = p.nav.pos(); d = VDIR[(x - px, y - py)]
+    st = p.key('m', 'move'); p.log('  M: %r verb=%r' % (st['msg'][-60:], st.get('verb')))
+    st = p.key(d, 'pick'); p.log('  %s: %r verb=%r' % (d, st['msg'][-80:], st.get('verb')))
+    for k in (d, 'left', 'right'):
+        if not st.get('verb'): break
+        st = p.key(k, 'to'); p.log('  to %s: %r verb=%r' % (k, st['msg'][-80:], st.get('verb')))
+    p.log('  after: %s' % [(o['obj'], o.get('name'), o['x'], o['y']) for o in p.g.objects()[0] if abs(o['x'] - x) <= 1 and abs(o['y'] - y) <= 1])
 
 def seg_cheat(p, kw):
     """Iolo's own cheat menu (usecode_vm.md): spam x3, humbug, Edit player, Set Quest Flag 1; the menu must read
@@ -2200,7 +2215,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, train4=seg_train4, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, givetest=seg_givetest, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, train4=seg_train4, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, givetest=seg_givetest, honestyrune=lambda p, kw: honesty_rune(p), eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 LATE = ('train4', 'gargoyles', 'lenses', 'cube', 'keg', 'gate', 'sutek', 'catacombs', 'balloon', 'singularity', 'statues', 'ending')
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
@@ -2257,6 +2272,7 @@ def main():
             p.loot_ok = s not in QUEST
             try:
                 if s in QUEST: keep_up(p)
+                if REAL_MAGIC and s in PRE_STOCK and p.g.state.get('gold', 0) >= 10: stock_reagents(p, aid=PRE_STOCK[s][0], want=PRE_STOCK[s][1])
                 if REAL_MAGIC and s in SEG_SPELLS: learn(p, SEG_SPELLS[s])     # the spells first, then what gold is left on reagents
                 if REAL_MAGIC and s in LATE and p.g.state.get('gold', 0) >= 20: stock_reagents(p, want=STOCK_FOR.get(s))
             except Danger as e: p.issue('danger', 'before %s: %s' % (s, e)); p.rest_if_hurt(0.6)
