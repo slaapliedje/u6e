@@ -298,6 +298,8 @@ class Player:
                 else: self.issue('combat', 'no foe hurt in 40 turns (%s)' % who)
                 break
             f = fs[0]; x, y = self.nav.pos(); dx, dy = f['x'] - x, f['y'] - y
+            if any(m['max'] and 0 < m['hp'] < m['max'] * 0.4 for m in st['party']) and self.heal_up(0.4, tries=2):   # mend mid-fight
+                turns += 1; continue
             if max(abs(dx), abs(dy)) <= 5 and self.attack_cast(f):          # a spell first while the mana and reagents last
                 turns += 1; continue
             if max(abs(dx), abs(dy)) <= 1:
