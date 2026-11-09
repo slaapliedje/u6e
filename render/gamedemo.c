@@ -3507,8 +3507,8 @@ static void slot_swap(world_t*w,int m)
     g_avatar_ovr=g_solo_m?0:g_atile[1];
     g_tmp_valid=0; g_dm_valid=0; build_blocked();
 }
-static int g_keys_fall;                          /* the keys went to a member because the Avatar couldn't act (combat.md §8 Who leads) */
-static void solo_end(world_t*w){ if(g_solo_m){ int m=g_solo_m; slot_swap(w,m); g_solo_m=0; g_avatar_ovr=0; } g_solo_on=0; g_keys_fall=0; }   /* (the Avatar's own Solo has no swap) */
+static int g_keys_cmd;                           /* the keys are a COMMAND member's own turn, not a hand-over (combat.md §8 Who leads) */
+static void solo_end(world_t*w){ if(g_solo_m){ int m=g_solo_m; slot_swap(w,m); g_solo_m=0; g_avatar_ovr=0; } g_solo_on=0; g_keys_cmd=0; }   /* (the Avatar's own Solo has no swap) */
 static void solo_begin(world_t*w,int m,int on){ solo_end(w); slot_swap(w,m); g_solo_m=m; g_solo_on=on; g_avatar_ovr=g_atile[1]; }
 static int actor_real(int a){ return !g_solo_m?a:(a==1?g_solo_m:(a==g_solo_m?1:a)); }
 
@@ -8850,12 +8850,12 @@ static void sched_run(world_t*w)
         if((g_ahp[1]==0&&!g_solo_m)||g_pending_verb=='J') return;
         for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a!=1&&wt_now(a)==1&&g_pts[a]<=0&&!g_resting){ g_pts[1]=0; break; } }
         sched_pass(w);
-        if(!able(1)&&!g_solo_on){ int nx=0; for(int p=0;p<g_nparty&&!nx;p++){ int a=g_party[p].actor; if(a!=1&&able(a)) nx=a; } if(nx){ to_keys(w,nx); g_keys_fall=1; } }
-        else if(g_solo_m&&!g_solo_on&&(!g_combat_mode||g_keys_fall)) solo_end(w);   /* able again: the Avatar takes them back (a COMMAND turn runs on) */
+        if(!able(1)&&!g_solo_on){ int nx=0; for(int p=0;p<g_nparty&&!nx;p++){ int a=g_party[p].actor; if(a!=1&&able(a)) nx=a; } if(nx) to_keys(w,nx); }
+        else if(g_solo_m&&!g_solo_on&&able(g_solo_m)&&(!g_combat_mode||!g_keys_cmd)) solo_end(w);   /* the Avatar (in the member's slot) able again takes them back; a COMMAND turn runs on */
         int i=sched_pick(w);
         if(i<0){ minute_end(w); if(++minutes>240) return; continue; }
         if(dragged_turn(i)){ g_pts[i]=0; continue; }
-        if(wt_now(i)==2){ if(i==1) return; to_keys(w,i); return; }
+        if(wt_now(i)==2){ if(i==1) return; to_keys(w,i); g_keys_cmd=1; return; }
         wt_act(w,i);
         if(g_meet_talk){ int t=g_meet_talk; g_meet_talk=0; talk(t); }
         if(g_game_over) return; } }
