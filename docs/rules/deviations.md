@@ -5,12 +5,10 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
+> - Last updated: 2026-11-08 (the user keeps the foes' "casts" line as an addition); 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
 
 ## Found, not yet built
-| Difference | Where | DOS |
-|---|---|---|
-| A foe's spell prints "<creature> casts <spell>." (added as feedback, never registered; found 2026-11-07) | combat.md §7b | No such line: GAME.EXE has no "casts" text; the foe's cast shows only its effect. Awaiting the user's choice: keep as an addition, or drop |
+None.
 
 (The conversation page waits, found 2026-11-07, are built: converse.md §6d.) The foes' charge roll was read in DOS
 2026-11-07 (weapon pick at image 0x1dcb7: each readied charge or spellbook, 1 in 4 with no storm, then
@@ -30,6 +28,7 @@ rand(0..spell) < 16): it matches combat.md §7b.
 | Transfer decodes ST Ultima IV's BCD numbers, which the ST original misreads | transfer_saves.md §1 |
 | Create and Transfer don't refuse a game in progress | transfer_saves.md §4 |
 | The DOS sound effects are a setting (Ctrl-X, on by default); the ST original has none | sound_effects.md |
+| A foe's spell prints "<creature> casts <spell>."; GAME.EXE shows only the effect (kept 2026-11-08) | combat.md §7b |
 
 ## The machine (accepted by the user, 2026-11-05)
 | Difference | Where |

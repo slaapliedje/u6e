@@ -395,8 +395,8 @@ reference's scripts with the monster as caster):
 
 Damage to a party member goes through the same path as a monster's blow (it CAN reach 0 HP, like
 melee); damage to anyone else through the spell damage routine. The cast shows the spell's
-projectile tile on the target and a line "<creature> casts <spell>." (u6e feedback; the original
-shows its casting flash).
+projectile tile on the target and a line "<creature> casts <spell>." (an addition the user kept 2026-11-08, see deviations.md; the
+original shows only its casting flash).
 
 ## 8. Implementation plan (stages)
 - **CB1 — player melee attack — DONE.** A)ttack (key 'A' / command-bar icon 0) → direction
