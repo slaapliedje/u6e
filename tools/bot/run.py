@@ -1632,7 +1632,9 @@ def equip_party(p):
         if not gear: return
         r = gear[0]; got = False
         for m in range(1, n + 1):
-            if REAL_MAGIC and m == 1 and 'shield' in r.get('name', '') and carried(p, 57): continue   # the book takes the Avatar's other hand: a weapon goes with it
+            if REAL_MAGIC and m == 1 and carried(p, 57) and ('shield' in r.get('name', '') or 33 <= r['obj'] <= 56):
+                eq1 = readied(p)                                         # the book takes the Avatar's other hand: one weapon, no shield
+                if 'shield' in r.get('name', '') or eq1.get((1, 3)) or eq1.get((1, 4)): continue
             if ready(p, r['obj'], m): got = True; break
             if sum(1 for q in p.g.objects()[1] if q['obj'] == r['obj']) < sum(1 for q in inv if q['obj'] == r['obj']): got = True; break
         if not got: p.unfit = getattr(p, 'unfit', set()) | {(r['obj'], r.get('name'))}
@@ -2199,17 +2201,23 @@ def seg_probe(p, kw):
     p.nav.refresh(); p.log('  doors by the cranks: %s' % {k: v for k, v in p.nav.doors.items() if 300 <= k[0] <= 315 and 378 <= k[1] <= 386})
     p.log('  objects at (304,382): %s' % [o for o in p.g.objects()[0] if (o['x'], o['y']) == (304, 382)])
 
+def free_book_hand(p):
+    """the Avatar's other hand (176,56) holds what the book needs: open his inventory, the panel crosshair from the
+    first pack cell (248,32) to that slot, Enter takes it off (equipment.md §5: a selected readied thing comes off)"""
+    p.idle(); p.key('f10', 'party view'); p.key('star', 'a portrait'); p.key('star', 'its inventory')   # (F1-F8 are the bot's reports)
+    for _ in range(8): p.key('minus', 'back to the first member')          # the Avatar leads the roster
+    st = p.key('tab', 'the panel')
+    for _ in range(9): p.key('left', 'to the slot')
+    for _ in range(3): p.key('down', 'to the slot')
+    st = p.key('ret', 'take it off'); p.log('  free the book hand: %r' % st['msg'][-50:])
+    p.key('tab', 'back'); p.key('f10', 'party view'); p.idle()
+    return 'Unready' in st['msg']
+
 def seg_givetest(p, kw):
-    """probe: what lies on (219,147) and what M)ove does to the top of it"""
-    x, y = 219, 147
-    p.log('  pos %s; on the tile: %s' % (p.nav.pos(), [(o['obj'], o.get('name'), o['i']) for o in p.g.objects()[0] if (o['x'], o['y']) == (x, y)]))
-    px, py = p.nav.pos(); d = VDIR[(x - px, y - py)]
-    st = p.key('m', 'move'); p.log('  M: %r verb=%r' % (st['msg'][-60:], st.get('verb')))
-    st = p.key(d, 'pick'); p.log('  %s: %r verb=%r' % (d, st['msg'][-80:], st.get('verb')))
-    for k in (d, 'left', 'right'):
-        if not st.get('verb'): break
-        st = p.key(k, 'to'); p.log('  to %s: %r verb=%r' % (k, st['msg'][-80:], st.get('verb')))
-    p.log('  after: %s' % [(o['obj'], o.get('name'), o['x'], o['y']) for o in p.g.objects()[0] if abs(o['x'] - x) <= 1 and abs(o['y'] - y) <= 1])
+    """probe: free the Avatar's book hand and ready the book"""
+    p.log('  before: %s' % sorted((k, v) for k, v in readied(p).items() if k[0] == 1))
+    free_book_hand(p); ready(p, 57, 1)
+    p.log('  after: %s book=%s' % (sorted((k, v) for k, v in readied(p).items() if k[0] == 1), p.g.state.get('book')))
 
 def seg_cheat(p, kw):
     """Iolo's own cheat menu (usecode_vm.md): spam x3, humbug, Edit player, Set Quest Flag 1; the menu must read
@@ -2288,7 +2296,9 @@ def main():
             log('== segment %s' % s); ts = time.time()
             if REAL_MAGIC:                                             # a death puts what was readied in the pack (combat.md §3d)
                 equip_party(p)
-                if carried(p, 57) and not p.g.state.get('book'): ready(p, 57, 1)
+                if carried(p, 57) and not p.g.state.get('book'):
+                    ready(p, 57, 1)
+                    if not p.g.state.get('book') and free_book_hand(p): ready(p, 57, 1)   # a weapon took its hand
                 for obj in (88, 65, 66, 67, 68, 69, 70, 71, 72):          # gold and reagents to the Avatar: he pays and casts
                     for _ in range(4):
                         if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
