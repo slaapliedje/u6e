@@ -139,6 +139,7 @@ def seg_death(p, kw):
     where he stood, holding what he had; he leaves the map and the roster; karma stays; then the
     Avatar picks the body up (the healer segment takes it to Tiberius)"""
     if p.g.state['foes'] and p.foes(): p.fight()                        # an attack takes its time now: they'd answer
+    equip_party(p)                                                       # (Max may have bought the Avatar's readied sword)
     k0 = p.g.state['karma']; p.meant.add(4)
     for _ in range(40):
         st = strike(p, 3, 'Shamino')
@@ -180,7 +181,7 @@ def seg_help(p, kw):
     the hour one when he sits on his throne, karma unchanged"""
     dead = missing(p)
     k0 = p.g.state['karma']
-    st = p.key('c', 'cast')
+    st = p.cast_open()
     if not st['cast']: p.issue('help', 'C did not open the spell prompt'); p.idle(); return
     st = p.g.type('kl'); p.check('cast help')
     for _ in range(40):
@@ -199,7 +200,7 @@ def seg_help(p, kw):
     if left: p.issue('help', 'the bodies of %s still in the pack after they rose' % left)
     p.meant.clear()
 
-def wait_for_work(p, aid, name, limit=400):
+def wait_for_work(p, aid, name, limit=1000):   # through a night: a shop opens in the morning
     """pass turns (space) until actor aid is at work (worktype 0x90); False if it never is"""
     for i in range(limit):
         a = p.actor(aid) if i % 10 == 0 else a
@@ -219,9 +220,11 @@ def seg_sell(p, kw):
         for r in p.g.ready: c[r['obj']] = c.get(r['obj'], 0) + 1
         return c
     g0 = p.g.state['gold']; pack0 = carried()
-    out = p.talk_to(18, ['sell', '1', '1', 'y'], 'Max')         # which of you: 1 (the Avatar holds the pooled pack, usecode_vm.md §6f)
+    out = p.talk_to(18, ['sell', '1', 'y'], 'Max')              # which of you: 1 (the Avatar holds the pooled pack, usecode_vm.md §6f); his offer
     if out is None: p.issue('sell', 'could not reach Max'); return
     text = ' '.join(r for _, r in out)
+    if 'take' not in text or 'a some other atime' in text:            # a list of what to sell came first: its first
+        out = p.talk_to(18, ['sell', '1', '1', 'y'], 'Max') or []; text = ' '.join(r for _, r in out)
     m = re.search(r'take (\d+) gold for that ([^,?]+)', text)
     pack1 = carried()
     gone = {o: pack0[o] - pack1.get(o, 0) for o in pack0 if pack0[o] > pack1.get(o, 0)}
@@ -275,12 +278,14 @@ def ways(p, up, reach=None):
 def seg_cave(p, kw):
     """walk from Britain to the cave, step in (level 1), explore and fight, take a way down to level 2
     and explore it, then climb back to the surface"""
+    if REAL_MAGIC and min(count(p, 68, 1), count(p, 71, 1)) < 6 and p.g.state.get('gold', 0) >= 40:
+        restock(p, 6); orb_go(p, 8)                     # Heal's reagents first (the start's bag holds a few); the Orb back to Britain
     p.nav.refresh(); p.walk(*CAVE)
     st = p.g.state
     if st['L'] != 1: p.issue('cave', 'stepping onto the cave at %s left us on L%d (%d,%d)' % (CAVE, st['L'], st['X'], st['Y'])); return
     p.log('  entered L1 at (%d,%d)' % (st['X'], st['Y'])); arrived = {1: (st['X'], st['Y'])}
-    st = p.use_pack(90)                                 # light a torch: the dungeon is dark
-    if st is not None and 'burned out' in st['msg'].lower(): st = p.use_pack(90)   # the lit one went out as we stepped in
+    st = light_torch(p)                                 # light a torch: the dungeon is dark (a free hand holds it)
+    if st is not None and 'burned out' in st['msg'].lower(): st = light_torch(p)   # the lit one went out as we stepped in
     if st is None or 'lit' not in st['msg'].lower(): p.issue('cave', 'lighting a torch: %r' % (st and st['msg']))
     reach = explore(p)
     for o in ways(p, up=False, reach=reach):
@@ -289,6 +294,7 @@ def seg_cave(p, kw):
             arrived[st['L']] = (st['X'], st['Y'])
             if st['L'] != 2: p.issue('cave', 'a way down from L1 led to L%d' % st['L'])
             explore(p, seed=2); break
+    p.flee = True                                       # out, whatever the wounds
     for _ in range(4):                                  # climb: each level's nearest way up
         if p.g.state['L'] == 0: break
         p.nav.refresh(); lv = p.g.state['L']
@@ -300,6 +306,7 @@ def seg_cave(p, kw):
                 if p.g.state['L'] != lv - 1: p.issue('cave', 'a way up from L%d led to L%d' % (lv, p.g.state['L']))
                 break
         else: break
+    p.flee = False
     st = p.g.state
     if st['L'] != 0: p.issue('cave', 'could not get back to the surface from L%d (%d,%d)' % (st['L'], st['X'], st['Y']))
     else: p.log('  back on the surface at (%d,%d)' % (st['X'], st['Y']))
@@ -660,7 +667,7 @@ def unlock_any(p, x, y, magic=False):
     quality, else a lock pick (quality 0 only; one may break, usecode_use.md)"""
     px, py = p.nav.pos(); d = VDIR[(x - px, y - py)]
     if magic:
-        st = p.key('c', 'cast')
+        st = p.cast_open()
         if not st['cast']: p.idle(); return False
         p.g.type('ep'); st = p.at(d, 'unlock magic'); p.idle(); p.log('  unlock magic (%d,%d): %r' % (x, y, st['msg'][-40:]))
         return 'unlocked' in st['msg']
@@ -845,7 +852,7 @@ TWO_HANDED = {41, 42, 44, 45, 46, 47, 50, 54}                           # bows, 
 def cast_light(p):
     """C)ast Light (In Lor, sulfurous ash): 100 minutes of light (magic_skills.md timers)"""
     if not count(p, 72, 1): return None
-    st = p.key('c', 'cast')
+    st = p.cast_open()
     if not st['cast']: p.idle(); return None
     st = p.g.type('il'); p.idle(); p.log('  light: %r' % st['msg'][-50:])
     return 'success' in st['msg'].lower()
@@ -863,7 +870,7 @@ def avatar_leads(p, turns=30):
 def dispel_at(p, x, y, d):
     """from (x,y), C)ast Dispel Field (An Grav) on the next tile that way (magic_skills.md §5a)"""
     p.walk(x, y); avatar_leads(p)
-    st = p.key('c', 'cast')
+    st = p.cast_open()
     if not st['cast']: p.idle(); return False
     p.g.type('ag'); st = p.at(d, 'dispel the field'); p.idle()
     p.log('  dispel field %s of (%d,%d): %r' % (d, x, y, st['msg'][-60:])); p.nav.refresh()
@@ -1187,7 +1194,7 @@ def seg_sutek(p, kw):
     from afar (magic_skills.md)"""
     p.loot_ok = False
     p.walk(789, 962); cast_light(p); p.nav.refresh()
-    st = p.key('c', 'cast') if p.nav.route(*p.nav.pos(), {(787, 958)}) is None else p.g.state   # down already: a second turn raises it
+    st = p.cast_open() if p.nav.route(*p.nav.pos(), {(787, 958)}) is None else p.g.state   # down already: a second turn raises it
     if st['cast']:
         p.g.type('opy'); st = p.g.state
         for _ in range(3): st = p.key('up', 'aim')
@@ -1216,7 +1223,7 @@ def seg_sutek(p, kw):
     p.walk(787, 952)
     for d in ('upleft', 'up'):
         st = p.act('u', d, 'lever'); p.log('  lever %s: %r' % (d, st['msg'][-50:]))
-    p.nav.refresh(); p.walk(779, 951); avatar_leads(p); st = p.key('c', 'cast')
+    p.nav.refresh(); p.walk(779, 951); avatar_leads(p); st = p.cast_open()
     if st['cast']:
         p.g.type('ep'); st = p.at('up', 'unlock magic'); p.idle(); p.log('  unlock magic (779,950): %r' % st['msg'][-50:])
         st = p.act('u', 'up', 'open'); p.log('  door: %r' % st['msg'][-40:]); p.nav.refresh()
@@ -1278,7 +1285,7 @@ def seg_balloon(p, kw):
         return
     if not carried(p, 270): p.issue('balloon', 'no balloon plans'); return
     if p.g.state['L'] >= 2:                                              # out of Sutek's catacombs by Help: the party back at the castle
-        st = p.key('c', 'cast'); st = p.g.type('kl'); p.idle(); p.log('  help: %r at L%d (%d,%d)' % (st['msg'][-40:], st['L'], st['X'], st['Y']))
+        st = p.cast_open(); st = p.g.type('kl'); p.idle(); p.log('  help: %r at L%d (%d,%d)' % (st['msg'][-40:], st['L'], st['X'], st['Y']))
         p.nav.refresh()
     if count(p, 71) < 40 and not carried(p, 226) and not carried(p, 241) and not carried(p, 421):
         restock(p, 20)
@@ -1370,7 +1377,7 @@ def pick_heavy(p, x, y, obj_n):
 
 def wind_to(p, d):
     """C)ast Wind Change (Rel Hur): the wind goes the way asked (magic_skills.md)"""
-    st = p.key('c', 'cast')
+    st = p.cast_open()
     if not st['cast']: p.idle(); return False
     p.g.type('rh'); st = p.key(d, 'the wind'); p.idle(); p.log('  wind %s: %r' % (d, st['msg'][-40:]))
     return True
@@ -1498,7 +1505,7 @@ def seg_statues(p, kw):
             p.key('l', 'look'); st = p.at('down', 'search'); p.idle(); p.nav.refresh(); p.log('  hidden door (103,237): %r' % st['msg'][-40:])
             p.walk(103, 238); st = p.act('u', 'down', 'ladder'); p.nav.refresh(); p.log('  ladder (103,239): L%d' % p.g.state['L'])
         if name == 'Exodus' and p.g.state['L'] == 3:                     # daemons on his level: unseen (Mass Invisibility), straight to him
-            avatar_leads(p); st = p.key('c', 'cast')
+            avatar_leads(p); st = p.cast_open()
             if st['cast']:
                 p.g.type('vsl'); st = p.g.state
                 if st.get('verb') == 'C': st = p.key('ret', 'on the party')   # an area spell: its centre is the Avatar's own tile
@@ -1593,7 +1600,6 @@ def keep_up(p):
     drop_junk(p)
     gold = p.g.state.get('gold', 0)
     if min(count(p, 68), count(p, 71)) < 6 and gold >= 60: restock(p, 12 if gold >= 200 else 6)   # Heal, Dispel Magic and Create Food all take ginseng
-    if REAL_MAGIC and p.g.state.get('gold', 0) >= 80: stock_reagents(p)
     if any(m['max'] and m['hp'] < m['max'] * 0.6 for m in p.g.state['party']) and min(count(p, 68, 1), count(p, 71, 1)) < 1: lb_heal(p)
     if p.poisoned() and min(count(p, 67, 1), count(p, 68, 1)) < 1: lb_heal(p)
 
@@ -1821,8 +1827,9 @@ def seg_book(p, kw):
     if 'nothing' not in st['msg']: p.issue('book', 'a spell not in the book: %r' % st['msg'])
     p.key('c', 'cast'); st = p.g.type('im')                            # Heal: needs reagents nobody holds
     p.log('  heal: %r' % st['msg'])
-    if 'No Reagents' not in st['msg']: p.issue('book', 'Heal with no reagents: %r' % st['msg'])
-    p.key('s', 'the slot page'); st = p.key('ret', 'save'); p.log('  save: %r' % st['msg'])
+    if 'No Reagents' not in st['msg'] and not (count(p, 68, 1) or count(p, 71, 1) or REAL_MAGIC): p.issue('book', 'Heal with no reagents: %r' % st['msg'])   # (the kit's bag has some)
+    if p.g.state.get('verb'): p.key('ret', 'on the Avatar')                # it worked: its target
+    p.idle(); p.key('s', 'the slot page'); st = p.key('ret', 'save'); p.log('  save: %r' % st['msg'])
     if st['verb'] == 'Q' or 'saved' not in st['msg'].lower(): p.issue('book', 'save: %r' % st['msg'])
     p.g.shot('book.png')
 
@@ -2028,7 +2035,7 @@ def raise_dead(p):
     recalls the party to the castle (combat.md §3d, the recall)"""
     gone = sorted(ROSTER - {m['id'] for m in p.g.state['party']})
     if not gone or p.foes(): return
-    st = p.key('c', 'cast')
+    st = p.cast_open()
     if not st['cast']: p.idle(); return
     st = p.g.type('kl'); p.idle()
     left = sorted(ROSTER - {m['id'] for m in p.g.state['party']})
@@ -2198,17 +2205,25 @@ def main():
         if os.path.exists(demo): os.unlink(demo)
     else: open(demo, 'w').write('1')
     g = Game(hd, out, machine=os.environ.get('BOT_MACHINE', 'falcon')); p = Player(g, out, REF, log)
+    p.on_no_book = lambda: ready(p, 57, 1) if carried(p, 57) else None
     t0 = time.time()
     try:
         if start: restore(p, start)
         for s in segs:
             if s.startswith('save:'): checkpoint(p, hd, out, s[5:]); continue
             log('== segment %s' % s); ts = time.time()
+            if REAL_MAGIC:                                             # a death puts what was readied in the pack (combat.md §3d)
+                equip_party(p)
+                if carried(p, 57) and not p.g.state.get('book'): ready(p, 57, 1)
+                for _ in range(4):                                     # each member has a purse (usecode_vm.md): the Avatar pays, so his
+                    if count(p, 88) == count(p, 88, 1) or not give_to_avatar(p, 88, others=True): break
             p.heal_up(); p.cure_up()
             p.loot_ok = s not in QUEST
-            if s in QUEST: keep_up(p)
-            if REAL_MAGIC and s in LATE and p.g.state.get('gold', 0) >= 80: stock_reagents(p)
-            if REAL_MAGIC and s in SEG_SPELLS: learn(p, SEG_SPELLS[s])
+            try:
+                if s in QUEST: keep_up(p)
+                if REAL_MAGIC and s in LATE and p.g.state.get('gold', 0) >= 80: stock_reagents(p)
+                if REAL_MAGIC and s in SEG_SPELLS: learn(p, SEG_SPELLS[s])
+            except Danger as e: p.issue('danger', 'before %s: %s' % (s, e)); p.rest_if_hurt(0.6)
             try: SEGS[s](p, kw)
             except Danger as e: p.issue('danger', '%s: %s' % (s, e))
             except Exception as e: p.issue('crash', '%s: %s: %s' % (s, type(e).__name__, e)); raise

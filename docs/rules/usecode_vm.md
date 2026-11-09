@@ -364,13 +364,12 @@ letter; we copy the run as written.)
   OBJINPARTY(339) answers the leader, and RESURRECT with no body in the pack raises the first such
   companion beside the Avatar. Without this a companion who died before a save could only come
   back through the Avatar's own death (deviations.md).
-- **Per-member counts read the pooled pack once.** HASOBJ / OBJCOUNT asked about the party leader
-  (or actor 0) see the whole pooled pack and the gold; asked about another party member they see
-  nothing. The healers total the party's gold member by member ("Your party takes up a
-  collection"), and the merchants check the gold of the member chosen at "Which of you?"; counting
-  the shared pack for each member made a party of four look four times as rich. GIVE / NEW / DELETE
-  for any member still change the pooled pack. Consequence (deviations.md): at "Which of you?" the
-  member who pays or sells is the Avatar (1); a companion has nothing of its own.
+- **Each member's own pack (U6).** U6 counts per member, as DOS does: HASOBJ / OBJCOUNT / DELETE /
+  GIVE / NEW act on that actor's own things and readied things (the game's inv_count callbacks;
+  equipment.md). The merchants check the gold of the member chosen at "Which of you?", so a member
+  who carries no coins is told so ("But Avatar don't have 5 gold!") while a companion holds the
+  gold; the healers total the party's gold member by member. (SE and MD keep one gold pool, the
+  leader's.) The pooled-pack text above and below is the older model, kept for SE/MD.
 - **Readied things are carried.** In the reference a character's readied weapon, armour, ring and so
   on are part of its inventory, so HASOBJ / OBJCOUNT / OBJINPARTY see them and a merchant buying
   ("sell") can take them. u6e counts every party member's readied things into the pooled pack the

@@ -361,8 +361,13 @@ class Player:
                 if not took and not used: self.log('  loot: nothing new (%d new; near: %s)' % (len(new), ' '.join('%d:%d@%d,%d' % (o['i'], o['obj'], o['x'], o['y']) for o in objs if abs(o['x'] - x) <= 3 and abs(o['y'] - y) <= 3)))
                 break
             o = min(todo, key=lambda o: abs(o['x'] - x) + abs(o['y'] - y))
+            if abs(o['x'] - x) + abs(o['y'] - y) != 1:                   # within r tiles: a short search tells (a full one takes 30 s)
+                self.nav.refresh(); S = self.nav.span
+                adj = {((o['x'] + dx) % S, (o['y'] + dy) % S) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
+                if self.nav.route(x, y, {t for t in adj if self.nav.cost(*t) is not None}, limit=20000) is None:
+                    self.log('  loot at (%d,%d): out of reach' % (o['x'], o['y'])); skip.add(o['i']); continue
             try:
-                if abs(o['x'] - x) + abs(o['y'] - y) != 1: self.nav.refresh(); self.nav.goto(o['x'], o['y'], adj=True); x, y = self.nav.pos()
+                if abs(o['x'] - x) + abs(o['y'] - y) != 1: self.nav.goto(o['x'], o['y'], adj=True); x, y = self.nav.pos()
             except Exception as e: self.log('  loot at (%d,%d): %s' % (o['x'], o['y'], e)); skip.add(o['i']); continue
             if abs(o['x'] - x) + abs(o['y'] - y) != 1: skip.add(o['i']); continue
             d = VDIR[(o['x'] - x, o['y'] - y)]
@@ -387,7 +392,7 @@ class Player:
             hurt = [m for m in self.g.state['party'] if m['max'] and 0 < m['hp'] < m['max'] * frac and self.in_view(m['id'])]
             if not hurt: break
             worst = min(hurt, key=lambda m: m['hp'] / m['max'])['id']
-            st = self.key('c', 'cast')
+            st = self.cast_open()
             if not st['cast']: self.idle(); break
             st = self.g.type('im'); self.check('cast heal')
             st = self.aim_at(worst, 'heal') if st.get('verb') else st
@@ -395,6 +400,13 @@ class Player:
             n += 1
         if n: self.log('  healed x%d: party %s' % (n, ' '.join('%d:%d/%d' % (m['id'], m['hp'], m['max']) for m in self.g.state['party'])))
         return n
+
+    def cast_open(self):
+        """C)ast; a death or a load leaves the book in the pack (combat.md §3d): ready it again (on_no_book) and retry"""
+        st = self.key('c', 'cast')
+        if not st['cast'] and 'No spellbook' in st['msg'] and getattr(self, 'on_no_book', None):
+            self.idle(); self.on_no_book(); st = self.key('c', 'cast')
+        return st
 
     FOOD = (128, 129, 130, 131, 132, 133)                               # bread, meat, rolls, cake, cheese, ham (eaten in camp, rest.md §7)
 
@@ -404,7 +416,7 @@ class Player:
         food = sum(r['qty'] or 1 for r in self.g.objects()[1] if r['obj'] in self.FOOD)
         gin = sum(r['qty'] or 1 for r in self.g.objects()[1] if r['obj'] == 68 and r.get('own', 1) == 1)
         if food >= len(self.g.state['party']) or gin < 4: return None
-        st = self.key('c', 'cast')
+        st = self.cast_open()
         if not st['cast']: self.idle(); return None
         st = self.g.type('imy'); self.check('cast create food'); self.idle()
         self.log('  create food: %r' % st['msg'][-60:])
@@ -433,7 +445,7 @@ class Player:
         a = self.actor(i) if i != 1 else None; x, y = self.nav.pos()
         if i != 1 and not a: return False
         if a and (max(abs(a['x'] - x), abs(a['y'] - y)) > 5 or (a['x'], a['y']) == (x, y)): return False   # on his tile the crosshair finds the Avatar
-        st = self.key('c', 'cast')
+        st = self.cast_open()
         if not st['cast']: self.idle(); return False
         st = self.g.type('ajo'); self.check('cast dispel magic')
         if not st.get('verb'): self.log('  dispel magic: %r' % st['msg']); self.idle(); return False
@@ -495,6 +507,7 @@ class Player:
             hit = lambda s: s['foes'] or ' hits ' in s['msg'] or ' kills ' in s['msg']   # a foe out of view can still strike the rear
             sneak = getattr(self, 'sneak', False)
             near = (lambda: [i for i in self.near_death() if i == 1]) if sneak else self.near_death   # sneaking: only the Avatar's own danger stops the walk
+            if getattr(self, 'flee', False): near = lambda: []             # getting out (up a ladder): wounds don't stop it
             blocker = lambda bx, by: not sneak and any(a.get('hostile') and a['hp'] > 0 and (a['x'], a['y']) == (bx, by) for a in self.g.actors())
             try: st = self.nav.goto(tx, ty, on_step=lambda s: (s['foes'] > ignore and not sneak) or (hit(s) and near()), on_block=blocker, **kw)
             except NavError:
