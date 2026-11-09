@@ -3507,7 +3507,7 @@ static void slot_swap(world_t*w,int m)
     g_avatar_ovr=g_solo_m?0:g_atile[1];
     g_tmp_valid=0; g_dm_valid=0; build_blocked();
 }
-static void solo_end(world_t*w){ if(g_solo_m){ int m=g_solo_m; slot_swap(w,m); g_solo_m=0; g_solo_on=0; g_avatar_ovr=0; } }
+static void solo_end(world_t*w){ if(g_solo_m){ int m=g_solo_m; slot_swap(w,m); g_solo_m=0; g_avatar_ovr=0; } g_solo_on=0; }   /* (the Avatar's own Solo has no swap) */
 static void solo_begin(world_t*w,int m,int on){ solo_end(w); slot_swap(w,m); g_solo_m=m; g_solo_on=on; g_avatar_ovr=g_atile[1]; }
 static int actor_real(int a){ return !g_solo_m?a:(a==1?g_solo_m:(a==g_solo_m?1:a)); }
 
@@ -6913,6 +6913,12 @@ static int do_verb_at(world_t*w,int verb,int dx,int dy);
 static int book_from_children(int idx){ int set=book_new(); for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*c=&g_wobj[j]; if(!c->alive && c->parent==(uint16_t)idx && ON_IS(c->obj_n,g_on.spell)) book_add(set,c->quality); } return set; }
 static int32_t actor_carried(int a);
 static int missile_reaches(const world_t*w,int x0,int y0,int x1,int y1);
+/* the first object on the tile that is no thing on top (tileflags3 bit 4), skipping one; -1 = none */
+static int use_under(int tx,int ty,int skip)
+{   for(int j=g_ow.nobjs-1;j>=0;j--){ const wobj_t*o=&g_wobj[j];
+        if(j!=skip && o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && !(g_tflags3 && (g_tflags3[o->tile]&0x10))) return j; }
+    return -1; }
+static int g_use_take=-1;                                  /* what U)se took, for do_verb_at */
 /* the verb's echo first, as DOS: "Use-a door", and what comes of it on the lines after */
 static int do_verb(world_t*w,int verb,int dx,int dy)
 {
@@ -6921,11 +6927,14 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
     int idx=objworld_at(&g_ow,tx,ty), id=(dx||dy)?npc_at(w,tx,ty):-1, n=msgcat(0,"Use-");
     if(g_veh_kind && !dx && !dy){ g_msg[0]=0; return do_verb_at(w,verb,dx,dy); }   /* aboard: leaving is the use */
+    if(id>=0){ int t=actor_objn(id);                             /* what U)se takes (usecode_use.md) */
+        if(t!=428 && t!=430 && t!=431){ id=-1; idx=use_under(tx,ty,-1); if(idx<0){ msgcat(n,"nothing"); g_verb_pts=0; return 0; } } }
+    else if(idx>=0 && g_tflags3 && (g_tflags3[g_wobj[idx].tile]&0x10) && g_wobj[idx].obj_n!=412 && g_wobj[idx].obj_n!=414 && g_wobj[idx].obj_n!=415 && g_wobj[idx].obj_n!=423) idx=use_under(tx,ty,idx);   /* a vessel is an actor in DOS */
     if(id>=0){ n=msgcat(n,look_article(npc_tile(id))); char nm[40]; obj_name(npc_tile(id),nm,sizeof nm); n=msgcat(n,nm); }
     else if(idx>=0) n=look_thing(n,g_wobj[idx].obj_n,g_wobj[idx].tile,g_wobj[idx].qty,0);
     else { msgcat(n,"nothing"); g_verb_pts=0; return 0; }
     if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"\n\nOut of range!"); g_verb_pts=0; return 0; }
-    g_msg_append=1; int r=do_verb_at(w,verb,dx,dy); g_msg_append=0;
+    g_msg_append=1; g_use_take=idx; int r=do_verb_at(w,verb,dx,dy); g_use_take=-1; g_msg_append=0;
     return r;
 }
 /* U6's U)se before the switch: aboard, mounted, an actor on the tile, a vehicle, a fixed cannon, the
@@ -6952,7 +6961,7 @@ static int do_verb_at(world_t*w,int verb,int dx,int dy)
 {
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1));
     int ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-    int idx=objworld_at(&g_ow,tx,ty);
+    int idx=(verb=='U' && g_use_take>=0)?g_use_take:objworld_at(&g_ow,tx,ty);
     if(verb=='U' && idx>=0 && g_on.doorway && g_wobj[idx].obj_n==g_on.doorway)   /* a door hung in a doorway: U)se works the door, not the arch (usecode_use.md Doors) */
         for(int dn=g_on.door_first;dn<g_on.door_first+g_on.door_n;dn++){ int di=obj_idx_at(tx,ty,dn); if(di>=0 && g_wobj[di].alive){ idx=di; break; } }
     int recompose=0, n=0;
@@ -16868,7 +16877,7 @@ int main(int argc, char **argv)
                     if(g_ahp[act]==0||g_asleep[act]||g_paralyze[act]||g_charm[act]){ char nb[20]; actor_name(act,nb,sizeof nb); int n=msgcat(0,nb); msgcat(n," fails to respond."); }
                     else if(g_veh_kind && g_veh_kind!=431) msgcat(0,"Not while aboard ship!");
                     else if(g_combat_mode) msgcat(0,"Not in combat mode!");
-                    else { solo_end(&w); if(who!=1){ solo_begin(&w,who,1); } else g_solo_on=0; msgcat(0,"Solo mode"); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
+                    else { solo_end(&w); if(who!=1){ solo_begin(&w,who,1); } else g_solo_on=1; msgcat(0,"Solo mode"); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }   /* the Avatar alone too: the others wait (combat.md §8) */
                     redraw=1; }
                 else if (a=='0' && g_solo_on){ int far_=0;
                     for(int p=0;p<g_nparty;p++){ int a2=g_party[p].actor,ax,ay; if(a2==1||!actor_pos(a2,&ax,&ay)) continue; int ox=ax-(int)w.px, oy=ay-(int)w.py; if(ox<0)ox=-ox; if(oy<0)oy=-oy; if(ox>8||oy>8) far_=1; }
@@ -17047,7 +17056,7 @@ int main(int argc, char **argv)
         if (g_dragged[1] && !g_pending_verb && !g_talking && !g_casting && !g_save_menu && dragged_turn(1)){ if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); } redraw=1; }
         if (g_verb_pts && !g_pending_verb && !g_talking){ verb_spend(&w); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* the command's time (movement_turns.md §3b) */
         if (g_inv_open && !g_show_inv && !g_show_status && !g_talking && !g_casting && !g_save_menu){ g_show_inv=1; redraw=1; }   /* the display stays up through a verb */
-        if (g_solo_m && (g_ahp[1]==0 || g_ahp[g_solo_m]==0)){ solo_end(&w); compose_map(&w); draw_border_tiles(); redraw=1; }   /* one of them fell */
+        if ((g_solo_m && (g_ahp[1]==0 || g_ahp[g_solo_m]==0)) || (g_solo_on && !g_solo_m && g_ahp[1]==0)){ solo_end(&w); compose_map(&w); draw_border_tiles(); redraw=1; }   /* one of them fell */
         if (redraw){ draw_conversation(ink); draw_status(&w,ink); draw_command_bar(15); }
         /* Exactly ONE Vsync per loop iteration paces the frame. present_frame() (full
          * doubled present) Vsyncs internally, so don't Vsync again after it — the old code

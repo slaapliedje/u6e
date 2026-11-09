@@ -504,6 +504,15 @@ prompt is the verb's name and a dash: `Look-`, `Get-`, `Move-`, `Use-`, `Talk-`;
 leader, diagonals too, else a blank line and `Out of range!`. What the cursor names is echoed after the dash with
 its count or article: `Get-a sword`, `Use-a door`.
 
+**What U)se takes** (GAME.EXE 4.5, the dispatcher at image 0x25809, read 2026-11-08). The crosshair names the top
+of the tile, an actor before the objects. Then:
+- An actor that is not a horse (430, 431) or a cow (428): the first object on its tile that is not an actor and
+  lacks tileflags3 bit 4 is taken instead (the search's routine, image 0x1ffa9). So U)se on a companion standing on
+  a lever echoes and works the lever. No such object: `Use-nothing`. (DOS skips this only while its current party
+  slot, DS 0x2c54, equals the party size, DS 0x8e50: a state not seen in play.)
+- An object with tileflags3 bit 4: the first object under it without the bit, as above.
+- The echo names what was taken. A type outside the usable list (85 types, DS 0x1c30) prints `Not usable`.
+
 **L)ook prints**, after `Thou dost see `:
 - **A tile with no object, or only a hidden one:** the map tile's article and name and `.`, then within one tile
   of the leader a blank line and `Searching here, you find nothing.`
@@ -536,6 +545,8 @@ turn. A readable object out of range is an ordinary look, and is then searched o
 `Searching here, you find `, then:
 - secret door (334): on a hidden frame (even) `a secret door`, and the door shows; on a shown one `nothing`.
 - a thing with tileflags3 bit 4 is searched through to the first object under it that lacks the bit.
+  The secret door test comes first and looks only at the thing searched (GAME.EXE 0x20112, then 0x2018b): a
+  secret door under a wall decoration is not found until the decoration is taken down (checked 2026-11-08).
 - a closed chest (98), crate (192) or barrel (186), or a spellbook: `nothing`.
 - anything else: each thing it holds, except charges (336) and effects (337), comes out onto its tile and is listed
   `a, b and c`, each with its count or article. Holding nothing: `nothing`. It ends in `.`

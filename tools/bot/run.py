@@ -2039,6 +2039,27 @@ def seg_camp(p, kw):
         msg = p.rest_if_hurt(1.01)
         p.log('  camp: %r' % msg)
 
+def seg_levertest(p, kw):
+    """U)se aimed at someone standing on a lever (usecode_use.md, What U)se takes): the lever under them is used,
+    by the Avatar alone (Solo: the one on the lever stays) and by another member alone"""
+    reach = reach_set(p); x0, y0 = p.nav.pos()
+    objs = [o for o in p.g.objects()[0] if o['obj'] in (268, 174) and (o['x'], o['y']) in reach]
+    if not objs: p.issue('levertest', 'no lever to stand on here'); return
+    a = min(objs, key=lambda o: abs(o['x'] - x0) + abs(o['y'] - y0)); lx, ly = a['x'], a['y']
+    p.log('  lever %d at (%d,%d) q%d frame tile %s' % (a['obj'], lx, ly, a['q'], a.get('tile')))
+    st = p.key('2', 'member 2 alone'); p.walk(lx, ly)
+    if p.nav.pos() != (lx, ly): p.issue('levertest', 'member 2 did not reach the lever: %s' % (p.nav.pos(),)); p.key('0'); return
+    on = lambda: [(a['id'], a['x'], a['y']) for a in p.g.actors() if abs(a['x'] - lx) + abs(a['y'] - ly) <= 1]
+    p.log('  member 2 there: %s' % on())
+    st = p.key('2', 'the Avatar alone'); p.log('  the Avatar (2nd in a solo roster) %r: %s' % (st['msg'][-30:], on())); p.walk(lx, ly, adj=True); px, py = p.nav.pos()   # solo numbers follow the roster, soloist first (0 refuses with the party apart)
+    p.log('  on the lever: %s' % [a['id'] for a in p.g.actors() if (a['x'], a['y']) == (lx, ly)])
+    p.key('u'); st = p.key(VDIR[(lx - px, ly - py)], 'use'); p.log('  Avatar solo: %r' % st['msg'][-60:])
+    if 'Use-a lever' not in st['msg']: p.issue('levertest', 'Avatar solo: %r' % st['msg'][-60:])
+    st = p.key('3', 'member 3 alone'); p.walk(lx, ly, adj=True); px, py = p.nav.pos()
+    p.key('u'); st = p.key(VDIR[(lx - px, ly - py)], 'use'); p.log('  member 3 solo: %r' % st['msg'][-60:])
+    if 'Use-a lever' not in st['msg']: p.issue('levertest', 'member 3 solo: %r' % st['msg'][-60:])
+    p.key('0', 'party mode')
+
 def seg_cheat(p, kw):
     """Iolo's own cheat menu (usecode_vm.md): spam x3, humbug, Edit player, Set Quest Flag 1; the menu must read
     the flag back, and the way to the Codex then lets the party by (a check; never saved)"""
@@ -2066,7 +2087,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, camp=seg_camp, cheat=seg_cheat, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
