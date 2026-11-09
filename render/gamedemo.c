@@ -8847,6 +8847,7 @@ static void to_keys(world_t*w,int a)
 static void sched_run(world_t*w)
 {   int minutes=0;
     for(;;){
+        if(g_solo_m && (g_ahp[1]==0 || g_ahp[g_solo_m]==0)) solo_end(w);   /* whoever fell is back in its own slot (the main loop's rule, here too) */
         if((g_ahp[1]==0&&!g_solo_m)||g_pending_verb=='J') return;
         for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a!=1&&wt_now(a)==1&&g_pts[a]<=0&&!g_resting){ g_pts[1]=0; break; } }
         sched_pass(w);
@@ -14586,6 +14587,8 @@ int main(int argc, char **argv)
             { g_asleep[1]=255; g_pts[1]=0; g_pts[2]=20; sched_run(&w); SC_NUM("asleep: Solo slot takes the keys",g_solo_m); g_asleep[g_solo_m?g_solo_m:1]=0; solo_end(&w); g_asleep[1]=0; }
             { g_combat_mode=1; g_asleep[1]=255; g_pts[1]=0; g_pts[2]=20; sched_run(&w); SC_NUM("combat, asleep: keys to (2)",g_solo_m);   /* combat.md §8 Who leads */
               g_asleep[g_solo_m?g_solo_m:1]=0; g_asleep[1]=0; g_pts[1]=20; g_pts[2]=0; sched_run(&w); SC_NUM("combat, awake: keys back (0)",g_solo_m); solo_end(&w); g_combat_mode=0; }
+            { g_combat_mode=1; g_paralyze[1]=3; g_pts[1]=0; g_pts[2]=20; sched_run(&w); SC_NUM("paralysed: keys to (2)",g_solo_m);
+              int hp=g_ahp[1]; g_ahp[1]=0; sched_run(&w); SC_NUM("the one at the keys falls, the Avatar still paralysed: the next able (3)",g_solo_m); g_ahp[2]=hp; g_paralyze[1]=0; solo_end(&w); g_combat_mode=0; }
             { uint32_t c0=w.clock; for(int i=2;i<U6_MAX_ACTORS;i++){ g_asleep[i]=0; g_paralyze[i]=0; } uint32_t t0=plat_ticks_200hz(); g_pts[1]=0; for(int k=0;k<30;k++){ g_pts[1]=0; sched_run(&w); g_msg[0]=0; } SC_NUM("ms per minute, castle",(plat_ticks_200hz()-t0)*5/30); SC_NUM("minutes",w.clock-c0); }
             Cconws("SC done\r\n"); Pterm0(); } }
     /* headless L)ook checks (usecode_use.md): LOOK.REQ */
