@@ -536,13 +536,20 @@ def seg_sacrifice(p, kw):
     """the panpipes: a yew log from Ben (Yew), a board from Aaron (by Minoc), panpipes from Julia,
     the tune from Gwenno; Selganor's guild takes the player and gives the rune of Sacrifice"""
     if not orb_go(p, 15): return
-    p.talk_to(54, ['log', 'y', '1', 'y'], 'Ben', yes=True)
+    p.talk_to(54, ['log', 'y', payer(p), 'y'], 'Ben', yes=True)
     if not orb_go(p, 25): return
     p.talk_to(69, ['log', 'y'], 'Aaron', yes=True)
     p.talk_to(67, ['pipe', 'boar', 'y'], 'Julia', yes=True)
     p.talk_to(66, ['ston'], 'Gwenno')
     p.talk_to(64, ['rune', 'join', 'pipe', 'y', '6789878767653'], 'Selganor', yes=True)
     got_rune(p, 246, 'Selganor')
+
+def payer(p):
+    """the roster number to answer "Who wants it?" / "Which of you?": whoever carries the most gold (each member
+    has a purse, usecode_vm.md)"""
+    ids = [m['id'] for m in p.g.state['party']]
+    gold = {i: count(p, 88, i) for i in ids}
+    return str(ids.index(max(ids, key=lambda i: gold[i])) + 1) if ids else '1'
 
 def give_to_avatar(p, obj_n, others=False):
     """M)ove a carried thing to the Avatar: M, M through the pack to it, Enter, then the crosshair on the Avatar
@@ -555,10 +562,12 @@ def give_to_avatar(p, obj_n, others=False):
     p.idle(); p.key('m', 'move')
     for k in range(len(inv) + 2):
         st = p.key('m', 'the pack')
-        if st['msg'].startswith('Move the ' + name) and (not others or k >= rows[0]): break
+        if st['msg'].startswith('Move the ' + name + '?') and (not others or k >= rows[0]): break
     else: p.idle(); return False
-    st = p.key('ret', 'this one'); st = p.key('ret', 'to the Avatar'); p.log('  %s to the Avatar: %r' % (name, st['msg'][-50:]))
-    p.idle(); return True
+    st = p.key('ret', 'this one')
+    if 'How many' in st['msg']: st = p.key('ret', 'all of them')            # a stack asks first (equipment.md)
+    st = p.key('ret', 'to the Avatar'); p.log('  %s to the Avatar: %r' % (name, st['msg'][-50:]))
+    p.idle(); return 'To Avatar' in st['msg']
 
 def seg_valor(p, kw):
     """cheese from the castle kitchen for Sherry the mouse (9), who joins; Jhelom: the rune of Valor lies
@@ -1071,7 +1080,7 @@ def seg_cube(p, kw):
         wait_until(p, 8, 13, 'Trebor sells by day')
         if not go_to_actor(p, 72, 'Trebor'): return
         ids = [m['id'] for m in p.g.state['party']]
-        out = p.talk_to(72, ['skif', '1', 'y', 'bye'], 'Trebor', yes=True)
+        out = p.talk_to(72, ['skif', payer(p), 'y', 'bye'], 'Trebor', yes=True)
         p.log('  deed: %s (%r)' % (carried(p, 149), out and out[-2:]))
         if not carried(p, 149): p.issue('cube', 'no skiff deed from Trebor'); return
     if not there and not p.g.state.get('veh'):
@@ -1133,7 +1142,7 @@ def seg_keg(p, kw):
         wait_until(p, 6, 19, 'Efram keeps shop 6-20')
         if not go_to_actor(p, 22, 'Efram'): return
         lighten(p)                                                        # the gold is the Avatar's purse: he buys, so room for three stones
-        out = p.talk_to(22, ['buy', 'powd', '1', '1', 'bye'], 'Efram')
+        out = p.talk_to(22, ['buy', 'powd', payer(p), '1', 'bye'], 'Efram')
         p.log('  keg: %s (%r)' % (carried(p, 223), out and out[-2:]))
         if not carried(p, 223): p.issue('keg', 'Efram sold no powder keg'); return
         if not orb_go(p, 25): return
@@ -1539,11 +1548,7 @@ def restock(p, n=6):
             c0 = count(p, obj)
             p.talk_to(128, ['buy', str(m), str(item), str(n)], 'Rudyom')
             if count(p, obj) > c0: break
-    for item in (8, 7, 6, 4, 1):                                          # sulfurous ash for Light (In Lor): where it is in his list
-        if count(p, 72) >= n: break
-        c0 = count(p, 72); p.talk_to(128, ['buy', '1', str(item), str(n)], 'Rudyom')
-        if count(p, 72) > c0: p.log('  Rudyom: ash is item %d' % item); break
-    for obj in (68, 71, 67, 72):                                          # the caster's own: they go to the Avatar
+    for obj in (68, 71, 67):                                              # the caster's own: they go to the Avatar
         for _ in range(4):
             if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
     p.log('  restock: ginseng/silk/garlic %s -> %s, gold %s' % (before, (count(p, 68), count(p, 71), count(p, 67)), p.g.state.get('gold')))
@@ -1588,6 +1593,7 @@ def equip_party(p):
         if not gear: return
         r = gear[0]; got = False
         for m in range(1, n + 1):
+            if REAL_MAGIC and m == 1 and 'shield' in r.get('name', '') and carried(p, 57): continue   # the book takes the Avatar's other hand: a weapon goes with it
             if ready(p, r['obj'], m): got = True; break
             if sum(1 for q in p.g.objects()[1] if q['obj'] == r['obj']) < sum(1 for q in inv if q['obj'] == r['obj']): got = True; break
         if not got: p.unfit = getattr(p, 'unfit', set()) | {(r['obj'], r.get('name'))}
@@ -1650,7 +1656,7 @@ def stock_reagents(p, aid=88):
     if not to_mage(p, aid): return
     for o, n in want.items():
         c0 = count(p, o, 1)
-        for words in (['reag', str(REAGENT_MENU[aid][o]), str(n), 'bye'], ['reag', '1', str(REAGENT_MENU[aid][o]), str(n), 'bye']):
+        for words in (['reag', str(REAGENT_MENU[aid][o]), str(n), 'bye'], ['reag', payer(p), str(REAGENT_MENU[aid][o]), str(n), 'bye']):
             p.talk_to(aid, words, MAGE[aid][0])
             if count(p, o) > c0: break
         for _ in range(4):
@@ -2104,6 +2110,17 @@ def seg_train(p, kw):
         if sum(m['lvl'] for m in p.g.state['party']) > lv: checkpoint(p, p.g.hd, p.out, 'trainauto')   # a crash keeps the levels
     p.log('  train to: %s' % party_line(p))
 
+def seg_train4(p, kw):
+    """an early stop: everyone to level 4 (up to TRAIN4_MIN minutes, default 90) before the deep catacombs of the
+    shrine quests"""
+    keep = os.environ.get('TRAIN_TO'), os.environ.get('TRAIN_MIN')
+    os.environ['TRAIN_TO'] = '4'; os.environ['TRAIN_MIN'] = os.environ.get('TRAIN4_MIN', '90')
+    try: seg_train(p, kw)
+    finally:
+        for k, v in zip(('TRAIN_TO', 'TRAIN_MIN'), keep):
+            if v is None: os.environ.pop(k, None)
+            else: os.environ[k] = v
+
 def seg_camp(p, kw):
     """camp 8 hours by the Cove gate, where the Avatar died in camp during training (a check)"""
     if not orb_go(p, 4): return
@@ -2138,6 +2155,14 @@ def seg_probe(p, kw):
     p.nav.refresh(); p.log('  doors by the cranks: %s' % {k: v for k, v in p.nav.doors.items() if 300 <= k[0] <= 315 and 378 <= k[1] <= 386})
     p.log('  objects at (304,382): %s' % [o for o in p.g.objects()[0] if (o['x'], o['y']) == (304, 382)])
 
+def seg_givetest(p, kw):
+    """the companions' gold to the Avatar by give_to_avatar"""
+    rows = lambda: [(r.get('own'), r['qty']) for r in p.g.objects()[1] if r['obj'] == 88]
+    p.log('  gold before: %s' % rows())
+    for _ in range(4):
+        if count(p, 88) == count(p, 88, 1) or not give_to_avatar(p, 88, others=True): break
+    p.log('  gold after: %s' % rows())
+
 def seg_cheat(p, kw):
     """Iolo's own cheat menu (usecode_vm.md): spam x3, humbug, Edit player, Set Quest Flag 1; the menu must read
     the flag back, and the way to the Codex then lets the party by (a check; never saved)"""
@@ -2165,7 +2190,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, train4=seg_train4, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, givetest=seg_givetest, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 LATE = ('gargoyles', 'lenses', 'cube', 'keg', 'gate', 'sutek', 'catacombs', 'balloon', 'singularity', 'statues', 'ending')
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
@@ -2215,8 +2240,9 @@ def main():
             if REAL_MAGIC:                                             # a death puts what was readied in the pack (combat.md §3d)
                 equip_party(p)
                 if carried(p, 57) and not p.g.state.get('book'): ready(p, 57, 1)
-                for _ in range(4):                                     # each member has a purse (usecode_vm.md): the Avatar pays, so his
-                    if count(p, 88) == count(p, 88, 1) or not give_to_avatar(p, 88, others=True): break
+                for obj in (88, 65, 66, 67, 68, 69, 70, 71, 72):          # gold and reagents to the Avatar: he pays and casts
+                    for _ in range(4):
+                        if count(p, obj) == count(p, obj, 1) or not give_to_avatar(p, obj, others=True): break
             p.heal_up(); p.cure_up()
             p.loot_ok = s not in QUEST
             try:

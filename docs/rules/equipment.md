@@ -73,7 +73,8 @@ As combat.md CB3b, now recomputed whenever an actor's readied set changes:
 > routines (d25:0..1738) for the layout in screen pixels. Re-expressed, no code transcribed.
 
 Each party member **carries its own things**: a pack row has an owner (the record's owner on load, on save). A thing
-got goes to the one played. The gold alone stays one purse, the leader's, and is drawn in its pack.
+got goes to the one played. Gold coins are things like any other, each member's own (the merchants ask who pays
+and check that one's coins, usecode_vm.md); SE and MD keep one gold pool, the leader's, drawn in its pack.
 
 **Party display** (the default): the sky and the roster, five rows; `+` / `-` or the arrows at (168,24), (168,96) scroll a
 longer one. Health in red below 10, green if poisoned. A click on a figure opens that member's inventory, on the name its
