@@ -12665,7 +12665,10 @@ static void bot_report(const world_t*w)
     n=bot_put(n," verb="); { char v[2]={(char)(g_pending_verb?g_pending_verb:'-'),0}; n=bot_put(n,v); }
     n=bot_kv(n,"cx",g_tcur_dx); n=bot_kv(n,"cy",g_tcur_dy);
     n=bot_kv(n,"talk",g_talking?g_talk_actor:0); n=bot_kv(n,"ask",g_await_input); n=bot_kv(n,"cast",g_casting);
-    { int sp=0; for(int s=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s), has=g_magic_demo?g_known[s]:0; for(int b=0;b<BOOK_SETS&&!has;b++) if(g_bookused[b]&&book_has(b+1,q)) has=1; sp+=has; } n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58)); }
+    { int sp=0; for(int s=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s), has=g_magic_demo?g_known[s]:0; for(int b=0;b<BOOK_SETS&&!has;b++) if(g_bookused[b]&&book_has(b+1,q)) has=1; sp+=has; } n=bot_kv(n,"spells",sp); n=bot_kv(n,"book",book_readied()); n=bot_kv(n,"parch",objworld_count(&g_ow,58));
+      n=bot_put(n," sk="); for(int s=0,c=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s), has=g_magic_demo?g_known[s]:0;   /* the known spells' numbers */
+          for(int b=0;b<BOOK_SETS&&!has;b++) if(g_bookused[b]&&book_has(b+1,q)) has=1;
+          if(has){ if(c++) n=bot_put(n,","); n=bot_num(n,q); } } }
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
     { plat_mem_info_t mi_; plat_mem_get_info(&mi_); n=bot_kv(n,"cfree",(int)(((long)mi_.chip_size-(long)mi_.chip_used)/1024)); }
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"more",g_msg_more); n=bot_kv(n,"cwait",g_talking?talk_waiting():0); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);

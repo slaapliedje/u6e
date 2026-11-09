@@ -22,12 +22,25 @@ def seg_castle(p, kw):
         name, words = kw[m]; p.talk_to(m, [w for w in words if w not in ('join', 'leav', 'bye') and len(w) > 1], name)
     p.sweep((286, 336, 330, 386), kw, done={5}, party=PARTY)
 
+def start_kit(p):
+    """the chest by the book's table (298,367) holds the start's kit, every record free to take: lock picks for
+    the crank rooms, a bag of all eight reagents, torches, a potion. U)se opens it and spills it; then G)et"""
+    st = use_at(p, 298, 367); p.log('  the kit chest: %r' % st['msg'][-160:])
+    for obj in (63, 188, 90, 275):
+        if not carried(p, obj): get_at(p, 298, 367, obj, tries=14)
+
 def seg_bridge(p, kw):
     """the crank opens the drawbridge; walk across the moat"""
     if p.g.state['foes'] and p.foes(): p.fight()                        # the opening gargoyles keep up with a walking party (movement_turns.md §3b)
-    p.nav.goto(303, 384, adj=True); x, y = p.nav.pos()
+    if not carried(p, 63): start_kit(p)
+    p.nav.unlock = lambda x, y, magic: unlock_any(p, x, y, magic)        # the crank rooms are locked (key 1, which nobody has): a lock pick
+    try: p.nav.goto(303, 384, adj=True, keys=True)
+    finally: p.nav.unlock = None
+    x, y = p.nav.pos()
     st = p.act('u', VDIR[(303 - x, 384 - y)], 'crank')
     if 'drawbridge' not in st['msg']: p.issue('bridge', 'crank said %r' % st['msg'])
+    p.walk(304, 383); st = p.act('u', 'left', 'the lever')                # the gate's portcullis (doorway q1): its lever is the crank room's floor
+    p.log('  portcullis lever (303,383): %r' % st['msg'][-50:])
     p.nav.refresh(); p.nav.goto(307, 395)
 
 def seg_britain(p, kw):
@@ -1405,7 +1418,7 @@ def seg_singularity(p, kw):
     The Singularity asks for whom the Codex is sought: all; then the three catacombs' statues (Mondain, Minax,
     Exodus: their mantras UN, OR, US), and the temple again: the Mantra of Singularity, unorus"""
     p.loot_ok = False
-    second = os.environ.get('SINGULARITY') == 'mantra'                    # back from the three catacombs
+    second = os.environ.get('SINGULARITY') == 'mantra' or getattr(p, 'statues_done', False)   # back from the three catacombs
     near = [o for o in p.g.objects()[0] if o['obj'] == 420]
     if not carried(p, 420) and near: pick_heavy(p, near[0]['x'], near[0]['y'], 420)
     if not (p.g.state['L'] == 5 and abs(p.nav.pos()[1] - 48) < 6):
@@ -1500,6 +1513,7 @@ def seg_statues(p, kw):
         try: out = p.talk_at(sx, sy, tid, ['task', topic, mantra, 'bye'], name, yes=True)   # the topic ends "Repeat after me the Mantra": the mantra
         finally: p.sneak = False
         p.log('  %s: %r' % (name, out and out[-2:]))
+    p.statues_done = True                                                 # the next visit to the Singularity is with the mantra
 
 def count(p, obj_n, own=None):
     """how many of obj_n the party carries (own: only that member's own; a spell takes the caster's reagents)"""
@@ -1579,8 +1593,63 @@ def keep_up(p):
     drop_junk(p)
     gold = p.g.state.get('gold', 0)
     if min(count(p, 68), count(p, 71)) < 6 and gold >= 60: restock(p, 12 if gold >= 200 else 6)   # Heal, Dispel Magic and Create Food all take ginseng
+    if REAL_MAGIC and p.g.state.get('gold', 0) >= 80: stock_reagents(p)
     if any(m['max'] and m['hp'] < m['max'] * 0.6 for m in p.g.state['party']) and min(count(p, 68, 1), count(p, 71, 1)) < 1: lb_heal(p)
     if p.poisoned() and min(count(p, 67, 1), count(p, 68, 1)) < 1: lb_heal(p)
+
+REAL_MAGIC = os.environ.get('BOT_REAL_MAGIC') == '1'                 # the original start: no test stock (magic_skills.md §4)
+SPELL_SHOP = {33: (36, 3, 1), 21: (36, 2, 3), 57: (36, 4, 7), 23: (58, 2, 2), 103: (58, 7, 2)}   # spell number: (mage, circle, item in his list)
+MAGE = {36: ('Xiao', 2), 58: ('Nicodemus', 8), 88: ('Horance', 21)}       # name, the orb position to walk from
+SEG_SPELLS = {'gargoyles': [33, 21, 57], 'cube': [33], 'sutek': [23, 21, 33, 103], 'balloon': [57], 'statues': [103, 23, 33]}
+REAGENT_MENU = {88: {65: 1, 66: 2, 69: 3, 70: 4, 71: 5, 72: 6}, 36: {65: 1, 67: 2, 68: 3, 69: 4, 70: 5, 71: 6, 72: 7}}
+REAGENT_WANT = {65: 8, 66: 10, 69: 6, 70: 4, 71: 10, 72: 14}               # pearl, moss, mandrake, nightshade, silk, ash
+
+def known(p):
+    return {int(x) for x in str(p.g.state.get('sk', '')).split(',') if x.strip().isdigit()}
+
+def to_mage(p, aid):
+    name, orb = MAGE[aid]
+    if not orb_go(p, orb): return False
+    return go_to_actor(p, aid, name)
+
+def put_parchments(p):
+    """each bought parchment into the readied book: M, M (the pack), M to the spell, Enter (magic_skills.md §4)"""
+    for _ in range(8):
+        if not p.g.state.get('parch'): return
+        p.key('m', 'move'); st = p.key('m', 'the pack')
+        for _ in range(40):
+            if 'Move the spell?' in st['msg']: break
+            st = p.key('m', 'next')
+        else: p.idle(); p.issue('magic', 'no parchment in the pack list: %r' % st['msg'][-60:]); return
+        st = p.key('ret', 'into the book'); p.log('  parchment: %r spells %d' % (st['msg'][-50:], st['spells'])); p.idle()
+
+def learn(p, spells):
+    """buy the spells the book lacks from the mage who teaches them, gold permitting"""
+    for aid in (36, 58):
+        need = [q for q in spells if q not in known(p) and SPELL_SHOP[q][0] == aid]
+        if not need: continue
+        if not to_mage(p, aid): continue
+        for q in need:
+            _, c, i = SPELL_SHOP[q]; g0 = p.g.state.get('gold', 0)
+            out = p.talk_to(aid, ['spel', str(c), str(i), 'y', 'bye'], MAGE[aid][0], yes=True) or []
+            p.log('  %s, spell %d: gold %d -> %d, parch %d %r' % (MAGE[aid][0], q, g0, p.g.state.get('gold', 0), p.g.state.get('parch', 0), ' '.join(r for _, r in out)[-120:]))
+            put_parchments(p)
+            if q not in known(p): p.issue('magic', 'spell %d not learned from %s (gold %d)' % (q, MAGE[aid][0], p.g.state.get('gold', 0)))
+
+def stock_reagents(p, aid=88):
+    """top the reagents up at a mage's shop (Horance by default: all but garlic and ginseng); the Avatar casts, so
+    his own; a "Which of you?" first is answered with 1"""
+    want = {o: n - count(p, o, 1) for o, n in REAGENT_WANT.items() if o in REAGENT_MENU[aid] and count(p, o, 1) < n // 2}
+    if not want: return
+    if not to_mage(p, aid): return
+    for o, n in want.items():
+        c0 = count(p, o, 1)
+        for words in (['reag', str(REAGENT_MENU[aid][o]), str(n), 'bye'], ['reag', '1', str(REAGENT_MENU[aid][o]), str(n), 'bye']):
+            p.talk_to(aid, words, MAGE[aid][0])
+            if count(p, o) > c0: break
+        for _ in range(4):
+            if count(p, o) == count(p, o, 1) or not give_to_avatar(p, o, others=True): break
+        p.log('  reagent %d: %d -> %d, gold %s' % (o, c0, count(p, o, 1), p.g.state.get('gold')))
 
 def norm(name):
     """a merchant's item name and a look name compared alike: case, armour/armor, a leading article"""
@@ -1742,11 +1811,7 @@ def seg_book(p, kw):
     if st['spells'] != 7: p.issue('book', 'the book gave %d spells, not 7 (%r)' % (st['spells'], st['msg']))
     st = p.key('c', 'cast')
     if st['cast'] or 'No spellbook is readied' not in st['msg']: p.issue('book', 'C with the book in the pack: cast=%s %r' % (st['cast'], st['msg'])); p.idle()
-    st = p.key('e', 'equip')
-    for _ in range(40):
-        if 'spell' in st['msg'].lower(): break
-        st = p.key('e', 'next')
-    p.key('1', 'ready it'); p.idle()
+    ready(p, 57, 1)                                                    # E)quip through the pack (the kit makes it long)
     st = p.g.state
     if not st['book']: p.issue('book', 'the book is not readied (%r)' % st['msg'])
     st = p.key('c', 'cast')
@@ -2060,6 +2125,12 @@ def seg_levertest(p, kw):
     if 'Use-a lever' not in st['msg']: p.issue('levertest', 'member 3 solo: %r' % st['msg'][-60:])
     p.key('0', 'party mode')
 
+def seg_probe(p, kw):
+    """where the mages and reagent sellers are (PROBE env: actor ids)"""
+    for a in [int(x) for x in os.environ.get('PROBE', '36,58,88,128').split(',')]: p.log('  actor %d at %s' % (a, p.g.where(a)))
+    p.nav.refresh(); p.log('  doors by the cranks: %s' % {k: v for k, v in p.nav.doors.items() if 300 <= k[0] <= 315 and 378 <= k[1] <= 386})
+    p.log('  objects at (304,382): %s' % [o for o in p.g.objects()[0] if (o['x'], o['y']) == (304, 382)])
+
 def seg_cheat(p, kw):
     """Iolo's own cheat menu (usecode_vm.md): spam x3, humbug, Edit player, Set Quest Flag 1; the menu must read
     the flag back, and the way to the Codex then lets the party by (a check; never saved)"""
@@ -2087,8 +2158,9 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
+LATE = ('gargoyles', 'lenses', 'cube', 'keg', 'gate', 'sutek', 'catacombs', 'balloon', 'singularity', 'statues', 'ending')
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
 CKPT_FILES = ('SAVED.000', 'SAVES.DAT')                              # slot 1 and the slot index (save_load.md §2b)
 
@@ -2122,7 +2194,7 @@ def main():
         line = '%s %s' % (time.strftime('%H:%M:%S'), s); print(line, flush=True); logf.write(line + '\n'); logf.flush()
     kw = keywords(REF)
     demo = os.path.join(hd, 'MAGIC.REQ')                               # the test stock, but for the segments of the real rules
-    if segs in (['book'], ['bookload'], ['parchment']):
+    if segs in (['book'], ['bookload'], ['parchment']) or REAL_MAGIC:
         if os.path.exists(demo): os.unlink(demo)
     else: open(demo, 'w').write('1')
     g = Game(hd, out, machine=os.environ.get('BOT_MACHINE', 'falcon')); p = Player(g, out, REF, log)
@@ -2135,6 +2207,8 @@ def main():
             p.heal_up(); p.cure_up()
             p.loot_ok = s not in QUEST
             if s in QUEST: keep_up(p)
+            if REAL_MAGIC and s in LATE and p.g.state.get('gold', 0) >= 80: stock_reagents(p)
+            if REAL_MAGIC and s in SEG_SPELLS: learn(p, SEG_SPELLS[s])
             try: SEGS[s](p, kw)
             except Danger as e: p.issue('danger', '%s: %s' % (s, e))
             except Exception as e: p.issue('crash', '%s: %s: %s' % (s, type(e).__name__, e)); raise
