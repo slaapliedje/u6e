@@ -390,9 +390,29 @@ def carried(p, obj_n):
 
 HEAVY = (73, 90, 394, 396, 62, 48, 149, 422, 421, 284, 264, 141, 140)    # moonstones, torches, lenses, cube, glass sword, deed, balloon parts, pole, decorations
 
+SURPLUS = {129: 4, 67: 10, 90: 4, 128: 2, 133: 1, 68: 12, 71: 12}           # meat, garlic, torches, bread, ham, ginseng, silk: what to keep
+def drop_surplus(p):
+    """D)rop what the Avatar carries beyond SURPLUS: D, D through the pack to it, Enter, the count, Enter, Enter (at the feet)"""
+    for obj, keep in SURPLUS.items():
+        n = count(p, obj, 1)
+        if n <= keep: continue
+        inv = p.g.objects()[1]; rows = [r for r in inv if r['obj'] == obj and r.get('own', 1) == 1]
+        if not rows: continue
+        name = rows[0].get('name', '')
+        p.idle(); st = p.key('d', 'drop')
+        for _ in range(len(inv) + 2):
+            st = p.key('d', 'next')
+            if ('Drop-' + name) in st['msg'] or ('Drop the ' + name) in st['msg']: break
+        else: p.idle(); continue
+        st = p.key('ret')
+        if 'How many' in st['msg']: p.g.type(str(n - keep)); st = p.key('ret', 'the count')
+        if 'Location' in st['msg']: st = p.key('ret', 'at the feet')
+        p.log('  drop %d %s: %r (%d left)' % (n - keep, name, st['msg'][-50:], count(p, obj, 1))); p.idle()
+
 def lighten(p):
     """the Avatar carries at most twice his strength (G)et says 'The total is too heavy.'): his heavy quest
     things go to the strongest-backed companion, Dupre, else the next"""
+    if REAL_MAGIC: drop_junk(p); drop_surplus(p)                         # spoils kept to sell (no seller in this run) and surplus food weigh too
     for _ in range(4): p.key('space', 'the party gathers')               # the crosshair finds only who is in view (dark, strung out: "To nobody.")
     ids = [m['id'] for m in p.g.state['party'] if m['id'] != 1 and m['hp'] > 0 and m['id'] != 9 and p.in_view(m['id'])]
     if not ids: return
@@ -401,12 +421,13 @@ def lighten(p):
         if count(p, obj, 1): give_to(p, obj, ids[k % len(ids)]); k += 1
 
 def get_at(p, x, y, obj_n, tries=3):
-    """walk beside (x,y) and G)et until obj_n is in the pack (what lies on top comes first); True if got"""
+    """walk beside (x,y) and G)et until one more obj_n is in the pack (what lies on top comes first); True if got"""
+    c0 = count(p, obj_n)                                                 # (the eighth moonstone joins seven)
     for _ in range(tries):
         p.walk(x, y, adj=True); px, py = p.nav.pos()
         st = p.act('g', VDIR[(x - px, y - py)], 'get at (%d,%d)' % (x, y))
         p.log('  get at (%d,%d): %r' % (x, y, st['msg'][-120:]))
-        if carried(p, obj_n): return True
+        if count(p, obj_n) > c0: return True
         if 'too heavy' in st['msg']:
             p.log('  loads: %s' % ' '.join('%d:%s/%s' % (m['id'], m.get('wt'), m.get('lim')) for m in p.g.state['party']))
             top = [o for o in p.g.objects()[0] if (o['x'], o['y']) == (x, y)]
@@ -806,7 +827,7 @@ def seg_shrines(p, kw):
     p.log('  invisibility ring readied: %s' % ring)
     for v, (fx, fy), lv, pos, mantra in SHRINES:
         def have(): return any(r['obj'] == 73 and r.get('fr', -1) == v for r in p.g.objects()[1])
-        for attempt in range(3):
+        for attempt in range(6):                         # the gates' gargoyles can stop a try or two
             if have(): break
             p.log('  shrine %d: orb %d, field (%d,%d) L%d (try %d)' % (v, pos, fx, fy, lv, attempt + 1))
             if not orb_go(p, pos): continue
@@ -1576,7 +1597,9 @@ def drop_junk(p):
     if p.g.state['L'] != 0: return
     for _ in range(40):
         inv = p.g.objects()[1]
-        junk = [r for r in inv if r['obj'] not in KEEP and (r['obj'] < 57 or r['obj'] in (89, 114, 115, 116, 117, 118, 119, 120, 153, 158, 188, 191))]
+        full = {r.get('in') for r in inv if r.get('in')}                    # a bag or basket holding something (the start's reagents) stays
+        junk = [r for r in inv if r['obj'] not in KEEP and (r['obj'] < 57 or r['obj'] in (89, 114, 115, 116, 117, 118, 119, 120, 153, 158, 188, 191))
+                and not (r.get('id') and r['id'] in full)]
         if not junk: return
         name = junk[0].get('name', '')
         p.idle(); st = p.key('d', 'drop')
@@ -2255,6 +2278,7 @@ def main():
         if os.path.exists(demo): os.unlink(demo)
     else: open(demo, 'w').write('1')
     g = Game(hd, out, machine=os.environ.get('BOT_MACHINE', 'falcon')); p = Player(g, out, REF, log)
+    if REAL_MAGIC: p.SELLS = ()                                         # nothing is sold in this run: no spoils to carry
     p.on_no_book = lambda: ready(p, 57, 1) if carried(p, 57) else None
     t0 = time.time()
     try:
