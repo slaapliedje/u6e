@@ -65,3 +65,8 @@ list once SE's seams exist.
 - 2026-11-07: the page waits built for U6 and SE (converse.md §6d, read from both GAME.EXEs): the line
   count, the page wait (Space/Enter/Esc/click, the arrow), `*` waits, the cursor glyphs (arrow; ankh in
   U6, skull in SE); the message scroll pages the same way. MD's GAME.EXE pages differently (item 13).
+- 2026-11-10: SE bot runs (bot_harness.md §5b): `make bot-smoke` checks U6 against a baseline and
+  runs an SE smoke; `tools/bot/se.py OUT talk` sweeps SE's conversations. Fixed: who answers (the
+  dead and asleep status bits, not HP; converse.md §6c) and SE/MD's look line ("You see "). Open:
+  SE's doors (item 5): the party cannot leave the hut it wakes in; on a 4 MB Falcon SE leaves 19 KB
+  free and restore fails ("Not enough memory to restore.").

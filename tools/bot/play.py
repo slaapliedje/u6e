@@ -163,6 +163,13 @@ class Player:
     def answer(self, aid, conv):
         """if the text ends with a question the script itself answers, its first keyword"""
         tail = conv.rstrip()
+        if tail.endswith(':'):                                 # SE's waking questions end "(page N):" (convkw's jump sections)
+            norm = lambda t: re.sub(r'[^a-z0-9]', '', t.lower())
+            nt = norm(tail[-300:])
+            for q, kws in sections(self.ref, aid):
+                nq = norm(q)
+                if len(nq) > 12 and nt.endswith(nq[-40:]) and kws: return kws[0]
+            return None
         if not tail.endswith(('?', '?"')): return None
         if re.search(r"(thy|your) name\?\"?$", tail, re.I): return 'Avatar'          # a child who won't talk to strangers
         for q, kws in sections(self.ref, aid):

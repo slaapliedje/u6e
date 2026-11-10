@@ -8,12 +8,18 @@
  * With an NPC number: one line per keyword section, "<last words before it>\t<keywords>" — how
  * the bot answers a question the script poses (Lord British's Compendium question).
  *
- * Usage: convkw <dir holding CONVERSE.A and CONVERSE.B> [npc] */
+ * Savage Empire: a folder with TALK.LZC instead (converse.md §6b); an item's byte 1 is its actor,
+ * which is the number printed and the one [npc] picks.
+ *
+ * With "raw" after the NPC: that script unpacked, to stdout (to read its structure; never saved).
+ *
+ * Usage: convkw <dir holding CONVERSE.A and CONVERSE.B, or TALK.LZC> [npc [raw]] */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include "u6lzw.h"
+#include "u6lzc.h"
 
 static uint8_t *slurp(const char*p,long*n)
 { FILE*f=fopen(p,"rb"); if(!f) return NULL;
@@ -65,11 +71,43 @@ static void sections(const uint8_t*d,int32_t n)
         int32_t j=i+1; for(;j<n && d[j]!=0xF6 && d[j]<0x80;j++) putchar(d[j]);
         putchar('\n'); i=j;
     }
+    /* a question that JUMPs (0xB0 addr32, converse.md) straight into its own keyword loop (0xF7 0xEF):
+     * SE's waking questions. The text before the jump, then the keywords there. */
+    for(int32_t i=1;i+5<=n;i++){
+        if(d[i]!=0xB0 || d[i-1]>=0x80) continue;
+        uint32_t t=(uint32_t)(d[i+1]|d[i+2]<<8|d[i+3]<<16|(uint32_t)d[i+4]<<24);
+        if(t+2>=(uint32_t)n || d[t]!=0xF7 || d[t+1]!=0xEF) continue;
+        int32_t b=i; while(b>0 && d[b-1]<0x80 && i-b<120) b--;
+        for(int32_t k=b;k<i;k++){ char c=(char)d[k]; if(c!='@') putchar(c=='\t'||c=='\n'||c=='\r'?' ':c); }
+        putchar('\t');
+        for(uint32_t j=t+2;j<(uint32_t)n && d[j]!=0xF6 && d[j]<0x80;j++) putchar(d[j]);
+        putchar('\n');
+    }
+}
+
+static int g_raw;   /* convkw <dir> <npc> raw: the unpacked script itself, to stdout */
+
+/* SE: every TALK.LZC item, or only the one whose byte 1 is npc (npc < 0: all) */
+static int talk_lzc(const char*dir,int npc)
+{
+    char p[512]; snprintf(p,sizeof p,"%s/TALK.LZC",dir);
+    long n=0; uint8_t*f=slurp(p,&n); if(!f) return -1;
+    u6lzc_t lc; if(!u6lzc_open(&lc,f,(int32_t)n,U6LZC_COMP_SE)){ fprintf(stderr,"bad %s\n",p); return 2; }
+    static uint8_t d[1<<17]; int found=0;
+    for(int i=0;i<u6lzc_count(&lc);i++){
+        int32_t got=u6lzc_read(&lc,i,d,sizeof d);
+        if(got<=2 || d[0]!=0xFF) continue;
+        if(npc<0) dump(d[1],d,got);
+        else if(d[1]==npc){ if(g_raw) fwrite(d,1,(size_t)got,stdout); else sections(d,got); found=1; }
+    }
+    free(f); return npc<0||found ? 0 : 1;
 }
 
 int main(int argc,char**argv)
 {
     if(argc<2){ fprintf(stderr,"usage: convkw <dir>\n"); return 2; }
+    g_raw = argc>3 && !strcmp(argv[3],"raw");
+    { int r=talk_lzc(argv[1],argc>2?atoi(argv[2]):-1); if(r>=0) return r; }
     char pa[512], pb[512]; snprintf(pa,sizeof pa,"%s/CONVERSE.A",argv[1]); snprintf(pb,sizeof pb,"%s/CONVERSE.B",argv[1]);
     long la=0, lb=0; uint8_t*a=slurp(pa,&la), *b=slurp(pb,&lb);
     if(!a){ fprintf(stderr,"cannot read %s\n",pa); return 2; }
@@ -77,7 +115,7 @@ int main(int argc,char**argv)
     if(argc>2){
         int i=atoi(argv[2]); int32_t n; uint8_t*d=(i<ca)?load_conv(a,la,i,&n):load_conv(b,lb,(int)(i-ca),&n);
         if(!d) return 1;
-        sections(d,n); free(d); return 0;
+        if(g_raw) fwrite(d,1,(size_t)n,stdout); else sections(d,n); free(d); return 0;
     }
     for(long i=0;i<ca+cb;i++){
         int32_t n; uint8_t*d=(i<ca)?load_conv(a,la,(int)i,&n):load_conv(b,lb,(int)(i-ca),&n);

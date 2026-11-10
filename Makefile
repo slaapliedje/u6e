@@ -68,7 +68,7 @@ AUTO_PRG := c:\\$(notdir $(SELFTEST_PRG))
 # common Hatari invocation: mount build/ as C:, autostart the .PRG
 HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
-.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk objfind
+.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk objfind bot-smoke
 
 all: $(SELFTEST_PRG)
 
@@ -402,7 +402,7 @@ $(BUILD)/objfind: tools/objfind.c dataformats/u6lzw.c dataformats/u6obj.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 objfind: $(BUILD)/objfind
-$(BUILD)/convkw: tools/convkw.c dataformats/u6lzw.c
+$(BUILD)/convkw: tools/convkw.c dataformats/u6lzw.c dataformats/u6lzc.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 convkw: $(BUILD)/convkw
@@ -1012,6 +1012,12 @@ shot-$(1): $(3) $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 endef
 $(eval $(call SHOT_WOU,se,SE,world-se))
 $(eval $(call SHOT_WOU,md,MD,world-md))
+
+# The bot's quick check after a change (docs/design/bot_harness.md §5b): U6 castle + bridge against
+# the baseline in build/bot-baseline (take it at a good commit: tools/bot/smoke.sh baseline), and
+# the Savage Empire smoke run. The SE talk sweep is separate: python3 tools/bot/se.py OUT talk.
+bot-smoke: game-falcon convkw $(BUILD)/mksave world-se $(BUILD)/NEWDESK.INF
+	tools/bot/smoke.sh
 
 # SE conversations on the VM (converse.md §6c): stage SETALK.BIN in a copy of the SE run folder, talk to
 # Kysstaa (name / join / bye, then wait) and check what the engine reports.

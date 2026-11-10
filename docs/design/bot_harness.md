@@ -5,11 +5,11 @@
 > - References   : Hatari's command FIFO (`hatari-event keypress`) and NatFeats (`NF_STDERR`);
 >                  the reference's T)alk targeting and ASKC input (usecode_vm.md) where the bot
 >                  exposed differences.
-> - Tools        : tools/bot (u6bot.py, nav.py, play.py, run.py), tools/convkw.c, Hatari 2.6.1.
+> - Tools        : tools/bot (u6bot.py, nav.py, play.py, run.py, se.py, smoke.sh), tools/convkw.c, Hatari 2.6.1.
 > - Validated by  : the first milestone run (castle, drawbridge, Britain) on an emulated stock
 >                   4 MB Falcon, 2026-10-30: 3,600 keys, 22 NPCs talked through every keyword.
 > - Confidence   : confirmed (the harness works); the walkthrough itself is in progress.
-> - Last updated : 2026-10-30
+> - Last updated : 2026-11-10 (§5b: the smoke check and Savage Empire)
 
 ## 1. Purpose
 
@@ -78,6 +78,39 @@ python3 tools/bot/run.py hd out [castle bridge britain]
 
 The first milestone (Lord British, the party, the castle, the crank and the bridge, every NPC in
 Britain) takes about 110 s of wall time for ~3,600 keys.
+
+The emulator never outlives its run: Hatari can ignore SIGTERM, so the child is started with
+PR_SET_PDEATHSIG (SIGKILL when the harness dies), a failed start kills it, quit falls back to a
+hard kill, and SIGTERM/SIGHUP run the run's cleanup. For a hand-run Hatari use `timeout -s KILL`.
+
+## 5b. The smoke check, and Savage Empire
+
+`make bot-smoke` (tools/bot/smoke.sh) is the quick check after a change, about 4 minutes:
+
+- **U6**: castle + bridge on a fresh drive. The run is deterministic, so `run.log` (times cut)
+  and `transcripts.json` must match a baseline taken at a known-good commit
+  (`tools/bot/smoke.sh baseline` writes build/bot-baseline). A difference is either a bug or a
+  change in what keys do; find the first differing log line and explain it.
+- **SE**: `tools/bot/se.py OUT smoke` boots Savage Empire and checks walking, L)ook, T)alk to the
+  nearest scripted actor (Intanya, whose waking question it answers), and S)ave then restore.
+
+`tools/bot/se.py OUT talk` is the SE conversation sweep: every actor with a TALK.LZC script on this
+level, nearest first, every keyword (convkw reads TALK.LZC), BOTTOUGH.TXT on. `SE_START=x,y` builds
+a pack whose party starts there (mkworld's start, as `make world-se SE_X= SE_Y=`). SE's waking
+questions jump straight into their own keyword loops; `convkw <dir> <npc>` lists those too (the
+question, then its keywords), and the bot answers a question that ends "(page N):" from them.
+
+Found by the SE runs (2026-11-10):
+
+| finding | state |
+|---|---|
+| Huitlapacti (31) and Zipactriotl (55) gave "No response.": the engine refused actors with 0 HP, but DOS tests the dead and asleep status bits (both start with 0 HP and talk) | fixed (converse.md §6c, se_talk) |
+| L)ook said U6's "Thou dost see"; SE and MD say "You see " | fixed (game layer `see`) |
+| The party cannot leave the hut it wakes in: SE's doors (obj 234, doorway 236) have no use yet | open: checklist item 5 |
+| Restore fails on a 4 MB Falcon, "Not enough memory to restore.": SE leaves 19 KB free (910 KB with 14 MB) | open: SE's memory fit |
+
+From outside the hut (`SE_START=412,287`) the sweep talks to 15 of the 48 surface actors in about
+3 minutes with no conversation issues; the rest are behind doors, water or on other levels.
 
 ## 6. Found by the bot so far (2026-10-30, all fixed)
 
