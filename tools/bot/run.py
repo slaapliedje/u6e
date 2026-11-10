@@ -3,7 +3,7 @@
 """run.py <drive folder> <out dir> [--from <checkpoint>] [segment | save:<checkpoint> ...]: the bot's walkthrough, segment by segment.
 Each segment plays part of the game with the real keyboard; issues.jsonl and transcripts.json
 collect what looked wrong. Segments: castle, bridge, britain, shop, sell, death, healer, help, cave, orb, shrine (default: all, in order)."""
-import json, os, sys, time
+import json, os, signal, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from u6bot import Game, kv
 from play import Player, keywords, Danger
@@ -2285,6 +2285,8 @@ def main():
     if segs in (['book'], ['bookload'], ['parchment']) or REAL_MAGIC:
         if os.path.exists(demo): os.unlink(demo)
     else: open(demo, 'w').write('1')
+    def stop(sig, frame): raise SystemExit('signal %d' % sig)         # SIGTERM/SIGHUP run the finally below
+    signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGHUP, stop)
     g = Game(hd, out, machine=os.environ.get('BOT_MACHINE', 'falcon')); p = Player(g, out, REF, log)
     if REAL_MAGIC: p.SELLS = ()                                         # nothing is sold in this run: no spoils to carry
     p.on_no_book = lambda: ready(p, 57, 1) if carried(p, 57) else None
@@ -2317,8 +2319,10 @@ def main():
             log('== %s done in %.0fs: L%d (%d,%d) %02d:%02d day %d keys %d issues %d' % (s, time.time() - ts, st['L'], st['X'],
                 st['Y'], st['min'] // 60, st['min'] % 60, st['day'], st['k'], len(p.issues)))
     finally:
-        json.dump({str(k): v for k, v in p.transcripts.items()}, open(os.path.join(out, 'transcripts.json'), 'w'), indent=1)
-        g.shot('final.png'); g.quit()
+        try:
+            json.dump({str(k): v for k, v in p.transcripts.items()}, open(os.path.join(out, 'transcripts.json'), 'w'), indent=1)
+            g.shot('final.png')
+        finally: g.quit()
         log('run %.0fs, %d issues' % (time.time() - t0, len(p.issues)))
 
 if __name__ == '__main__': main()

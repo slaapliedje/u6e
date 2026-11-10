@@ -6,7 +6,12 @@ The game, started with BOT.REQ in its folder, prints one '@S' line after each ke
 (docs/design/bot_harness.md). Game.key() sends one ST scancode through Hatari's command FIFO and
 returns the parsed report whose key count has caught up. Dumps: actors() (F2), objects() (F3),
 passmap() (F4, reads BOTPASS.BIN from the drive folder)."""
-import os, re, select, subprocess, time
+import ctypes, os, re, select, signal, subprocess, time
+
+def _die_with_parent():
+    """in the child: SIGKILL it when the harness dies (prctl PR_SET_PDEATHSIG), so no emulator outlives a run"""
+    try: ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)
+    except Exception: pass
 
 # ST scancodes (US layout): letters, digits, and the keys the game uses
 SC = {c: v for c, v in zip('qwertyuiop', range(0x10, 0x1a))}
@@ -71,14 +76,17 @@ class Game:
         args += os.environ.get('BOT_HATARI_ARGS', '').split()    # e.g. --trace psg_write, into console.log
         if avi: args += ['--avirecord', '--avi-vcodec', 'png', '--avi-file', os.path.join(self.out, 'run.avi')]
         self.log = open(log or os.path.join(self.out, 'console.log'), 'w')
-        self.p = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        self.p = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+                                  preexec_fn=_die_with_parent)
         self.buf = b''; self.keys = 0; self.state = None
         self.watch = None                                  # called with every report (dumps included)
-        t0 = time.time()
-        while not os.path.exists(self.fifo):
-            if time.time() - t0 > 20: raise RuntimeError('no hatari fifo')
-            time.sleep(0.05)
-        self.state = self.wait(lambda l: l.startswith('@S'), timeout)
+        try:
+            t0 = time.time()
+            while not os.path.exists(self.fifo):
+                if time.time() - t0 > 20: raise RuntimeError('no hatari fifo')
+                time.sleep(0.05)
+            self.state = self.wait(lambda l: l.startswith('@S'), timeout)
+        except BaseException: self.p.kill(); self.p.wait(); raise   # a start that fails leaves no emulator behind
         self.keys = self.state['k']
 
     def lines(self, timeout):
@@ -198,6 +206,7 @@ class Game:
 
     def quit(self):
         try: self.cmd('hatari-shortcut quit'); self.p.wait(timeout=10)
-        except Exception: self.p.kill(); self.p.wait()
+        except BaseException: pass
+        if self.p.poll() is None: self.p.kill(); self.p.wait()   # hatari can ignore SIGTERM: kill it outright
         try: os.unlink(os.path.join(self.hd, 'BOT.REQ'))
         except OSError: pass
