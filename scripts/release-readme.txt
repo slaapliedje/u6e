@@ -36,8 +36,7 @@ TRANSFER A CHARACTER
 
 SOUND
   Ctrl-Z turns the sound off and on, as in the original. F9 (F1 in the
-  menus) picks the
-  music source.
+  menus) picks the music source.
 
 SAVED GAMES
   S saves and Ctrl-R restores. Each opens a page of 8 slots: Up, Down or
@@ -56,7 +55,7 @@ MAGIC
 MUSIC
   Have the ST disks? Copy U.PRG from them next to the game and you get the
   ST release's own chip tunes too (the default without DMA sound).
-  The YM2149 sound chip plays the original songs by default. F1 cycles
+  The YM2149 sound chip plays the original songs by default. F9 cycles
   through the sources: automatic, Roland MT-32 or General MIDI on the
   MIDI port, DMA sound, YM2149. The choice is saved in MIDI.CFG.
 
