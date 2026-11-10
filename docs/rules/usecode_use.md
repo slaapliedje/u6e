@@ -9,7 +9,7 @@ RuleSet "use" overrides.
 > - References   : Nuvie U6UseCode::use_door / use_switch / object-type table.
 > - Test hooks   : on-target `make m5` (use a door → it opens, tile changes).
 > - Confidence   : confirmed (doors); others scoped below as TODO.
-> - Last updated : 2026-11-05
+> - Last updated : 2026-11-10 (SE and MD look: "You see ")
 
 ## Dispatch model (IMPORTANT — not a bytecode file)
 Unlike NPC conversations (CONVERSE.A/.B bytecode → our converse_vm), U6 OBJECT
@@ -452,7 +452,8 @@ ScummVM's hatches it again.
 - The **look line itself** (every L)ook, not only these): `Thou dost see ` + the tile's **article** +
   name — the article is tileflags3 bits 6-7 (tileflag.md: "", "a ", "an ", "the "), printed as the data
   has it, quirks included ("a earth", "the water"); the reference does the same. Before 2026-10-27 the
-  engine printed "You see " + the bare name.
+  engine printed "You see " + the bare name. Savage Empire and Martian Dreams begin the line with
+  `You see ` instead (their GAME.EXEs have no "Thou dost see"; the game layer's `see`).
 - Secret doors (above) keep their reveal line in the reference's search wording ("Searching here, you
   find a secret door."); the reference prints a name line before it ("Thou dost see a …" from the hidden
   frame's look entry, which the data run-fills from an earlier "sign" entry) — not reproduced until the

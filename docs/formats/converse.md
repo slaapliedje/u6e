@@ -17,7 +17,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M4 (spike) / M6 (full VM)
 >                  text; name+greeting+responses parse for many other NPCs.
 > - Confidence   : confirmed (container + readable layer); the usecode
 >                  EXPRESSION/flag/branch opcodes are NOT yet decoded (probable).
-> - Last updated : 2026-11-07 (Savage Empire's driver, §6c)
+> - Last updated : 2026-11-10 (Savage Empire: who answers, §6c)
 
 ## 1. Container layout
 CONVERSE.A is a **library** (see library.md) of per-NPC conversation scripts:
@@ -155,7 +155,7 @@ kind 1 = the TALK item's own [lzw.md] container (SE), kind 0 = stored bytes.
 >                  every statement and value op the scripts use. Behaviour in play: NOT YET
 >                  compared against DOS running.
 > - Confidence   : probable (read from the code; not yet watched in DOSBox)
-> - Last updated : 2026-11-07
+> - Last updated : 2026-11-10 (who answers: the status flags, read again)
 
 SE's interpreter is U6's: the same byte classes, data pushes (0xD2/D3/D4), EVAL (0xA7), frames
 (IF/ELSE/ENDIF, KEYWORDS/ANSWER), keyword loop, data block, string variables and text tokens.
@@ -195,9 +195,13 @@ closing quote mark: scripts open speech with `"` and close it with `&`.
 Other numbers do nothing.
 
 **Who answers** (the talk entry, before the script runs): a party member who isn't near prints
-`No response.`; so do the dead, the asleep, the paralysed and an actor whose worktype is 0x9B,
-0x13 or 0x07; talking to yourself prints `Talking to yourself?`. In solo mode the game prints
-`Not in solo mode!`, except to actor 25 (Fabozz).
+`No response.`; so do the dead (actor status bit 0x10, objlist 0x800), the asleep (status bit
+0x04) and an actor whose worktype is 0x9B, 0x13 or 0x07, and nobody answers while the game's byte
+at DS:0x205 is set (not yet identified); talking to yourself prints `Talking to yourself?`. In solo
+mode the game prints `Not in solo mode!`, except to actor 25 (Fabozz). The test is the status
+flag, not hit points: Huitlapacti (31) and Zipactriotl (55) start with 0 HP in the new-game objlist
+and talk. A paralysed actor is not refused here. (Re-read 2026-11-10 from the talk entry, image
+0x11998, after the bot's talk sweep found both silent.)
 
 Census (68 scripts): statements a1 616, a2 619, a3 343, a4 208, a5 18, a6/a8 121, b0 1780, b6 191,
 b9 23, ba 15, bf 265, c9 2, cb 987, cd 28, d1 18, d6 3, d8 12, d9 3, db 2, ee 55, ef/f6 1185, f1/f2/ff

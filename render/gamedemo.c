@@ -115,6 +115,7 @@ typedef struct GameLayer {
     int  (*usable)(int on);                                     /* U)se finds something to use under a thing that is not (usecode_use.md) */
     int  (*use_pack)(world_t *w, int on);                       /* U)se a thing in the pack or readied (usecode_use.md) */
     uint8_t asks_count;                                         /* a stack asks "How many?" first (usecode_use.md) */
+    const char *see;                                            /* L)ook's opening words (usecode_use.md, the look line) */
     int16_t ol_talk, ol_talk_hi;                                /* objlist offsets of the talk flags (0-7, 8-15); 0 = U6's (converse.md §6c) */
     int  (*rest)(world_t *w);                                   /* R)est: the refusals, the camp, the meal, the sleep (rest.md) */
     void (*cast)(void);                                         /* C)ast: the spellbook page (magic_skills.md §6) */
@@ -5755,7 +5756,7 @@ static void se_talk(int id)
     if(id>=1 && id<U6_MAX_ACTORS){
         if(is_party_member(id) && !vm_seen(id)){ msgcat(0,"No response."); return; }
         int live=npc_live_worktype(id);
-        if(g_ahp[id]==0 || g_asleep[id] || g_paralyze[id] || live==0x9b||live==0x13||live==0x07){ msgcat(0,"No response."); return; }
+        if(g_adead[id] || g_asleep[id] || live==0x9b||live==0x13||live==0x07){ msgcat(0,"No response."); return; }   /* status flags, not HP (§6c) */
         if(id==use_actor_fwd()){ msgcat(0,"Talking to yourself?"); return; } }
     g_talk_actor=id; g_talk_face=id; g_have_pc=0;
     int32_t got=0;
@@ -6857,7 +6858,7 @@ static int look_search(int idx,int n)
 static int do_look(world_t*w,int dx,int dy)
 {
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-    int near=dx>=-1&&dx<=1&&dy>=-1&&dy<=1, n=msgcat(0,"Thou dost see ");
+    int near=dx>=-1&&dx<=1&&dy>=-1&&dy<=1, n=msgcat(0,g_gl->see);
     { static uint8_t pl[VT*VT],pv[VT*VT]; int vx=VT/2+dx,vy=VT/2+dy;       /* what shows black is darkness */
       compute_predim_light(w,pl,pv);
       if(vx>=0&&vx<VT&&vy>=0&&vy<VT&&!pl[vy*VT+vx]){ msgcat(n,"darkness."); return 0; } }
@@ -6898,7 +6899,7 @@ static int do_look(world_t*w,int dx,int dy)
 }
 /* L)ook at a carried thing: no search; the book opens its page, a book reads */
 static void look_pack_item(const invitem_t*it)
-{   int count, n=msgcat(0,"Thou dost see "), on=it->obj_n;
+{   int count, n=msgcat(0,g_gl->see), on=it->obj_n;
     n=look_thing(n,on,it->tile,it->qty,&count);
     n=look_details(n,on,count,obj_weight10(on,look_counted(on)?it->qty:1));
     if((look_book_far(on)||look_book_near(on)) && it->quality){ msgcat(n,":"); look_read(it->quality); return; }
@@ -12830,7 +12831,7 @@ static int first_start(void)
 /* the game layers (docs/design/game_layer.md) */
 static const GameObjs objs_none;                    /* SE and MD: no U6 object numbers; theirs land with items 3-13 */
 static const GameLayer gl_u6 = {
-    .on=&objs_u6, .talk=u6_talk, .use=use_object_inner, .asks_count=1, .rest=u6_rest, .use_pack=u6_use_pack,
+    .on=&objs_u6, .talk=u6_talk, .use=use_object_inner, .asks_count=1, .see="Thou dost see ", .rest=u6_rest, .use_pack=u6_use_pack,
     .use_at=u6_use_at, .usable=use_usable, .ready_on=u6_ready_fx_on, .ready_off=u6_ready_fx_off,
     .ready_tick=u6_ready_fx_tick, .wind_tick=u6_wind_tick, .burn_tick=u6_dunguse_tick,
     .npc_torches=u6_npc_torches_update, .moongates=u6_moongates_update, .max_mana=u6_actor_max_mana,
@@ -12839,10 +12840,10 @@ static const GameLayer gl_u6 = {
     .ending=run_ending,
 };
 static const GameLayer gl_se = {
-    .on=&objs_none, .talk=se_talk, .use=se_use_object, .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_none, .talk=se_talk, .use=se_use_object, .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
-    .on=&objs_none, .talk=md_talk, .gold_pool=1,
+    .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
 };
 int main(int argc, char **argv)
 {
