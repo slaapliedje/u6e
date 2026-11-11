@@ -1325,11 +1325,17 @@ typedef struct {
     const char *faces;       /* portrait library .LZC (NULL = none) */
     const char *talk;        /* conversation library .LZC (NULL = none) */
     const char *cursor;      /* mouse pointer library */
+    const uint16_t *stack;   /* the stackable objects as its GAME.EXE lists them (NULL = from LOOK's plurals) */
 } GameProfile;
+
+/* Savage Empire's stackables, GAME.EXE DS:0x806 (48 words; 137 twice). LOOK's plurals miss 18 of them
+ * (gold, corn meal, meat, charcoal, clay, gunpowder, flax, ...): rules/se_use.md §2 */
+static const uint16_t SE_STACK[]={10,26,27,36,41,44,45,47,48,54,55,56,69,70,72,73,74,93,102,103,104,105,108,109,
+    110,115,120,123,129,130,132,133,134,137,137,139,140,180,191,192,204,206,208,210,211,214,240,252,0};
 
 static const GameProfile G_PROFILES[] = {
     { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL,          NULL,       "U6MCGA.PTR"   },
-    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC",   "TALK.LZC", "SECURSOR.PTR" },
+    { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC",   "TALK.LZC", "SECURSOR.PTR", SE_STACK },
     { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC", "TALK.LZC", "MDCURSOR.PTR" },
 };
 
@@ -1724,7 +1730,9 @@ int main(int argc, char **argv)
           for (int t=prev+1;t<=ix && t<NTILES;t++) tile_plural[t]=(uint8_t)pl;
           prev=ix; }
       for (int o=0;o<1024;o++){ uint16_t base=u6_basetile(bt,(uint16_t)o);
-          stackable[o] = (base<NTILES) ? tile_plural[base] : 0; nstack+=stackable[o]; } }
+          stackable[o] = (base<NTILES) ? tile_plural[base] : 0; }
+      if (gp->stack){ memset(stackable,0,sizeof stackable); for (const uint16_t *k=gp->stack; *k; k++) stackable[*k]=1; }
+      for (int o=0;o<1024;o++) nstack+=stackable[o]; }
 
     /* Object frame-animation table (objanim[obj_n] = frame count, 0 = static).
      * CAUTION: in U6 an object's frame_n usually encodes STATE or ORIENTATION, NOT an

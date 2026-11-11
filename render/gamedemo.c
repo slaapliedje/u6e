@@ -117,6 +117,7 @@ typedef struct GameLayer {
     uint8_t use_under;                                          /* a usable thing under an unusable one answers (U6); SE doesn't look (se_use.md §1) */
     const char *nothing, *unusable;                             /* U)se's words for an empty tile and a thing it can't use; NULL = U6's */
     int  (*bot_door)(const wobj_t *o);                          /* the bot's door list (bot_harness.md): 0-3 open, 4-7 shut, 8+ locked; -1 = not a door */
+    int  (*use_ground)(world_t *w, int tx, int ty, int n);      /* U)se on a tile with nothing on it, in reach: the map tile decides (se_use.md §1); n = the echo so far */
     int  (*use_pack)(world_t *w, int on);                       /* U)se a thing in the pack or readied (usecode_use.md) */
     uint8_t asks_count;                                         /* a stack asks "How many?" first (usecode_use.md) */
     const char *see;                                            /* L)ook's opening words (usecode_use.md, the look line) */
@@ -594,11 +595,15 @@ static uint16_t       g_cyc_phase;          /* rotation phase                   
 static int            g_help_on=1;          /* Ctrl-H: conversation keywords in colour */
 static int            g_msg_skip, g_msg_more, g_msg_page;   /* the scroll's page: rows skipped, more to come, rows per page */
 static char           g_msg[4096];          /* latest verb result line              */
+static int msg_end(void){ int n=0; while(g_msg[n]) n++; return n; }
 static int            g_msg_append;        /* while set, msgcat(0,..) adds a line (a foe answers an attack: combat.md §6c) */
 static char           g_atk_prompt[40];    /* "Attack with sword-" */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
 static const char* rest_prompt_text(void);  /* fwd: the R)est prompt line (rest.md §2) */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
+static int g_se_on, g_on_pack;                             /* SE's "On " prompt (se_use.md §5): which handler asks, and whether the pack is being picked from */
+static char g_on_prompt[48];
+static int se_on_map(world_t*w,int dx,int dy); static int se_on_pack(world_t*w,int row);
 static int            g_fx_on;             /* one-tile overlay drawn over everything: a cannonball in flight / a burst (cannons.md §1) */
 #define TILE_TARGET_CURSOR 365               /* the A)ttack crosshair (combat.md §6b) */
 /* the moongate walk (moongates.md §2b): phases 0 none, 1 walking in, 2 a member dissolving on the gate,
@@ -632,7 +637,7 @@ static int            g_look_pack;                /* L)ook armed on a carried it
 static int            g_book_read;                /* the spell page is open to read, from L)ook (usecode_use.md) */
 /* the verbs that arm the crosshair, as DOS: arrows walk it, Enter or a click acts (usecode_use.md) */
 #define VERB_CURSOR(v) ((v)=='A'||((v)=='R'&&g_rest_stage==2)||(v)=='T'||(v)=='O'||(v)=='L'||(v)=='G'||(v)=='U'||(v)=='M'||(v)=='D'||(v)=='W'||(v)=='K')
-#define VERB_PACK() (g_use_pack||g_move_pack||g_look_pack||g_drop_pick)
+#define VERB_PACK() (g_use_pack||g_move_pack||g_look_pack||g_drop_pick||g_on_pack)
 static int            g_travel_tx, g_travel_ty, g_travel_level;  /* the click-to-travel destination tile (+ level: a transition ends it) */
 static int            g_show_inv;          /* 1 = inventory list shown in the panel */
 static int            g_menu_journey;      /* "Journey Onward" chosen -> resume SAVED.000 at boot if present */
@@ -5391,7 +5396,7 @@ static void draw_conversation(uint8_t col)
             const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-":
                            g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
                            g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
-                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-";
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-";
             ui_text_wrap(PANX, MSGY+(g_msg[0]?7*9:0), PANW, p, 2, col);
         }
     }
@@ -6225,20 +6230,81 @@ static int se_use_door(int idx)
  * open at 3; Yunapotli's never opens to the bot */
 static int se_bot_door(const wobj_t*o){ int fr=(int)o->tile-basetile(o->obj_n);
     if(o->obj_n==234) return (fr==5||fr==7)?fr:-1; if(o->obj_n==275) return fr==1?5:fr==3?1:fr; if(o->obj_n==161) return 8; return -1; }
+static int use_actor(void); static int carry_over(int a,int extra);
+#define SEON_FIRE 1                                         /* the fire, the oven, the fire pit, lava (0x2215f) */
+static const uint16_t SE_TREES[]={50,51,64,65,66,67,68,69,70,71,72,192,193,194,195,198,179,180,130};   /* map tiles, DS:0x1134 */
+static const uint16_t SE_BURNS[]={4,5,13,7,9,36,39,42,17,45,134,183,180,191,210,171};               /* what a fire incinerates, DS:0x118a */
+static int on_list(const uint16_t*l,int n,int v){ for(int k=0;k<n;k++) if(l[k]==v) return 1; return 0; }
+/* a new thing for actor a's pack (0xa5d:0x102a): refused when strength x 20 can't take its weight */
+static int se_give(int a,int on,int q){ if(carry_over(a,obj_weight10(on,q))) return 0; vm_new(a,on,0,q); return 1; }
+static void se_drop_new(int on,int q,int x,int y){ int i=persist_obj_new(on,0,x,y,0); if(i>=0){ g_wobj[i].qty=(uint16_t)q; build_blocked(); } }
+static void se_leader_pos(int*x,int*y){ int a=use_actor(); if(a==1||!actor_pos(a,x,y)){ *x=g_wp?(int)g_wp->px:0; *y=g_wp?(int)g_wp->py:0; } }
+/* one of a stack, or the whole thing, used up: on the map (idx) or in the pack (row) */
+static void se_use_up(int idx,int row,int all){
+    if(idx>=0){ wobj_t*o=&g_wobj[idx]; if(!all && is_stackable(o->obj_n) && o->qty>1){ o->qty--; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; } else { obj_destroy(idx); build_blocked(); } }
+    else if(row>=0){ int h=g_ow.inv[row].qty?g_ow.inv[row].qty:1; pack_row_take(row,all?h:1); } }
+/* U)se on a bare tile in reach (§1): a tree, lava, the yucca plant */
+static int se_use_ground(world_t*w,int tx,int ty,int n)
+{
+    int t=world_tile(w,tx,ty), a=use_actor();
+    if(on_list(SE_TREES,19,t)){ n=msgcat(n,"Tree\n");
+        if(!se_give(a,206,1)){ msgcat(n,"You are carrying too much already."); return 0; }
+        msgcat(n,"\nYou pulled a branch from the tree."); return 1; }
+    if((t>=15&&t<=27)||t==170||t==171){ msgcat(n,"Lava\n"); g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }
+    if(t==0x34){ n=msgcat(n,"Yucca plant\n");
+        if(!se_give(a,210,1)){ msgcat(n,"You are carrying too much already."); return 0; }
+        msgcat(n,"\nYou got some flax from the yucca plant."); return 1; }
+    msgcat(n,"nothing!"); g_verb_pts=0; return 0;
+}
+/* the fire's "On " (0x2215f): what is put on it, from the map (idx) or the pack (row) */
+static int se_fire_on(int idx,int row,int n)
+{
+    int a=use_actor(), on, q, ax, ay; se_leader_pos(&ax,&ay);
+    if(idx>=0){ on=g_wobj[idx].obj_n; q=g_wobj[idx].qty; }
+    else { on=g_ow.inv[row].obj_n; q=g_ow.inv[row].qty; }
+    if(!q) q=1;
+    if(on==132){ msgcat(n,"\nYou fired the pot."); se_use_up(idx,row,0);
+        if(!se_give(a,133,1)) se_drop_new(133,1,ax,ay); return 1; }
+    if(on==93){ int tx=idx>=0?g_wobj[idx].x:ax, ty=idx>=0?g_wobj[idx].y:ay;
+        if(!(row>=0 && se_give(a,102,q))) se_drop_new(102,q,tx,ty);
+        se_use_up(idx,row,1); msgcat(n,"\nYou made corn tortillas."); return 1; }
+    if(on==206){ msgcat(n,"\nYou made some charcoal."); se_use_up(idx,row,0);
+        if(!se_give(a,129,10)) se_drop_new(129,10,ax,ay); return 1; }
+    if(on_list(SE_BURNS,16,on)){ char nm[40]; obj_name(idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,nm,sizeof nm);
+        n=msgcat(n,"\nYou incinerated the "); n=msgcat(n,nm); msgcat(n,"."); se_use_up(idx,row,1); return 1; }
+    msgcat(n,"No effect."); return 0;                 /* gunpowder blows up here: built with the grenades (§5) */
+}
+/* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
+static int se_on_target(int idx,int row)
+{
+    int n=msgcat(msg_end(),"\nOn ");
+    if(idx<0 && row<0){ msgcat(n,"nothing!"); g_se_on=0; return 0; }
+    n=look_thing(n,idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty,0);
+    n=msgcat(n,"\n");
+    if(idx>=0){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
+        if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); g_se_on=0; return 0; } }
+    int r=0, k=g_se_on; g_se_on=0; g_verb_pts=5;
+    if(k==SEON_FIRE) r=se_fire_on(idx,row,n);
+    return r;
+}
+static int se_on_map(world_t*w,int dx,int dy)
+{   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
+    return se_on_target(objworld_at(&g_ow,tx,ty),-1); }
+static int se_on_pack(world_t*w,int row){ (void)w; return se_on_target(-1,row); }
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
     if(o==234||o==161||o==275) return se_use_door(idx);
-    if(o==188){                                      /* the crate: not yet read (0x1ec8a); spills as before */
-        int n=msgcat(0,"Searching here, you find ");
+    if(o==173||o==242||o==254||o==257){ g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }   /* the oven and the fires ask "On " */
+    if(o==188){                                      /* the crate: searched only open, frame 0 (0x1ec8a) */
+        if(se_frame(idx)!=0) return 0;
+        int n=msgcat(0,"\nSearching here, you find ");
         int found=spill_container(idx,&n); if(!found) n=msgcat(n,"nothing");
         msgcat(n,".");
         return found?1:0;
     }
-    if(se_is_food(o)){                               /* eat: not yet read (0x21df5) */
-        int n=msgcat(0,"You eat the "); n=msgcat(n,nm); msgcat(n,".");
-        if(g_wobj[idx].qty>1) g_wobj[idx].qty--; else g_wobj[idx].alive=0;
-        return 1;
+    if(se_is_food(o)){                               /* eat (0x21df5): no more than that */
+        msgcat(0,"\nYou eat the food."); se_use_up(idx,-1,0); return 1;
     }
     int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");   /* the cases not yet read (§3) */
     return 0;
@@ -7016,6 +7082,8 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
         if(!ON_IS(o_,g_on.ship) && !ON_IS(o_,g_on.skiff) && !ON_IS(o_,g_on.raft) && !ON_IS(o_,g_on.balloon)) idx=use_under(tx,ty,idx); }
     if(id>=0){ n=msgcat(n,look_article(npc_tile(id))); char nm[40]; obj_name(npc_tile(id),nm,sizeof nm); n=msgcat(n,nm); }
     else if(idx>=0) n=look_thing(n,g_wobj[idx].obj_n,g_wobj[idx].tile,g_wobj[idx].qty,0);
+    else if(g_gl->use_ground){ if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); g_verb_pts=0; return 0; }
+        g_verb_pts=5; return g_gl->use_ground(w,tx,ty,n); }
     else { msgcat(n,USE_NOTHING); g_verb_pts=0; return 0; }
     if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"\n\nOut of range!"); g_verb_pts=0; return 0; }
     g_msg_append=1; g_use_take=idx; int r=do_verb_at(w,verb,dx,dy); g_use_take=-1; g_msg_append=0;
@@ -10605,6 +10673,7 @@ static int resolve_target(world_t*w,int verb,int dx,int dy)
     if(verb=='L'){ return do_verb(w,'L',dx,dy); }
     if(verb=='U'){ return do_verb(w,'U',dx,dy); }   /* recompose: doors, vehicle board/exit move the view */
     if(verb=='K'){ return key_at(w,dx,dy); }        /* a key or lock pick: "On " */
+    if(verb=='X'){ return se_on_map(w,dx,dy); }      /* SE: the second thing a use asks for (se_use.md §5) */
     if(verb=='G'){ return do_verb(w,'G',dx,dy); }
     if(verb=='D'){ int r_=do_verb(w,'D',dx,dy); g_count=0; return r_; }
     if(verb=='M'){ return push_select(w,dx,dy); }   /* M)ove: pick the thing (usecode_use.md) ... */
@@ -12918,7 +12987,7 @@ static const GameLayer gl_u6 = {
     .ending=run_ending,
 };
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_ground=se_use_ground, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -15765,9 +15834,10 @@ int main(int argc, char **argv)
             dbg_num("SE USE game==savage=", g_gd==&gamedef_se);
             for(int i=0;i<g_ow.nobjs;i++){
                 if(!g_wobj[i].alive || !objworld_can_get(&g_ow,g_wobj[i].obj_n)) continue;
-                g_wobj[i].obj_n=197; g_wobj[i].tile=(uint16_t)basetile(197); g_wobj[i].qty=2;   /* -> SE fruit */
-                dbg_num("SE food is_food=", se_is_food(197));
-                use_object(i); dbg_num("SE food qty after 1st eat=", g_wobj[i].qty);            /* expect 1 */
+                g_wobj[i].obj_n=103; g_wobj[i].tile=(uint16_t)basetile(103); g_wobj[i].qty=2;   /* -> SE meat, a stackable */
+                dbg_num("SE food is_food=", se_is_food(103));
+                g_msg[0]=0; use_object(i); dbg_num("SE food qty after 1st eat=", g_wobj[i].qty);            /* expect 1 */
+                dbg_num("SE food msg=", strstr(g_msg,"You eat the food.")!=0);
                 use_object(i); dbg_num("SE food alive after 2nd eat=", g_wobj[i].alive);        /* expect 0 */
                 break; }
             for(int i=0;i<g_ow.nobjs;i++){
@@ -15803,6 +15873,35 @@ int main(int argc, char **argv)
                 use_object(d); dbg_num("SE door blocked dx=", g_wobj[d].x-ex); dbg_num("SE door blocked frame=", se_frame(d)); /* 0, 1 */
                 dbg_num("SE door blocked msg=", strstr(g_msg,"The door is blocked.")!=0);                                         /* 1 */
                 g_wobj[c].alive=0; g_wobj[d].alive=0; build_blocked(); } }
+            /* GROUND + FIRE (se_use.md §1, §5): a tree gives a branch; a fire asks "On ": a soft pot from the pack
+             * is fired, a branch makes 10 charcoal, a basket is incinerated, and no answer says "On nothing!" */
+            { uint16_t sx=w.px, sy=w.py; int found=0;
+              for(int r=1;r<40&&!found;r++) for(int yy=-r;yy<=r&&!found;yy++) for(int xx=-r;xx<=r&&!found;xx++){
+                  int t=world_tile(&w,(int)sx+xx,(int)sy+yy); if(!on_list(SE_TREES,19,t)) continue;
+                  w.px=(uint16_t)(sx+xx-1); w.py=(uint16_t)(sy+yy); found=1; }
+              dbg_num("SE tree found=", found);
+              if(found){ int b0=objworld_count(&g_ow,206); g_msg[0]=0; g_use_take=-1;
+                  for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive&&g_wobj[j].x==w.px+1&&g_wobj[j].y==w.py) g_wobj[j].alive=0;   /* a bare tile */
+                  do_verb(&w,'U',1,0); dbg_num("SE tree branch gained=", objworld_count(&g_ow,206)-b0);
+                  dbg_num("SE tree msg=", strstr(g_msg,"You pulled a branch from the tree.")!=0); }
+              w.px=sx; w.py=sy; }
+            { int ex=(int)w.px+1, ey=(int)w.py, f=-1;
+              for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].x==ex && g_wobj[j].y==ey) g_wobj[j].alive=0;
+              f=persist_obj_new(242,0,ex,ey,0); build_blocked();
+              vm_new(1,132,0,1); vm_new(1,206,0,1); vm_new(1,183,0,1);
+              int p0=objworld_count(&g_ow,132), q0=objworld_count(&g_ow,133), c0=objworld_count(&g_ow,129), k0=objworld_count(&g_ow,183);
+              g_msg[0]=0; g_next_verb=0; do_verb(&w,'U',1,0); dbg_num("SE fire asks On=", f>=0 && g_next_verb=='X'); g_next_verb=0;
+              int row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==132) row=k;
+              if(row>=0) se_on_pack(&w,row);
+              dbg_num("SE fire pot fired=", objworld_count(&g_ow,133)-q0==1 && p0-objworld_count(&g_ow,132)==1);
+              dbg_num("SE fire pot msg=", strstr(g_msg,"You fired the pot.")!=0);
+              g_se_on=SEON_FIRE; row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==206) row=k;
+              if(row>=0) se_on_pack(&w,row); dbg_num("SE fire charcoal=", objworld_count(&g_ow,129)-c0);
+              g_se_on=SEON_FIRE; row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==183) row=k;
+              if(row>=0) se_on_pack(&w,row); dbg_num("SE fire basket burnt=", k0-objworld_count(&g_ow,183));
+              dbg_num("SE fire burnt msg=", strstr(g_msg,"You incinerated the basket.")!=0);
+              g_se_on=SEON_FIRE; g_msg[0]=0; se_on_target(-1,-1); dbg_num("SE fire nothing msg=", strstr(g_msg,"On nothing!")!=0);
+              if(f>=0) obj_destroy(f); build_blocked(); }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }
@@ -16964,7 +17063,7 @@ int main(int argc, char **argv)
                         if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
                         g_pending_verb=0; (void)resolve_target(&w,pv,dx,dy); g_pending_verb=g_next_verb; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; if(!g_casting) g_show_inv=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                    else if ((g_pending_verb=='T'||g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||(g_pending_verb=='C'&&!(g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change")))) && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the verbs' crosshair walks the map window (usecode_use.md) */
+                    else if ((g_pending_verb=='T'||g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||g_pending_verb=='X'||(g_pending_verb=='C'&&!(g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change")))) && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the verbs' crosshair walks the map window (usecode_use.md) */
                         if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
                         if(nx>=-VT/2 && nx<=VT/2 && ny>=-VT/2 && ny<=VT/2){ g_tcur_dx=nx; g_tcur_dy=ny; }
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
@@ -16982,7 +17081,7 @@ int main(int argc, char **argv)
                         (void)resolve_target(&w,'O',cx,cy); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: talk to whoever stands there */
                         compose_map(&w); draw_border_tiles(); (void)resolve_target(&w,'T',cx,cy); draw_status(&w,ink); redraw=1; }
-                    else if ((g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K') && a==0x0d && !VERB_PACK()){ int cx=g_tcur_dx, cy=g_tcur_dy, pv=g_pending_verb;   /* Enter: the verb acts on the tile under the crosshair */
+                    else if ((g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||g_pending_verb=='X') && a==0x0d && !VERB_PACK()){ int cx=g_tcur_dx, cy=g_tcur_dy, pv=g_pending_verb;   /* Enter: the verb acts on the tile under the crosshair */
                         g_pending_verb=0; (void)resolve_target(&w,pv,cx,cy); g_pending_verb=g_next_verb; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; if(!g_casting) g_show_inv=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='L' && (a=='l'||a=='L') && !(dx||dy) && g_ow.ninv>0){
@@ -17013,6 +17112,14 @@ int main(int argc, char **argv)
                         equip_to_member(a-'1'); redraw=1;                             /* 1..5 -> that member */
                     }
                     else if ((g_pending_verb=='E'||g_pending_verb=='P') && (dx||dy)) { }   /* E / On-whom ignore directions */
+                    else if (g_pending_verb=='X' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){   /* "On ": U picks from the pack instead */
+                        if(!g_on_pack){ g_on_pack=1; g_show_inv=1; g_inv_sel=0; } else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;
+                        { char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn); int o=0; const char*q="On the "; while(*q&&o<40) g_on_prompt[o++]=*q++;
+                          for(int k=0;dn[k]&&o<46;k++) g_on_prompt[o++]=dn[k]; g_on_prompt[o++]='?'; g_on_prompt[o]=0; }
+                        redraw=1; }
+                    else if (g_pending_verb=='X' && g_on_pack && a==0x0d && !(dx||dy)){
+                        g_pending_verb=0; g_on_pack=0; g_show_inv=0; if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) (void)se_on_pack(&w,g_inv_sel);
+                        g_pending_verb=g_next_verb; g_next_verb=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='U' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){
                         if(!g_use_pack){ g_use_pack=1; g_show_inv=1; g_inv_sel=0; }     /* U again -> use a carried item */
                         else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;                        /* ... U once more -> next item */
@@ -17032,7 +17139,7 @@ int main(int argc, char **argv)
                         move_pack_item(); g_pending_verb=g_next_verb; g_next_verb=0; g_move_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0; redraw=1; }
-                    else if (a==0x1b) { if(g_pending_verb=='C'&&!g_free_cast){ g_msg[0]=0; msgcat(0,"nothing"); cast_finish(0); } else g_msg[0]=0; g_tk_move=0; g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_move_pack=0; g_look_pack=0; g_use_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* cancel */
+                    else if (a==0x1b) { if(g_pending_verb=='C'&&!g_free_cast){ g_msg[0]=0; msgcat(0,"nothing"); cast_finish(0); } else if(g_pending_verb=='X'){ msgcat(msg_end(),"\nOn nothing!"); g_on_pack=0; } else g_msg[0]=0; g_tk_move=0; g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_move_pack=0; g_look_pack=0; g_use_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* cancel */
                 }
                 else if (a>='1' && a<='8' && a-'1'<g_nparty){ int act=g_party[a-'1'].actor, who=actor_real(act);   /* Solo: this one alone; 0 back to the party (combat.md §8) */
                     if(g_ahp[act]==0||g_asleep[act]||g_paralyze[act]||g_charm[act]){ char nb[20]; actor_name(act,nb,sizeof nb); int n=msgcat(0,nb); msgcat(n," fails to respond."); }

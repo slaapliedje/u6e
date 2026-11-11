@@ -12,18 +12,23 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
 > - Validated by : doors — `make bot-smoke` (SE leaves the waking hut) and SEUSE.REQ; the rest NOT YET
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11
+> - Last updated : 2026-11-11 (ground uses, "On ", the fire, food, the crate, stackables)
 
 ## 1. The dispatcher (image 0x25e46)
 
 The verb echo ("Use-" and the thing's name) and the range test are the shared engine's. What SE adds:
 
 1. **Nothing on the tile, in reach** (|dx| and |dy| at most 1, else `Out of range!`): the map tile
-   decides.
-   - a tree (19 map tiles, DS:0x1134) prints `Tree` and pulls a branch (0x23dff);
-   - lava (map tiles 15-27, 170, 171) prints `Lava` and goes to the fire handler (0x2215f);
-   - the yucca plant (map tile 0x34) prints `Yucca plant` and gets flax (0x23ef8);
-   - anything else prints `nothing!`.
+   decides. Each prints its name on the echo line, then:
+   - a tree (map tiles 50 51 64-72 192-195 198 179 180 130, DS:0x1134): the acting member gets a
+     tree branch (206): `You pulled a branch from the tree.` (0x23dff);
+   - lava (map tiles 15-27, 170, 171): the fire's `On ` (§5);
+   - the yucca plant (map tile 0x34): flax (210): `You got some flax from the yucca plant.`
+     (0x23ef8);
+   - anything else: `nothing!`, and no time passes.
+
+   A new thing for a pack (0xa5d:0x102a) is refused when the member's strength × 20 can't take its
+   weight on top of what they carry: `You are carrying too much already.`
 2. **An actor on the tile** is taken only if it is the turtle (302) or 307, or while the party is
    aboard (the acting slot is the vehicle's, one past the party). Otherwise the object under it is
    taken (0x2ec00), and so is anything under an object whose tile has tileflags3 bit 0x10 (ignore).
@@ -35,7 +40,15 @@ The verb echo ("Use-" and the thing's name) and the range test are the shared en
 6. **The switch** (81 cases, table cs:0x8965). Every case, and an object in the list with no case
    (217, 221), costs the leader 5 (0x130f:0x1dcc).
 
-## 2. The usable list (DS:0x11aa, 84 words; 110 appears twice)
+## 2. The lists
+
+**Stackable** (DS:0x806, 48 words; 137 twice): 10 26 27 36 41 44 45 47 48 54 55 56 69 70 72 73 74 93
+102-105 108-110 115 120 123 129 130 132-134 137 139 140 180 191 192 204 206 208 210 211 214 240 252.
+LOOK.LZC's plural markers, which U6 uses for this, miss 18 of them (gold, corn meal, meat, corn,
+charcoal, cloth, clay, gunpowder, flax and others), so mkworld takes SE's from this list. A stackable's
+record keeps the high byte of its quantity in the quality byte (objblk.md §2).
+
+**Usable** (DS:0x11aa, 84 words; 110 appears twice):
 
 6 10 20 22 25 29 42 43 44 47 49 50 51 52 59 60 61 62 63 79 80 81 82 86 87 88 92 93 94 95 102-111 113
 114 119 120 131 134 136 137 143 148 161 165 173 177 186 188 190 191 192 197 204 207 208 209 212 213 214
@@ -48,8 +61,8 @@ The verb echo ("Use-" and the thing's name) and the range test are the shared en
 | 234 door | the sliding door, §4 | 0x25150 | yes |
 | 161 door | Yunapotli's door, §4 | 0x253d0 | yes |
 | 275 door | the swinging door, §4 | 0x246a8 | yes |
-| 93 102-111 113 114 120 197 213 214 | food: eat | 0x21df5 | no (old "You eat the") |
-| 188 crate | search it | 0x1ec8a | no (old spill) |
+| 93 102-111 113 114 120 197 213 214 | food: `You eat the food.`, one of a stack (or the thing) used up; nothing more | 0x21df5 | yes |
+| 188 crate | open (frame 0): `Searching here, you find A, B and C.`, the contents spill out; shut: nothing | 0x1ec8a | yes |
 | 6 giant gem | | 0x24302 | no |
 | 10 magnesium ribbon | | 0x24f6b | no |
 | 20 rope | | in the switch | no |
@@ -77,7 +90,7 @@ The verb echo ("Use-" and the thing's name) and the range test are the shared en
 | 143 machine | | 0x25b44 | no |
 | 148 jungle drum | | 0x2542b | no |
 | 165 loom | | 0x23f9e | no |
-| 173 242 254 257 oven, fire, fire pit | | 0x2215f | no |
+| 173 242 254 257 oven, fire, fire pit | the fire's `On ` (§5) | 0x2215f | yes, but gunpowder |
 | 177 wire screen | sift | 0x23b10 | no |
 | 186 brazier | | in the switch | no |
 | 190 metal head | | 0x24147 | no |
@@ -135,7 +148,26 @@ frames do nothing. It doesn't move. Opening it with Aiela (actor 2) within 2 til
 talk flag 0 is clear, starts a cutscene (0x1dbfe: music 14, its own screen). The cutscene is item 9;
 until it is built, the door just opens.
 
-## 5. Open questions
+## 5. "On ": the second thing (0x5d0:0x22c8)
+
+Many uses ask for a second thing: `On ` is printed after the echo and a cursor picks a map tile or
+a thing in the pack (29 functions call the picker). The answer's name follows on the same line; a
+map thing must be within one tile of the acting member (`Out of range!`); no answer prints
+`On nothing!`. The engine's verb is `X`: the arrows walk the crosshair and Enter takes the tile, U
+picks from the pack instead (U again for the next thing, Enter takes it), Esc answers nothing.
+
+**The fire** (0x2215f; lava, the oven, a fire, the fire pit):
+
+| put on it | what happens |
+|-----------|--------------|
+| soft clay pot (132) | `You fired the pot.` One pot used; the member gets a fired clay pot (133), or it lands at their feet |
+| corn meal (93) | `You made corn tortillas.` The whole stack goes; that many tortillas (102) go to the member if it was carried, else onto the meal's tile |
+| tree branch (206) | `You made some charcoal.` One branch used; 10 charcoal (129) to the member, or at their feet |
+| 4 5 7 9 13 17 36 39 42 45 134 171 180 183 191 210 (DS:0x118a) | `You incinerated the <name>.` The whole thing goes |
+| gunpowder (204) | it explodes where it lies, or on the member if carried (0x1810:0x1941: sound 6, an explosion of tile 0x105, 1-20 to each non-stackable thing it reaches); built with the grenades |
+| anything else | `No effect.` |
+
+## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as
   objects only.
 - Item 5 covers the remaining cases, one handler at a time.

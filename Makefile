@@ -1046,7 +1046,9 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD)/se-use --auto 'C:\GAMEF.PRG' \
 	          --fast-forward on --run-vbls 4000 </dev/null 2>/dev/null | tr -d '\r' > $(BUILD)/se-use/console.txt
 	@grep -a "SE " $(BUILD)/se-use/console.txt
-	@for want in 'game==savage=1' 'food qty after 1st eat=1' 'food alive after 2nd eat=0' 'cont child spilled=1' \
+	@for want in 'game==savage=1' 'food qty after 1st eat=1' 'food alive after 2nd eat=0' 'food msg=1' 'cont child spilled=1' \
+	             'tree found=1' 'tree branch gained=1' 'tree msg=1' 'fire asks On=1' 'fire pot fired=1' 'fire pot msg=1' \
+	             'fire charcoal=10' 'fire basket burnt=1' 'fire burnt msg=1' 'fire nothing msg=1' \
 	             'usable crate=1' 'usable basket=0' 'hut door found=1' 'hut door shut blocks=1' 'hut door use msg ok=1' \
 	             'hut door opened x=411' 'hut door opened frame=1' 'hut doorway passable=1' 'door shut dx=1' 'door shut frame=5' 'door reopened dx=0' \
 	             'door reopened frame=1' 'door blocked dx=0' 'door blocked frame=1' 'door blocked msg=1' \

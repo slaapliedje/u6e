@@ -78,3 +78,8 @@ list once SE's seams exist.
   scripts stream on 4 MB machines (memory_streaming.md, the library tail): 777 KB free on the stock
   Falcon, restore works, `make bot-smoke` is clean. Next in item 5: the empty-tile uses (trees, lava,
   yucca), food, the crate, then the other handlers in §3's order.
+- 2026-11-11: item 5 continued: the bare-tile uses (a tree's branch, the yucca's flax, lava), the
+  "On " prompt for a second thing (map or pack, verb X), the fire (pots, tortillas, charcoal,
+  incinerating), food and the crate as DOS has them. SE's stackables now come from its GAME.EXE's list
+  (LOOK's plurals missed 18, gold and corn meal among them). Gunpowder in the fire waits for the
+  grenades' explosion.
