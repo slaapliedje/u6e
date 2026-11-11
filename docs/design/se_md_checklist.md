@@ -83,3 +83,7 @@ list once SE's seams exist.
   incinerating), food and the crate as DOS has them. SE's stackables now come from its GAME.EXE's list
   (LOOK's plurals missed 18, gold and corn meal among them). Gunpowder in the fire waits for the
   grenades' explosion.
+- 2026-11-11: item 5 continued (rules/se_use.md §5b): grenades and the anti-Myrmidex device (lighting, the
+  one 3-turn fuse, the 3x3 blast, chained grenades, webs cleared), gunpowder in the fire, and U)se of
+  carried and readied things (SE had none). Left in the blast: boulders and trees (with item 6's
+  object damage); the device going off when moved and thrown breakables are SE's M)ove rules.

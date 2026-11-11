@@ -1052,6 +1052,8 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'usable crate=1' 'usable basket=0' 'hut door found=1' 'hut door shut blocks=1' 'hut door use msg ok=1' \
 	             'hut door opened x=411' 'hut door opened frame=1' 'hut doorway passable=1' 'door shut dx=1' 'door shut frame=5' 'door reopened dx=0' \
 	             'door reopened frame=1' 'door blocked dx=0' 'door blocked frame=1' 'door blocked msg=1' \
+	             'grenade lit msg=1' 'grenade lit carried=1' 'grenade second refused=1' 'grenade fuse waits=1' 'grenade blew=1' \
+	             'grenade hurt the Avatar=1' 'grenade chained=1' 'grenade web gone=1' 'gunpowder blew=1' \
 	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"

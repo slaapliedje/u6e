@@ -6243,6 +6243,52 @@ static void se_leader_pos(int*x,int*y){ int a=use_actor(); if(a==1||!actor_pos(a
 static void se_use_up(int idx,int row,int all){
     if(idx>=0){ wobj_t*o=&g_wobj[idx]; if(!all && is_stackable(o->obj_n) && o->qty>1){ o->qty--; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; } else { obj_destroy(idx); build_blocked(); } }
     else if(row>=0){ int h=g_ow.inv[row].qty?g_ow.inv[row].qty:1; pack_row_take(row,all?h:1); } }
+/* ---- grenades and the anti-Myrmidex device (se_use.md §5b): one fuse at a time, 3 turns ---- */
+static int g_se_fuse, g_se_fuse_idx=-1;                     /* turns left (0 = none); the lit thing on the map, or -1 */
+static int rays_from(const world_t*w,int sx,int sy,int n,const int*ex,const int*ey,int tile,int skipstart,int*out,int cap);
+static void actor_wound(int att,int def,int dmg,int blow);
+static void se_actor_xy(int a,int*x,int*y){ if(a==1||!actor_pos(a,x,y)){ *x=g_wp?(int)g_wp->px:0; *y=g_wp?(int)g_wp->py:0; } }
+/* the blast at (x,y) (0x1810:0x1941 grenade, 0x19c1 device): rays to the 3x3, each actor reached hurt; then the 3x3's
+ * grenades go off one by one and its webs go (0x218f5) */
+static void se_blast(int x,int y,int dev,int depth)
+{
+    world_t*w=(world_t*)g_wp; int ex[9],ey[9],ids[16],n; if(!w) return;
+    int span=(w->level==0)?U6_SURFACE_TILES:256;
+    for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
+    n=rays_from(w,x,y,9,ex,ey,dev?0x109:0x105,0,ids,16);
+    for(int k=0;k<n;k++){ int on=actor_objn(ids[k]); if(is_stackable(on)) continue;
+        if(dev && on!=323 && on!=328) continue;                  /* the device hurts only Myrmidex drones and the queen */
+        actor_wound(-1,ids[k],1+(int)rng_range(&g_crng,dev?35:20),0); }
+    for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int tx=(x+dx)&(span-1), ty=(y+dy)&(span-1), gi, wi;
+        if(depth<8 && (gi=obj_idx_at(tx,ty,137))>=0 && g_wobj[gi].alive){   /* a grenade here: one of it lit and gone off at once */
+            se_use_up(gi,-1,0); se_blast(tx,ty,0,depth+1); g_se_fuse=0; g_se_fuse_idx=-1; }
+        if((wi=obj_idx_at(tx,ty,17))>=0 && g_wobj[wi].alive) obj_destroy(wi); }   /* boulders (167) and trees (263): not yet */
+    build_blocked();
+}
+/* the fuse runs out (0x21838): the lit thing goes, and blows where it lies or where its carrier stands */
+static void se_detonate(void)
+{
+    int i=g_se_fuse_idx, x=-1, y=0, dev=0; g_se_fuse=0; g_se_fuse_idx=-1;
+    if(i>=0 && g_wobj[i].alive && (g_wobj[i].obj_n==138||g_wobj[i].obj_n==241)){ x=g_wobj[i].x; y=g_wobj[i].y; dev=g_wobj[i].obj_n==241; obj_destroy(i); }
+    else { for(int r=0;r<g_ow.ninv && x<0;r++) if(g_ow.inv[r].obj_n==138||g_ow.inv[r].obj_n==241){
+               dev=g_ow.inv[r].obj_n==241; se_actor_xy(g_ow.inv[r].owner?g_ow.inv[r].owner:1,&x,&y); pack_row_take(r,1); }
+           for(int p=0;p<g_nparty && x<0;p++){ int a=g_party[p].actor; for(int sl=0;sl<EQ_NSLOTS && x<0;sl++) if(g_aready[a][sl]==138||g_aready[a][sl]==241){
+               dev=g_aready[a][sl]==241; (void)equip_unready(g_aready[a],sl); equip_refold(a); se_actor_xy(a,&x,&y); } } }
+    if(x>=0) se_blast(x,y,dev,0);
+}
+static void se_fuse_tick(const world_t*w){ (void)w; if(g_se_fuse>0 && --g_se_fuse==0) se_detonate(); }
+/* U)se a grenade or a device (0x21671), on the map (idx), in the pack (row) or readied by a (slot sl) */
+static int se_light(int idx,int row,int a,int sl)
+{
+    int on=idx>=0?g_wobj[idx].obj_n:row>=0?g_ow.inv[row].obj_n:g_aready[a][sl], gr=on==137, lit=gr?138:241;
+    int fr=idx>=0?se_frame(idx):row>=0?(int)g_ow.inv[row].tile-basetile(on):0;
+    if(fr){ msgcat(0,"\nNo effect."); return 0; }
+    if(g_se_fuse){ msgcat(0,gr?"\nA grenade has already been lit.":"\nA device has already been activated."); return 0; }
+    if(idx>=0){ int x=g_wobj[idx].x, y=g_wobj[idx].y; se_use_up(idx,-1,0); g_se_fuse_idx=persist_obj_new(lit,0,x,y,0); build_blocked(); }
+    else { int x,y; if(row>=0){ a=g_ow.inv[row].owner?g_ow.inv[row].owner:1; pack_row_take(row,1); } else { (void)equip_unready(g_aready[a],sl); equip_refold(a); }
+        g_se_fuse_idx=-1; if(!se_give(a,lit,1)){ se_actor_xy(a,&x,&y); g_se_fuse_idx=persist_obj_new(lit,0,x,y,0); build_blocked(); } }
+    g_se_fuse=3; msgcat(0,gr?"\nGrenade lit!":"\nDevice activated."); return 1;
+}
 /* U)se on a bare tile in reach (§1): a tree, lava, the yucca plant */
 static int se_use_ground(world_t*w,int tx,int ty,int n)
 {
@@ -6272,7 +6318,10 @@ static int se_fire_on(int idx,int row,int n)
         if(!se_give(a,129,10)) se_drop_new(129,10,ax,ay); return 1; }
     if(on_list(SE_BURNS,16,on)){ char nm[40]; obj_name(idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,nm,sizeof nm);
         n=msgcat(n,"\nYou incinerated the "); n=msgcat(n,nm); msgcat(n,"."); se_use_up(idx,row,1); return 1; }
-    msgcat(n,"No effect."); return 0;                 /* gunpowder blows up here: built with the grenades (§5) */
+    if(on==204){ int x=ax, y=ay;                     /* gunpowder blows where it lies, or on its carrier; all of it goes */
+        if(idx>=0){ x=g_wobj[idx].x; y=g_wobj[idx].y; } else se_actor_xy(g_ow.inv[row].owner?g_ow.inv[row].owner:1,&x,&y);
+        se_use_up(idx,row,1); se_blast(x,y,0,0); return 1; }
+    msgcat(n,"No effect."); return 0;
 }
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
 static int se_on_target(int idx,int row)
@@ -6303,10 +6352,28 @@ static int se_use_object(int idx)
         msgcat(n,".");
         return found?1:0;
     }
+    if(o==137||o==240) return se_light(idx,-1,0,0);
     if(se_is_food(o)){                               /* eat (0x21df5): no more than that */
         msgcat(0,"\nYou eat the food."); se_use_up(idx,-1,0); return 1;
     }
     int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");   /* the cases not yet read (§3) */
+    return 0;
+}
+
+/* U)se a thing in the pack or readied (the same switch, 0x25e46): the row is the one chosen */
+static int g_use_slot=-1;                                   /* the readied slot being used (panel_select_slot), or -1 */
+static int se_use_pack(world_t*w,int on)
+{
+    int row=-1, a=g_status_actor>=1?g_status_actor:1; (void)w;
+    if(!g_use_readied){ if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv && g_ow.inv[g_inv_sel].obj_n==on) row=g_inv_sel;
+        else for(int k=0;k<g_ow.ninv && row<0;k++) if(g_ow.inv[k].obj_n==on) row=k;
+        if(row<0) return 0; }
+    else if(g_use_slot<0 || g_aready[a][g_use_slot]!=on) return 0;
+    if(!se_usable(on)){ msgcat(0,"\nNot possible."); return 0; }
+    g_verb_pts=5;
+    if(on==137||on==240) return se_light(-1,row,a,g_use_slot);
+    if(se_is_food(on) && row>=0){ msgcat(0,"\nYou eat the food."); se_use_up(-1,row,0); return 1; }
+    { char nm[40]; int n=msgcat(0,"Nothing happens with the "); obj_name(row>=0?g_ow.inv[row].tile:(uint16_t)basetile(on),nm,sizeof nm); n=msgcat(n,nm); msgcat(n,"."); }   /* the cases not yet read (§3) */
     return 0;
 }
 
@@ -10617,7 +10684,7 @@ static int panel_select_slot(world_t*w,int sl)
 {   int a=g_status_actor; uint16_t on=(a>=1&&a<U6_MAX_ACTORS)?g_aready[a][sl]:0;
     if(!on) return 0;
     if(g_pending_verb=='L'){ invitem_t it; it.in=0; it.id=0; it.seq=0; it.owner=1; it.obj_n=on; it.tile=(uint16_t)basetile(on); it.qty=1; it.quality=0; g_pending_verb=0; look_pack_item(&it); return 1; }
-    if(g_pending_verb=='U'){ g_use_readied=1; int pr=use_pack_item(w,on); g_use_readied=0;         /* a readied thing in use */
+    if(g_pending_verb=='U'){ g_use_readied=1; g_use_slot=sl; int pr=use_pack_item(w,on); g_use_readied=0; g_use_slot=-1;         /* a readied thing in use */
         g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_use_pack=0; return 1; }
     if(g_pending_verb=='I'){ g_pending_verb=0; pick_take(w,-1,sl); return 1; }
     if(g_pending_verb=='C'&&g_cast_spell>=0&&!strcmp(g_spells[g_cast_spell].name,"Enchant")){ g_pending_verb=0; g_cast_slot=sl; g_pan_focus=0; (void)cast_aimed(w,0,0); return 1; }
@@ -12987,7 +13054,7 @@ static const GameLayer gl_u6 = {
     .ending=run_ending,
 };
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_ground=se_use_ground, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_ground=se_use_ground, .use_pack=se_use_pack, .burn_tick=se_fuse_tick, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -15902,6 +15969,23 @@ int main(int argc, char **argv)
               dbg_num("SE fire burnt msg=", strstr(g_msg,"You incinerated the basket.")!=0);
               g_se_on=SEON_FIRE; g_msg[0]=0; se_on_target(-1,-1); dbg_num("SE fire nothing msg=", strstr(g_msg,"On nothing!")!=0);
               if(f>=0) obj_destroy(f); build_blocked(); }
+            /* GRENADES (se_use.md §5b): one lit from the pack, a second refused; three turns on it blows at the Avatar, sets
+             * off a grenade beside him and clears a web; gunpowder on the fire blows too */
+            { int gx=(int)w.px+1, gy=(int)w.py, wy=(int)w.py+1;
+              for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].x==gx && (g_wobj[j].y==gy||g_wobj[j].y==wy)) g_wobj[j].alive=0;
+              int mg=persist_obj_new(137,0,gx,gy,0), wb=persist_obj_new(17,0,gx,wy,0); build_blocked();
+              vm_new(1,137,0,2); int row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==137) row=k;
+              g_ahp[1]=200; g_inv_sel=row; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,137);
+              dbg_num("SE grenade lit msg=", strstr(g_msg,"Grenade lit!")!=0); dbg_num("SE grenade lit carried=", objworld_count(&g_ow,138));
+              row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==137) row=k;
+              g_inv_sel=row; g_msg[0]=0; se_use_pack(&w,137); dbg_num("SE grenade second refused=", strstr(g_msg,"already been lit")!=0);
+              se_fuse_tick(&w); se_fuse_tick(&w); dbg_num("SE grenade fuse waits=", objworld_count(&g_ow,138));
+              se_fuse_tick(&w); dbg_num("SE grenade blew=", objworld_count(&g_ow,138)==0 && g_se_fuse==0);
+              dbg_num("SE grenade hurt the Avatar=", g_ahp[1]<200); dbg_num("SE grenade chained=", mg>=0 && !g_wobj[mg].alive);
+              dbg_num("SE grenade web gone=", wb>=0 && !g_wobj[wb].alive);
+              int h0=g_ahp[1]; vm_new(1,204,0,3); row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==204) row=k;
+              g_se_on=SEON_FIRE; if(row>=0) se_on_pack(&w,row);
+              dbg_num("SE gunpowder blew=", objworld_count(&g_ow,204)==0 && g_ahp[1]<h0); g_ahp[1]=200; g_msg[0]=0; }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

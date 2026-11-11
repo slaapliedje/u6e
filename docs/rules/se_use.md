@@ -10,9 +10,9 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 >                  addresses below, code segment base 0x1dbd0). The disassembly stays outside the repo.
 > - References   : none
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
-> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut) and SEUSE.REQ; the rest NOT YET
+> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades and gunpowder; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (ground uses, "On ", the fire, food, the crate, stackables)
+> - Last updated : 2026-11-11 (grenades, the device, gunpowder; U)se from the pack)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -86,11 +86,11 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 131 digging stick | | 0x21f60 | no |
 | 134 cloth strips | | 0x23c06 | no |
 | 136 metal bucket | | 0x235a9 | no |
-| 137 240 grenades, devices | light | 0x21671 | no |
+| 137 240 grenades, devices | light, §5b | 0x21671 | yes, but boulders and trees |
 | 143 machine | | 0x25b44 | no |
 | 148 jungle drum | | 0x2542b | no |
 | 165 loom | | 0x23f9e | no |
-| 173 242 254 257 oven, fire, fire pit | the fire's `On ` (§5) | 0x2215f | yes, but gunpowder |
+| 173 242 254 257 oven, fire, fire pit | the fire's `On ` (§5) | 0x2215f | yes |
 | 177 wire screen | sift | 0x23b10 | no |
 | 186 brazier | | in the switch | no |
 | 190 metal head | | 0x24147 | no |
@@ -164,10 +164,48 @@ picks from the pack instead (U again for the next thing, Enter takes it), Esc an
 | corn meal (93) | `You made corn tortillas.` The whole stack goes; that many tortillas (102) go to the member if it was carried, else onto the meal's tile |
 | tree branch (206) | `You made some charcoal.` One branch used; 10 charcoal (129) to the member, or at their feet |
 | 4 5 7 9 13 17 36 39 42 45 134 171 180 183 191 210 (DS:0x118a) | `You incinerated the <name>.` The whole thing goes |
-| gunpowder (204) | it explodes where it lies, or on the member if carried (0x1810:0x1941: sound 6, an explosion of tile 0x105, 1-20 to each non-stackable thing it reaches); built with the grenades |
+| gunpowder (204) | all of it goes, and it blows as a grenade (§5b) where it lies, or where its carrier stands |
 | anything else | `No effect.` |
+
+### 5b. Grenades and the device (0x21671)
+
+U)se on a grenade (137) or a device (240), on the map or carried (readied too):
+
+- frame not 0: `No effect.`;
+- a fuse already burning (there is one, DS:0x2842, for both kinds): `A grenade has already been lit.` or
+  `A device has already been activated.`;
+- else one of the stack is used up and a lit grenade (138) or an activated device (241) takes its place:
+  on the map at the same tile; carried, to the carrier (into the same bag in DOS; the engine puts it in
+  the pack), or at their feet if it is too heavy. `Grenade lit!` / `Device activated.` The fuse is 3.
+
+**The fuse** (image 0x4746): every call takes away the turns passed (1 a turn, 60 for an hour's rest); when
+it reaches 0 the lit thing (0x21838) is deleted and blows where it lies, or where its carrier stands.
+
+**The blast** (0x1810:0x1941 grenade, 0x19c1 device): the effect (0x276b:0xe85) sends 9 rays from the
+centre to the 3x3 around it (tile 0x105, the device 0x109); the actors they reach and those on the centre
+are hit (actors only: the hit list is a 256-bit actor set). A grenade does 1-20 to each, the device 1-35,
+and only to Myrmidex drones (323) and the queen (328). The hit (0x1810:0x289b) is flat: no armour. Then, in
+the 3x3 (0x218f5):
+
+- a grenade (137) there: one of it is lit and goes off at once (a chain); this clears the fuse, so a
+  grenade lit elsewhere then stays lit for good (DOS's own);
+- a boulder (167): pushed or broken (0x1810:0x14ea) — **not yet built**;
+- a tree (263): hit for 30; a felled tree comes down across its parts (0x1abcd, SE's object damage,
+  checklist item 6) — **not yet built**;
+- a web (17): gone.
+
+DOS plays sound 6 (the device 0x12 and 0x1d); SE's sounds are not yet built.
+
+**M)ove** (0x1f530, SE's own M)ove rules, not yet built): moving an activated device anywhere but into a
+container sets it off at the place it lands. A thing thrown more than a tile that is on the breakable list
+(DS:0x1170: 3 6 25 59 60 95 97 132 133 181 184 137 63) breaks: `It broke!`, or for the soft clay pot `The
+soft clay pot went squish.` and clay (192) is left. A lit grenade is not on the list: thrown, it lands
+and its fuse burns on.
+
+The engine doesn't save the fuse; whether DOS's save keeps DS:0x2842 is an open question (§6).
 
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as
   objects only.
+- Whether the save keeps the fuse (DS:0x2842/0x2844).
 - Item 5 covers the remaining cases, one handler at a time.
