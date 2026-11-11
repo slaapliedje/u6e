@@ -6248,6 +6248,93 @@ static int g_se_fuse, g_se_fuse_idx=-1;                     /* turns left (0 = n
 static int rays_from(const world_t*w,int sx,int sy,int n,const int*ex,const int*ey,int tile,int skipstart,int*out,int cap);
 static void actor_wound(int att,int def,int dmg,int blow);
 static void se_actor_xy(int a,int*x,int*y){ if(a==1||!actor_pos(a,x,y)){ *x=g_wp?(int)g_wp->px:0; *y=g_wp?(int)g_wp->py:0; } }
+/* ---- the boulder (se_use.md §5c): a blast pushes it, it rolls down slopes, and above the waterfall it dams it.
+ * The boulder (167) fills 2x2 with its anchor at the bottom right. ---- */
+static const uint16_t SE_SLOPE[]={5,6,8,9,10,11,13,14,30,49,50,53,54,55,61,62,63,98,99,100,101,103,104,105,112,113,115,116,
+    117,118,119,121,122,123,124,125,126,127,128,131,132,133,135,136,137,138,139,140,141,142,143,147,148,150,209,210,211,212,
+    213,214,215,217,218,219,220,221,222,223};                                                        /* map tiles, DS:0xf80 */
+static const uint16_t SE_NOSOUTH[]={14,11,208,28,29,30,50,51,96,97,98,107,114,120,123,211,213,140,223};  /* DS:0x1008 */
+static const uint16_t SE_NOEAST[]={5,6,8,10,28,31,49,51,53,54,96,99,102,116,117,131,221,222,203,204,205,206,207,208};   /* DS:0x102e */
+static int se_mt(int x,int y){ return g_wp?world_tile(g_wp,x,y)&0xff:0; }
+static int se_boulder_wall(int t){ return t==0x90||t==0x91||t==0x92||t==0x95||(t>=0x98&&t<=0xa9)||(t>=0xac&&t<=0xb6)||(t>=0xba&&t<=0xc5)||on_list(SE_TREES,19,t); }
+/* the map objects at (x,y), up to n */
+static int se_objs_at(int x,int y,int*out,int n){ int k=0;
+    for(int i=0;i<g_ow.nobjs&&k<n;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive&&o->parent==WOBJ_PARENT_NONE&&o->x==x&&o->y==y) out[k++]=i; }
+    return k; }
+/* the 2x2 ending at (x,y) is barred (0x1913f): a wall tile, or a tree (260-266) or the waterfall (150, 151) */
+static int se_boulder_barred(int x,int y){
+    for(int di=0;di<2;di++) for(int k=0;k<2;k++){ int ids[16], n;
+        if(se_boulder_wall(se_mt(x+di-1,y+k-1))) return 1;
+        n=se_objs_at(x+di-1,y-di+k,ids,16);                    /* DOS's own cells: (x-1,y-1) (x-1,y) (x,y) (x,y+1) */
+        for(int j=0;j<n;j++){ int on=g_wobj[ids[j]].obj_n; if((on>=260&&on<=266)||on==150||on==151) return 1; } }
+    return 0; }
+static void se_actor_put(int a,int x,int y){ if(a==1){ ((world_t*)g_wp)->px=(uint16_t)x; ((world_t*)g_wp)->py=(uint16_t)y; } else { g_actx[a]=(uint16_t)x; g_acty[a]=(uint16_t)y; g_amoved[a]=1; } }
+static int se_boulder(int b,int bx,int by,int depth);
+static int actor_on(const world_t*w,int x,int y);
+/* the other tiles of SE's big creatures (0xa5d:0xdef): their quality is the creature's actor */
+static int se_part_of(int on){ return on==284||on==285||on==289||on==290||(on>=293&&on<=295)||on==297||on==298||(on>=303&&on<=306); }
+/* an actor under the boulder: crushed (a = 1), or thrust to the first free tile around (column by column) and hurt
+ * 1-30, crushed if there is none */
+static void se_crush(world_t*w,int id,int cx,int cy,int a){
+    if(a!=1) for(int ix=0;ix<3;ix++) for(int iy=0;iy<3;iy++){ int tx=cx+ix-1, ty=cy+iy-1;
+        if(ix==1&&iy==1) continue;
+        if(world_is_passable(w,tx,ty)&&!obj_blocks_at(tx,ty)&&actor_on(w,tx,ty)<0){ se_actor_put(id,tx,ty); actor_wound(-1,id,1+(int)rng_range(&g_crng,30),0); return; } }
+    actor_wound(-1,id,g_ahp[id]?g_ahp[id]:1,0); }
+/* what is under the 2x2 ending at (x,y) as the boulder comes (0x19201): other boulders are pushed on; actors are
+ * crushed (a = 1) or thrust to a free tile around and hurt 1-30, crushed if there is none; things go, except those
+ * with tileflags3 bit 0x20 and 249 and 280 */
+static int se_boulder_clear(int x,int y,int b,int a,int depth){
+    world_t*w=(world_t*)g_wp; int ids[16], n;
+    for(int k=0;k<2;k++) for(int di=0;di<2;di++){ n=se_objs_at(x-k,y-di,ids,16);
+        for(int j=0;j<n;j++) if(ids[j]!=b && g_wobj[ids[j]].obj_n==167 && g_wobj[ids[j]].alive && !se_boulder(ids[j],x-k,y-di,depth+1)) return 0; }
+    for(int k=0;k<2;k++) for(int di=0;di<2;di++){ int cx=x-k, cy=y-di, id=actor_on(w,cx,cy);
+        if(id>=0) se_crush(w,id,cx,cy,a);
+        n=se_objs_at(cx,cy,ids,16);
+        for(int j=0;j<n;j++){ wobj_t*o=&g_wobj[ids[j]]; int on=o->obj_n;
+            if(ids[j]==b) continue;
+            if(se_part_of(on)){ if(o->quality&&o->quality<U6_MAX_ACTORS&&g_ahp[o->quality]) se_crush(w,o->quality,cx,cy,a); continue; }   /* a big creature's other tile: the creature itself */
+            if((g_tflags3&&(g_tflags3[o->tile&2047]&0x20))||on==249||on==280) continue;
+            obj_destroy(ids[j]); } }
+    return 1; }
+/* one step of the boulder to (x,y) (0x194b1); f = go even where barred */
+static int se_boulder_step(int b,int x,int y,int a,int f,int g,int depth){
+    wobj_t*o=&g_wobj[b];
+    if((o->quality==1||se_boulder_barred(x,y))&&f!=1) return 0;
+    if(se_boulder_clear(x,y,b,a,depth)!=1&&f!=1) return 0;
+    o->x=(uint16_t)x; o->y=(uint16_t)y; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; build_blocked();
+    { int wf=obj_idx_at(x,y+2,150);
+      if(wf>=0){ static const int16_t GO[5][3]={{150,0,2},{151,2,3},{195,1,3},{195,0,3},{152,2,4}};   /* it dams the waterfall */
+          o->quality=1;
+          for(int k=0;k<5;k++){ int i=obj_idx_at(x+GO[k][1],y+GO[k][2],GO[k][0]); if(i>=0) obj_destroy(i); }
+          if(g>=0&&g_wobj[g].alive) obj_destroy(g); build_blocked(); } }
+    for(int di=0;di<2;di++) for(int si=0;si<2;si++){ int t=se_mt(x+1-di,y+si-1); if(t==0xc||t==0xf){ o->quality=1; break; } }   /* in the water it stays */
+    return 1; }
+/* the blast at (bx,by) meets the boulder b (0x1810:0x14ea) */
+static int se_boulder(int b,int bx,int by,int depth)
+{
+    wobj_t*o=&g_wobj[b]; int g=obj_idx_at(o->x,o->y,230), di=o->x, si=o->y, dx=bx-di, dy=by-si, fl=0, e=0, nf=0, wf=0, roll=0, r=0;
+    if(o->quality==1||depth>8) return 0;
+    if(dx==1||(dx==0&&(dy==0||dy==-1))){ di--; fl|=0x10; }
+    else if(dx==-2||(dx==-1&&(dy==0||dy==-1))){ if(!on_list(SE_NOEAST,24,se_mt(di+1,si))){ di++; fl|=0x40; } }
+    if(dy==1||(dy==0&&(dx==0||dx==-1))){ si--; fl|=0x80; }
+    else if(dy==-2||(dy==-1&&(dx==0||dx==-1))){ if(!on_list(SE_NOSOUTH,19,se_mt(di+1,si))){ si++; fl|=0x20; } }
+    if((fl&0x10)&&on_list(SE_NOEAST,24,se_mt(di,si))){ wf=1; r=se_boulder_step(b,di,si,0,0,g,depth); di--; r=se_boulder_step(b,di,si,1,0,g,depth); di--; r=se_boulder_step(b,di,si,1,0,g,depth); }
+    else if((fl&0x80)&&on_list(SE_NOSOUTH,19,se_mt(di,si))){ nf=1; r=se_boulder_step(b,di,si,0,0,g,depth); si--; r=se_boulder_step(b,di,si,1,0,g,depth); si--; r=se_boulder_step(b,di,si,1,0,g,depth); }
+    else if(!(r=se_boulder_step(b,di,si,0,1,g,depth))) return 0;
+    for(int guard=0; !roll && o->quality!=1 && guard<64; guard++){   /* it rolls on (DOS has no limit) */
+        roll=1;
+        if(on_list(SE_SLOPE,68,se_mt(di,si))||on_list(SE_SLOPE,68,se_mt(di-1,si))||on_list(SE_SLOPE,68,se_mt(di,si-1))||on_list(SE_SLOPE,68,se_mt(di-1,si-1))){
+            e=1; if(!on_list(SE_NOEAST,24,se_mt(di+1,si))){ di++; roll=0; } if(!on_list(SE_NOSOUTH,19,se_mt(di,si+1))){ si++; roll=0; }
+            if(!roll) r=se_boulder_step(b,di,si,1,0,g,depth); }
+        else if(!(r=se_boulder_step(b,di,si,1,1,g,depth)) && (e||nf||wf)){ int found=0;
+            for(int ix=0;ix<3;ix++) for(int iy=0;iy<3;iy++){ int tx=di+ix-1, ty=si+iy-1;
+                if((ix==1&&iy==1)||(nf&&iy==2)||(wf&&ix==2)||(e&&ix==0&&iy==0)) continue;
+                if(iy==2&&on_list(SE_NOSOUTH,19,se_mt(tx,ty))) continue;
+                if(ix==2&&on_list(SE_NOEAST,24,se_mt(tx,ty))) continue;
+                if((r=se_boulder_step(b,tx,ty,1,1,g,depth))){ found=1; break; } }
+            if(!found){ if(e){ di++; si++; } else if(nf) si--; else di--; r=se_boulder_step(b,di,si,1,0,g,depth); roll=0; } } }
+    return r;
+}
 /* the blast at (x,y) (0x1810:0x1941 grenade, 0x19c1 device): rays to the 3x3, each actor reached hurt; then the 3x3's
  * grenades go off one by one and its webs go (0x218f5) */
 static void se_blast(int x,int y,int dev,int depth)
@@ -6262,7 +6349,8 @@ static void se_blast(int x,int y,int dev,int depth)
     for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int tx=(x+dx)&(span-1), ty=(y+dy)&(span-1), gi, wi;
         if(depth<8 && (gi=obj_idx_at(tx,ty,137))>=0 && g_wobj[gi].alive){   /* a grenade here: one of it lit and gone off at once */
             se_use_up(gi,-1,0); se_blast(tx,ty,0,depth+1); g_se_fuse=0; g_se_fuse_idx=-1; }
-        if((wi=obj_idx_at(tx,ty,17))>=0 && g_wobj[wi].alive) obj_destroy(wi); }   /* boulders (167) and trees (263): not yet */
+        { int bi=obj_idx_at(tx,ty,167); if(bi>=0 && g_wobj[bi].alive) (void)se_boulder(bi,x,y,depth); }
+        if((wi=obj_idx_at(tx,ty,17))>=0 && g_wobj[wi].alive) obj_destroy(wi); }   /* trees (263): with SE's object damage */
     build_blocked();
 }
 /* the fuse runs out (0x21838): the lit thing goes, and blows where it lies or where its carrier stands */
@@ -15986,6 +16074,21 @@ int main(int argc, char **argv)
               int h0=g_ahp[1]; vm_new(1,204,0,3); row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==204) row=k;
               g_se_on=SEON_FIRE; if(row>=0) se_on_pack(&w,row);
               dbg_num("SE gunpowder blew=", objworld_count(&g_ow,204)==0 && g_ahp[1]<h0); g_ahp[1]=200; g_msg[0]=0; }
+            /* BOULDER (se_use.md §5c): a blast on its east side pushes it a tile west on open ground; blasted west onto
+             * the ledge above the waterfall at (292,66) it dams it: the falls and water go and it stays for good */
+            { int ox=-1, oy=-1;
+              for(int r=4;r<24&&ox<0;r++) for(int yy=-r;yy<=r&&ox<0;yy++) for(int xx=-r;xx<=r&&ox<0;xx++){ int cx=(int)w.px+xx, cy=(int)w.py+yy, ok=1;
+                  for(int ty=cy-2;ty<=cy+1&&ok;ty++) for(int tx=cx-3;tx<=cx+2&&ok;tx++){ int t=se_mt(tx,ty);
+                      if(se_boulder_wall(t)||on_list(SE_SLOPE,68,t)||on_list(SE_NOEAST,24,t)||on_list(SE_NOSOUTH,19,t)||!world_is_passable(&w,tx,ty)||objworld_at(&g_ow,tx,ty)>=0||actor_on(&w,tx,ty)>=0) ok=0; }
+                  if(ok){ ox=cx; oy=cy; } }
+              dbg_num("SE boulder open ground found=", ox>=0);
+              if(ox>=0){ int b=persist_obj_new(167,0,ox,oy,0); build_blocked(); se_blast(ox+1,oy,0,0);
+                  dbg_num("SE boulder pushed west=", b>=0&&g_wobj[b].x==ox-1&&g_wobj[b].y==oy);
+                  if(b>=0) obj_destroy(b); build_blocked(); }
+              { int b=persist_obj_new(167,0,293,64,0); build_blocked(); int f0=obj_idx_at(292,66,150)>=0;
+                se_blast(294,64,0,0);
+                dbg_num("SE boulder dam falls there=", f0); dbg_num("SE boulder dam x=", b>=0?g_wobj[b].x:0);
+                dbg_num("SE boulder dammed=", b>=0&&g_wobj[b].quality==1&&obj_idx_at(292,66,150)<0&&obj_idx_at(294,67,151)<0&&obj_idx_at(294,68,152)<0&&obj_idx_at(293,67,195)<0); } }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

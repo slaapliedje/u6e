@@ -12,7 +12,7 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
 > - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades and gunpowder; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (grenades, the device, gunpowder; U)se from the pack)
+> - Last updated : 2026-11-11 (the boulder and the waterfall)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -86,7 +86,7 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 131 digging stick | | 0x21f60 | no |
 | 134 cloth strips | | 0x23c06 | no |
 | 136 metal bucket | | 0x235a9 | no |
-| 137 240 grenades, devices | light, §5b | 0x21671 | yes, but boulders and trees |
+| 137 240 grenades, devices | light, §5b | 0x21671 | yes, but trees |
 | 143 machine | | 0x25b44 | no |
 | 148 jungle drum | | 0x2542b | no |
 | 165 loom | | 0x23f9e | no |
@@ -189,12 +189,60 @@ the 3x3 (0x218f5):
 
 - a grenade (137) there: one of it is lit and goes off at once (a chain); this clears the fuse, so a
   grenade lit elsewhere then stays lit for good (DOS's own);
-- a boulder (167): pushed or broken (0x1810:0x14ea) — **not yet built**;
+- a boulder (167): pushed, and it may roll (§5c);
 - a tree (263): hit for 30; a felled tree comes down across its parts (0x1abcd, SE's object damage,
   checklist item 6) — **not yet built**;
 - a web (17): gone.
 
 DOS plays sound 6 (the device 0x12 and 0x1d); SE's sounds are not yet built.
+
+### 5c. The boulder (0x1810:0x14ea)
+
+The boulder (167) fills 2x2, anchored at its bottom right (x, y), like SE's other big things. A blast at
+(bx, by) in the 3x3 around the anchor meets it (dx = bx - x, dy = by - y). Nothing happens once its
+quality is 1 (DOS plays sound 0x1c). Three lists of map tiles steer it: *slope* (DS:0xf80, 68 tiles),
+*no-south* (DS:0x1008, 19) and *no-east* (DS:0x102e, 24).
+
+**The push.** It goes one tile west when dx = 1, or dx = 0 and dy is 0 or -1; else one tile east when
+dx = -2, or dx = -1 and dy is 0 or -1, unless the tile at (x+1, y) is no-east. Likewise north when
+dy = 1, or dy = 0 and dx is 0 or -1; else south when dy = -2, or dy = -1 and dx is 0 or -1, unless the
+tile one east of the (new) column is no-south (DOS tests x+1 here too). Then:
+
+- pushed west onto a no-east tile: three steps west (the first may not push actors, the others may);
+- else pushed north onto a no-south tile: three steps north, the same way;
+- else one forced step to the new place; if it fails, that's all.
+
+**The roll** repeats until the boulder's quality is 1 (DOS has no other limit; the engine stops after 64
+rounds):
+
+1. if any of its four tiles is a slope tile, it rolls downhill: east unless the tile east is no-east,
+   south unless the tile south is no-south; if it can go neither way it stops; else one step;
+2. else a forced step where it is (crushing what is under it); if that fails and it was rolling or
+   pushed three steps, it tries each tile around (column by column, west first; not back the way it
+   came; no-south and no-east tiles skipped for the south and east tiles); with none taken it goes on
+   one tile (downhill diagonally, or on north or west) and rolls again.
+
+**A step** to (x, y) (0x194b1). Unless forced, it fails when the boulder's quality is 1 or the place is
+barred: a wall tile in its 2x2 (map tiles 0x90-0x92, 0x95, 0x98-0xa9, 0xac-0xb6, 0xba-0xc5, or a
+tree), or a tree (260-266) or waterfall (150, 151) object at (x-1, y-1), (x-1, y), (x, y) or (x, y+1)
+(DOS's own cells). Then what is under the 2x2 (0x19201): another boulder is blasted on from that cell
+(if it can't go, the step fails unless forced); an actor, or a big creature's other tile (284 285 289
+290 293-295 297 298 303-306, whose quality is its actor), is crushed on a step that may push actors,
+else moved to the first free tile around (column by column) and hurt 1-30, crushed if none is free;
+other things are destroyed, except 249, 280 and those whose tileflags3 has bit 0x20 (DOS reads that
+byte by the thing's index in its object table, not its tile: a slip; the engine reads the tile). Then
+the boulder moves, and:
+
+- **the waterfall:** a waterfall (150) at (x, y+2) means it has fallen onto the ledge above it. Its
+  quality becomes 1 for good; the waterfall at (x, y+2), the falls (151) at (x+2, y+3), the earth (195)
+  at (x+1, y+3) and (x, y+3) and the water (152) at (x+2, y+4) are removed, and so is the egg
+  (230) under the boulder's first tile, so no other boulder hatches there. On the new-game surface this is the falls at (292,66),
+  in front of the cave at (293,67): the boulder dams it from (292,64);
+- **water:** a map tile 0x0c or 0x0f in (x, y-1), (x, y), (x+1, y-1), (x+1, y) also makes its quality 1.
+
+DOS plays sound 0x1f at each of these. The waterfall's boulders hatch from eggs (230): the new game's
+eggs at (295,64) and (299,65) each hold one (no boulder lies on the map itself). SE's eggs are not yet
+built, so in the engine the boulder appears only once they are.
 
 **M)ove** (0x1f530, SE's own M)ove rules, not yet built): moving an activated device anywhere but into a
 container sets it off at the place it lands. A thing thrown more than a tile that is on the breakable list

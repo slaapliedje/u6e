@@ -87,3 +87,7 @@ list once SE's seams exist.
   one 3-turn fuse, the 3x3 blast, chained grenades, webs cleared), gunpowder in the fire, and U)se of
   carried and readied things (SE had none). Left in the blast: boulders and trees (with item 6's
   object damage); the device going off when moved and thrown breakables are SE's M)ove rules.
+- 2026-11-11: item 5 continued (rules/se_use.md §5c): the boulder in a blast (the push, the roll down
+  slopes, crushing, and damming the waterfall at (292,66) to open the cave behind it). The boulders
+  hatch from SE's eggs (object 230, e.g. at (295,64)); **SE's eggs are not built and no item lists
+  them** — they belong with item 11 (levels) or a new item before the register.

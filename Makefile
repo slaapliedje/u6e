@@ -1044,7 +1044,7 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	printf 'x' > $(BUILD)/se-use/SEUSE.BIN
 	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
 	          --tos '$(TOS_FALC)' --harddrive $(BUILD)/se-use --auto 'C:\GAMEF.PRG' \
-	          --fast-forward on --run-vbls 4000 </dev/null 2>/dev/null | tr -d '\r' > $(BUILD)/se-use/console.txt
+	          --fast-forward on --run-vbls 12000 </dev/null 2>/dev/null | tr -d '\r' > $(BUILD)/se-use/console.txt
 	@grep -a "SE " $(BUILD)/se-use/console.txt
 	@for want in 'game==savage=1' 'food qty after 1st eat=1' 'food alive after 2nd eat=0' 'food msg=1' 'cont child spilled=1' \
 	             'tree found=1' 'tree branch gained=1' 'tree msg=1' 'fire asks On=1' 'fire pot fired=1' 'fire pot msg=1' \
@@ -1054,6 +1054,8 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'door reopened frame=1' 'door blocked dx=0' 'door blocked frame=1' 'door blocked msg=1' \
 	             'grenade lit msg=1' 'grenade lit carried=1' 'grenade second refused=1' 'grenade fuse waits=1' 'grenade blew=1' \
 	             'grenade hurt the Avatar=1' 'grenade chained=1' 'grenade web gone=1' 'gunpowder blew=1' \
+	             'boulder open ground found=1' 'boulder pushed west=1' 'boulder dam falls there=1' \
+	             'boulder dam x=292' 'boulder dammed=1' \
 	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"
