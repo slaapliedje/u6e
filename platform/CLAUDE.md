@@ -74,8 +74,8 @@ Two RAM types matter on our higher targets:
 - DMA disk transfer buffers must be in ST-RAM (chip-accessible). If reading
   into a Fast-RAM destination, read into an ST-RAM bounce buffer then copy,
   OR let GEMDOS handle it (GEMDOS buffers internally) — but verify large-read
-  behavior on TT. <<FILL IN: confirm whether our toolchain's Fread into
-  Alt-RAM is safe on target TOS, else bounce-buffer.>>
+  behavior on TT. Resolved: platfile.c bounces
+  every Alt-RAM read through a 16 KB ST-RAM buffer.
 - Read big, parse in memory: pull whole data files into a pool, hand the
   buffer to /dataformats. Avoid many small reads.
 - Path handling: TOS uses '\' and drive letters; keep all original-asset
@@ -85,11 +85,14 @@ Two RAM types matter on our higher targets:
 ## Input
 - Keyboard: BIOS `Bconin`/`Bconstat` (con dev) for blocking-ish; or
   `Kbshift` for modifier state; IKBD/system-variable polling for game-style
-  non-blocking input. Decide one model and wrap it. <<FILL IN: confirm input
-  model — likely poll IKBD/keyboard buffer each loop for responsiveness.>>
+  non-blocking input. Resolved: platinput.c polls
+  Bconstat/Bconin (BIOS 1/2) each loop; key repeat is set with Kbrate (XBIOS 35).
 - Mouse: via the IKBD / line-A or VDI mouse vector if GEM is up. Since we run
   fullscreen non-GEM in-game, prefer reading IKBD packets directly through a
-  platform wrapper. <<FILL IN: GEM-up menus vs fullscreen game input split.>>
+  platform wrapper. Resolved: the game takes over the screen on every target.
+  It reads the mouse from IKBD relative packets through the mousevec hook
+  (platinput.c), so a replacement VDI such as NVDI doesn't matter.
+  The vcard target keeps the AES open only to get its VDI workstation.
 - Expose plat_input_poll() -> normalized events to /engine.
 
 ## Timing
@@ -124,8 +127,9 @@ Two RAM types matter on our higher targets:
 - Hatari --trace gemdos,xbios to verify which calls we actually issue.
 
 ## Decisions log (platform)
-<<FILL IN>>
-- Fread-into-Alt-RAM safety vs. bounce buffer policy.
-- Input model (IKBD direct vs BIOS con) + GEM-menu/fullscreen split.
+- Alt-RAM reads go through a 16 KB ST-RAM bounce buffer (platfile.c).
+- Keys are polled with Bconstat/Bconin (BIOS 1/2); the mouse comes from IKBD
+  packets via mousevec. Every target runs full screen; vcard keeps the AES only
+  for its VDI workstation.
 - Timer source for game clock (200Hz var vs Timer-C).
 

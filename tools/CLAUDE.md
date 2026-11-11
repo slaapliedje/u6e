@@ -8,8 +8,8 @@ quantization, palette remapping, format conversion) happens here at build
 time. The ST does NONE of it at runtime.
 
 - Language for tools: host-native (C, or a scripting language is fine here
-  since these don't run on target). <<FILL IN: confirm tool language; C lets
-  you reuse /dataformats parsers, a scripting lang is faster to iterate.>>
+  since these don't run on target). Resolved: C, so the tools reuse the
+  /dataformats parsers; Python only for the bot and video harnesses.
 - Clean-room still applies to FORMAT KNOWLEDGE: tools may read original files
   the user owns, but ship NO copyrighted assets in the repo or output repo.
 - Endianness: original files are little-endian; engine target is big-endian
@@ -80,7 +80,8 @@ gamut. Our pipeline produces a BETTER 16-color result.
   - indexed256: 8-bit chunky OR the format requested via EdDI/v_opnbm
     (match the screen's device format to make present a straight copy).
   - truecolor: 16-bit; expand at conversion or expand-at-present (decide;
-    expand-at-present keeps packs smaller). <<FILL IN: choose.>>
+    expand-at-present keeps packs smaller). Resolved: expand at present
+    (rdr_falcon's RGB565 LUT, rdr_vcard's per-layout expand); packs stay 8-bit.
 - Respect tile masks/transparency; emit mask data alongside where needed.
 
 ## Map / world conversion
@@ -109,9 +110,8 @@ gamut. Our pipeline produces a BETTER 16-color result.
   reproducible and diffable).
 
 ## Decisions log (tools)
-<<FILL IN>>
-- Tool language (C reuse vs scripting iteration speed).
-- Truecolor: expand-at-convert vs expand-at-present.
+- Tool language: C (reuses /dataformats); Python for tools/bot and tools/video.
+- Truecolor: expand at present; one 8-bit pack serves every 256-colour target.
 - Dithering defaults per asset class.
 - Where reference/known-good assets live for golden tests.
 

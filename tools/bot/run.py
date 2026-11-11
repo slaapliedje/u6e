@@ -522,7 +522,7 @@ def move_off(p, x, y):
     return p.g.state['msg']
 
 def seg_justice(p, kw):
-    """Yew: the rune of Justice lies under a potted plant in the Slaughtered Lamb (bot_walkthrough.md §3);
+    """Yew: the rune of Justice is hidden in a plant pot at the inn (bot_walkthrough.md §3);
     the plant is moved aside, not taken"""
     if not orb_go(p, 15): return
     move_off(p, 237, 156)
@@ -1614,7 +1614,7 @@ def drop_junk(p):
             p.idle(); return
 
 def lb_heal(p):
-    """Lord British heals the whole party when asked ("any time thou dost need healing, do thou but ask me")"""
+    """Lord British heals the whole party when asked (his script offers it at any time)"""
     if not orb_go(p, 8): return
     if p.foes(): p.fight()                                              # the throne room's egg (eggs.md)
     p.talk_to(5, ['heal'], 'Lord British')

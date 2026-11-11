@@ -33,14 +33,15 @@ Renderer interface (platform-agnostic), small surface:
   - rdr_present()              -> backbuffer -> visible screen
 Backends:
   - st       : 16-color shifter, CPU/Blitter present
-  - ste      : <<decide>> 16/4096 palette
+  - ste      : the st backend; on STE hardware it loads 4-bit (4096-colour) palettes
   - tt       : 256/4096 TT shifter
   - falcon   : VIDEL, 256 or 16-bit truecolor present path
   - vcard    : present via the card's VDI driver; mode chosen from VDI enum
 All backends composite into a backbuffer in a canonical internal pixel
 format; per-target present step handles layout/palette conversion.
-<<FILL IN: canonical internal format — 8-bit indexed is the natural choice
-since source art is 256-color VGA; truecolor targets up-convert at present.>>
+Canonical internal format (resolved): 8-bit indexed chunky backbuffer
+(render/render.h); the source art is 256-colour VGA. The ST backend LUT-maps it to
+16 colours and converts to planar at present; the others present the 256 colours directly.
 
 ## Asset Pipeline (host-side, runs on dev PC)
 - Inputs: user-provided original data files (U6 / Savage / Martian).

@@ -43,9 +43,8 @@ NOT three forks.
   Martian override only deltas.
 - WorldModel: shared chunk/object representation; level-mapping is a policy
   object provided per game.
-<<FILL IN: confirm you want C with vtable-style struct-of-fn-pointers, or
-C++ with virtual methods. (Engine is C per project default; pick the C
-"interface struct" pattern unless changed.)>>
+Resolved: C with structs of function pointers (see RESOLVED DECISIONS; the
+game layer tables gl_u6/gl_se/gl_md in docs/design/game_layer.md).
 
 ## Golden rules (engine-specific)
 - Big-endian 68000. Engine works on IN-MEMORY decoded structures only; all
@@ -60,8 +59,9 @@ C++ with virtual methods. (Engine is C per project default; pick the C
   capabilities; lay out UI responsively where the original allowed it,
   otherwise target the canonical internal layout and let /render present.
 - Memory-aware: must run on modest ST RAM. Keep the resident working set
-  small; stream/page map and tile data. <<FILL IN: min RAM target, e.g. 1MB
-  base ST vs TT/Falcon-only for full VGA assets.>>
+  small; stream/page map and tile data. Resolved: 4 MB on every target
+  (a stock TT/Falcon with no Fast RAM, and a 4 MB ST/STE on the 16-colour pack);
+  full VGA assets need TT/Falcon/card. See docs/design/memory_streaming.md.
 
 ## Main loop (shared shape)
 1. Poll input (via /platform input abstraction).
@@ -84,16 +84,17 @@ Keep simulation tick decoupled from present rate where feasible
 - Validate against captured original dialog flows (input choices -> expected
   text/state changes) before trusting it. Add per-game opcode deltas behind
   the RuleSet if Savage/Martian diverge.
-<<FILL IN: confirm whether all 3 games share the same usecode opcode set or
-have deltas — verify during decode.>>
+Resolved for U6 and SE: SE shares the opcode set with a few differences and has
+its own container (converse.md §4, §6b-6d). Martian Dreams has not been read yet.
 
 ## Save / restore
 - Engine orchestrates; /dataformats owns the byte layout of save files.
 - Decision: native-original save compatibility, or our own save format?
   - Pros of original-compatible: interoperate with real game saves.
   - Pros of our own: cleaner, versioned, cross-target portable.
-<<FILL IN: pick save strategy. Recommend: load original saves (read-only
-import) + write our own versioned format, to keep enhancements safe.>>
+Resolved: original-compatible. The engine reads and writes the ScummVM/original
+save layout (docs/rules/save_load.md, docs/formats/nuvie_save.md), and our saves
+load in real ScummVM (tools/savecheck.sh).
 
 ## Testing
 - Headless logic tests: drive the engine with scripted input, assert world
@@ -105,12 +106,9 @@ import) + write our own versioned format, to keep enhancements safe.>>
   tests).
 
 ## Decisions log (engine)
-<<FILL IN as you go>>
-- Interface style: C fn-pointer structs vs C++ virtuals.
-- Min RAM target & whether full-VGA assets are TT/Falcon-only.
-- Save strategy (import-only original + native write?).
-- Fixed-point vs integer-only for any math (avoid FPU dependence; Falcon has
-  FPU, base ST does not — keep core math integer/fixed-point).
+All four early questions are settled in RESOLVED DECISIONS below: C interface
+structs, a 4 MB minimum with VGA assets on TT/Falcon/card only, original-compatible
+saves, and integer/fixed-point math only.
 
 ## RESOLVED DECISIONS
 - Language: C (NOT C++). Use the "interface struct" pattern (structs of
@@ -121,9 +119,9 @@ import) + write our own versioned format, to keep enhancements safe.>>
 - Math: integer / fixed-point ONLY. NO FPU dependence anywhere in shared
   code. Rationale: base ST has no FPU; TT often shipped without the optional
   68882; Falcon needs an FPU mod. Treat FPU as never-present.
-- Save format: OWN versioned format (not original-compatible on write).
-  Original saves may be imported READ-ONLY; all writes use our format so
-  enhancements never risk corrupting real saves.
+- Save format: original-compatible on read AND write (revised from an early
+  "own format" plan): saves use the ScummVM/original layout and load in real
+  ScummVM. See docs/rules/save_load.md.
 - VGA (256-color) assets require TT / Falcon / 256+ color video card. Base
   ST/STE run from down-converted low-color asset packs (see palette note).
 

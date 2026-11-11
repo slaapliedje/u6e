@@ -84,5 +84,8 @@ Nuvie/ScummVM). We ship none. Asset paths are user-configured.
 Maintain one markdown spec per format with: byte layout, endianness,
 compression, bit-shuffle notes, per-game deltas (U6 / Savage / Martian),
 and which reference was used to validate.
-<<FILL IN as decoded — note any format that differs between the 3 games>>
+Status: every U6 format has its spec in /docs/formats/ (index: docs/INDEX.md). Per-game
+differences are noted in each spec. The main SE/MD ones are the .LZC libraries (lzc.md),
+TALK.LZC conversations (converse.md §6b), and object numbering (se_md_objn.md).
+See docs/design/multigame.md.
 

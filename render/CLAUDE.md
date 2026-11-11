@@ -78,8 +78,10 @@ Detect hardware via the `_VDO` cookie (jar) to know which path to take.
 - Never route per-tile blits through VDI.
 - Allocate screen buffers in ST-RAM where the shifter/VIDEL requires it;
   keep working buffers in Fast-RAM (TT/Falcon) where beneficial.
-- <<FILL IN: confirmed list of target graphics cards + whether they expose a
-  linear framebuffer aperture or are VDI-driver-only>>
+- Graphics cards (resolved): no card list and no framebuffer access. rdr_vcard
+  presents through the card's VDI driver (vr_trnfm/vro_cpyfm, VDI 110/109), using
+  the pixel layout vq_scrninfo reports (docs/formats/vdi_scrninfo.md). It was
+  validated on ARAnyM with fVDI (docs/design/vcard-aranym-rig.md).
 
 ## Hardware Detection (runtime — NO card list)
 Most ST-line graphics cards are framebuffer cards that ship a VDI driver

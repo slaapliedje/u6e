@@ -8,9 +8,9 @@
 - /docs/design/  : our architecture decisions (renderer, memory, toolchain,
                    milestones)
 
-Per-routine reverse-engineering notes from the original ST binary live in
-**/routines/** (the disassembly notebook); their findings flow OUTWARD into the
-specs here. See /routines/README.md.
+Reverse-engineering notes on the original binaries (ST and DOS) are kept
+OUTSIDE this repository, in a separate workspace. Only their findings flow
+OUTWARD into the specs here; no disassembly is committed.
 
 These documents are the SPECIFICATIONS that /engine, /dataformats, /render,
 /tools, and /platform are implemented FROM. Code is written from the spec,
