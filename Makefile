@@ -68,7 +68,7 @@ AUTO_PRG := c:\\$(notdir $(SELFTEST_PRG))
 # common Hatari invocation: mount build/ as C:, autostart the .PRG
 HATARI_COMMON = --harddrive $(BUILD) --auto '$(AUTO_PRG)'
 
-.PHONY: all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk objfind bot-smoke
+.PHONY: check-se-use all clean run run-st run-ste run-tt run-falcon shot check check-st check-tt trace dftest mapdump objrender convspike convtest enginetest savetest wtrun pack rdemo run-rdemo bench bench-intro m3 world world-svm gamedata game run-game m5 m5-svm uipreview portdump bmpdump npcsheet convvm cvmtest npcsched convkw refshot save-roundtrip save-check save-engine m6-anim m6-npc convert check-se-talk objfind bot-smoke
 
 all: $(SELFTEST_PRG)
 
@@ -1034,6 +1034,25 @@ check-se-talk: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'kysstaa in party after wait=0' 'flag15 after wait=1'; do \
 	    grep -aq "SETALK $$want" $(BUILD)/se-talk/console.txt || { echo "FAIL: SETALK $$want"; exit 1; }; done
 	@echo "SE talk: ALL PASS"
+
+# SE U)se (docs/rules/se_use.md): stage SEUSE.BIN; the engine eats, searches a crate, works a sliding door
+# (open, shut, blocked), checks the usable list, and gets an item and gold.
+check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
+	rm -rf $(BUILD)/se-use && mkdir -p $(BUILD)/se-use
+	cp $(BUILD)/SE.PAK $(BUILD)/se-use/U6.PAK
+	cp $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF $(BUILD)/se-use/
+	printf 'x' > $(BUILD)/se-use/SEUSE.BIN
+	-$(HL) $(HATARI) --machine falcon --fast-boot on --conout 2 \
+	          --tos '$(TOS_FALC)' --harddrive $(BUILD)/se-use --auto 'C:\GAMEF.PRG' \
+	          --fast-forward on --run-vbls 4000 </dev/null 2>/dev/null | tr -d '\r' > $(BUILD)/se-use/console.txt
+	@grep -a "SE " $(BUILD)/se-use/console.txt
+	@for want in 'game==savage=1' 'food qty after 1st eat=1' 'food alive after 2nd eat=0' 'cont child spilled=1' \
+	             'usable crate=1' 'usable basket=0' 'hut door found=1' 'hut door shut blocks=1' 'hut door use msg ok=1' \
+	             'hut door opened x=411' 'hut door opened frame=1' 'hut doorway passable=1' 'door shut dx=1' 'door shut frame=5' 'door reopened dx=0' \
+	             'door reopened frame=1' 'door blocked dx=0' 'door blocked frame=1' 'door blocked msg=1' \
+	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
+	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
+	@echo "SE use: ALL PASS"
 
 # M7 headless verify: render the game view on an emulated PLAIN ST (68000, ST-low 16-colour
 # shifter) and capture the real 4-plane video output, on a colour (rgb) monitor for ST-low. This

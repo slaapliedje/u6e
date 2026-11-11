@@ -9,7 +9,7 @@
 > - Validated by  : the first milestone run (castle, drawbridge, Britain) on an emulated stock
 >                   4 MB Falcon, 2026-10-30: 3,600 keys, 22 NPCs talked through every keyword.
 > - Confidence   : confirmed (the harness works); the walkthrough itself is in progress.
-> - Last updated : 2026-11-10 (§5b: the smoke check and Savage Empire)
+> - Last updated : 2026-11-11 (§5b: SE doors and memory fixed)
 
 ## 1. Purpose
 
@@ -106,11 +106,13 @@ Found by the SE runs (2026-11-10):
 |---|---|
 | Huitlapacti (31) and Zipactriotl (55) gave "No response.": the engine refused actors with 0 HP, but DOS tests the dead and asleep status bits (both start with 0 HP and talk) | fixed (converse.md §6c, se_talk) |
 | L)ook said U6's "Thou dost see"; SE and MD say "You see " | fixed (game layer `see`) |
-| The party cannot leave the hut it wakes in: SE's doors (obj 234, doorway 236) have no use yet | open: checklist item 5 |
-| Restore fails on a 4 MB Falcon, "Not enough memory to restore.": SE leaves 19 KB free (910 KB with 14 MB) | open: SE's memory fit |
+| The party cannot leave the hut it wakes in: SE's doors (obj 234, doorway 236) have no use yet | fixed 2026-11-11: SE's doors as its GAME.EXE has them (rules/se_use.md §4) |
+| Restore fails on a 4 MB Falcon, "Not enough memory to restore.": SE leaves 19 KB free (910 KB with 14 MB) | fixed 2026-11-11: the faces and scripts stream (memory_streaming.md, the library tail); 777 KB free. The same shortage had kept an opened door in the blocking map |
 
-From outside the hut (`SE_START=412,287`) the sweep talks to 15 of the 48 surface actors in about
-3 minutes with no conversation issues; the rest are behind doors, water or on other levels.
+From the waking hut on the 4 MB Falcon (2026-11-11) the sweep opens four doors and talks to 17 of the 48
+surface actors in under 3 minutes with no conversation issues; the rest are behind water, other doors
+or on other levels. The engine's door list for the bot (BOTDOOR.TXT) comes from the game layer
+(`bot_door`): SE reports a shut door at frames 5/7 and leaves an open one out, because it has left the doorway.
 
 ## 6. Found by the bot so far (2026-10-30, all fixed)
 

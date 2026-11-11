@@ -1,6 +1,6 @@
 # Memory: resident where the RAM permits, streamed where it doesn't
 
-Status: IMPLEMENTED 2026-08-16 (all targets: ST/STE, TT, Falcon, cards).
+Status: IMPLEMENTED 2026-08-16 (all targets: ST/STE, TT, Falcon, cards); the SE/MD library tail 2026-11-11.
 Owner: /render (loader in gamedemo.c), /platform (pools, file I/O), /tools (mkworld pack layout).
 
 ## Why
@@ -198,7 +198,27 @@ runs ONE CHUNK AT A TIME (container links are chunk-local, objblk.md §2), with 
 (~72 KB) — see rules/map_levels.md §4b. Lesson: every save/load hook must run on the 4 MB Falcon too,
 not only the TT; the margin is tens of KB.
 
+## The SE/MD library tail (2026-11-11)
+
+Savage Empire and Martian Dreams have no CONVERSE/PORTRAIT files to stream from: their faces (CFAC,
+625 KB for SE), names and look texts (CTLK, 4 KB) and conversation scripts (CTSC, 160 KB) were
+sections of the core pack, loaded whole. On the stock 4 MB Falcon that left 18 KB of pool, too little
+for `build_blocked`'s 52 KB of scratch (an opened door stayed in the old blocking map, so the party
+could not leave the waking hut) and for a restore.
+
+mkworld now writes them as a **tail** after the core, then a footer `[u32 tail offset]["CLIB"]`
+(U6's pack has no tail and stays byte-identical). The engine reads the footer before the memory plan
+(`clib_find`), loads only the core (`load_prefix`), and counts the tail as a library. After the core,
+`clib_open` decides like the libraries: **resident** if the pool has the tail + 384 KB, else **on
+demand**: the names (4 KB) and the script offsets (1 KB) stay, a face is read into one 7 KB buffer
+when it changes (`se_face`), and a script is read and unpacked per conversation through a chip-pool
+transient (`se_script`). An older engine stops at the footer's bytes; an older pack (tail inline)
+still parses. Measured, SE on the 4 MB Falcon: **777 KB free** after boot (was 18).
+
 ## Follow-ups (not done)
+
+- `build_blocked` keeps the last blocking map when its scratch can't be had; with the margins above
+  that no longer happens, but a failure there is silent.
 
 - Finer streaming granularity (per scene inside INTRO) if a smaller-RAM config ever matters — the
   directory already allows it; only the group masks change.

@@ -2636,8 +2636,10 @@ int main(int argc, char **argv)
         free(nd); } }
     /* SE/MD: the portrait bank (CFAC, face(actor N) = slot N-1) and each NPC's name and look text
      * (CTLK), magic-guarded after everything else (portraits.md, converse.md §6b) */
-    if(!u6){ cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
-             cv_step("Conversation art"); if(gp->talk){ convert_talk(dir, gp->talk, marker, f); if(marker==U6LZC_COMP_SE) convert_talk_scripts(dir, gp->talk, marker, f); } }   /* MD scripts: item 13 */
+    if(!u6){ long tail=ftell(f);                     /* the library tail: a 4 MB machine reads it on demand (memory_streaming.md) */
+             cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
+             cv_step("Conversation art"); if(gp->talk){ convert_talk(dir, gp->talk, marker, f); if(marker==U6LZC_COMP_SE) convert_talk_scripts(dir, gp->talk, marker, f); }   /* MD scripts: item 13 */
+             be32(f,(unsigned long)tail); fwrite("CLIB",1,4,f); }   /* footer: [u32 tail offset]["CLIB"] */
     fclose(f);
 
     printf("demo NPC %d script = %d bytes; %d actors w/ tiles, SCHEDULE %ld bytes; "

@@ -70,3 +70,11 @@ list once SE's seams exist.
   dead and asleep status bits, not HP; converse.md §6c) and SE/MD's look line ("You see "). Open:
   SE's doors (item 5): the party cannot leave the hut it wakes in; on a 4 MB Falcon SE leaves 19 KB
   free and restore fails ("Not enough memory to restore.").
+- 2026-11-11: item 5 started (rules/se_use.md): SE's use dispatcher read from its GAME.EXE (the usable
+  list of 84 objects, "Not possible.", "nothing!", what an actor on the tile yields) and its 81-case
+  switch mapped object by object; the three doors built as DOS has them (234 turns along the wall and
+  can be blocked, Jimmy's door wakes him and he joins and talks, Yunapotli's door, 275 swings; Aiela's
+  scene waits for item 9). `make check-se-use`. The party now leaves the waking hut. SE's faces and
+  scripts stream on 4 MB machines (memory_streaming.md, the library tail): 777 KB free on the stock
+  Falcon, restore works, `make bot-smoke` is clean. Next in item 5: the empty-tile uses (trees, lava,
+  yucca), food, the crate, then the other handlers in §3's order.

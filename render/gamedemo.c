@@ -94,10 +94,11 @@ typedef struct GameObjs {
     uint16_t cave, hole, codex_way;                     /* walked into, they go down (map_levels.md §4); the way to the Codex */
     uint16_t slime;                                     /* struck, it divides (combat.md) */
     uint16_t spell, staff, keg, cube, invis_ring;       /* a spell in a book; the staff that holds charges; the keg; the cube that holds moonstones; the ring that hides */
+    uint16_t use_takes[3];                              /* an actor U)se takes itself; under anyone else, the thing beneath (usecode_use.md, se_use.md §1) */
     uint16_t vine, mirror, corpser, cannon, unmovable, str_weapons[4]; /* struck, a vine dies and a mirror cracks; a corpser unseen below; a cannon re-aims when moved; what will not be moved; weapons swung by strength */
 } GameObjs;
 static const uint16_t SLEEP_U6[][2]={{430,1158},{367,339},{363,339},{371,339},{370,1363},{424,3412},{380,2387},{379,2387},{387,3411},{378,3411},{382,4435},{384,5459},{377,5459},{376,6483},{410,7507},{386,7507},{392,7507},{381,8531},{385,8531},{391,8531},{383,8531},{368,9555},{362,3413}};
-#define OBJS_U6 { .throne=327, .chair=252, .bed=163, .bed_sleeper=146, .musician=392, \
+#define OBJS_U6 { .use_takes={428,430,431}, .throne=327, .chair=252, .bed=163, .bed_sleeper=146, .musician=392, \
     .sleep=SLEEP_U6, .nsleep=sizeof SLEEP_U6/sizeof SLEEP_U6[0], .small={356,354,343,359,357}, .burrower=360, .mouse=354, .mouse_hole={213,282,310}, .tenth={88}, .tenth_first=65, .tenth_n=8, .body=339, .body_first=338, .body_n=4, .torch=90, .amulet=76, .holder={98,99,57,186,188,191,192,339,62}, .container={98,99,168,176,177,186,188,191,192,339,211,340,341,347,350,354,369,372}, .box={98,192,186}, .charge=336, .trap=337, .chest=98, .doorway=301, .door_first=297, .door_n=4, .secret_door=334, .book_near={151,61,152,270,59}, .book_far={332,333,143,254,255}, .clock=159, .sundial=235, .holy_flame=206, .face={393,397,398,399}, .moongate={84,85}, .moonstone=73, .candle={122,145}, .breaks={83,92,155,123,115,116,117,118,119,120,183,184,275,161,417}, .cracks={{123,2},{417,1}}, .mana_kin={378,377,386,410}, .halves={367,352,368}, .full_vs={48,50,54}, .glass_sword=48, .ship=412, .skiff=414, .raft=415, .balloon=423, .horse=431, .immortal=409, .bows={41,54}, .arrows=55, .crossbows={42,50}, .bolts=56, .triple=50, .reach={40,47}, .boomerang=49, .sleep_wand=91, .no_diag=413, .egg=335, .people={410,384,381,387,385,376,382,383,409,386,378,380,377,379}, .cave=326, .hole=308, .codex_way=416, .slime=375, .spell=58, .staff=78, .keg=223, .cube=62, .invis_ring=258, .vine=366, .mirror=123, .corpser=357, .cannon=221, .unmovable=411, .str_weapons={4,34,39,44} }
 static const GameObjs objs_u6 = OBJS_U6;
 static GameObjs g_on = OBJS_U6;
@@ -113,6 +114,9 @@ typedef struct GameLayer {
     int  (*use_at)(world_t *w, int tx, int ty, int dx, int dy, int idx);   /* U)se: what comes before the use switch (vehicles, mounts, wells); -1 = none of these */
     int  (*use)(int idx);                                       /* U)se a thing on the map: the game's use switch (usecode_use.md) */
     int  (*usable)(int on);                                     /* U)se finds something to use under a thing that is not (usecode_use.md) */
+    uint8_t use_under;                                          /* a usable thing under an unusable one answers (U6); SE doesn't look (se_use.md §1) */
+    const char *nothing, *unusable;                             /* U)se's words for an empty tile and a thing it can't use; NULL = U6's */
+    int  (*bot_door)(const wobj_t *o);                          /* the bot's door list (bot_harness.md): 0-3 open, 4-7 shut, 8+ locked; -1 = not a door */
     int  (*use_pack)(world_t *w, int on);                       /* U)se a thing in the pack or readied (usecode_use.md) */
     uint8_t asks_count;                                         /* a stack asks "How many?" first (usecode_use.md) */
     const char *see;                                            /* L)ook's opening words (usecode_use.md, the look line) */
@@ -156,6 +160,18 @@ static int            g_talk_face;    /* SE/MD: whose face the panel shows (PORT
  * 0xffffffff = none; each entry [u8 kind][u32 len][bytes], kind 1 = an LZW container */
 static const uint8_t *g_setsc_off, *g_setsc_blob;
 static int32_t        g_setsc_len;
+/* PACK_NAME: the core pack every target loads (one U6.PAK + U6FE.PAK pair, docs/design/memory_streaming.md;
+ * every game's core pack has this name and the game is told by its magic). -DPACK_NAME names another. */
+#ifndef PACK_NAME
+#define PACK_NAME "U6.PAK"
+#endif
+/* the SE/MD library tail (faces, names, scripts) behind the core pack (memory_streaming.md, the library
+ * tail): resident when RAM allows, else read on demand from these file offsets (0 = resident or none) */
+static int32_t        g_clib_off, g_clib_len, g_seface_foff, g_setsc_foff;
+static uint8_t       *g_seface_buf; static int g_seface_cur=-1;
+static const uint8_t *se_face(int fi); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
+static void *load_prefix(const char *path,int32_t len,bool fast); static void *load_prefix_at(const char *path,int32_t off,int32_t len);
+static void clib_open(int resident);
 /* name/description for SE/MD actor `a`, or NULL if none. */
 static const char *se_npc_str(int a, int want_desc){
     if(!g_setalk_off || a<0 || a>=g_setalk_nact) return 0;
@@ -5337,10 +5353,11 @@ static void draw_conversation(uint8_t col)
     } else if(g_talking){                          /* NPC portrait replaces the roster */
         if(g_gamename){                            /* SE/MD core: draw the actor's own CFAC portrait (slot actor-1) */
             int fi=g_talk_face-1;
-            if(g_seface && fi>=0 && fi<g_senface){
+            const uint8_t *fc=se_face(fi);
+            if(fc){
                 int fx=PANX+(PANW-g_sefw)/2, fy=MAPY+8;
                 for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++)
-                    ui_px(fx+xx, fy+yy, g_seface[((long)fi*g_sefh+yy)*g_sefw+xx]);
+                    ui_px(fx+xx, fy+yy, fc[yy*g_sefw+xx]);
                 ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, fy+g_sefh+4, g_talk_name, 15);
             } else ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, MAPY+8, g_talk_name, 15);
         } else {
@@ -5360,10 +5377,11 @@ static void draw_conversation(uint8_t col)
         draw_party_roster(col);
         if(g_gamename){                            /* CORE pack (SE/MD): portrait + game name in the panel */
             int ty=100;
-            if(g_seface && g_senface>0){           /* a real portrait (79x85 U6 shape) at the panel top */
+            const uint8_t *fc=se_face(0);
+            if(fc){                                /* a real portrait (79x85 U6 shape) at the panel top */
                 int fx=PANX+(PANW-g_sefw)/2, fy=MAPY+8;
                 for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++)
-                    ui_px(fx+xx, fy+yy, g_seface[yy*g_sefw+xx]);
+                    ui_px(fx+xx, fy+yy, fc[yy*g_sefw+xx]);
                 ty=fy+g_sefh+4;
             }
             ui_text(PANX+(PANW-ui_textw(g_gamename))/2, ty, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
@@ -5710,7 +5728,7 @@ static void md_talk(int id)
 }
 
 /* SE's scripted events, EVENT n (0xD1; converse.md §6c) */
-static int npc_at(const world_t*w,int x,int y); static int se_use_object(int idx); static int use_actor_fwd(void);
+static int npc_at(const world_t*w,int x,int y); static void se_door_vanish(int idx); static int use_actor_fwd(void);
 static cvm_status talk_vm(int id,int32_t got,int look);
 static int g_se_counter;                         /* EVENT 149 adds 1 (DOS keeps it; nothing here reads it yet) */
 static void end_talk(void);
@@ -5742,7 +5760,7 @@ static void se_event(int n)
     case 150: if(w->level==0){ int i=persist_obj_new(148,3,533,453,0); if(i>=0) build_blocked(); } break;   /* Tuomaxx's drum */
     case 175: g_actx[25]=997; g_acty[25]=339; g_actz[25]=0;                                      /* Fabozz fades */
               wt_apply(179,0); g_align_hostile[179]=0; g_agood[179]=0; g_achaos[179]=0; break;
-    case 222: { int i=obj_idx_at(146,137,161); if(i>=0) (void)se_use_object(i); } break;         /* Yunapotli's door */
+    case 222: { int i=obj_idx_at(146,137,161); if(i>=0) se_door_vanish(i); } break;              /* Yunapotli's door */
     default: break;
     }
 }
@@ -5750,6 +5768,7 @@ static int se_per_ten(int on){ return on_in(g_on.tenth,2,on)||(g_on.tenth_n&&on>
 
 /* SE: talk to actor `id` (converse.md §6c): who answers, then its TALK script on the VM in SE's
  * dialect, with its own face (PORTRAIT may change it). */
+static void se_talk_open(int id);
 static void se_talk(int id)
 {
     if(g_solo_on && id!=25){ msgcat(0,"Not in solo mode!"); return; }
@@ -5758,15 +5777,38 @@ static void se_talk(int id)
         int live=npc_live_worktype(id);
         if(g_adead[id] || g_asleep[id] || live==0x9b||live==0x13||live==0x07){ msgcat(0,"No response."); return; }   /* status flags, not HP (§6c) */
         if(id==use_actor_fwd()){ msgcat(0,"Talking to yourself?"); return; } }
-    g_talk_actor=id; g_talk_face=id; g_have_pc=0;
+    se_talk_open(id);
+}
+/* an actor's script out of the pack's CTSC section into g_script_buf; its length, 0 = none */
+static int32_t se_script(int id)
+{
     int32_t got=0;
-    if(g_setsc_off && id>=0 && id<256){
+    if(g_setsc_off && id>=0 && id<256 && !g_setsc_blob && g_setsc_foff){   /* on demand: the entry from the file */
+        uint32_t o=((uint32_t)g_setsc_off[id*4]<<24)|((uint32_t)g_setsc_off[id*4+1]<<16)|((uint32_t)g_setsc_off[id*4+2]<<8)|g_setsc_off[id*4+3];
+        plat_file pf; uint8_t h[5];
+        if(o!=0xFFFFFFFFu && (int32_t)o+5<=g_setsc_len && (pf=plat_fopen(PACK_NAME,0))>=0){
+            if(plat_read_at(pf,g_setsc_foff+(int32_t)o,h,5)==5){
+                int32_t L=(int32_t)(((uint32_t)h[1]<<24)|((uint32_t)h[2]<<16)|((uint32_t)h[3]<<8)|h[4]);
+                if(h[0]!=1){ if(L<=(int32_t)sizeof g_script_buf && plat_read_at(pf,g_setsc_foff+(int32_t)o+5,g_script_buf,L)==L) got=L; }
+                else { plat_mark mk_=plat_chip_mark(); uint8_t *tb=(uint8_t*)plat_alloc_chip((uint32_t)L);   /* the packed script, for this call only */
+                    if(tb && plat_read_at(pf,g_setsc_foff+(int32_t)o+5,tb,L)==L) got=u6lzw_decompress(tb,L,g_script_buf,(int32_t)sizeof g_script_buf);
+                    plat_chip_reset(mk_); } }
+            plat_fclose(pf); }
+        return got; }
+    if(g_setsc_off && g_setsc_blob && id>=0 && id<256){
         uint32_t o=((uint32_t)g_setsc_off[id*4]<<24)|((uint32_t)g_setsc_off[id*4+1]<<16)|((uint32_t)g_setsc_off[id*4+2]<<8)|g_setsc_off[id*4+3];
         if(o!=0xFFFFFFFFu && (int32_t)o+5<=g_setsc_len){
             const uint8_t*e=g_setsc_blob+o; int32_t L=(int32_t)(((uint32_t)e[1]<<24)|((uint32_t)e[2]<<16)|((uint32_t)e[3]<<8)|e[4]);
             if((int32_t)o+5+L<=g_setsc_len){
                 if(e[0]==1) got=u6lzw_decompress(e+5,L,g_script_buf,(int32_t)sizeof g_script_buf);
                 else if(L<=(int32_t)sizeof g_script_buf){ for(int32_t k=0;k<L;k++) g_script_buf[k]=e[5+k]; got=L; } } } }
+    return got;
+}
+/* the conversation itself, past who answers */
+static void se_talk_open(int id)
+{
+    g_talk_actor=id; g_talk_face=id; g_have_pc=0;
+    int32_t got=se_script(id);
     if(got<=0){
         if(!g_setsc_off){ se_talk_plain(id); g_talking=1; g_await_input=0; g_inlen=0; g_inbuf[0]=0; return; }
         msgcat(0,"No response."); return; }
@@ -6119,48 +6161,86 @@ static int use_object_inner(int idx)
  * obj_n: SEARCH a container (spill its children onto the map) and EAT food. DOORS are deferred: SE
  * door frames are per-object and share tile ranges with other objects (survey via
  * `objsurvey ... frames`), so there is no clean open/close delta — they need a per-object frame table. */
-static int se_is_container(int on){ return on==183||on==184||on==188||on==132||on==133; } /* basket/pot/crate/clay pots */
-static int se_is_food(int on){ return (on==103||on==110||on==197||on==114) ? 1 : 0; }     /* meat/meat/fruit/turnips (eat) */
+/* the bot's doors: U6's door types by frame (usecode_use.md Doors) */
+static int u6_bot_door(const wobj_t*o){ return (g_on.door_n&&o->obj_n>=g_on.door_first&&o->obj_n<g_on.door_first+g_on.door_n)?(int)o->tile-basetile(o->obj_n):-1; }
+/* ---- Savage Empire U)se (docs/rules/se_use.md) ---- */
+static const uint16_t SE_USABLE[]={6,10,20,22,25,29,42,43,44,47,49,50,51,52,59,60,61,62,63,79,80,81,82,86,87,88,92,93,94,
+    95,102,103,104,105,106,107,108,109,110,111,113,114,119,120,131,134,136,137,143,148,161,165,173,177,186,188,190,191,192,
+    197,204,207,208,209,212,213,214,216,217,221,229,233,234,237,240,242,247,252,254,257,275,302,307};   /* §2 */
+static int se_usable(int on){ for(unsigned k=0;k<sizeof SE_USABLE/sizeof SE_USABLE[0];k++) if(SE_USABLE[k]==on) return 1; return 0; }
+static int se_is_food(int on){ return on==93||(on>=102&&on<=111)||on==113||on==114||on==120||on==197||on==213||on==214; }   /* the food case (§3) */
+static int se_frame(int idx){ return (int)g_wobj[idx].tile-basetile(g_wobj[idx].obj_n); }
+/* an actor within the view: 5 tiles across and 4 down of its centre (0xa5d:0x613) */
+static int se_on_screen(int id){ int x,y; if(!g_wp||!actor_pos(id,&x,&y)) return 0;
+    int dx=x-(int)g_wp->px, dy=y-(int)g_wp->py; return dx>=-5&&dx<=5&&dy>=-4&&dy<=4; }
+/* join the party as SE does (0xf8d:0x290): five members besides Aiela, Yunapotli and Johann */
+static void se_join(int id)
+{
+    int room=5; if(is_party_member(id)) return;
+    for(int j=0;j<g_nparty;j++){ int a=g_party[j].actor; if(a!=2&&a!=11&&a!=5) room--; }
+    if((room<1 && id!=2&&id!=11&&id!=5) || g_nparty>=MAXPARTY) return;
+    g_party[g_nparty].actor=id; g_party[g_nparty].hp=g_ahp[id]?g_ahp[id]:30;
+    { int32_t got=se_script(id); int o=0;                       /* the name heads the script: 0xFF, the actor, the name, 0xF1 */
+      for(int32_t i=2;i<got&&g_script_buf[i]!=0xf1&&g_script_buf[i]>=0x20&&g_script_buf[i]<0x80&&o<15;i++) g_party[g_nparty].name[o++]=(char)g_script_buf[i];
+      g_party[g_nparty].name[o]=0; }
+    g_nparty++; g_away[id]=0;
+    if(g_savetmpl && g_objlist_off>=0){ pool_absorb(g_savetmpl, g_savetmpl_len, g_objlist_off, id); equip_refold(id); }
+}
+/* a door slides onto a tile only if nothing solid lies there (§4) */
+static int se_door_blocked(int x,int y,int self)
+{   for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+        if(j==self||!o->alive||o->parent!=WOBJ_PARENT_NONE||o->x!=(uint16_t)x||o->y!=(uint16_t)y) continue;
+        if(o->obj_n==234||o->obj_n==236||o->obj_n==226) continue;
+        if(!(g_tflags3 && (g_tflags3[o->tile]&0x10))) return 1; }
+    return 0; }
+static void se_door_move(int idx,int x,int y,int fr)
+{   wobj_t*o=&g_wobj[idx]; o->x=(uint16_t)x; o->y=(uint16_t)y; o->tile=(uint16_t)(basetile(o->obj_n)+fr);
+    if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; build_blocked(); }
+static void se_door_vanish(int idx){ g_wobj[idx].alive=0; g_wobj[idx].dirty=WOBJ_DIRTY_DESTROYED; build_blocked(); }
+static int se_use_door(int idx)
+{
+    int on=g_wobj[idx].obj_n, fr=se_frame(idx), x=g_wobj[idx].x, y=g_wobj[idx].y;
+    if(on==234){                                            /* the door: shut at 5/7 across its doorway, open at 1/3 (§4) */
+        if(fr==1||fr==3){ int nx=x+(fr==1), ny=y+(fr==3);   /* shut it, unless something is in the way */
+            if(se_door_blocked(nx,ny,idx)){ msgcat(0,"\nThe door is blocked."); return 0; }
+            se_door_move(idx,nx,ny,fr+4); return 1; }
+        if(fr==5){ se_door_move(idx,x-1,y,1);                /* open it */
+            if(x==388&&y==565&&g_cur_level==0&&!(g_cg.talk_flags[4]&0x10)&&se_on_screen(4)){   /* Jimmy's door: his talk flag 4, once */
+                g_asleep[4]=0; g_cg.talk_flags[4]|=0x10; se_join(4); se_talk_open(4); }
+            return 1; }
+        if(fr==7){ se_door_move(idx,x,y-1,3); return 1; }
+        return 0; }
+    if(on==161){                                            /* Yunapotli's door */
+        if(is_party_member(11) && se_on_screen(11)){   /* status 0x80: in the party */
+            msgcat(0,"\nYunapotli closes its eyes and appears to concentrate.  There is a grinding noise froom the direction of the doors...  and they slide open!");
+            se_door_vanish(idx); return 1; }
+        msgcat(0,"You can't budge it!"); return 0; }
+    if(on==275){                                            /* the swinging door; Aiela's scene waits for item 9 */
+        if(fr==1){ g_wobj[idx].tile=(uint16_t)(basetile(on)+3); build_blocked(); return 1; }
+        if(fr==3){ g_wobj[idx].tile=(uint16_t)(basetile(on)+1); build_blocked(); return 1; }
+        return 0; }
+    return 0;
+}
+/* SE's doors for the bot: 234 shut at 5/7 (open, it has left the doorway: the map says the rest); 275 shut at 1,
+ * open at 3; Yunapotli's never opens to the bot */
+static int se_bot_door(const wobj_t*o){ int fr=(int)o->tile-basetile(o->obj_n);
+    if(o->obj_n==234) return (fr==5||fr==7)?fr:-1; if(o->obj_n==275) return fr==1?5:fr==3?1:fr; if(o->obj_n==161) return 8; return -1; }
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
-    if(se_is_container(o)){                          /* search: spill children out (generic spill_container) */
+    if(o==234||o==161||o==275) return se_use_door(idx);
+    if(o==188){                                      /* the crate: not yet read (0x1ec8a); spills as before */
         int n=msgcat(0,"Searching here, you find ");
         int found=spill_container(idx,&n); if(!found) n=msgcat(n,"nothing");
         msgcat(n,".");
         return found?1:0;
     }
-    if(se_is_food(o)){                               /* eat: consume one + feed the Avatar (shared hunger model) */
+    if(se_is_food(o)){                               /* eat: not yet read (0x21df5) */
         int n=msgcat(0,"You eat the "); n=msgcat(n,nm); msgcat(n,".");
         if(g_wobj[idx].qty>1) g_wobj[idx].qty--; else g_wobj[idx].alive=0;
         return 1;
     }
-    if(strstr(nm,"door")){                           /* SE door: OPEN/CLOSE, data-driven (se_md_objn.md).
-        * SE door frames are per-object (no U6 ±4 rule) and share tile ranges with other objects, so we
-        * DON'T do frame arithmetic. Instead: a door's open frame is PASSABLE, its closed frame IMPASSABLE
-        * (g_tflags1, the pack's tileflags1). USE flips to the nearest tile that is still a "door" AND has the
-        * opposite passability. Name-matching skips the interleaved non-door tiles; the tie-break (opening
-        * prefers the lower frame, closing the higher) keeps a multi-orientation door in its orientation. */
-        int cur=g_wobj[idx].tile;
-        int curblk=(cur>=0&&cur<2048)?(g_tflags1[cur]&0x06):0;   /* impassable => currently CLOSED */
-        int want_pass=curblk?1:0;                                 /* closed -> want passable(open); open -> impassable(closed) */
-        int best=-1;
-        for(int d=1; d<=3 && best<0; d++){
-            int cand[2]; if(want_pass){ cand[0]=cur-d; cand[1]=cur+d; } else { cand[0]=cur+d; cand[1]=cur-d; }
-            for(int k=0;k<2 && best<0;k++){ int c=cand[k];
-                if(c<0||c>=2048) continue;
-                char cn[40]; obj_name(c,cn,sizeof cn);
-                int cpass=!(g_tflags1[c]&0x06);
-                if(strstr(cn,"door") && cpass==want_pass) best=c;
-            }
-        }
-        if(best>=0){ g_wobj[idx].tile=(uint16_t)best;
-            int n=msgcat(0, curblk?"You open the ":"You close the "); n=msgcat(n,nm); msgcat(n,".");
-            build_blocked();                          /* door passability changed */
-            return 1; }
-        { int n=msgcat(0,"The "); n=msgcat(n,nm); msgcat(n," won't budge."); return 0; }
-    }
-    int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");
+    int n=msgcat(0,"Nothing happens with the "); n=msgcat(n,nm); msgcat(n,".");   /* the cases not yet read (§3) */
     return 0;
 }
 
@@ -6921,6 +7001,7 @@ static int use_under(int tx,int ty,int skip)
         if(j!=skip && o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && !(g_tflags3 && (g_tflags3[o->tile]&0x10))) return j; }
     return -1; }
 static int g_use_take=-1;                                  /* what U)se took, for do_verb_at */
+#define USE_NOTHING (g_gl->nothing?g_gl->nothing:"nothing")
 /* the verb's echo first, as DOS: "Use-a door", and what comes of it on the lines after */
 static int do_verb(world_t*w,int verb,int dx,int dy)
 {
@@ -6930,11 +7011,12 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
     int idx=objworld_at(&g_ow,tx,ty), id=(dx||dy)?npc_at(w,tx,ty):-1, n=msgcat(0,"Use-");
     if(g_veh_kind && !dx && !dy){ g_msg[0]=0; return do_verb_at(w,verb,dx,dy); }   /* aboard: leaving is the use */
     if(id>=0){ int t=actor_objn(id);                             /* what U)se takes (usecode_use.md) */
-        if(t!=428 && t!=430 && t!=431){ id=-1; idx=use_under(tx,ty,-1); if(idx<0){ msgcat(n,"nothing"); g_verb_pts=0; return 0; } } }
-    else if(idx>=0 && g_tflags3 && (g_tflags3[g_wobj[idx].tile]&0x10) && g_wobj[idx].obj_n!=412 && g_wobj[idx].obj_n!=414 && g_wobj[idx].obj_n!=415 && g_wobj[idx].obj_n!=423) idx=use_under(tx,ty,idx);   /* a vessel is an actor in DOS */
+        if(!on_in(g_on.use_takes,3,t)){ id=-1; idx=use_under(tx,ty,-1); if(idx<0){ msgcat(n,USE_NOTHING); g_verb_pts=0; return 0; } } }
+    else if(idx>=0 && g_tflags3 && (g_tflags3[g_wobj[idx].tile]&0x10)){ int o_=g_wobj[idx].obj_n;   /* a vessel is an actor in DOS */
+        if(!ON_IS(o_,g_on.ship) && !ON_IS(o_,g_on.skiff) && !ON_IS(o_,g_on.raft) && !ON_IS(o_,g_on.balloon)) idx=use_under(tx,ty,idx); }
     if(id>=0){ n=msgcat(n,look_article(npc_tile(id))); char nm[40]; obj_name(npc_tile(id),nm,sizeof nm); n=msgcat(n,nm); }
     else if(idx>=0) n=look_thing(n,g_wobj[idx].obj_n,g_wobj[idx].tile,g_wobj[idx].qty,0);
-    else { msgcat(n,"nothing"); g_verb_pts=0; return 0; }
+    else { msgcat(n,USE_NOTHING); g_verb_pts=0; return 0; }
     if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"\n\nOut of range!"); g_verb_pts=0; return 0; }
     g_msg_append=1; g_use_take=idx; int r=do_verb_at(w,verb,dx,dy); g_use_take=-1; g_msg_append=0;
     return r;
@@ -7047,8 +7129,8 @@ static int do_verb_at(world_t*w,int verb,int dx,int dy)
         if(idx<0){
                    g_verb_pts=0; }
         else if(g_gl->usable && !g_gl->usable(g_wobj[idx].obj_n)){ int ui=-1;   /* a usable thing under it answers, or "Not usable" */
-            for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && g_gl->usable(o->obj_n)){ ui=j; break; } }
-            if(ui<0){ g_verb_pts=0; msgcat(0,"\nNot usable"); }
+            for(int j=0;g_gl->use_under && j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && g_gl->usable(o->obj_n)){ ui=j; break; } }
+            if(ui<0){ g_verb_pts=0; msgcat(0,g_gl->unusable?g_gl->unusable:"\nNot usable"); }
             else recompose=use_object(ui); }
         else recompose = use_object(idx);
     }
@@ -12751,18 +12833,13 @@ static void bot_dump_pass(const world_t*w)
     plat_fclose(f);
     /* doors are patched in by a second pass over the objects (cheaper than a lookup per tile) */
     f=plat_fcreate("BOTDOOR.TXT");
-    for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive||o->obj_n<297||o->obj_n>300) continue;
-        int fr=(int)o->tile-basetile(o->obj_n); int n=bot_put(0,""); n=bot_num(n,o->x); n=bot_put(n," "); n=bot_num(n,o->y);
+    for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; int fr=(o->alive&&g_gl->bot_door)?g_gl->bot_door(o):-1; if(fr<0) continue;
+        int n=bot_put(0,""); n=bot_num(n,o->x); n=bot_put(n," "); n=bot_num(n,o->y);
         n=bot_put(n," "); n=bot_num(n,fr); g_bot_ln[n++]='\n'; if(f>=0) plat_fwrite(f,g_bot_ln,n); }
     if(f>=0) plat_fclose(f);
     int n=bot_put(0,"@P done"); n=bot_kv(n,"L",w->level); n=bot_kv(n,"span",span); n=bot_kv(n,"forced",g_force_n); bot_flush(n);
 }
 
-/* PACK_NAME: the core pack every target loads (one U6.PAK + U6FE.PAK pair, docs/design/memory_streaming.md;
- * every game's core pack has this name and the game is told by its magic). -DPACK_NAME names another. */
-#ifndef PACK_NAME
-#define PACK_NAME "U6.PAK"
-#endif
 
 /* FIRST START (docs/design/first_boot_convert.md): no pack yet, but the player's DOS files are in the
  * folder. Say the files need converting and about how long it takes on this machine, and on a key hand
@@ -12829,10 +12906,11 @@ static int first_start(void)
 }
 
 /* the game layers (docs/design/game_layer.md) */
-static const GameObjs objs_none;                    /* SE and MD: no U6 object numbers; theirs land with items 3-13 */
+static const GameObjs objs_none;                    /* MD: no U6 object numbers; its own land with item 13 */
+static const GameObjs objs_se = { .use_takes={302,307} };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
 static const GameLayer gl_u6 = {
     .on=&objs_u6, .talk=u6_talk, .use=use_object_inner, .asks_count=1, .see="Thou dost see ", .rest=u6_rest, .use_pack=u6_use_pack,
-    .use_at=u6_use_at, .usable=use_usable, .ready_on=u6_ready_fx_on, .ready_off=u6_ready_fx_off,
+    .use_at=u6_use_at, .usable=use_usable, .use_under=1, .bot_door=u6_bot_door, .ready_on=u6_ready_fx_on, .ready_off=u6_ready_fx_off,
     .ready_tick=u6_ready_fx_tick, .wind_tick=u6_wind_tick, .burn_tick=u6_dunguse_tick,
     .npc_torches=u6_npc_torches_update, .moongates=u6_moongates_update, .max_mana=u6_actor_max_mana,
     .touch=u6_creature_touch, .shot_spend=u6_shot_spend, .hazard=u6_hazard_hit, .eggs=u6_eggs_update,
@@ -12840,11 +12918,91 @@ static const GameLayer gl_u6 = {
     .ending=run_ending,
 };
 static const GameLayer gl_se = {
-    .on=&objs_none, .talk=se_talk, .use=se_use_object, .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
 };
+/* the SE/MD library tail: the portrait bank (CFAC, face(actor N) = slot N-1), each NPC's name and look
+ * text (CTLK) and the scripts (CTSC) (portraits.md, converse.md §6b) — pointers into p..end */
+static void clib_parse(const uint8_t *ap,const uint8_t *end)
+{
+            while(ap+4<=end){
+                if(ap[0]=='C'&&ap[1]=='F'&&ap[2]=='A'&&ap[3]=='C'){        /* [u16 nface][u16 w][u16 h][n x w*h] */
+                    if(ap+10>end) break;
+                    int nf=(ap[4]<<8)|ap[5], fw=(ap[6]<<8)|ap[7], fh=(ap[8]<<8)|ap[9];
+                    const uint8_t *fp=ap+10;
+                    if(fp+(long)nf*fw*fh>end) break;
+                    g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;
+                    ap=fp+(long)nf*fw*fh;
+                } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='L'&&ap[3]=='K'){ /* [u16 nact][u16 blob_len][nact x u16 off][blob "name\0desc\0"] */
+                    if(ap+8>end) break;
+                    int na=(ap[4]<<8)|ap[5], bl=(ap[6]<<8)|ap[7];
+                    const uint8_t *ofs=ap+8, *blob=ofs+(long)na*2;
+                    if(blob+bl>end) break;
+                    g_setalk_nact=na; g_setalk_off=ofs; g_setalk_blob=blob;
+                    ap=blob+bl;
+                } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='S'&&ap[3]=='C'){ /* [u16 nact=256][u32 blob_len][256 x u32 off][blob] */
+                    if(ap+10>end) break;
+                    int na=(ap[4]<<8)|ap[5]; int32_t bl=(int32_t)(((uint32_t)ap[6]<<24)|((uint32_t)ap[7]<<16)|((uint32_t)ap[8]<<8)|ap[9]);
+                    const uint8_t *ofs=ap+10, *blob=ofs+(long)na*4;
+                    if(na!=256 || blob+bl>end) break;
+                    g_setsc_off=ofs; g_setsc_blob=blob; g_setsc_len=bl;
+                    ap=blob+bl;
+                } else break;
+            }
+}
+/* the tail's place, from the footer [u32 offset]["CLIB"] mkworld writes after it (memory_streaming.md) */
+static void clib_find(int32_t sz)
+{   plat_file pf=plat_fopen(PACK_NAME,0); uint8_t ft[8]; g_clib_off=g_clib_len=0;
+    if(pf<0) return;
+    if(sz>8 && plat_read_at(pf,sz-8,ft,8)==8 && ft[4]=='C'&&ft[5]=='L'&&ft[6]=='I'&&ft[7]=='B'){
+        int32_t o=(int32_t)(((uint32_t)ft[0]<<24)|((uint32_t)ft[1]<<16)|((uint32_t)ft[2]<<8)|ft[3]);
+        if(o>0 && o<sz-8){ g_clib_off=o; g_clib_len=sz-8-o; } }
+    plat_fclose(pf); }
+/* the first len bytes of a file into a pool (fast = Alt-RAM preferred) */
+static void *load_prefix(const char *path,int32_t len,bool fast)
+{   plat_file pf=plat_fopen(path,0); if(pf<0) return NULL;
+    void *b=fast?plat_alloc_fast((uint32_t)len):plat_alloc_chip((uint32_t)len);
+    if(b && plat_read_at(pf,0,b,len)!=len) b=NULL;
+    plat_fclose(pf); return b; }
+/* resident: the whole tail in RAM; else the names and the script index only, faces and scripts read when wanted */
+static void clib_open(int resident)
+{
+    if(resident){ uint8_t *t=(uint8_t*)load_prefix_at(PACK_NAME,g_clib_off,g_clib_len); if(t){ clib_parse(t,t+g_clib_len); return; } }
+    plat_file pf=plat_fopen(PACK_NAME,0); if(pf<0) return;
+    int32_t p=g_clib_off, e=g_clib_off+g_clib_len; uint8_t h[10];
+    while(p+10<=e && plat_read_at(pf,p,h,10)==10){
+        if(h[0]=='C'&&h[1]=='F'&&h[2]=='A'&&h[3]=='C'){
+            g_senface=(h[4]<<8)|h[5]; g_sefw=(h[6]<<8)|h[7]; g_sefh=(h[8]<<8)|h[9]; g_seface=NULL; g_seface_foff=p+10;
+            g_seface_buf=(uint8_t*)plat_alloc_fast((uint32_t)g_sefw*(uint32_t)g_sefh); g_seface_cur=-1;
+            p+=10+(int32_t)g_senface*g_sefw*g_sefh; }
+        else if(h[0]=='C'&&h[1]=='T'&&h[2]=='L'&&h[3]=='K'){
+            int32_t L=8+(int32_t)((h[4]<<8)|h[5])*2+((h[6]<<8)|h[7]); uint8_t *b=(uint8_t*)plat_alloc_fast((uint32_t)L);
+            if(b && plat_read_at(pf,p,b,L)==L) clib_parse(b,b+L);
+            p+=L; }
+        else if(h[0]=='C'&&h[1]=='T'&&h[2]=='S'&&h[3]=='C'){
+            int na=(h[4]<<8)|h[5]; int32_t bl=(int32_t)(((uint32_t)h[6]<<24)|((uint32_t)h[7]<<16)|((uint32_t)h[8]<<8)|h[9]);
+            uint8_t *ofs=(uint8_t*)plat_alloc_fast((uint32_t)na*4u);
+            if(na==256 && ofs && plat_read_at(pf,p+10,ofs,na*4)==na*4){ g_setsc_off=ofs; g_setsc_blob=NULL; g_setsc_len=bl; g_setsc_foff=p+10+na*4; }
+            p+=10+na*4+bl; }
+        else break; }
+    plat_fclose(pf);
+}
+/* face fi of the portrait bank, or NULL: in RAM, or read into one buffer when the tail is on demand */
+static const uint8_t *se_face(int fi)
+{   if(fi<0||fi>=g_senface) return NULL;
+    if(g_seface) return g_seface+(long)fi*g_sefw*g_sefh;
+    if(!g_seface_foff||!g_seface_buf) return NULL;
+    if(fi!=g_seface_cur){ plat_file pf=plat_fopen(PACK_NAME,0); int32_t L=g_sefw*g_sefh; if(pf<0) return NULL;
+        g_seface_cur=(plat_read_at(pf,g_seface_foff+(int32_t)fi*L,g_seface_buf,L)==L)?fi:-1; plat_fclose(pf); }
+    return g_seface_cur==fi?g_seface_buf:NULL; }
+/* len bytes at off of a file into a pool (Alt-RAM preferred) */
+static void *load_prefix_at(const char *path,int32_t off,int32_t len)
+{   plat_file pf=plat_fopen(path,0); if(pf<0) return NULL;
+    void *b=plat_alloc_fast((uint32_t)len);
+    if(b && plat_read_at(pf,off,b,len)!=len) b=NULL;
+    plat_fclose(pf); return b; }
 int main(int argc, char **argv)
 {
     boot_chdir_to_exe(argc, argv);
@@ -12923,6 +13081,7 @@ int main(int argc, char **argv)
     int32_t sz_fe   = plat_fsize_path("U6FE.PAK");  if(sz_fe<0)   sz_fe=0;
     int32_t sz_core = plat_fsize_path(PACK_NAME);   if(sz_core<0) sz_core=0;
     int32_t sz_libs = 0; for(int i=0;i<LIB_N;i++){ int32_t z=plat_fsize_path(g_lib[i].name); if(z>0) sz_libs+=z; }
+    clib_find(sz_core); if(g_clib_off){ sz_core=g_clib_off; sz_libs+=g_clib_len; }   /* SE/MD: the library tail is not core */
     int32_t sz_save = plat_fsize_path("SAVE.000");  if(sz_save<0) sz_save=0;   /* optional dev template (chip) */
     int fe_resident=0, fe_prefer_fast=0;
     {   plat_mem_info_t mi; plat_mem_get_info(&mi);
@@ -12993,8 +13152,9 @@ int main(int argc, char **argv)
         if(!g_fe_res){ g_font=NULL; g_fset=NULL; g_basepal=NULL; }   /* header pointers stay valid (static), but the core re-sets these */
     } else if (sz_fe>0) Cconws("  U6FE.PAK is not a v2 pack (rebuild: make world) - front-end skipped\r\n");
     /* (no console line here: the video mode is up — text would scribble on the game screen) */
-    uint8_t *pak=(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
-    if(!pak) pak=(uint8_t*)plat_load_file(PACK_NAME,0,&n);   /* fast pool full (tight TT-RAM) -> load into CHIP (ST-RAM);
+    uint8_t *pak=g_clib_off?(uint8_t*)load_prefix(PACK_NAME,g_clib_off,1):(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
+    if(!pak) pak=g_clib_off?(uint8_t*)load_prefix(PACK_NAME,g_clib_off,0):(uint8_t*)plat_load_file(PACK_NAME,0,&n);
+    if(pak && g_clib_off) n=g_clib_off;   /* fast pool full (tight TT-RAM) -> load into CHIP (ST-RAM);
                                                               * the tileset then reads slower but the game FITS. A stock
                                                               * 4 MB TT can't hold the pack in its ~2.7 MB fast pool + the
                                                               * full engine, but has ST-RAM to spare. See fast-pool-tight-on-tt. */
@@ -13281,32 +13441,7 @@ int main(int argc, char **argv)
             /* the spellbook page (U6WN): [4 "U6WN"][144*82 indices], pointer into the pak */
             if(ap+4+SPELL_W*SPELL_H<=pak+n && ap[0]=='U'&&ap[1]=='6'&&ap[2]=='W'&&ap[3]=='N'){
                 g_spell_page=ap+4; ap+=4+SPELL_W*SPELL_H; }
-            /* SE/MD: the portrait bank (CFAC, face(actor N) = slot N-1) and each NPC's name and look text
-             * (CTLK), after everything else (portraits.md, converse.md §6b) */
-            while(ap+4<=pak+n){
-                if(ap[0]=='C'&&ap[1]=='F'&&ap[2]=='A'&&ap[3]=='C'){        /* [u16 nface][u16 w][u16 h][n x w*h] */
-                    if(ap+10>pak+n) break;
-                    int nf=(ap[4]<<8)|ap[5], fw=(ap[6]<<8)|ap[7], fh=(ap[8]<<8)|ap[9];
-                    const uint8_t *fp=ap+10;
-                    if(fp+(long)nf*fw*fh>pak+n) break;
-                    g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;
-                    ap=fp+(long)nf*fw*fh;
-                } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='L'&&ap[3]=='K'){ /* [u16 nact][u16 blob_len][nact x u16 off][blob "name\0desc\0"] */
-                    if(ap+8>pak+n) break;
-                    int na=(ap[4]<<8)|ap[5], bl=(ap[6]<<8)|ap[7];
-                    const uint8_t *ofs=ap+8, *blob=ofs+(long)na*2;
-                    if(blob+bl>pak+n) break;
-                    g_setalk_nact=na; g_setalk_off=ofs; g_setalk_blob=blob;
-                    ap=blob+bl;
-                } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='S'&&ap[3]=='C'){ /* [u16 nact=256][u32 blob_len][256 x u32 off][blob] */
-                    if(ap+10>pak+n) break;
-                    int na=(ap[4]<<8)|ap[5]; int32_t bl=(int32_t)(((uint32_t)ap[6]<<24)|((uint32_t)ap[7]<<16)|((uint32_t)ap[8]<<8)|ap[9]);
-                    const uint8_t *ofs=ap+10, *blob=ofs+(long)na*4;
-                    if(na!=256 || blob+bl>pak+n) break;
-                    g_setsc_off=ofs; g_setsc_blob=blob; g_setsc_len=bl;
-                    ap=blob+bl;
-                } else break;
-            }
+            clib_parse(ap,pak+n);                     /* an old pack with the tail inline */
         }
     }
     }
@@ -13348,7 +13483,8 @@ int main(int argc, char **argv)
         g_libs_resident = free_now >= (long)sz_libs + 384L*1024L;
         g_libs_ok=1; for(int i=0;i<LIB_N;i++) if(!lib_open(&g_lib[i], g_libs_resident)) g_libs_ok=0;
         g_libs_resident = g_libs_ok && g_lib[LIB_CONVA].data && g_lib[LIB_CONVB].data && g_lib[LIB_PORTA].data && g_lib[LIB_PORTB].data;
-        g_countA=g_lib[LIB_CONVA].count; }
+        g_countA=g_lib[LIB_CONVA].count;
+        if(g_clib_off) clib_open(free_now >= (long)g_clib_len + 384L*1024L); }
 
     if(_meminfo){ plat_mem_get_info(&_mi);
         dbg_num("MEM chip(ST-RAM)_used KB=", (int)(_mi.chip_used/1024));
@@ -15636,22 +15772,37 @@ int main(int argc, char **argv)
                 break; }
             for(int i=0;i<g_ow.nobjs;i++){
                 if(!g_wobj[i].alive) continue;
-                g_wobj[i].obj_n=183; g_wobj[i].tile=(uint16_t)basetile(183);                    /* -> SE basket */
+                g_wobj[i].obj_n=188; g_wobj[i].tile=(uint16_t)basetile(188);                    /* -> SE crate */
                 int child=-1; for(int j=0;j<g_ow.nobjs;j++) if(j!=i && !g_wobj[j].alive){ child=j; break; }
                 if(child>=0){ g_wobj[child].parent=(uint16_t)i; g_wobj[child].alive=0;
                     dbg_num("SE cont child alive0=", g_wobj[child].alive);                       /* 0 (in basket) */
                     use_object(i); dbg_num("SE cont child spilled=", g_wobj[child].alive); }     /* expect 1 */
                 break; }
-            /* DOOR: force an obj to SE door 234 at its CLOSED frame (tile 977, impassable). USE -> should
-             * OPEN to a passable "door" tile (976). Proves tileflags1 passability + the name/passability toggle. */
-            for(int i=0;i<g_ow.nobjs;i++){ if(!g_wobj[i].alive) continue;
-                g_wobj[i].obj_n=234; g_wobj[i].tile=977;                                          /* SE door, closed */
-                dbg_num("SE door tflags1 loaded=", (g_tflags1[976]|g_tflags1[977])!=0);           /* tileflags1 present? */
-                dbg_num("SE door closed blk0=", (g_tflags1[977]&0x06)!=0);                        /* expect 1 (blocks) */
-                use_object(i);
-                dbg_num("SE door tile after USE=", g_wobj[i].tile);                               /* expect 976 (open) */
-                dbg_num("SE door open passable=", (g_tflags1[g_wobj[i].tile]&0x06)==0);           /* expect 1 */
-                break; }
+            /* DOOR (se_use.md §4): the waking hut's door (412,289, shut at frame 5) opens to (411,289) frame 1 and
+             * lets the party out. A door open at frame 1 two tiles east shuts east to frame 5, opens back to frame 1,
+             * and won't shut onto a crate. And the usable list: a basket is not. */
+            { int h=obj_idx_at(412,289,234); dbg_num("SE hut door found=", h>=0);
+              if(h>=0){ dbg_num("SE hut door shut blocks=", !world_is_passable(&w,412,289));
+                uint16_t sx=w.px, sy=w.py; w.px=412; w.py=290; g_msg[0]=0; do_verb(&w,'U',0,-1); w.px=sx; w.py=sy;   /* U)se north from inside, the real verb */
+                dbg_num("SE hut door use msg ok=", strstr(g_msg,"Not possible")==0);
+                dbg_num("SE hut door opened x=", g_wobj[h].x); dbg_num("SE hut door opened frame=", se_frame(h));
+                dbg_num("SE hut doorway passable=", world_is_passable(&w,412,289));
+                dbg_num("SE hut doorway way blocked=", avatar_way_blocked(412,289));
+                { uint16_t sx=w.px, sy=w.py; w.px=412; w.py=290; int st=player_step(&w,0,-1); dbg_num("SE hut step out=", st); dbg_num("SE hut step y=", w.py); w.px=sx; w.py=sy; } } }
+            dbg_num("SE usable crate=", se_usable(188)); dbg_num("SE usable basket=", se_usable(183));   /* 1, 0 */
+            { int ex=(int)w.px+2, ey=(int)w.py, d=-1, c=-1;
+              for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].y==ey && (g_wobj[j].x==ex||g_wobj[j].x==ex+1)) g_wobj[j].alive=0;
+              for(int i=g_ow.nobjs-1;i>=0 && c<0;i--){ if(g_wobj[i].parent!=WOBJ_PARENT_NONE) continue; if(d<0) d=i; else c=i; }   /* any two map objects will do */
+              if(d>=0 && c>=0){
+                g_wobj[d].obj_n=234; g_wobj[d].tile=(uint16_t)(basetile(234)+1); g_wobj[d].x=(uint16_t)ex; g_wobj[d].y=(uint16_t)ey;
+                g_wobj[d].parent=WOBJ_PARENT_NONE; g_wobj[d].origin=WOBJ_PARENT_NONE; g_wobj[d].alive=1; build_blocked();
+                use_object(d); dbg_num("SE door shut dx=", g_wobj[d].x-ex); dbg_num("SE door shut frame=", se_frame(d));             /* 1, 5 */
+                use_object(d); dbg_num("SE door reopened dx=", g_wobj[d].x-ex); dbg_num("SE door reopened frame=", se_frame(d)); /* 0, 1 */
+                g_wobj[c].obj_n=188; g_wobj[c].tile=(uint16_t)basetile(188); g_wobj[c].x=(uint16_t)(ex+1); g_wobj[c].y=(uint16_t)ey;
+                g_wobj[c].parent=WOBJ_PARENT_NONE; g_wobj[c].origin=WOBJ_PARENT_NONE; g_wobj[c].alive=1; build_blocked();
+                use_object(d); dbg_num("SE door blocked dx=", g_wobj[d].x-ex); dbg_num("SE door blocked frame=", se_frame(d)); /* 0, 1 */
+                dbg_num("SE door blocked msg=", strstr(g_msg,"The door is blocked.")!=0);                                         /* 1 */
+                g_wobj[c].alive=0; g_wobj[d].alive=0; build_blocked(); } }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

@@ -20,7 +20,7 @@ VM_ERRORS = ('unknown command', 'control char', 'error')        # the interprete
 
 def prepare(hd, tough, start=None):
     """the drive: build/SE.PAK, or with start='x,y' a pack whose party starts there (mkworld's start, as
-    make world-se SE_X= SE_Y=; until SE's doors work the party cannot leave the hut it wakes in)"""
+    make world-se SE_X= SE_Y=)"""
     if os.path.isdir(hd): shutil.rmtree(hd)
     os.makedirs(hd)
     b = os.path.join(ROOT, 'build')

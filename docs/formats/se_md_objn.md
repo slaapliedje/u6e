@@ -34,24 +34,11 @@ NOT carry over — SE/MD renumber objects — so shared engine code reads per-ga
 
 SE cast (context): 311 professor, 312 reporter, 313 woman, 314 shaman, 315 chieftain, 316/320 man.
 
-### SE USE (behind the g_gd seam → `se_use_object` in gamedemo.c). Not `wko` (per-item behaviour).
-- **containers → SEARCH/spill** (IMPLEMENTED, `se_is_container`): 183 basket, 184 pot, 188 crate,
-  132 soft clay pot, 133 fired clay pot. USE spills the container's children onto the map (the shared,
-  U6-proven `spill_container`). Validated: `SEUSE.BIN` self-test — a parked child spills alive.
-- **food → EAT** (IMPLEMENTED, `se_is_food`): 103/110 meat, 197 fruit, 114 bunch of turnips. USE
-  consumes one + feeds the Avatar (shared hunger model). Validated: `SEUSE.BIN` — qty 2→1→gone.
-- **doors / doorways → OPEN/CLOSE** (IMPLEMENTED, data-driven — no per-object table). SE door FRAMES
-  are per-object and share tile ranges with OTHER objects (`objsurvey ... frames`: 161's frames read as
-  fountain/cave; 234 open 0/2 closed 1/3; 270 open 2 closed 0 with "table" tiles interleaved; 275 open 3;
-  161/226/236/272 have NO open frame), so there is no uniform frame delta. Instead the toggle is derived
-  from **passability**: an OPEN door tile is passable, a CLOSED one impassable (tileflags1, now shipped
-  in the world pack's tileflags1 section). USE flips to the NEAREST tile that is still "door"-named AND has the
-  opposite passability (name-match skips the interleaved table/window tiles; tie-break keeps orientation).
-  Doors with no opposite-passability door tile (161/226/236/272 arches, 160 trap door) → "won't budge"
-  (safe). Validated: `SEUSE.BIN` — door 977 (closed) → USE → 976 (open, passable).
-- tileflags1 also gives SE/MD **object passability in general** (walls/furniture/closed doors block);
-  the Avatar keeps 7/8 walkable neighbours at the SE start, so it's not boxed in.
-- water 140/152 excluded from food (terrain water, not a gettable item).
+### SE USE
+Superseded 2026-11-11: SE's U)se now follows its GAME.EXE's own dispatcher, usable list and switch,
+documented in rules/se_use.md (the earlier name- and passability-driven guesses for containers and
+doors are gone; DOS uses only the crate among the containers, and its doors move rather than change
+frame in place).
 
 ### SE GET (mostly already generic)
 GET (`do_verb 'G'` → `objworld_get`) is game-agnostic and reads the `gettable[1024]` table the world pack
