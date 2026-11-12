@@ -30,8 +30,22 @@ static const eqent_t EQTAB[] = {
     {82,EQ_HAND},{256,EQ_HAND},{257,EQ_HAND},{258,EQ_HAND},
 };
 
+/* Savage Empire's classes (se_combat.md §1, 0xe5f3) */
+static const eqent_t SE_EQTAB[] = {
+    {84,EQ_NECK},{85,EQ_NECK},{135,EQ_NECK},
+    {7,EQ_BODY},{8,EQ_BODY},{9,EQ_BODY},
+    {31,EQ_ARM2},{32,EQ_ARM2},{34,EQ_ARM2},{40,EQ_ARM2},{50,EQ_ARM2},{94,EQ_ARM2},{118,EQ_ARM2},{128,EQ_ARM2},{131,EQ_ARM2},{175,EQ_ARM2},{212,EQ_ARM2},
+    {2,EQ_CLS_OFFHAND},{13,EQ_CLS_OFFHAND},{14,EQ_CLS_OFFHAND},{15,EQ_CLS_OFFHAND},{67,EQ_CLS_OFFHAND},
+    {1,EQ_ARM},{24,EQ_ARM},{25,EQ_ARM},{26,EQ_ARM},{27,EQ_ARM},{28,EQ_ARM},{29,EQ_ARM},{33,EQ_ARM},{37,EQ_ARM},{39,EQ_ARM},{44,EQ_ARM},
+    {52,EQ_ARM},{119,EQ_ARM},{137,EQ_ARM},{177,EQ_ARM},{208,EQ_ARM},{206,EQ_ARM},{240,EQ_ARM},{21,EQ_ARM},{138,EQ_ARM},{209,EQ_ARM},{241,EQ_ARM},
+};
+
 int equip_class(int obj_n)
 {
+    if (rules_game() == RULES_SE){
+        for (unsigned i = 0; i < sizeof SE_EQTAB / sizeof SE_EQTAB[0]; i++)
+            if (SE_EQTAB[i].obj_n == (uint16_t)obj_n) return SE_EQTAB[i].cls;
+        return -1; }
     for (unsigned i = 0; i < sizeof EQTAB / sizeof EQTAB[0]; i++)
         if (EQTAB[i].obj_n == (uint16_t)obj_n) return EQTAB[i].cls;
     return -1;

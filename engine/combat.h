@@ -6,6 +6,11 @@
 
 #include "rng.h"
 
+/* Whose tables these answer with (docs/rules/se_combat.md): the game is chosen at load. */
+enum { RULES_U6 = 0, RULES_SE = 1 };
+void rules_select(int game);
+int  rules_game(void);
+
 /* §2 hit check: attack_role = attacker's str_adj or dex_adj; foe_dex = defender's
  * dex_adj. Returns 1 = hit, 0 = miss. (A single d30 roll.) */
 int combat_hit(int attack_role, int foe_dex, rng_t *r);

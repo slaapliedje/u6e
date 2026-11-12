@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /* monsters.c — creature base stats + hatch stat roll. Implemented from docs/rules/eggs.md §3-§4. */
 #include "monsters.h"
+#include "combat.h"   /* rules_game */
 
 typedef struct { uint16_t obj_n; mon_base_t b; } mon_row_t;
 
@@ -66,8 +67,31 @@ static const mon_row_t MON[] = {
     { 431, { 22, 27,  7,  15,   3, ALIGN_NEUTRAL, 0 } },   /* horse with rider */
 };
 
+/* Savage Empire's creature table (se_combat.md §4): str, dex, int, armour, damage, HP, status, flags */
+typedef struct { uint16_t obj_n; uint8_t str, dex, intel, armour, dmg, hp, status; uint16_t flags; } se_mon_t;
+static const se_mon_t SE_MON[] = {
+    {310,20,20,20,0,3,10,0x40,0x6000}, {311,20,20,20,0,3,10,0x40,0x6000}, {312,20,20,20,0,3,10,0x40,0x6000}, {313,20,20,20,0,3,10,0x00,0x6000},
+    {314,20,20,20,0,3,10,0x00,0x6000}, {315,20,20,20,0,3,10,0x00,0x6000}, {316,20,20,20,0,3,10,0x00,0x6000}, {318,20,20,20,3,5,10,0x00,0x6000},
+    {319,20,20,20,0,3,10,0x00,0x4000}, {320,20,20,20,0,3,10,0x00,0x6000}, {321,20,20,20,0,3,10,0x00,0x6000}, {322,20,20,20,0,3,10,0x00,0x6000},
+    {323,10,45,1,8,10,10,0x20,0x6000}, {324,20,20,20,0,3,10,0x00,0x6000}, {325,25,15,10,0,10,15,0x00,0x6000}, {326,20,20,20,0,3,10,0x00,0x6000},
+    {317,1,20,1,0,2,3,0x00,0x2100}, {294,60,5,1,255,150,255,0x60,0x2024}, {296,35,15,10,3,25,40,0x60,0x2020}, {284,20,1,1,4,5,20,0x00,0x2025},
+    {289,40,11,2,8,35,50,0x60,0x2025}, {297,50,9,60,15,40,60,0x60,0x002d}, {303,30,3,1,8,20,25,0x00,0x2025}, {305,40,8,2,10,30,50,0x00,0x2025},
+    {288,10,35,2,3,20,10,0x60,0x2105}, {283,17,25,12,2,15,20,0x20,0x2044}, {300,25,20,2,5,15,20,0x60,0x020d}, {327,25,2,1,15,15,25,0x00,0x2025},
+    {330,7,20,2,3,10,20,0x60,0x2001}, {331,30,25,7,3,30,35,0x60,0x2000}, {332,20,5,3,1,5,20,0x00,0x2020}, {333,22,30,8,2,25,25,0x60,0x2000},
+    {334,30,5,2,6,25,20,0x60,0x2025}, {335,30,15,6,3,27,40,0x60,0x2020}, {291,1,60,60,0,1,30,0x00,0x1429}, {299,3,2,1,0,3,3,0x00,0x0011},
+    {301,20,15,60,7,15,30,0x60,0x002d}, {302,15,5,4,10,10,25,0x00,0x0a28}, {307,15,5,4,5,10,25,0x00,0x4a28}, {308,3,7,6,1,2,5,0x60,0x2840},
+    {309,5,13,4,0,6,8,0x60,0x2840}, {336,9,11,4,0,8,10,0x60,0x0051}, {337,5,14,6,0,2,7,0x00,0x2020}, {328,0,0,30,10,0,20,0x20,0x3000},
+    {329,20,30,20,0,3,10,0x00,0x6000}, {282,50,30,0,5,10,10,0x60,0x1011}, {292,0,0,0,5,0,10,0x60,0x1011},
+};
+static const se_mon_t *se_mon(int obj_n){ for (unsigned i = 0; i < sizeof SE_MON / sizeof SE_MON[0]; i++) if (SE_MON[i].obj_n == obj_n) return &SE_MON[i]; return 0; }
+int monster_type_flags(int obj_n){ const se_mon_t *m = rules_game() == RULES_SE ? se_mon(obj_n) : 0; return m ? m->flags : 0; }
+
 int monster_base(int obj_n, mon_base_t *out)
 {
+    if (rules_game() == RULES_SE){ const se_mon_t *m = se_mon(obj_n);
+        if (m){ out->str = m->str; out->dex = m->dex; out->intel = m->intel; out->hp = m->hp; out->dmg = m->dmg;
+            out->align = (uint8_t)(((m->status & 0x60) >> 5) + 1); out->xp = 0; return 1; }
+        out->str = out->dex = out->intel = out->hp = 0; out->dmg = 1; out->align = ALIGN_DEFAULT; out->xp = 0; return 0; }   /* no row: no stats, a blow of 1 (0x1a03d) */
     for (unsigned i = 0; i < sizeof MON / sizeof MON[0]; i++)
         if (MON[i].obj_n == obj_n){ *out = MON[i].b; return 1; }
     out->str = 10; out->dex = 10; out->intel = 10; out->hp = 30; out->dmg = 4; out->align = ALIGN_DEFAULT; out->xp = 0;
@@ -86,6 +110,7 @@ int monster_roll_stat(int base, rng_t *r)
  * skiff, raft; a tangle vine pod never moves; everything else walks. */
 int monster_movetype(int obj_n)
 {
+    if (rules_game() == RULES_SE){ int f = monster_type_flags(obj_n); return (f & 0x200) ? MT_WATER_HIGH : (f & 0x100) ? MT_AIR_LOW : MT_LAND; }
     switch (obj_n){
     case 343: case 344: case 355: case 356: case 362: case 367: case 369: case 372: case 411: case 423: return MT_AIR_LOW;
     case 352: case 373: return MT_AIR_HIGH;                /* ghost, wisp: nothing on the map stops them */
@@ -98,6 +123,7 @@ int monster_movetype(int obj_n)
 
 int monster_remains(int obj_n, int *frame)
 {
+    if (rules_game() == RULES_SE){ if (frame) *frame = 0; return 0; }   /* SE's remains: item 6 */
     int fr = 0, body = 0;
     switch (obj_n){
     /* blood (338), a random frame rolled by the caller */
@@ -154,12 +180,14 @@ static const uint16_t STRB[] = { 98, 347, 355, 362, 363, 365, 366, 367, 368, 370
     380, 381, 382, 383, 384, 385, 386, 387, 409, 410, 424, 427, 428, 429, 430, 431 };
 int monster_str_based(int obj_n)
 {
+    if (rules_game() == RULES_SE) return (monster_type_flags(obj_n) & 0x20) != 0;
     for (unsigned i = 0; i < sizeof STRB / sizeof STRB[0]; i++) if (STRB[i] == obj_n) return 1;
     return 0;
 }
 
 int monster_flags(int obj_n)
 {
+    if (rules_game() == RULES_SE) return (monster_type_flags(obj_n) & 0x100) ? MF_FLIES : 0;
     for (unsigned i = 0; i < sizeof MF / sizeof MF[0]; i++) if (MF[i].obj_n == obj_n) return MF[i].f;
     return 0;
 }
@@ -187,6 +215,7 @@ static const mon_spells_t MSP[] = {
 };
 int monster_spells(int obj_n, const uint8_t **out)
 {
+    if (rules_game() == RULES_SE){ if (out) *out = 0; return 0; }
     for (unsigned i = 0; i < sizeof MSP / sizeof MSP[0]; i++)
         if (MSP[i].obj_n == obj_n){ if (out) *out = MSP[i].sp; return MSP[i].n; }
     if (out) *out = 0;
@@ -226,6 +255,7 @@ static const mon_kit_t MKIT[] = {
 };
 int monster_kit(int obj_n, int list, const uint8_t **out)
 {
+    if (rules_game() == RULES_SE){ (void)list; if (out) *out = 0; return 0; }
     for (unsigned i = 0; i < sizeof MKIT / sizeof MKIT[0]; i++) if (MKIT[i].obj_n == obj_n){
         const uint8_t *l = list == 0 ? MKIT[i].wp : list == 1 ? MKIT[i].ar : MKIT[i].tr;
         int cap = list == 0 ? 5 : list == 1 ? 4 : 3, n = 0;

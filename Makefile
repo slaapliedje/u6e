@@ -488,7 +488,7 @@ xfertest: $(BUILD)/xfertest
 	$(BUILD)/xfertest
 
 # combat math unit test (docs/rules/combat.md)
-$(BUILD)/combattest: tools/combattest.c engine/combat.c engine/rng.c
+$(BUILD)/combattest: tools/combattest.c engine/combat.c engine/equip.c engine/monsters.c engine/rng.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
 combattest: $(BUILD)/combattest
@@ -1075,6 +1075,7 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'crate shut opens=1' 'crate open refused=1' 'logs lit=1' 'logs cold refused=1' 'brazier unlit refused=1' 'brazier fire=1' 'head statue joins=1' 'tarstrip asks On=1' 'tarstrip torch=1' 'tarstrip need powder=1' 'tarstrip grenade=1' 'clay pot=1' 'powder asks On=1' 'powder loads=1' 'torch lit=1' 'torch hands full=1' 'torch incinerates=1' 'torch burned out=1' 'fish no water=1' 'fish water near=1' 'fish caught some=1' 'crystals nobody=1' 'crystals rafkin=1' 'tarpit asks On=1' 'tarpit strips=1' 'statue no head=1' 'statue joins=1' 'crystal heals=1' 'crystal no help=1' 'fix gem on the hour=1' 'fix mortar keeps=1' 'fix skin north=1' \
 	             'veh spots found=1' 'raft few people=1' 'raft no paddles=1' 'raft boarded=1' 'raft land refused=1' 'raft no diagonal=1' 'raft west=1' 'raft east=1' 'raft landed=1' \
 	             'turtle ridden=1' 'turtle already=1' 'rider swims=1' 'rider back=1' 'rider landed=1' 'bait turtle=1' 'bait not near water=1' \
+	             'ready modern refused=1' 'ready modern avatar=1' 'ready shield after two-hander=1' 'ready necklace=1' \
 	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"

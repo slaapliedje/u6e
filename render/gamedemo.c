@@ -95,7 +95,7 @@ typedef struct GameObjs {
     uint16_t slime;                                     /* struck, it divides (combat.md) */
     uint16_t spell, staff, keg, cube, invis_ring;       /* a spell in a book; the staff that holds charges; the keg; the cube that holds moonstones; the ring that hides */
     uint16_t use_takes[3];                              /* an actor U)se takes itself; under anyone else, the thing beneath (usecode_use.md, se_use.md §1) */
-    uint16_t vine, mirror, corpser, cannon, unmovable, str_weapons[4]; /* struck, a vine dies and a mirror cracks; a corpser unseen below; a cannon re-aims when moved; what will not be moved; weapons swung by strength */
+    uint16_t vine, mirror, corpser, cannon, unmovable, str_weapons[8]; /* struck, a vine dies and a mirror cracks; a corpser unseen below; a cannon re-aims when moved; what will not be moved; weapons swung by strength */
 } GameObjs;
 static const uint16_t SLEEP_U6[][2]={{430,1158},{367,339},{363,339},{371,339},{370,1363},{424,3412},{380,2387},{379,2387},{387,3411},{378,3411},{382,4435},{384,5459},{377,5459},{376,6483},{410,7507},{386,7507},{392,7507},{381,8531},{385,8531},{391,8531},{383,8531},{368,9555},{362,3413}};
 #define OBJS_U6 { .use_takes={428,430,431}, .throne=327, .chair=252, .bed=163, .bed_sleeper=146, .musician=392, \
@@ -140,6 +140,7 @@ typedef struct GameLayer {
     void (*cast)(void);                                         /* C)ast: the spellbook page (magic_skills.md §6) */
     /* the pack */
     uint8_t gold_pool;                                          /* the party's gold is one pool (SE/MD), not coins carried in the packs (U6) */
+    int  (*ready_ok)(int a,int on,int n);                       /* may actor a ready obj_n at all (SE's modern weapons); 0 = refused, the words said after echo n */
     void (*ready_on)(int a,int on);                             /* a readied thing takes effect (equipment.md §8) */
     void (*ready_off)(int a,int on);                            /* a readied thing comes off */
     void (*ready_tick)(void);                                   /* what readied things do each turn */
@@ -7748,7 +7749,7 @@ static int se_swim_ok(const world_t*w,int x,int y)
         if(o->tile==12||(g_tflags3&&(g_tflags3[o->tile]&0x10))) continue;
         return 0; }
     return 1; }
-static int se_can_enter(const world_t*w,int x,int y,int on){ return (on==302||on==307)?se_swim_ok(w,x,y):-1; }
+static int se_can_enter(const world_t*w,int x,int y,int on){ return (monster_type_flags(on)&0x200)?se_swim_ok(w,x,y):-1; }   /* the swimmers (se_combat.md §4) */
 /* a member's look: a rider (307 at frame fr), or itself again */
 static void se_look_set(int a,int tile)
 {   int base, tpd=npc_base_fc(tile,&base);
@@ -8248,6 +8249,7 @@ static void equip_to_member(int pi)
     int on=g_ow.inv[g_inv_sel].obj_n;
     char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
     int bset=g_ow.inv[g_inv_sel].quality;
+    if(g_gl->ready_ok && equip_class(on)>=0){ int n=msgcat(0,"Ready-"); n=msgcat(n,dn); if(!g_gl->ready_ok(a,on,n)) return; g_msg[0]=0; }
     int r=equip_ready(g_aready[a], on);
     if(r>=0){ g_aseq[actor_real(a)][r]=++g_rseq; g_aready_id[a][r]=g_ow.inv[g_inv_sel].id; }
     if(ON_IS(on,g_wko.spellbook) && r>=0) g_abook[a][r==EQ_ARM2?1:0]=(uint8_t)bset;
@@ -8823,7 +8825,7 @@ static int actor_objn(int i){
  * strength-based type (wobj 0), else dexterity; a glass sword (48) never misses (see the callers) */
 static int dex_adj(int a){ int v=g_adex[a]?g_adex[a]:15; if(g_curse[a]) v=(v<=3)?1:v-3; if((g_time_stop&&!is_party_member(a)&&a!=1)||g_asleep[a]) v=1; return v; }
 static int hit_role(int att,int wobj){
-    int str=on_in(g_on.str_weapons,4,wobj) || (wobj==0 && monster_str_based(actor_objn(att)));
+    int str=on_in(g_on.str_weapons,8,wobj) || (wobj==0 && monster_str_based(actor_objn(att)));
     if(!str) return dex_adj(att);
     int v=g_astr[att]?g_astr[att]:15; if(g_curse[att]) v=(v<=3)?1:v-3; return v; }
 static int bare_hands_max(int att){
@@ -14048,7 +14050,7 @@ static int first_start(void)
 
 /* the game layers (docs/design/game_layer.md) */
 static const GameObjs objs_none;                    /* MD: no U6 object numbers; its own land with item 13 */
-static const GameObjs objs_se = { .use_takes={302,307}, .holder={59,60,258,181,188,183,182,184,97} };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
+static const GameObjs objs_se = { .use_takes={302,307}, .str_weapons={24,29,33,34,94,118,119}, .holder={59,60,258,181,188,183,182,184,97} };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
 static const GameLayer gl_u6 = {
     .on=&objs_u6, .talk=u6_talk, .use=use_object_inner, .asks_count=1, .see="Thou dost see ", .rest=u6_rest, .use_pack=u6_use_pack,
     .use_at=u6_use_at, .usable=use_usable, .use_under=1, .bot_door=u6_bot_door, .ready_on=u6_ready_fx_on, .ready_off=u6_ready_fx_off,
@@ -14058,8 +14060,20 @@ static const GameLayer gl_u6 = {
     .cast=u6_open_cast_menu, .foe_cast=u6_foe_cast, .theft=u6_theft_counts, .avatar_death=u6_avatar_death,
     .ending=run_ending,
 };
+/* SE: a creature with flag 0x40 poisons 1 blow in 4, unless the defender is protected or immune (se_combat.md §3) */
+static void se_creature_touch(int att,int def)
+{   static const uint8_t IMMUNE_ID[]={11,25,31,33,35,47,55};
+    if(!(monster_type_flags(actor_objn(att))&0x40) || g_ahp[def]==0 || se_rand(0,3)!=0 || g_protect[def]) return;
+    { int k=actor_objn(def); if(g_se_rider[def]) k=0; if(k==294||k==286||k==287) return; }
+    for(unsigned i=0;i<sizeof IMMUNE_ID;i++) if(def==IMMUNE_ID[i]) return;
+    { int n=msg_tail(); n=msg_name(n,def); msgcat(n," poisoned!"); g_poison[def]=255; } }
+/* SE: the modern weapons, for the four who know them (se_combat.md §1); DOS checks frame 0 only (se_deviations.md) */
+static int se_ready_ok(int a,int on,int n)
+{   if((on==40||on==50||on==137) && a!=1 && a!=4 && a!=5 && a!=7){ char nm[24]; actor_name(a,nm,sizeof nm);
+        n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
+    return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -14338,6 +14352,7 @@ int main(int argc, char **argv)
     g_gd = gd ? gd : &gamedef_u6;                        /* authoritative loaded-game identity */
     g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
     g_gl = g_gd==&gamedef_se ? &gl_se : g_gd==&gamedef_md ? &gl_md : &gl_u6;   /* the game layer (game_layer.md) */
+    rules_select(g_gd==&gamedef_se ? RULES_SE : RULES_U6);                    /* whose weapon, armour and creature tables (se_combat.md) */
     g_on = *g_gl->on;
     const uint8_t *gettable;
     const uint8_t *after_actors = NULL;
@@ -17465,6 +17480,25 @@ int main(int argc, char **argv)
                   dbg_num("SE bait not near water=", pack_count(1,47)==1 && strstr(g_msg,"You must be near water.")!=0);
                   pack_take(1,47,1); }
               memcpy(g_party,sp,sizeof g_party); g_nparty=sn; teleport_party(&w,sx,sy); build_blocked(); g_msg[0]=0; }
+            /* READYING (se_combat.md §1): a modern weapon only for the four who know them; a two-hander takes both hands */
+            { int sn=g_nparty; static uint8_t sp[sizeof g_party]; memcpy(sp,g_party,sizeof g_party);
+              g_nparty=2; g_party[0].actor=1; g_party[1].actor=2; g_away[2]=0;
+              uint16_t s1[EQ_NSLOTS], s2[EQ_NSLOTS]; memcpy(s1,g_aready[1],sizeof s1); memcpy(s2,g_aready[2],sizeof s2);
+              memset(g_aready[1],0,sizeof s1); memset(g_aready[2],0,sizeof s2);
+              int r_=-1; vm_new(1,40,0,1); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==40) r_=k;
+              g_inv_sel=r_; g_msg[0]=0; equip_to_member(1);
+              dbg_num("SE ready modern refused=", r_>=0 && g_aready[2][EQ_ARM]==0 && strstr(g_msg,"can't use modern weapons!")!=0 && pack_count(1,40)==1);
+              for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==40) r_=k;
+              g_inv_sel=r_; g_msg[0]=0; equip_to_member(0);
+              dbg_num("SE ready modern avatar=", g_aready[1][EQ_ARM]==40 && pack_count(1,40)==0);
+              vm_new(1,14,0,1); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==14) r_=k;
+              g_inv_sel=r_; g_msg[0]=0; equip_to_member(0);
+              dbg_num("SE ready shield after two-hander=", g_aready[1][EQ_ARM2]==0 && strstr(g_msg,"No place to put!")!=0);
+              vm_new(1,84,0,1); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==84) r_=k;
+              g_inv_sel=r_; g_msg[0]=0; equip_to_member(0);
+              dbg_num("SE ready necklace=", g_aready[1][EQ_NECK]==84);
+              pack_take(1,14,1); memcpy(g_aready[1],s1,sizeof s1); memcpy(g_aready[2],s2,sizeof s2); equip_refold(1); equip_refold(2);
+              memcpy(g_party,sp,sizeof g_party); g_nparty=sn; g_inv_sel=-1; g_msg[0]=0; }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

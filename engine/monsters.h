@@ -22,7 +22,8 @@ int monster_roll_stat(int base, rng_t *r);
 enum { MF_POISON_IMMUNE = 1, MF_UNDEAD = 2, MF_SLEEP_IMMUNE = 4, MF_FLIES = 8, MF_REPEL_UNDEAD = 16,
        MF_DOUBLE_FIRE = 32, MF_FIRE_IMMUNE = 64 };
 int monster_flags(int obj_n);
-int monster_str_based(int obj_n);   /* its own blow rolls to hit on strength (combat.md §2) */
+int monster_str_based(int obj_n);
+int monster_type_flags(int obj_n);  /* SE's creature flag word (se_combat.md §4): 0x20 strength, 0x40 poisons, 0x100 flies, 0x200 swims; 0 for U6 */   /* its own blow rolls to hit on strength (combat.md §2) */
 /* movement types (combat.md §7c): what a creature type may step onto */
 enum { MT_LAND = 0, MT_AIR_LOW = 1, MT_WATER_HIGH = 2, MT_WATER_LOW = 3, MT_NONE = 4, MT_AIR_HIGH = 5 };
 int monster_movetype(int obj_n);

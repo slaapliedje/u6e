@@ -3,10 +3,31 @@
  * (derived from Nuvie data/scripts/u6/actor.lua: actor_combat_hit_check / actor_take_hit). */
 #include "combat.h"
 
+static int g_rules = RULES_U6;
+void rules_select(int game){ g_rules = game; }
+int  rules_game(void){ return g_rules; }
+
+/* Savage Empire's tables (se_combat.md §2): weapon damage and range, armour */
+static const struct { uint16_t obj_n; uint8_t dmg, range; } SE_WEAP[] = {
+    {1,10,5},{21,5,1},{24,7,1},{25,5,1},{26,10,6},{27,6,4},{28,8,1},{29,6,1},{31,8,6},{32,2,4},{33,12,1},
+    {34,11,1},{37,14,7},{39,4,4},{40,35,8},{44,7,4},{50,25,7},{94,6,1},{118,15,1},{119,6,1},{128,3,1},
+    {137,15,6},{138,15,6},{175,3,1},{209,5,1},{240,3,6},{241,3,6},
+};
+static int se_weap(int obj_n){ for (unsigned i = 0; i < sizeof SE_WEAP / sizeof SE_WEAP[0]; i++) if (SE_WEAP[i].obj_n == obj_n) return (int)i; return -1; }
+static int se_armour(int obj_n)
+{
+    switch (obj_n){
+    case 7: return 1; case 8: return 3; case 9: return 2; case 67: return 7;
+    case 2: return 4; case 13: return 1; case 14: return 2; case 15: return 3;
+    default: return 0;
+    }
+}
+
 /* §2: MISS if floor((foe_dex + 30 - attack_role) / 2) >= rand(1..30), else HIT. */
 int combat_hit(int attack_role, int foe_dex, rng_t *r)
 {
     int roll = 1 + rng_range(r, 30);                 /* 1..30 */
+    if (g_rules == RULES_SE) return roll >= (foe_dex + 30 - attack_role) / 2;   /* SE hits on the threshold too (se_combat.md §3) */
     return ((foe_dex + 30 - attack_role) / 2 >= roll) ? 0 : 1;
 }
 
@@ -26,6 +47,7 @@ int combat_damage(int weapon_max, int ac, rng_t *r)
 /* §4 weapon damage table (obj_n -> max damage). */
 int weapon_dmg(int obj_n)
 {
+    if (g_rules == RULES_SE){ int k = se_weap(obj_n); return k < 0 ? 0 : SE_WEAP[k].dmg; }
     switch (obj_n){
     case 4: return 4;    case 13: return 4;   case 33: return 6;   case 34: return 8;
     case 35: return 8;   case 36: return 10;  case 37: return 10;  case 38: return 6;
@@ -44,6 +66,7 @@ int weapon_dmg(int obj_n)
 /* §6c weapon range (1 = melee). The morning star and halberd reach 2 without shooting. */
 int weapon_range(int obj_n)
 {
+    if (g_rules == RULES_SE){ int k = se_weap(obj_n); return k < 0 ? 1 : SE_WEAP[k].range; }
     switch (obj_n){
     case 40: case 47: return 2;   /* morning star, halberd */
     case 37: case 38: return 3;   /* throwing axe, dagger  */
@@ -55,11 +78,12 @@ int weapon_range(int obj_n)
 }
 
 /* §6c: an item that fights when readied (a row in the damage table, Zu Ylem's being 0) */
-int weapon_is(int obj_n){ return obj_n==91 || weapon_dmg(obj_n)>0; }
+int weapon_is(int obj_n){ return (obj_n==91 && g_rules==RULES_U6) || weapon_dmg(obj_n)>0; }
 
 /* §6c: never mind the distance, this weapon shoots (the morning star and halberd never do) */
 int weapon_shoots(int obj_n)
 {
+    if (g_rules == RULES_SE) return 0;           /* SE's shooting: item 6's next slice */
     switch (obj_n){
     case 33: case 37: case 41: case 42: case 49: case 50: case 79: case 80: case 83: case 91: return 1;
     default: return 0;
@@ -79,6 +103,7 @@ int combat_dist(int dx,int dy)
 /* §6b the tile a weapon throws or shoots (0 = not a missile weapon). */
 int weapon_missile(int obj_n)
 {
+    if (g_rules == RULES_SE) return 0;
     switch (obj_n){
     case 33: return 398;   /* sling: a stone      */
     case 36: return 547;   /* spear               */
@@ -99,6 +124,7 @@ int weapon_missile(int obj_n)
 /* §5 armour class of a readied item (obj_n -> AC). */
 int armour_ac(int obj_n)
 {
+    if (g_rules == RULES_SE) return se_armour(obj_n);
     switch (obj_n){
     case 1: return 1;   case 2: return 2;   case 3: return 3;   case 4: return 3;
     case 5: return 2;   case 6: return 2;   case 7: return 3;   case 8: return 5;

@@ -124,3 +124,8 @@ list once SE's seams exist.
   (307, swimmers on deep water, a turtle left behind on landing), the turtle bait. Every case of SE's
   U)se switch is now built but those waiting on items 6 and 11. Three engine choices went to
   se_deviations.md for the user.
+- 2026-11-12: item 4's weapons and readying, and item 6 begun (rules/se_combat.md): SE's ready classes and
+  the modern weapons, weapon damage and range, armour, the hit (on the threshold, U6 needs over it) and
+  damage rolls, poison from a blow, and SE's 47-creature table, read from its GAME.EXE. The engine's
+  combat, equip and monster tables answer for SE when it is loaded (rules_select). Left in item 4: SE's
+  look and search texts. Next in item 6: the special blows, ammunition and shooting, death and experience.

@@ -3,6 +3,8 @@
  * Verifies the hit-chance distribution + damage roll/armour behave per spec. */
 #include <stdio.h>
 #include "combat.h"
+#include "equip.h"
+#include "monsters.h"
 #include "rng.h"
 
 static int fails = 0;
@@ -58,6 +60,21 @@ int main(void){
     CHECK(armour_ac(22)==7, "plate mail AC 7");
     CHECK(armour_ac(23)==10, "magic armour AC 10");
     CHECK(armour_ac(999)==0, "non-armour AC 0");
+
+    /* Savage Empire (se_combat.md): its tables, and a hit on the threshold itself */
+    rules_select(RULES_SE);
+    CHECK(weapon_dmg(40)==35 && weapon_range(40)==8, "SE modern rifle 35, range 8");
+    CHECK(weapon_dmg(24)==7 && weapon_range(24)==1, "SE club 7, melee");
+    CHECK(weapon_dmg(43)==0 && !weapon_is(91), "SE: U6 weapons are not SE's");
+    CHECK(armour_ac(67)==7 && armour_ac(8)==3 && armour_ac(22)==0, "SE armour: kotl shield 7, leather 3, none for U6 plate");
+    CHECK(equip_class(84)==EQ_NECK && equip_class(31)==EQ_ARM2 && equip_class(2)==EQ_CLS_OFFHAND && equip_class(24)==EQ_ARM && equip_class(1)==EQ_ARM && equip_class(22)<0, "SE ready classes");
+    { mon_base_t mb; CHECK(monster_base(294,&mb) && mb.str==60 && mb.hp==255 && mb.dmg==150 && mb.align==ALIGN_CHAOTIC, "SE tyrannosaurus row");
+      CHECK(monster_base(323,&mb) && mb.align==ALIGN_EVIL && monster_base(310,&mb) && mb.align==ALIGN_GOOD && monster_base(303,&mb) && mb.align==ALIGN_NEUTRAL, "SE alignments"); }
+    CHECK((monster_type_flags(302)&0x200) && monster_movetype(302)==MT_WATER_HIGH && monster_movetype(288)==MT_AIR_LOW && monster_str_based(294) && !monster_str_based(323), "SE creature flags");
+    hits=0; for(int i=0;i<N;i++) hits += combat_hit(16,16,&r);    /* threshold 15: rolls 15..30 hit, 16 in 30 */
+    { double p=100.0*hits/N; printf("SE hit%% 16v16 = %.1f (expect ~53.3)\n", p); CHECK(p>50.5 && p<56, "SE hits on the threshold"); }
+    rules_select(RULES_U6);
+    CHECK(weapon_dmg(43)==15 && armour_ac(22)==7 && equip_class(22)==EQ_BODY, "U6 tables back");
 
     printf(fails? "\n%d CHECK(S) FAILED\n" : "\nALL COMBAT TESTS PASS\n", fails);
     return fails?1:0;

@@ -11,7 +11,7 @@ register is deviations.md.
 
 ## Fixed by the user's choice (2026-11-12): DOS's own slips we don't copy
 
-The user's rule: where DOS's code plainly can't do what it was written to do, the engine does what it
+The user's rule (row 12 added 2026-11-12 under it, as plain as the first eleven): where DOS's code plainly can't do what it was written to do, the engine does what it
 was meant to do (ScummVM was looked at first: its SE U)se is mostly unwritten, so it decides none of
 these). Each row says what DOS does, so any of them can be put back.
 
@@ -28,6 +28,7 @@ these). Each row says what DOS does, so any of them can be put back.
 | 9 | Only the gem goes onto the gem stand by M)ove; anything else is `nobody.` | se_move.md §3 | Anything moved onto the stand is placed as the gem, with the gem's words and scene |
 | 10 | A breakable container thrown and broken spills what it held onto the tile | se_move.md §6 | Moves it there, then deletes it with everything in it |
 | 11 | A tar fire's waves burn only the fires the pour started | se_use.md §5q | Each wave takes every fire of its quality in the loaded objects, so a campfire nearby burns out; the engine holds the whole world, not DOS's loaded area |
+| 12 | The modern weapons can't be readied by those who don't know them at any frame | se_combat.md §1 | Compares the whole object word, so a loaded flintlock (frame 1) can be readied by anyone |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
