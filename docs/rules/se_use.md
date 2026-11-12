@@ -10,9 +10,9 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 >                  addresses below, code segment base 0x1dbd0). The disassembly stays outside the repo.
 > - References   : none
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
-> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock and the camera; not yet against DOS running
+> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick and the strips; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera)
+> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -75,16 +75,16 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 49 notebook | Jimmy's shorthand, §5j | 0x24d88 | yes |
 | 50 bamboo flintlock | load with gunpowder, §5k | 0x21e67 | yes, but readied (item 6) |
 | 51 camera | a picture (its quality is the film left), and the ribbon's flash, §5e | 0x24edf | yes |
-| 59 60 mortar, grinding stone | grind what is in it: corn flour, or gunpowder, §5l | 0x210ad | with SE's M)ove (containers) |
-| 61 62 corn and bean stalks | | 0x23ea5, 0x23e52 | no |
-| 63 jug of plachta | | 0x254bc | no |
-| 79-82 bones, skeleton | rib bones | 0x23f4b | no |
-| 86-88 the three totems | | 0xa5d:0x1bf3 | no |
-| 92 folded skin | | 0x25c2e | no |
-| 94 fire extinguisher | | 0x243e9 | no |
-| 95 bottle of liquor | | 0x21c2d | no |
-| 131 digging stick | | 0x21f60 | no |
-| 134 cloth strips | | 0x23c06 | no |
+| 59 60 mortar, grinding stone | grind what is in it: corn flour, or gunpowder, §5l | 0x210ad | yes |
+| 61 62 corn and bean stalks | a corn or a bean to the acting member, §5m | 0x23ea5, 0x23e52 | yes |
+| 63 jug of plachta | `On ` a spear: the spear of Shamap, §5m | 0x254bc | yes |
+| 79-82 bones, skeleton | a rib bone to the acting member, §5m | 0x23f4b | yes |
+| 86-88 the three totems | Triolo's invocations, §5n | in the switch, then 0x11ff:0xf07 | item 6 |
+| 92 folded skin | unfolds into the skin (245) where there is room, §5o | 0x25c2e | yes |
+| 94 fire extinguisher | `On `: a fire out, burning logs out, lava hardened, §5o | 0x243e9 | yes |
+| 95 bottle of liquor | drunk; past three drinks the Avatar staggers, §5o | 0x21c2d | yes |
+| 131 digging stick | clay from a clay tile beside its holder, §5p | 0x21f60 | yes |
+| 134 cloth strips | `On ` a person: bind their wounds, §5p | 0x23c06 | yes |
 | 136 metal bucket | | 0x235a9 | no |
 | 137 240 grenades, devices | light, §5b | 0x21671 | yes, but trees |
 | 143 machine | | 0x25b44 | no |
@@ -244,8 +244,8 @@ DOS plays sound 0x1f at each of these. The waterfall's boulders hatch from eggs 
 eggs at (295,64) and (299,65) each hold one (no boulder lies on the map itself). SE's eggs are not yet
 built, so in the engine the boulder appears only once they are.
 
-**M)ove** (0x1f530, SE's own M)ove rules, not yet built): moving an activated device anywhere but into a
-container sets it off at the place it lands. A thing thrown more than a tile that is on the breakable list
+**D)rop** (0x1f530, rules/se_move.md §6): dropping an activated device anywhere but into a container sets
+it off at the place it lands. A thing thrown more than a tile that is on the breakable list
 (DS:0x1170: 3 6 25 59 60 95 97 132 133 181 184 137 63) breaks: `It broke!`, or for the soft clay pot `The
 soft clay pot went squish.` and clay (192) is left. A lit grenade is not on the list: thrown, it lands
 and its fuse burns on.
@@ -264,8 +264,8 @@ column by column, west first, and stops after the column it found one in. For ea
 
 None found: `No effect.` The new game has one stand, at (170,483); the gem goes to (169,482).
 
-M)ove of the gem onto a stand does the same (0x2071f, after M)ove's own range test), without the
-search: SE's M)ove rules are not yet built. The gem is also on the breakable list (§5c, M)ove): thrown
+M)ove of a carried thing onto a stand does the same (0x2071f, rules/se_move.md §3), without the
+search. The gem is also on the breakable list (§5c, M)ove): thrown
 more than a tile, it breaks.
 
 **The scene**, in order:
@@ -392,7 +392,7 @@ The acting member loads it (whoever holds it). Frame 1 is loaded:
 The engine keeps a readied thing's object number but not its frame, so a readied flintlock is loaded
 with item 6, where firing it unloads it.
 
-### 5l. The mortar and the grinding stone (0x210ad), with SE's M)ove
+### 5l. The mortar and the grinding stone (0x210ad)
 
 Both are containers; U)se grinds what is in them. The things inside are looked at in order:
 - empty: `There's nothing to grind!`;
@@ -410,8 +410,64 @@ Then:
   stops there, but what was taken from those before it stays gone (a DOS slip, kept). With all three:
   that much gunpowder (204) goes into the container and `You mix a batch of gunpowder.`
 
-The engine has no SE containers yet (nothing goes into one but by DOS's M)ove), so this comes with SE's
-M)ove rules.
+SE's containers and how things get into them are rules/se_move.md.
+
+### 5m. The stalks, the bones and the jug of plachta
+
+The corn stalk (61) and the bean stalk (62) give the acting member (the first of the party while aboard)
+one corn (108) or one bean (109): `You got some corn from the plant.`, `You got some beans from the
+plant.`; the bones and the skeleton (79-82) one rib bone (211): `You got some rib bones.` None of them is
+used up. Too heavy (strength x 20): `You are carrying too much already.`
+
+The jug of plachta (63) asks `On ` as the knives do (holder, `nothing!`, range from the holder). On a
+spear (26): one spear goes; the spear of Shamap (1) goes to the acting member if the spear was in their
+pack (and they can carry it), else onto their tile; then the jug goes. Nothing is said. On anything else:
+`No effect.`
+
+### 5n. The totems (in the switch), with item 6
+
+The three totems (86-88) are Triolo's (actor 9). The acting member has the totem and is Triolo: his
+invocation (0x11ff:0xf07). The acting member doesn't have it: the invocation if the leader is Triolo,
+else `<member> can't use that!`. Someone else has it in their pack: `<member> can't use that!`. The
+invocations are item 6.
+
+### 5o. The folded skin, the fire extinguisher and the bottle of liquor
+
+**The folded skin (92)** unfolds where it lies into the skin (245) at its frame + 3, a 2x2 thing anchored
+at the folded skin's tile. Carried, or no room: `There is not enough room to unfold the skin.` No room
+means a thing at (x-1, y) or (x-1, y-1) (DOS means to look at the whole 2x2 but looks at that column
+twice: a slip, kept), or an impassable tile (tile flags 1, bit 0x02) at (x-1, y), (x, y-1) or (x-1, y-1).
+
+**The fire extinguisher (94)** asks `On ` as the knives do (holder, range from the holder):
+- a fire (242, 254): `You put the fire out.` and it goes;
+- burnt logs (207) burning (frame 2): `You put the fire out.` and they are frame 0;
+- another thing: `No effect.`;
+- a tile with nothing on it, in reach: lava (map tiles 15-27, 170, 171): on level 3 `The lava is too far
+  below you.`; else `Lava`, `You harden some of the lava.`, and frozen lava (57) lies there, its frame the
+  lava tile's place in that list (0-14). Not lava: `nothing!`
+DOS plays sound 0x1d each time; SE's sounds are not yet built.
+
+**The bottle of liquor (95)** goes: `You drink it.`, and the drinks count (DS:0x280e) goes up by one; it
+goes down by one each hour. Past 3, each step of the Avatar's is, 1 time in 2, `Hic!` and a step one of
+the eight ways at random (N, NE, E, SE, S, SW, W, NW, DS:0xac/0xb4) instead. (U6's is 3 in 4, any way or
+none.) Where SE's save keeps the count is item 10.
+
+### 5p. The digging stick and the cloth strips
+
+**The digging stick (131)** looks at the eight tiles around its holder (the party's tile when aboard),
+column by column from the west, top to bottom. The first clay tile (map tiles 0x20-0x2f, 0xbe): `You get
+some clay.` and one clay (192) to the holder, else onto that tile. None: `There is nothing to dig!` The
+stick stays.
+
+**The cloth strips (134)** ask `On ` (holder, range from the holder; a person is taken here, not only
+things):
+- a person: their name, then, below their maximum HP (SE's: strength x 2 + level x 4, 1-255, strength as
+  in §5g), 1-5 HP back (no more than the maximum), `<name>'s wounds are bound.` and one strip goes; at the
+  maximum, `<name> doesn't need any help.`;
+- a person who has fallen (their object a body, 249, or blood, 248), or a body or blood on the map: `a
+  body.` and `That person is beyond help.`;
+- anything else: `nothing`.
+Where SE's save keeps the levels is item 10.
 
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as

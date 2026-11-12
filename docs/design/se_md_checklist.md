@@ -30,7 +30,7 @@ list once SE's seams exist.
 5. U)se: SE's whole use switch (grinding, gunpowder, pots and clay, tar, torches, fishing, the
    bucket, skinning, the camera, the raft and turtles, flintlocks, grenades), read case by case.
 6. Combat and the party's powers: Triolo's and Intanya's invocations (Heluzz, Aphazz, Motazz),
-   offerings, ranged weapons, monsters; fallen creatures as bodies in their actor slots (status 0x10)
+   offerings, ranged weapons, monsters; the totems (rules/se_use.md §5n); fallen creatures as bodies in their actor slots (status 0x10)
    and the bell on a fallen tyrannosaurus (rules/se_use.md §5i); trees in a blast (§5b); a readied
    flintlock's frame (loading, firing; §5k).
 7. Rest and food: SE's rest rules and the dream at the first rest.
@@ -102,3 +102,10 @@ list once SE's seams exist.
   Knives and scissors (§5f): cloth strips, butchering, skinning the tiger, plucking.
   The hammers (§5g): blue stone, charcoal. The vine (§5h): a rope over a hole. The bell (§5i) waits
   for item 6. Jimmy's notebook (§5j). The flintlock loads (§5k; readied ones with item 6). The turtle bait goes with the raft and the turtles. The rope and the hole in the ceiling go to item 11 (they are SE's level change).
+- 2026-11-11: item 5 continued (rules/se_move.md): SE's M)ove read from its GAME.EXE and built: pushing (its
+  words, the strength test, things lost in deep water, lava or down a slope, into a container on the map),
+  giving (16 things or the weight), its nine containers (what each takes, the jar's picture), and the
+  mortar's grinding (se_use.md §5l); and SE's D)rop (§6: things lost, breakables, the squished pot, into a
+  container, the device going off). The stalks, the bones and the jug of plachta (se_use.md §5m); the totems go to item 6
+  (§5n). The folded skin, the fire extinguisher and the liquor (§5o). The digging stick and the cloth strips (§5p). Next:
+  §3's order from the metal bucket (136).
