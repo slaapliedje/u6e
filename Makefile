@@ -1056,6 +1056,14 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'grenade hurt the Avatar=1' 'grenade chained=1' 'grenade web gone=1' 'gunpowder blew=1' \
 	             'boulder open ground found=1' 'boulder pushed west=1' 'boulder dam falls there=1' \
 	             'boulder dam x=292' 'boulder dammed=1' \
+	             'gem placed=1' 'gem noon=1' 'gem trap door open=1' 'gem flag=1' 'gem again no scene=1' \
+	             'ribbon head found=1' 'ribbon used one=1' 'ribbon whisper=1' 'ribbon head wakes=1' \
+	             'knife spot found=1' 'knife asks On=1' 'knife skinned=1' 'knife meat=1' 'knife skin=1' 'knife leftovers=1' \
+	             'knife too tough=1' 'knife strips=10' 'knife cloth left=1' \
+	             'hammer charcoal=1' 'hammer stacked silently=1' 'hammer glances and flakes=1' 'hammer blue stones=1' \
+	             'vine asks On=1' 'vine hole there=1' 'vine rope=1' \
+	             'notebook avatar=1' 'notebook jimmy is 312=1' 'notebook jimmy=1' \
+	             'flintlock no powder=1' 'flintlock loaded=1' 'flintlock already=1' 'camera pictures=2' 'camera out of film=1' \
 	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"

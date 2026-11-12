@@ -10,9 +10,9 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 >                  addresses below, code segment base 0x1dbd0). The disassembly stays outside the repo.
 > - References   : none
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
-> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades and gunpowder; not yet against DOS running
+> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock and the camera; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (the boulder and the waterfall)
+> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -63,19 +63,19 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 275 door | the swinging door, §4 | 0x246a8 | yes |
 | 93 102-111 113 114 120 197 213 214 | food: `You eat the food.`, one of a stack (or the thing) used up; nothing more | 0x21df5 | yes |
 | 188 crate | open (frame 0): `Searching here, you find A, B and C.`, the contents spill out; shut: nothing | 0x1ec8a | yes |
-| 6 giant gem | | 0x24302 | no |
-| 10 magnesium ribbon | | 0x24f6b | no |
-| 20 rope | | in the switch | no |
-| 22 hole in the ceiling | | 0x8cb:0x855 | no |
-| 25 44 52 obsidian knife, knives, scissors | cut: strips, skin, meat, feathers | 0x22488 | no |
-| 29 119 rock hammer, metal hammer | | 0x21436 | no |
-| 42 vine | | 0x24fde | no |
-| 43 bell | | 0x21293 | no |
-| 47 turtle bait | | 0x24783 | no |
-| 49 notebook | Jimmy's shorthand | 0x24d88 | no |
-| 50 bamboo flintlock | load | 0x21e67 | no |
-| 51 camera | | 0x24edf | no |
-| 59 60 mortar, grinding stone | grind | 0x210ad | no |
+| 6 giant gem | set on the gem stand: noon and the trap door, §5d | 0x24302 | yes |
+| 10 magnesium ribbon | burn one: a flash; wakes the giant stone head, §5e | 0x24f6b | yes |
+| 20 rope | in solo mode `Not in solo mode!`; else climb (0x8cb:0x855, SE's level changes: item 11) | in the switch | item 11 |
+| 22 hole in the ceiling | frame 1 and not solo: climb (as the rope); frame 0: `You need a rope dropped from above.`; else `Not in solo mode!` | 0x8cb:0x855 | item 11 |
+| 25 44 52 obsidian knife, knives, scissors | `On `: cloth into strips; meat, a skin or feathers from a body, §5f | 0x22488 | yes |
+| 29 119 rock hammer, metal hammer | `On `: a blue stone off the blue boulder, charcoal from burnt logs, §5g | 0x21436 | yes |
+| 42 vine | `On ` a hole: it becomes a rope down, §5h | 0x24fde | yes |
+| 43 bell | `On ` a fallen tyrannosaurus: the bell on its neck, §5i | 0x21293 | item 6 |
+| 47 turtle bait | a turtle (302) comes up beside the holder, near water, in a part of the sea | 0x24783 | with the raft and turtles |
+| 49 notebook | Jimmy's shorthand, §5j | 0x24d88 | yes |
+| 50 bamboo flintlock | load with gunpowder, §5k | 0x21e67 | yes, but readied (item 6) |
+| 51 camera | a picture (its quality is the film left), and the ribbon's flash, §5e | 0x24edf | yes |
+| 59 60 mortar, grinding stone | grind what is in it: corn flour, or gunpowder, §5l | 0x210ad | with SE's M)ove (containers) |
 | 61 62 corn and bean stalks | | 0x23ea5, 0x23e52 | no |
 | 63 jug of plachta | | 0x254bc | no |
 | 79-82 bones, skeleton | rib bones | 0x23f4b | no |
@@ -252,8 +252,172 @@ and its fuse burns on.
 
 The engine doesn't save the fuse; whether DOS's save keeps DS:0x2842 is an open question (§6).
 
+### 5d. The giant gem (0x24302)
+
+U)se of the giant gem (6) looks for a gem stand (66) in the 3x3 around whoever holds the gem: the
+member carrying it, or the acting member for one on the ground (not around the gem itself). It looks
+column by column, west first, and stops after the column it found one in. For each stand found at (x, y):
+
+1. the gem moves to (x-1, y-1) on the current level, out of the pack if it was carried;
+2. `You place the gem on the stand.`;
+3. the first time (bit 0x02 of talk flag 1 clear), the scene (0x1dd70).
+
+None found: `No effect.` The new game has one stand, at (170,483); the gem goes to (169,482).
+
+M)ove of the gem onto a stand does the same (0x2071f, after M)ove's own range test), without the
+search: SE's M)ove rules are not yet built. The gem is also on the breakable list (§5c, M)ove): thrown
+more than a tile, it breaks.
+
+**The scene**, in order:
+- song 15 plays (0x2701:0x190); afterwards the song for the place comes back (0x2701:0x1f1);
+- the message area is cleared, so the line above is gone at once;
+- the eyes in the top border turn blue (map tiles 373 and 374 drawn at (64,0) and (80,0); 371/372 are
+  the green pair and 375/376 the red);
+- the clock runs on: if the minute isn't 0, to the next hour, then an hour at a time until 12:00. Each
+  step is one pass of the world for that many minutes (0x359:0x11b6): a lit fuse runs down by that much
+  and blows if it runs out, and the schedules catch up. On the hour exactly, no time passes at all, even
+  far from noon (a DOS slip, kept);
+- a trap door (160) is made at (192,460), level 0, frame 1 (the open one);
+- talk flag 1 gets bit 0x02, so the scene never comes again;
+- the "light" object (11) takes map tile 284's picture (a beam) in place of its own (522), until the game
+  is reloaded. No light objects are in the new game's object data, surface or dungeon, so nothing shows it.
+
+The engine has no SE music yet (item 9) and draws U6's border (item 8), so the song and the eyes wait for
+those items. Where the trap door leads is item 11.
+
+### 5e. The magnesium ribbon (0x24f6b) and the camera (0x24edf)
+
+U)se burns one ribbon (10): one of a stack, or the last one. The flash is at the tile of whoever holds
+it (the acting member for one on the ground), and it goes in three frames: the burst (map tile 264)
+over that tile; the whole view at light level 7 (lit everywhere, as at noon); then the light as it
+was. No time passes beyond the U)se.
+
+Then, unless bit 0x02 of talk flag 3 or bit 0x80 of talk flag 53 is set, and only while the giant stone
+head (actor 25, on level 2 at (48,206) in the new game) is on screen (within 5 tiles across and 4 up or
+down of the leader, any level: DOS doesn't test it):
+- the flash within 2 tiles west or north, or 1 east or south, of the head's anchor (it fills 2x2,
+  anchored bottom right): talk flag 25 becomes 0x28 (the whole byte), flag 53 gets 0x80, and the head
+  talks (no name line first);
+- anywhere else: `You hear a barely audible voice whisper, "Closer...".`
+
+The camera (51) makes the same flash (0x24dd4, the same head test), at its holder's tile, or at its own
+tile when it lies on the map. Its quality is the film left: above 0 it goes down by one and `You take a
+picture.`; at 0, `The camera's out of film, but the flash still works.` Nothing is used up.
+
+### 5f. Knives and scissors (0x22488)
+
+The obsidian knife (25), the knives (44) and the scissors (52) ask `On ` at once, as the fire does (§5).
+"The holder" is whoever carries the knife (the acting member for one on the ground). No answer:
+`nothing!`. A thing on the map must be within one tile of the holder, else `Out of range!` (DOS measures
+from the holder, not the leader as the fire does). "Its place" is the thing's tile, or its carrier's.
+New things are made on the current level, at frame 0 unless given.
+
+| on | what happens |
+|----|--------------|
+| cloth (180) | one cloth goes (one of a stack); 10 cloth strips (134) go to the acting member if the cloth was in their pack, else onto the holder's tile: `You made some cloth strips.` |
+| a dead beast (280), by its frame | see below |
+| a body (249) frame 15 | blood (248, frame 0-2 at random) on its place, the body goes, `You remove the feathers.`, and 5-20 feathers (48) to the holder, else on its place |
+| a body (249) frame 11 | `You make a mess.` and blood (frame 0) on its place; the body stays |
+| a body (249), other frames | `You ghoul!` |
+| anything else | `No effect.` |
+
+A dead beast's frame (the jump table at cs:0x4dfa; the names are LOOK's for each frame):
+
+| frames | beast | what happens |
+|--------|-------|--------------|
+| 1 | serpent woman | `You ghoul!` |
+| 21 39 41 45 | gorilla, sloth, jaguar, bear | a skeleton (82, frame 1) and blood on its place, blood one tile west; the body goes; `You cut up some meat.`; 2-7 meat (110) to the holder, else on its place |
+| 47 | eohippus | bones (80) and blood on its place; the body goes; the meat as above |
+| 37 | tiger | as the gorilla, but `You skinned the big cat.`, and after the meat a folded skin (92) to the holder, else on its place |
+| 46 | spider | `You make a mess.` and blood (frame 0); the body stays |
+| 3 4 6 8 9 11 15 17 27 28 30 31 33 35 43 | the dinosaurs | `The hide is too tough.` |
+| 23 24 25 | robosaurus, argent sergeant | `Clank!` |
+| 0, and the others | the rest of a big beast's tiles | nothing at all, not even a message |
+
+Every new thing above comes from DOS's object maker (0xa5d:0xeb6), which also sets status bit 0x20;
+the gem's trap door is the only one DOS clears it on. What 0x20 does in SE (probably "temporary", as
+in U6's save) is an open question (§6); the engine keeps them like any other object.
+
+### 5g. The hammers (0x21436)
+
+The rock hammer (29) and the metal hammer (119) ask `On ` as the knives do, with the same holder, the
+same `nothing!`, and the same range test from the holder. The holder's strength here is the one DOS
+works with (0x1810:0x4a0): their strength, less 3 when their object flags (objlist 0x000) have bit 0x40,
+and with bit 0x80 as well the 3 back, kept between 1 and 30.
+
+| on | what happens |
+|----|--------------|
+| the blue boulder (172) | a roll of 1-30 below (45 - strength) / 2: `Glanced off!`; else `A piece of rock flakes off.` and a blue stone (58) to the holder, else onto the holder's tile. The boulder stays |
+| burnt logs (207), frame 0 | 1 to strength charcoal (129). If the holder carries a charcoal stack that can take it (no more than 255), it joins that stack and nothing is said (a DOS slip, kept); else `You made some charcoal.` and a new stack to the holder, else onto the holder's tile. The logs stay |
+| anything else | `No effect.` |
+
+### 5h. The vine (0x24fde)
+
+The vine (42) asks `On ` as the knives do (holder, `nothing!`, range from the holder). On a hole (168):
+the vine goes, and a rope (20) is made at (x-1, y-1) of the hole, on the current level, with the hole's
+quality (the hole's quality is its link to the level below, which the rope's climb reads: item 11); DOS
+clears the new rope's status bit 0x20. On anything else: `You can't use a rope here!`. The new game's
+holes are 2x2 (frame 3), e.g. at (396,68) with quality 1.
+
+### 5i. The bell (0x21293), with item 6
+
+The bell (43) asks `On ` as the knives do (holder, `nothing!`, range from the holder). It works only on
+an actor whose object is a dead beast (280) at frame 13 or 17: SE leaves a fallen creature in its actor
+slot with a body's object number (249 or 280) and status bit 0x10 (such an actor takes no turns,
+0x18767). Frames 13 and 17 are tyrannosaurus frames. Then:
+- the actor's status (objlist 0x800) without bit 0x04: `No effect.`;
+- its talk flag already nonzero: `It already has a bell on its neck.`;
+- else the bell goes, its talk flag becomes 0xff, `You put the bell on the dinosaur's neck.`, and for
+  actor 181 (the new game's tyrannosaurus at (421,584)) talk flag 20 gets bit 0x80.
+Anything else: `No effect.` (DOS also notes a frame-17 target's quality, then never uses it.)
+
+Waits for item 6: the engine doesn't yet turn SE's fallen creatures into bodies in their actor slots,
+and its `On ` takes things, not actors.
+
+### 5j. Jimmy's notebook (0x24d88)
+
+The acting member reads it. If that member's object is 312 (Jimmy): `Jimmy says, "Hey, boss, you'll
+never be able to figure out my shorthand."`, a blank line, `"Why don't you just ask me what you want to
+know?"`. Anyone else: `You can't read Jimmy's shorthand.`
+
+### 5k. The bamboo flintlock (0x21e67)
+
+The acting member loads it (whoever holds it). Frame 1 is loaded:
+- frame 1 already: `Flintlock already loaded.`;
+- no gunpowder (204) in the member's pack: `You don't have any gunpowder.` for the leader, else
+  `<name> doesn't have any gunpowder.`;
+- else one gunpowder goes, the flintlock turns to frame 1, and `Flintlock loaded.` for the leader, else
+  `<name>: Flintlock loaded.`
+
+The engine keeps a readied thing's object number but not its frame, so a readied flintlock is loaded
+with item 6, where firing it unloads it.
+
+### 5l. The mortar and the grinding stone (0x210ad), with SE's M)ove
+
+Both are containers; U)se grinds what is in them. The things inside are looked at in order:
+- empty: `There's nothing to grind!`;
+- anything but corn (108), charcoal (129), sulfur (123) or potassium nitrate (130), met before any corn:
+  `You can't grind that!`, and nothing changes;
+- corn stops the look. Until then, the smallest stack among the other three is noted (each of the
+  three is noted once, the last of its kind found).
+
+Then:
+- **corn**, with none of the other three seen before it: `You grind the corn into corn flour.` The corn
+  goes and as much corn meal (93; 1 for a quantity of 0) goes into the container. With any of the three
+  seen first: `The mixture in the <container> is wrong.`;
+- **no corn**: charcoal, sulfur and potassium nitrate in that order: the smallest stack's worth goes from
+  each (a stack no bigger goes whole); if one is missing, `You're missing some ingredients.` and it
+  stops there, but what was taken from those before it stays gone (a DOS slip, kept). With all three:
+  that much gunpowder (204) goes into the container and `You mix a batch of gunpowder.`
+
+The engine has no SE containers yet (nothing goes into one but by DOS's M)ove), so this comes with SE's
+M)ove rules.
+
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as
   objects only.
 - Whether the save keeps the fuse (DS:0x2842/0x2844).
+- The gem scene's 0x5d0:0x25ad (a buffer at DS:0xb65f) and the palette call 0x276b:0x245a (colour 2 to
+  black?) are not read; DOS running would show them.
+- What status bit 0x20 means for the things SE's object maker makes (§5f).
 - Item 5 covers the remaining cases, one handler at a time.

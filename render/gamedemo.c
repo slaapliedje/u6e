@@ -4061,8 +4061,10 @@ static int eclipse_now(void)
     if(g_wp){ int d,m,y; cur_date(g_wp,&d,&m,&y); if(d==1&&m%3==0) return 1; }
     return 0; }
 /* DOS's level of light, 0..7: the radius about the leader; 7 = everywhere. A burning light in the party or a Light spell lift it to 4 */
+static int g_light_force=-1;                                 /* a flash: this level of light for a frame (se_use.md §5e), or -1 */
 static int ambient_level(const world_t*w)
 {   int mn=clock_minutes(w), hour=mn/60, m=mn%60, a;
+    if(g_light_force>=0) return g_light_force;
     if(eclipse_now()||hour<5||hour>19||(w->level>=1&&w->level<=4)) a=0;
     else if(hour==5) a=m/10+1; else if(hour==19) a=(59-m)/10+1; else a=7;
     if(a<4){ if(g_spell_light_turns>0) a=4;
@@ -6232,6 +6234,11 @@ static int se_bot_door(const wobj_t*o){ int fr=(int)o->tile-basetile(o->obj_n);
     if(o->obj_n==234) return (fr==5||fr==7)?fr:-1; if(o->obj_n==275) return fr==1?5:fr==3?1:fr; if(o->obj_n==161) return 8; return -1; }
 static int use_actor(void); static int carry_over(int a,int extra);
 #define SEON_FIRE 1                                         /* the fire, the oven, the fire pit, lava (0x2215f) */
+#define SEON_KNIFE 2                                        /* a knife or the scissors (0x22488) */
+#define SEON_HAMMER 3                                       /* the rock hammer, the metal hammer (0x21436) */
+#define SEON_VINE 4                                         /* the vine (0x24fde) */
+static int g_se_on_idx=-1, g_se_on_row=-1;                  /* the thing that asked: on the map, or its pack row */
+static int g_se_on_actor=1;                                 /* who holds the thing that asked */
 static const uint16_t SE_TREES[]={50,51,64,65,66,67,68,69,70,71,72,192,193,194,195,198,179,180,130};   /* map tiles, DS:0x1134 */
 static const uint16_t SE_BURNS[]={4,5,13,7,9,36,39,42,17,45,134,183,180,191,210,171};               /* what a fire incinerates, DS:0x118a */
 static int on_list(const uint16_t*l,int n,int v){ for(int k=0;k<n;k++) if(l[k]==v) return 1; return 0; }
@@ -6411,6 +6418,76 @@ static int se_fire_on(int idx,int row,int n)
         se_use_up(idx,row,1); se_blast(x,y,0,0); return 1; }
     msgcat(n,"No effect."); return 0;
 }
+/* a knife's "On " (0x22488, se_use.md §5f): cloth into strips; meat, a skin or feathers from a body */
+static const uint8_t SE_BODY_CUT[48]={0,1,0,2,2,0,2,0,2,2,0,2,0,0,0,2,0,2,0,0,0,3,0,4,4,4,0,2,2,0,2,2,0,2,0,2,0,5,0,3,0,3,0,2,0,3,6,7};
+static void se_body_new(int on,int fr,int x,int y){ int i=persist_obj_new(on,fr,x,y,0); (void)i; }
+static void se_body_give(int a,int on,int q,int x,int y){ if(!se_give(a,on,q)) se_drop_new(on,q,x,y); }   /* to the knife's holder, else onto the body's tile */
+static int se_knife_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, on, fr, hx, hy, bx, by; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ on=g_wobj[idx].obj_n; fr=se_frame(idx); bx=g_wobj[idx].x; by=g_wobj[idx].y;
+        if(bx-hx<-1||bx-hx>1||by-hy<-1||by-hy>1){ msgcat(n,"Out of range!"); return 0; } }
+    else { on=g_ow.inv[row].obj_n; fr=(int)g_ow.inv[row].tile-basetile(on); se_actor_xy(g_ow.inv[row].owner?g_ow.inv[row].owner:1,&bx,&by); }
+    if(on==180){                                     /* cloth: the acting member gets ten strips if it is theirs, else they land at the knife */
+        int m=use_actor(), mine=row>=0 && (g_ow.inv[row].owner?g_ow.inv[row].owner:1)==m;
+        if(!(mine && se_give(m,134,10))) se_drop_new(134,10,hx,hy);
+        se_use_up(idx,row,0); msgcat(n,"\nYou made some cloth strips."); return 1; }
+    if(on==280){ int k=fr>=0&&fr<48?SE_BODY_CUT[fr]:0;
+        if(k==1){ msgcat(n,"\nYou ghoul!"); return 1; }
+        if(k==2){ msgcat(n,"\nThe hide is too tough."); return 1; }
+        if(k==4){ msgcat(n,"\nClank!"); return 1; }
+        if(k==6){ msgcat(n,"\nYou make a mess."); se_body_new(248,0,bx,by); build_blocked(); return 1; }
+        if(k==3||k==5||k==7){
+            if(k==7){ se_body_new(80,0,bx,by); se_body_new(248,se_rand(0,2),bx,by); }
+            else { se_body_new(82,1,bx,by); se_body_new(248,se_rand(0,2),bx,by); se_body_new(248,se_rand(0,2),bx-1,by); }
+            se_use_up(idx,row,1);
+            msgcat(n,k==5?"\nYou skinned the big cat.":"\nYou cut up some meat.");
+            se_body_give(a,110,se_rand(2,7),bx,by);
+            if(k==5) se_body_give(a,92,1,bx,by);
+            build_blocked(); return 1; }
+        return 1; }                                  /* the other parts of a big beast: nothing at all */
+    if(on==249){
+        if(fr==15){ se_body_new(248,se_rand(0,2),bx,by); se_use_up(idx,row,1); msgcat(n,"\nYou remove the feathers.");
+            se_body_give(a,48,se_rand(5,20),bx,by); build_blocked(); return 1; }
+        if(fr==11){ msgcat(n,"\nYou make a mess."); se_body_new(248,0,bx,by); build_blocked(); return 1; }
+        msgcat(n,"\nYou ghoul!"); return 1; }
+    msgcat(n,"\nNo effect."); return 0;
+}
+/* the strength DOS works with (0x1810:0x4a0): the actor's object flags (objlist 0x000) take 3 off with bit 0x40, and
+ * with 0x80 as well put the 3 back, between 1 and 30 (nothing sets them until item 6's invocations) */
+static int se_eff_str(int a){
+    int st=g_astr[a], f=(g_savetmpl&&g_objlist_off>=0&&a>=0&&a<256)?g_savetmpl[g_objlist_off+a]:0;
+    if(f&0x40){ st-=3; if(st<1) st=1; if(f&0x80){ st+=3; if(st>30) st=30; } }
+    return st; }
+/* a hammer's "On " (0x21436, se_use.md §5g): a blue stone off the blue boulder; charcoal from burnt logs */
+static int se_hammer_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, on, hx, hy; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ on=g_wobj[idx].obj_n; int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy;
+        if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    else on=g_ow.inv[row].obj_n;
+    if(on==172){                                     /* glances off on 1-30 below (45 - strength) / 2 */
+        if(se_rand(1,30)<(45-se_eff_str(a))/2){ msgcat(n,"\nGlanced off!"); return 1; }
+        msgcat(n,"\nA piece of rock flakes off."); if(!se_give(a,58,1)) se_drop_new(58,1,hx,hy); return 1; }
+    if(on==207 && (idx>=0?se_frame(idx):(int)g_ow.inv[row].tile-basetile(207))==0){
+        int q=se_rand(1,se_eff_str(a)), k;
+        for(k=0;k<g_ow.ninv;k++){ int ow=g_ow.inv[k].owner?g_ow.inv[k].owner:1;
+            if(ow==a && g_ow.inv[k].obj_n==129 && g_ow.inv[k].qty+q<=255) break; }
+        if(k<g_ow.ninv){ g_ow.inv[k].qty=(uint16_t)(g_ow.inv[k].qty+q); return 1; }   /* onto a stack: DOS says nothing */
+        msgcat(n,"\nYou made some charcoal."); if(!se_give(a,129,q)) se_drop_new(129,q,hx,hy); return 1; }
+    msgcat(n,"\nNo effect."); return 0;
+}
+/* the vine's "On " (0x24fde, se_use.md §5h): tied over a hole (168) it becomes a rope down (20) with the hole's quality */
+static int se_vine_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy;
+        if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    if(idx<0 || g_wobj[idx].obj_n!=168){ msgcat(n,"\nYou can't use a rope here!"); return 1; }
+    int x=g_wobj[idx].x-1, y=g_wobj[idx].y-1, q=g_wobj[idx].quality;
+    se_use_up(g_se_on_idx,g_se_on_row,1); g_se_on_idx=g_se_on_row=-1;
+    persist_obj_new(20,0,x,y,q); build_blocked(); return 1;
+}
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
 static int se_on_target(int idx,int row)
 {
@@ -6418,16 +6495,90 @@ static int se_on_target(int idx,int row)
     if(idx<0 && row<0){ msgcat(n,"nothing!"); g_se_on=0; return 0; }
     n=look_thing(n,idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty,0);
     n=msgcat(n,"\n");
-    if(idx>=0){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
+    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); g_se_on=0; return 0; } }
     int r=0, k=g_se_on; g_se_on=0; g_verb_pts=5;
     if(k==SEON_FIRE) r=se_fire_on(idx,row,n);
+    else if(k==SEON_KNIFE) r=se_knife_on(idx,row,n);
+    else if(k==SEON_HAMMER) r=se_hammer_on(idx,row,n);
+    else if(k==SEON_VINE) r=se_vine_on(idx,row,n);
     return r;
 }
 static int se_on_map(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
     return se_on_target(objworld_at(&g_ow,tx,ty),-1); }
 static int se_on_pack(world_t*w,int row){ (void)w; return se_on_target(-1,row); }
+/* ---- the giant gem (se_use.md §5d, 0x24302; M)ove onto the stand does the same) ---- */
+static void sched_pass(const world_t*w);
+/* time passes in one step of n minutes (0x359:0x11b6): the fuse runs down by n, the schedules catch up */
+static void se_time_pass(int n){
+    world_t*w=g_wp; if(!w) return;
+    w->clock+=(uint32_t)n; g_hour=clock_hour(w); g_minutes=clock_minutes(w);
+    if(g_se_fuse>0){ if(g_se_fuse>n) g_se_fuse-=n; else { g_se_fuse=0; se_detonate(); } }
+    sched_pass(w); }
+/* the first time (talk flag 1, bit 2): the clock runs on to noon, and a trap door opens at (192,460) */
+static void se_gem_scene(void){
+    if(g_minutes%60){ se_time_pass(60-g_minutes%60); while(g_hour!=12) se_time_pass(60); }   /* on the hour: no time passes */
+    { int t=persist_obj_new(160,1,192,460,0); (void)t; }
+    g_cg.talk_flags[1]|=2; build_blocked();
+    g_msg[0]=0; }                                        /* the scene wipes the message area */
+/* set the gem on a gem stand (66) within a tile of whoever holds it (the actor acting, for one on the
+ * ground); it goes one tile up and left of the stand. 1 = placed. */
+static int se_gem(int idx,int row,int a){
+    int x,y,done=0; se_actor_xy(a,&x,&y);
+    for(int dx=0;dx<3 && !done;dx++) for(int dy=0;dy<3;dy++){
+        int si=obj_idx_at(x+dx-1,y+dy-1,66); if(si<0 || !g_wobj[si].alive) continue;
+        int gx=x+dx-2, gy=y+dy-2;
+        if(idx<0 && row>=0){ pack_row_take(row,1); row=-1; idx=persist_obj_new(6,0,gx,gy,0); build_blocked(); }
+        else if(idx>=0){ wobj_t*o=&g_wobj[idx]; o->x=(uint16_t)gx; o->y=(uint16_t)gy; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; build_blocked(); }
+        msgcat(0,"\nYou place the gem on the stand.");
+        if(!(g_cg.talk_flags[1]&2)) se_gem_scene();
+        done=1; }                                        /* DOS finishes the column it found one in */
+    if(!done) msgcat(0,"\nNo effect.");
+    return done; }
+/* ---- the magnesium ribbon (se_use.md §5e, 0x24f6b): one burns in a flash where its holder stands; beside the
+ * giant stone head (25) the flash wakes it, once ---- */
+static void fx_show(const world_t*w,int x,int y,int tile,int vbls); static void fx_clear(const world_t*w);
+static void compose_map(const world_t*w); static void present_map(void);
+/* the flash at (x,y) (0x24dd4): the burst, a frame of full light, then the light as it was; beside the giant stone head
+ * it wakes it, once */
+static void se_flash(int x,int y){
+    int hx,hy;
+    if(g_wp){ fx_show(g_wp,x,y,264,1); g_fx_on=0; g_light_force=7; compose_map(g_wp); present_map(); vsync_pump();
+        g_light_force=-1; compose_map(g_wp); present_map(); }
+    if((g_cg.talk_flags[3]&2) || (g_cg.talk_flags[53]&0x80) || !se_on_screen(25)) return;
+    actor_pos(25,&hx,&hy);
+    if(x-hx>1 || y-hy>1 || x-hx<-2 || y-hy<-2){ msgcat(msg_end(),"\nYou hear a barely audible voice whisper, \"Closer...\"."); return; }
+    g_cg.talk_flags[25]=0x28; g_cg.talk_flags[53]|=0x80;
+    se_talk_open(25); }
+static int se_ribbon(int idx,int row,int a){ int x,y; se_actor_xy(a,&x,&y); se_use_up(idx,row,0); g_msg[0]=0; se_flash(x,y); return 1; }
+/* the camera (0x24edf, §5e): its quality is the film left */
+static int se_camera(int idx,int row,int a){
+    int x,y; uint8_t qq;
+    if(idx>=0 && g_wobj[idx].parent==WOBJ_PARENT_NONE){ x=g_wobj[idx].x; y=g_wobj[idx].y; } else se_actor_xy(a,&x,&y);
+    qq=idx>=0?g_wobj[idx].quality:g_ow.inv[row].quality;
+    if(qq>0){ if(idx>=0){ g_wobj[idx].quality--; if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; } else g_ow.inv[row].quality--;
+        msgcat(0,"\nYou take a picture."); }
+    else msgcat(0,"\nThe camera's out of film, but the flash still works.");
+    se_flash(x,y); return 1; }
+/* Jimmy's notebook (0x24d88, se_use.md §5j): only he reads it */
+static int se_notebook(void){
+    if(actor_objn(use_actor())==312) msgcat(0,"\nJimmy says, \"Hey, boss, you'll never be able to figure out my shorthand.\"\n\n\"Why don't you just ask me what you want to know?\"");
+    else msgcat(0,"\nYou can't read Jimmy's shorthand.");
+    return 1; }
+static int conv_name(int id,char*out,int cap);
+/* load the bamboo flintlock (0x21e67, se_use.md §5k): one gunpowder from the acting member (m); frame 1 = loaded */
+static int se_flintlock(int idx,int row,int m){
+    int lead=g_nparty?g_party[0].actor:1, fr=idx>=0?se_frame(idx):(int)g_ow.inv[row].tile-basetile(50), k; char nm[40];
+    if(fr==1){ msgcat(0,"\nFlintlock already loaded."); return 1; }
+    for(k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==204 && (g_ow.inv[k].owner?g_ow.inv[k].owner:1)==m) break;
+    if(!conv_name(m,nm,sizeof nm)) nm[0]=0;
+    if(k>=g_ow.ninv){ if(m==lead) msgcat(0,"\nYou don't have any gunpowder."); else { int n=msgcat(0,"\n"); n=msgcat(n,nm); msgcat(n," doesn't have any gunpowder."); } return 1; }
+    { int r=row, gone=g_ow.inv[k].qty<=1; pack_row_take(k,1); if(r>k && gone) r--;   /* the rows below move up */
+      if(idx>=0){ g_wobj[idx].tile=(uint16_t)(basetile(50)+1); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+      else if(r>=0) g_ow.inv[r].tile=(uint16_t)(basetile(50)+1); }
+    if(m==lead) msgcat(0,"\nFlintlock loaded."); else { int n=msgcat(0,"\n"); n=msgcat(n,nm); msgcat(n,": Flintlock loaded."); }
+    return 1; }
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
@@ -6441,6 +6592,14 @@ static int se_use_object(int idx)
         return found?1:0;
     }
     if(o==137||o==240) return se_light(idx,-1,0,0);
+    if(o==6) return se_gem(idx,-1,use_actor());
+    if(o==10) return se_ribbon(idx,-1,use_actor());
+    if(o==49) return se_notebook();
+    if(o==51) return se_camera(idx,-1,use_actor());
+    if(o==50) return se_flintlock(idx,-1,use_actor());
+    if(o==25||o==44||o==52){ g_se_on=SEON_KNIFE; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }   /* knives and scissors ask "On " */
+    if(o==29||o==119){ g_se_on=SEON_HAMMER; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }   /* the hammers too */
+    if(o==42){ g_se_on=SEON_VINE; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
     if(se_is_food(o)){                               /* eat (0x21df5): no more than that */
         msgcat(0,"\nYou eat the food."); se_use_up(idx,-1,0); return 1;
     }
@@ -6460,6 +6619,13 @@ static int se_use_pack(world_t*w,int on)
     if(!se_usable(on)){ msgcat(0,"\nNot possible."); return 0; }
     g_verb_pts=5;
     if(on==137||on==240) return se_light(-1,row,a,g_use_slot);
+    if(on==6 && row>=0) return se_gem(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
+    if(on==10 && row>=0) return se_ribbon(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
+    if(on==49) return se_notebook();
+    if(on==51 && row>=0) return se_camera(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
+    if(on==50 && row>=0) return se_flintlock(-1,row,a);
+    if(on==25||on==44||on==52||on==29||on==119){ g_se_on=(on==29||on==119)?SEON_HAMMER:SEON_KNIFE; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; g_next_verb='X'; return 0; }
+    if(on==42 && row>=0){ g_se_on=SEON_VINE; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
     if(se_is_food(on) && row>=0){ msgcat(0,"\nYou eat the food."); se_use_up(-1,row,0); return 1; }
     { char nm[40]; int n=msgcat(0,"Nothing happens with the "); obj_name(row>=0?g_ow.inv[row].tile:(uint16_t)basetile(on),nm,sizeof nm); n=msgcat(n,nm); msgcat(n,"."); }   /* the cases not yet read (§3) */
     return 0;
@@ -16089,6 +16255,99 @@ int main(int argc, char **argv)
                 se_blast(294,64,0,0);
                 dbg_num("SE boulder dam falls there=", f0); dbg_num("SE boulder dam x=", b>=0?g_wobj[b].x:0);
                 dbg_num("SE boulder dammed=", b>=0&&g_wobj[b].quality==1&&obj_idx_at(292,66,150)<0&&obj_idx_at(294,67,151)<0&&obj_idx_at(294,68,152)<0&&obj_idx_at(293,67,195)<0); } }
+            /* GIANT GEM (se_use.md §5d): U)sed from the pack beside the gem stand at (170,483) it goes onto the stand,
+             * the clock runs on to noon, and the trap door opens at (192,460) — once */
+            { uint16_t px0=w.px, py0=w.py; w.px=171; w.py=484;
+              w.clock+=(uint32_t)((9*60+30-clock_minutes(&w)+1440)%1440); g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
+              vm_new(1,6,0,1); int row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==6) row=k;
+              g_inv_sel=row; g_use_readied=0; g_msg[0]=0; int ok=se_use_pack(&w,6);
+              int gi=obj_idx_at(169,482,6), td=obj_idx_at(192,460,160);
+              dbg_num("SE gem placed=", ok && gi>=0 && objworld_count(&g_ow,6)==0);
+              dbg_num("SE gem noon=", g_hour==12 && g_minutes==12*60);
+              dbg_num("SE gem trap door open=", td>=0 && se_frame(td)==1); dbg_num("SE gem flag=", (g_cg.talk_flags[1]&2)!=0);
+              if(gi>=0){ uint32_t c=w.clock; g_msg[0]=0; se_use_object(gi); dbg_num("SE gem again no scene=", w.clock==c && obj_idx_at(192,460,160)>=0 && strstr(g_msg,"on the stand")!=0); }
+              w.px=px0; w.py=py0; g_msg[0]=0; }
+            /* MAGNESIUM RIBBON (se_use.md §5e): one burns; a flash four tiles from the giant stone head (25) only whispers
+             * "Closer...", one beside it wakes the head (talk flag 53 bit 0x80, the head talks) */
+            { int hx,hy; uint16_t px0=w.px, py0=w.py, ax0=g_actx[25], ay0=g_acty[25]; uint8_t az0=g_actz[25];   /* the head is on level 2: brought up */
+              g_actx[25]=(uint16_t)(px0+20); g_acty[25]=py0; g_actz[25]=(uint8_t)g_cur_level;
+              dbg_num("SE ribbon head found=", actor_pos(25,&hx,&hy));
+              if(actor_pos(25,&hx,&hy)){ int row=-1; vm_new(1,10,0,3);
+                  w.px=(uint16_t)(hx+3); w.py=(uint16_t)hy; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==10) row=k;
+                  g_inv_sel=row; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,10);
+                  dbg_num("SE ribbon used one=", objworld_count(&g_ow,10)==2); dbg_num("SE ribbon whisper=", strstr(g_msg,"Closer...")!=0);
+                  w.px=(uint16_t)(hx-1); row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==10) row=k;
+                  g_inv_sel=row; g_msg[0]=0; se_use_pack(&w,10);
+                  dbg_num("SE ribbon head wakes=", (g_cg.talk_flags[53]&0x80) && g_talk_actor==25);   /* its script then rewrites flag 25 */
+                  end_talk(); w.px=px0; w.py=py0; g_msg[0]=0; }
+              g_actx[25]=ax0; g_acty[25]=ay0; g_actz[25]=az0; }
+            /* KNIFE (se_use.md §5f): U)se asks "On "; on the tiger's body beside the Avatar: skeleton, blood, the body gone,
+             * meat and the folded skin to the Avatar; on cloth: ten strips; on a stegosaurus: too tough */
+            { int ex=-1, ey=-1;
+              for(int r=1;r<6&&ex<0;r++) for(int yy=-r;yy<=r&&ex<0;yy++) for(int xx=-r;xx<=r&&ex<0;xx++){ int cx=(int)w.px+xx, cy=(int)w.py+yy;
+                  if((xx>=-1&&xx<=1&&yy>=-1&&yy<=1) && (xx||yy) && world_is_passable(&w,cx,cy) && world_is_passable(&w,cx-1,cy) && objworld_at(&g_ow,cx,cy)<0 && objworld_at(&g_ow,cx-1,cy)<0){ ex=cx; ey=cy; } }
+              dbg_num("SE knife spot found=", ex>=0);
+              if(ex>=0){ int b=persist_obj_new(280,37,ex,ey,0); build_blocked(); vm_new(1,52,0,1);
+                  int m0=objworld_count(&g_ow,110), k0=objworld_count(&g_ow,92), row=-1;
+                  for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==52) row=k;
+                  g_inv_sel=row; g_use_readied=0; g_next_verb=0; g_msg[0]=0; se_use_pack(&w,52);
+                  dbg_num("SE knife asks On=", g_next_verb=='X' && g_se_on==SEON_KNIFE); g_next_verb=0;
+                  se_on_map(&w,ex-(int)w.px,ey-(int)w.py);
+                  dbg_num("SE knife skinned=", b>=0 && !g_wobj[b].alive && strstr(g_msg,"You skinned the big cat.")!=0);
+                  dbg_num("SE knife meat=", objworld_count(&g_ow,110)-m0>=2 && objworld_count(&g_ow,110)-m0<=7);
+                  dbg_num("SE knife skin=", objworld_count(&g_ow,92)-k0);
+                  dbg_num("SE knife leftovers=", obj_idx_at(ex,ey,82)>=0 && obj_idx_at(ex,ey,248)>=0 && obj_idx_at(ex-1,ey,248)>=0);
+                  { int i; while((i=obj_idx_at(ex,ey,82))>=0) obj_destroy(i); while((i=obj_idx_at(ex,ey,248))>=0) obj_destroy(i); while((i=obj_idx_at(ex-1,ey,248))>=0) obj_destroy(i); }
+                  b=persist_obj_new(280,27,ex,ey,0); build_blocked(); g_se_on=SEON_KNIFE; g_se_on_actor=1; g_msg[0]=0; se_on_map(&w,ex-(int)w.px,ey-(int)w.py);
+                  dbg_num("SE knife too tough=", b>=0 && g_wobj[b].alive && strstr(g_msg,"The hide is too tough.")!=0); if(b>=0) obj_destroy(b);
+                  vm_new(1,180,0,2); int s0=objworld_count(&g_ow,134); row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==180) row=k;
+                  g_se_on=SEON_KNIFE; g_msg[0]=0; if(row>=0) se_on_pack(&w,row);
+                  dbg_num("SE knife strips=", objworld_count(&g_ow,134)-s0); dbg_num("SE knife cloth left=", objworld_count(&g_ow,180));
+                  /* HAMMER (§5g): burnt logs give 1..strength charcoal (onto the Avatar's stack, silently); the blue boulder
+                   * sometimes glances off, else a blue stone flakes off */
+                  { int lg=persist_obj_new(207,0,ex,ey,0); build_blocked(); int c0=objworld_count(&g_ow,129);
+                    g_se_on=SEON_HAMMER; g_se_on_actor=1; g_msg[0]=0; se_on_map(&w,ex-(int)w.px,ey-(int)w.py);
+                    int got=objworld_count(&g_ow,129)-c0;
+                    dbg_num("SE hammer charcoal=", got>=1 && got<=se_eff_str(1) && lg>=0 && g_wobj[lg].alive);
+                    dbg_num("SE hammer stacked silently=", c0>0 ? strstr(g_msg,"charcoal")==0 : 1);
+                    if(lg>=0) obj_destroy(lg);
+                    int bb=persist_obj_new(172,0,ex,ey,0); build_blocked(); int st0=objworld_count(&g_ow,58), gl=0, fl=0;
+                    for(int t=0;t<30;t++){ g_se_on=SEON_HAMMER; g_msg[0]=0; se_on_map(&w,ex-(int)w.px,ey-(int)w.py);
+                        if(strstr(g_msg,"Glanced off!")) gl++; if(strstr(g_msg,"A piece of rock flakes off.")) fl++; }
+                    dbg_num("SE hammer glances and flakes=", gl>0 && fl>0 && gl+fl==30);
+                    dbg_num("SE hammer blue stones=", objworld_count(&g_ow,58)-st0==fl);
+                    pack_take(1,58,objworld_count(&g_ow,58)); pack_take(1,110,objworld_count(&g_ow,110)); pack_take(1,134,objworld_count(&g_ow,134)); pack_take(1,92,objworld_count(&g_ow,92)); pack_take(1,129,got);   /* not to weigh down the tests after */
+                    if(bb>=0) obj_destroy(bb); build_blocked(); }
+                  build_blocked(); g_msg[0]=0; } }
+            /* VINE (se_use.md §5h): on the hole at (396,68) (quality 1) it becomes a rope at (395,67) with that quality */
+            { uint16_t px0=w.px, py0=w.py; w.px=397; w.py=69; vm_new(1,42,0,1); int row=-1;
+              for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==42) row=k;
+              g_inv_sel=row; g_use_readied=0; g_next_verb=0; g_msg[0]=0; se_use_pack(&w,42);
+              dbg_num("SE vine asks On=", g_next_verb=='X' && g_se_on==SEON_VINE); g_next_verb=0;
+              int h=obj_idx_at(396,68,168); dbg_num("SE vine hole there=", h>=0);
+              se_on_map(&w,-1,-1); int r=obj_idx_at(395,67,20);
+              dbg_num("SE vine rope=", r>=0 && g_wobj[r].quality==1 && objworld_count(&g_ow,42)==0);
+              if(r>=0) obj_destroy(r); build_blocked(); w.px=px0; w.py=py0; g_msg[0]=0; }
+            /* NOTEBOOK (§5j): the Avatar can't read Jimmy's shorthand; Jimmy (actor 4, object 312) says so himself */
+            { g_msg[0]=0; se_notebook(); dbg_num("SE notebook avatar=", strstr(g_msg,"You can't read Jimmy's shorthand.")!=0);
+              dbg_num("SE notebook jimmy is 312=", actor_objn(4)==312);
+              int so=g_solo_on, sm=g_solo_m; g_solo_on=1; g_solo_m=4; g_msg[0]=0; se_notebook(); g_solo_on=so; g_solo_m=sm;
+              dbg_num("SE notebook jimmy=", strstr(g_msg,"Why don't you just ask me")!=0); g_msg[0]=0; }
+            /* FLINTLOCK (§5k): no gunpowder, then loaded with one, then already loaded */
+            { pack_take(1,204,objworld_count(&g_ow,204)); vm_new(1,50,0,1); int row=-1;
+              for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==50) row=k;
+              g_inv_sel=row; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,50); dbg_num("SE flintlock no powder=", strstr(g_msg,"You don't have any gunpowder.")!=0);
+              vm_new(1,204,0,2); row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==50) row=k;
+              g_inv_sel=row; g_msg[0]=0; se_use_pack(&w,50); row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==50) row=k;
+              dbg_num("SE flintlock loaded=", strstr(g_msg,"Flintlock loaded.")!=0 && row>=0 && g_ow.inv[row].tile==basetile(50)+1 && objworld_count(&g_ow,204)==1);
+              g_inv_sel=row; g_msg[0]=0; se_use_pack(&w,50); dbg_num("SE flintlock already=", strstr(g_msg,"already loaded")!=0 && objworld_count(&g_ow,204)==1);
+              pack_take(1,50,1); pack_take(1,204,1); g_msg[0]=0; }
+            /* CAMERA (§5e): two films: a picture, then another, then out of film */
+            { vm_new(1,51,2,1); int row=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==51) row=k;
+              int pics=0; for(int t=0;t<2;t++){ g_inv_sel=row; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,51); if(strstr(g_msg,"You take a picture.")) pics++; }
+              g_inv_sel=row; g_msg[0]=0; se_use_pack(&w,51);
+              dbg_num("SE camera pictures=", pics); dbg_num("SE camera out of film=", strstr(g_msg,"out of film, but the flash still works.")!=0 && row>=0 && g_ow.inv[row].quality==0);
+              pack_take(1,51,1); g_msg[0]=0; }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

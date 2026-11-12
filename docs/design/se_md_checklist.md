@@ -30,12 +30,16 @@ list once SE's seams exist.
 5. U)se: SE's whole use switch (grinding, gunpowder, pots and clay, tar, torches, fishing, the
    bucket, skinning, the camera, the raft and turtles, flintlocks, grenades), read case by case.
 6. Combat and the party's powers: Triolo's and Intanya's invocations (Heluzz, Aphazz, Motazz),
-   offerings, ranged weapons, monsters.
+   offerings, ranged weapons, monsters; fallen creatures as bodies in their actor slots (status 0x10)
+   and the bell on a fallen tyrannosaurus (rules/se_use.md §5i); trees in a blast (§5b); a readied
+   flintlock's frame (loading, firing; §5k).
 7. Rest and food: SE's rest rules and the dream at the first rest.
 8. Panel and screens: SCREEN.LZC and BKGRND.LZC, SE's portraits, cursor and font as DOS draws them.
 9. Front end and scenes: intro, character creation, MIDGAME1-5, ENDGAME, MUSIC.LZC.
 10. Saves: SE's objlist layout, the 8 slots.
-11. Levels: the underground levels, the trap door, level transitions.
+11. Levels: the underground levels, the trap door, level transitions (SE's level change 0x8cb:0x855:
+    the rope, the hole in the ceiling, the trap door 160, the stairs 259 and the gem's trap door sealing
+    behind the party, caves 163 and 227).
 12. Register: SE's own deviations list, worked to zero like U6's.
 
 ## Martian Dreams
@@ -91,3 +95,10 @@ list once SE's seams exist.
   slopes, crushing, and damming the waterfall at (292,66) to open the cave behind it). The boulders
   hatch from SE's eggs (object 230, e.g. at (295,64)); **SE's eggs are not built and no item lists
   them** — they belong with item 11 (levels) or a new item before the register.
+- 2026-11-11: item 5 continued (rules/se_use.md §5d): the giant gem set on the gem stand at (170,483):
+  the first time the clock runs on to noon and a trap door opens at (192,460). Its song waits for item 9,
+  the border's blue eyes for item 8, the trap door's way down for item 11; moving the gem onto the
+  stand waits for SE's M)ove rules. The magnesium ribbon and the camera (§5e): the flash, and waking the giant stone head.
+  Knives and scissors (§5f): cloth strips, butchering, skinning the tiger, plucking.
+  The hammers (§5g): blue stone, charcoal. The vine (§5h): a rope over a hole. The bell (§5i) waits
+  for item 6. Jimmy's notebook (§5j). The flintlock loads (§5k; readied ones with item 6). The turtle bait goes with the raft and the turtles. The rope and the hole in the ceiling go to item 11 (they are SE's level change).
