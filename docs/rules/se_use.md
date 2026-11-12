@@ -190,8 +190,7 @@ the 3x3 (0x218f5):
 - a grenade (137) there: one of it is lit and goes off at once (a chain); this clears the fuse, so a
   grenade lit elsewhere then stays lit for good (DOS's own);
 - a boulder (167): pushed, and it may roll (§5c);
-- a tree (263): hit for 30; a felled tree comes down across its parts (0x1abcd, SE's object damage,
-  checklist item 6) — **not yet built**;
+- a tree (263): hit for 30, SE's object damage (0x1abcd, se_combat.md §3f): a tree's count is 5, so it falls;
 - a web (17): gone.
 
 DOS plays sound 6 (the device 0x12 and 0x1d); SE's sounds are not yet built.

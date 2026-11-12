@@ -31,6 +31,7 @@ int monster_movetype(int obj_n);
  * usecode_use.md "Created and destroyed objects persist"): the remains' obj_n, or 0 for nothing; *frame = its
  * frame, 255 = the creature's own frame as it died (the remains are then the creature's own object). */
 int monster_remains(int obj_n, int *frame);
+int monster_exp_se(int obj_n);                 /* SE: the experience for slaying one (se_combat.md §3d) */
 /* The creature type's innate SPELLS as U6 spell numbers (combat.md §7b): *out points at the list,
  * returns its length (0 = casts nothing). */
 int monster_spells(int obj_n, const uint8_t **out);

@@ -86,6 +86,13 @@ static const se_mon_t SE_MON[] = {
 static const se_mon_t *se_mon(int obj_n){ for (unsigned i = 0; i < sizeof SE_MON / sizeof SE_MON[0]; i++) if (SE_MON[i].obj_n == obj_n) return &SE_MON[i]; return 0; }
 int monster_type_flags(int obj_n){ const se_mon_t *m = rules_game() == RULES_SE ? se_mon(obj_n) : 0; return m ? m->flags : 0; }
 
+/* SE: what slaying one of obj_n pays (0x1a6ad): (A x damage + (HP + armour) x dexterity) / 16, A the strength for
+ * flag 0x20, else the dexterity; a kind not in the table pays nothing */
+int monster_exp_se(int obj_n)
+{   const se_mon_t *m = se_mon(obj_n); if (!m) return 0;
+    int a = (m->flags & 0x20) ? m->str : m->dex;
+    return (a * m->dmg + (m->hp + m->armour) * m->dex) >> 4; }
+
 int monster_base(int obj_n, mon_base_t *out)
 {
     if (rules_game() == RULES_SE){ const se_mon_t *m = se_mon(obj_n);
@@ -123,7 +130,14 @@ int monster_movetype(int obj_n)
 
 int monster_remains(int obj_n, int *frame)
 {
-    if (rules_game() == RULES_SE){ if (frame) *frame = 0; return 0; }   /* SE's remains: item 6 */
+    if (rules_game() == RULES_SE){                       /* SE's remains (0x18764, DS:0xea3; se_combat.md §3d) */
+        static const uint16_t PEOPLE[16] = { 310,311,312,313,314,315,316,318,320,321,322,323,324,325,326,317 };
+        static const uint16_t BEAST[19][2] = { {283,1},{284,3},{288,6},{289,8},{294,13},{296,21},{297,23},{301,25},{303,27},{305,30},
+            {327,33},{330,35},{331,37},{332,39},{333,41},{334,43},{335,45},{336,46},{337,47} };
+        if (frame) *frame = 0;
+        for (int i = 0; i < 16; i++) if (PEOPLE[i] == obj_n){ if (frame) *frame = i; return 249; }        /* a body */
+        for (int i = 0; i < 19; i++) if (BEAST[i][0] == obj_n){ if (frame) *frame = BEAST[i][1]; return 280; }   /* a dead creature */
+        return obj_n == 299 ? 107 : 0; }                  /* a baby pteranodon is roast pteranodon */
     int fr = 0, body = 0;
     switch (obj_n){
     /* blood (338), a random frame rolled by the caller */

@@ -135,3 +135,10 @@ list once SE's seams exist.
   spear of shamap, the blowgun's poison, a torch on a web, the charged black staff, the queen's wound and
   the unharmed actors. DOS slip 13 (a failed hit roll strikes anyway) built as the intent. Next in item 6:
   death, experience and remains, and the breaking of things (bamboo, trees, the control panel).
+- 2026-11-12: item 6's deaths and broken things (rules/se_combat.md §3c-3f): `killed!` / `falls!` for any death,
+  SE's experience from its creature table (blows only, to 9999), the remains by kind (bodies 249, dead creatures
+  280, the roast pteranodon, the big creatures' second piece and blood), actor 23's and 180's story flags, a
+  rider off its turtle, the tyrannosaurus sleeping through blows, the Avatar's fall (Intanya's hut, a week on,
+  three quarters of the experience), things with a count breaking (bamboo to a pole, trees felled onto
+  whoever stands there, by a blow or a grenade's 30). Next in item 6: the
+  control panel's and the dark moonstone's scenes, the orchids with SE's creatures and eggs.

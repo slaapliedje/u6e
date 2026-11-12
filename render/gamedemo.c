@@ -87,6 +87,7 @@ typedef struct GameObjs {
     uint16_t mana_kin[4];                               /* who besides the Avatar regains magic each hour (magic_skills.md §3) */
     uint16_t halves[3], full_vs[3], glass_sword;        /* blows at these do half, but from these weapons; the sword that shatters (combat.md) */
     uint16_t ship, skiff, raft, balloon, horse, immortal; /* vessels and mounts; the one who does not die (combat.md §3d, vehicles.md) */
+    uint16_t deep_sleeper;                              /* a kind a blow does not wake (SE's tyrannosaurus, se_combat.md §3c) */
     uint16_t bows[2], arrows, crossbows[2], bolts, triple, reach[2], boomerang, sleep_wand; /* weapons by how they shoot (combat.md §2, §6c) */
     uint16_t no_diag;                                   /* a creature that never steps diagonally (movement_turns.md) */
     uint16_t egg;                                       /* the egg: a spawn point in the save (eggs.md) */
@@ -163,6 +164,10 @@ typedef struct GameLayer {
     int  (*blow)(int att,int def,int oi,int wobj,int*wm);       /* what a landed blow does instead (def<0: on object oi), or its damage *wm; 1 = all done */
     int  (*wound_to)(int def);                                  /* who takes a wound (SE's queen, the unharmed); -1 = nobody */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
+    void (*death_words)(int def);                               /* the words for any death (SE, se_combat.md §3d); NULL = U6's "killed!" for a blow */
+    int  (*dying)(int id,int temp);                             /* what a death does before its remains (the story, a rider, blood); 1 = it leaves nothing and keeps its things */
+    int  (*kill_exp)(int v);                                    /* the experience for slaying actor v; NULL = U6's (combat.md §3) */
+    uint16_t exp_cap;                                           /* experience stops here (SE 9999); 0 = 65535 */
     void (*avatar_death)(world_t*w);                            /* the Avatar falls: U6's KAL LOR and Lord British's recall (combat.md §3d); none = the game ends */
     /* the end */
     void (*ending)(world_t *w);                                 /* the game is won: its ending (design/ending.md); none = play stops */
@@ -3441,7 +3446,8 @@ static void npc_routetaken(int i,int nx,int ny)
 static int  actor_pos(int i,int*ax,int*ay);          /* (defined below) */
 static int actor_pick_weapon(int a,int d);
 static void npc_attack(const world_t*w,int att,int wobj,int x,int y,int tx,int ty);
-static void lb_recall(world_t*w,int forget);                /* Lord British's revival: Help, the Avatar's death (defined below) */
+static void party_recall(world_t*w,int forget,int tx,int ty,int se);   /* the party's revival: LB's (Help, the Avatar's death), SE's Intanya (defined below) */
+static void lb_recall(world_t*w,int forget){ party_recall(w,forget,307,352,0); }
 static void enemy_attack(int att,int def);                  /* a hostile's blow on a party member (defined below) */
 static int  ship_aboard(void);                               /* cannons.md: the party is aboard a ship (defined with the vehicle code) */
 static void ship_struck(int att);                            /* an enemy's hit on the party's ship -> hull (defined with the cannon code) */
@@ -6384,6 +6390,7 @@ static int se_boulder(int b,int bx,int by,int depth)
 }
 /* the blast at (x,y) (0x1810:0x1941 grenade, 0x19c1 device): rays to the 3x3, each actor reached hurt; then the 3x3's
  * grenades go off one by one and its webs go (0x218f5) */
+static void se_obj_wound(int oi,int dmg);
 static void se_blast(int x,int y,int dev,int depth)
 {
     world_t*w=(world_t*)g_wp; int ex[9],ey[9],ids[16],n; if(!w) return;
@@ -6397,7 +6404,8 @@ static void se_blast(int x,int y,int dev,int depth)
         if(depth<8 && (gi=obj_idx_at(tx,ty,137))>=0 && g_wobj[gi].alive){   /* a grenade here: one of it lit and gone off at once */
             se_use_up(gi,-1,0); se_blast(tx,ty,0,depth+1); g_se_fuse=0; g_se_fuse_idx=-1; }
         { int bi=obj_idx_at(tx,ty,167); if(bi>=0 && g_wobj[bi].alive) (void)se_boulder(bi,x,y,depth); }
-        if((wi=obj_idx_at(tx,ty,17))>=0 && g_wobj[wi].alive) obj_destroy(wi); }   /* trees (263): with SE's object damage */
+        { int ti=obj_idx_at(tx,ty,263); if(ti>=0 && g_wobj[ti].alive) se_obj_wound(ti,30); }   /* a tree takes 30 (0x218f5) */
+        if((wi=obj_idx_at(tx,ty,17))>=0 && g_wobj[wi].alive) obj_destroy(wi); }
     build_blocked();
 }
 /* the fuse runs out (0x21838): the lit thing goes, and blows where it lies or where its carrier stands */
@@ -8918,6 +8926,8 @@ static void hit_flash(int a)
 {   int x,y; if(!g_wp||!actor_where(a,&x,&y)) return;
     { int vx=iabs_gl(x-(int)g_wp->px), vy=iabs_gl(y-(int)g_wp->py); if(vx>5||vy>5) return; }
     fx_show(g_wp,x,y,0x101,1); fx_clear(g_wp); }
+/* a blow wakes the struck, but not a deep sleeper (se_combat.md §3c) */
+static void wake_struck(int a){ if(!(g_on.deep_sleeper && actor_objn(a)==g_on.deep_sleeper)) g_asleep[a]=0; }
 /* the wound, whatever gave it (combat.md §3): at 0 "killed!", the experience, the remains; else what the blow does besides and how bad it looks */
 static int g_bot_tough;
 static void actor_wound(int att,int def,int dmg,int blow)
@@ -8925,12 +8935,13 @@ static void actor_wound(int att,int def,int dmg,int blow)
     int hp=g_ahp[def], party=def==1||is_party_member(def), on=actor_objn(def);
     if(!party&&!hp) hp=30;
     if(party&&g_bot_tough) dmg=0;                             /* BOTTOUGH.TXT: a bot run that tests a quest, not its fights */
-    g_asleep[def]=0; hit_flash(def);
+    wake_struck(def); hit_flash(def);
     if(on==g_on.balloon&&on) return;                          /* the balloon takes no harm */
     if(((on==g_on.skiff||on==g_on.raft)&&on)&&g_nparty){ int a=g_party[rng_range(&g_crng,g_nparty)].actor; if(a!=def){ actor_wound(att,a,dmg,blow); return; } }   /* what is hit aboard is someone aboard */
     if(on==g_on.immortal&&on){ g_ahp[def]=255; return; }      /* Lord British does not die */
     if(on==g_on.ship&&on&&dmg>=hp){ g_ahp[def]=10; g_abase[def]=g_atile[def]=(uint16_t)basetile(g_on.raft); return; }
-    if(dmg>=hp){ if(blow){ int n=msg_tail(); n=msg_name(n,def); msgcat(n," killed!"); }   /* a spell kills in silence */
+    if(dmg>=hp){ if(g_gl->death_words) g_gl->death_words(def);
+        else if(blow){ int n=msg_tail(); n=msg_name(n,def); msgcat(n," killed!"); }   /* a spell kills in silence */
         g_ahp[def]=0;
         if(party) sync_party_hp();
         else { int gain=kill_exp(def); g_charm[def]=0; g_ally[def]=0; actor_die(def); if(att>=1&&att<U6_MAX_ACTORS) grant_exp(att,gain); }
@@ -8944,7 +8955,7 @@ static void actor_wound(int att,int def,int dmg,int blow)
 static void actor_hit(int att,int def,int wm,int wobj)
 {   if(g_gl->blow && g_gl->blow(att,def,-1,wobj,&wm)) return;
     int dmg=status_dmg(def,combat_damage(wm,g_aac[def],&g_crng));
-    g_asleep[def]=0; hit_flash(def);
+    wake_struck(def); hit_flash(def);
     note_striker(att,def);
     if(dmg<=0){ int n=msg_tail(); n=msg_name(n,def); msgcat(n," grazed."); glass_shatters(att,wobj); return; }
     if(!g_ahp[def]&&(def==1||is_party_member(def))) return;
@@ -9054,7 +9065,7 @@ static int check_flee(int i){                         /* critical: a thinking th
  * behind TRAINING (see try_train); exp just accumulates here. */
 static void grant_exp(int actor,int gain){
     if(actor<0||actor>=U6_MAX_ACTORS) return;
-    int e=(int)g_aexp[actor]+gain; if(e>65535) e=65535;   /* cap (L8 needs only 6400) */
+    int cap=g_gl->exp_cap?g_gl->exp_cap:65535, e=(int)g_aexp[actor]+gain; if(e>cap) e=cap;   /* cap (L8 needs only 6400; SE stops at 9999) */
     g_aexp[actor]=(uint16_t)e;
 }
 
@@ -9063,6 +9074,7 @@ static void grant_exp(int actor,int gain){
  * base values for its type; an unknown type pays nothing */
 static int kill_exp(int v){
     if(v<0||v>=U6_MAX_ACTORS || !g_align_hostile[v]) return 0;
+    if(g_gl->kill_exp) return g_gl->kill_exp(v);
     mon_base_t mb; if(!monster_base(actor_objn(v),&mb)) return 0;
     return ((int)mb.str+(int)mb.dex+(int)mb.intel+(int)mb.hp+(int)mb.dmg+(int)mb.xp)/4;
 }
@@ -10527,8 +10539,9 @@ static void actor_die(int id){
     sfx_play(15,0);
     if(id<1 || id>=U6_MAX_ACTORS) return;
     if(!member(id)&&align_of(id)==0) g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);   /* killing the innocent (combat.md §3d) */
-    int on=actor_objn(id), fr=0, body=monster_remains(on,&fr);
     int temp=(id>=160) || g_temp[id] || g_summon[id];
+    if(g_gl->dying && g_gl->dying(id,temp)){ g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0; if(!temp) g_adead[id]=1; build_blocked(); return; }   /* it leaves nothing: its things go with it */
+    int on=actor_objn(id), fr=0, body=monster_remains(on,&fr);
     int x=g_actx[id], y=g_acty[id], lv=g_wp?g_wp->level:0;
     if(fr==255){ int b=basetile(on); fr=(g_atile[id]!=0xffff && b>0 && (int)g_atile[id]>=b && (int)g_atile[id]<b+64) ? (int)g_atile[id]-b : 0; }
     if(body==338) fr=(int)rng_range(&g_crng,3);
@@ -12464,11 +12477,12 @@ static void gear_to_body(int id,int bi,int x,int y)
 /* a companion at 0 HP: its body (quality = the actor) where it stood, holding all it carried; off the map and off the
  * roster, but still marked in the party for when it rises (combat.md §3d) */
 static void companion_die(const world_t*w,int id){
+    int none=g_gl->dying && g_gl->dying(id,0);                     /* nothing left: its things go with it */
     int on=actor_objn(id), fr=0, body=monster_remains(on,&fr), x=g_actx[id], y=g_acty[id];
     if(fr==255) fr=0;
     if(body==338) fr=(int)rng_range(&g_crng,3);
     if(veh_aboard()){ x=(int)w->px; y=(int)w->py; }
-    { int bi=body?persist_obj_new(body,fr,x,y,id):-1;
+    if(!none){ int bi=body?persist_obj_new(body,fr,x,y,id):-1;
       gear_to_body(id,bi,x,y); }
     equip_refold(id);
     g_atile[id]=0xffff; g_ahp[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=0; g_charm[id]=g_ally[id]=0; g_amoved[id]=0; g_dragged[id]=0;
@@ -12567,11 +12581,12 @@ static void arrest_no(world_t*w){
 }
 /* Lord British's revival (combat.md §3d, magic_skills.md §5d Help): off any vehicle, to the throne room
  * on the surface, the dead stand up, everyone healed, the clock on to his throne hours; forget = the
- * hunters forget the party (the Avatar's death, not Help) */
+ * hunters forget the party (the Avatar's death, not Help). SE's (se_combat.md §3e): to (x,y), a week on,
+ * and only a companion whose body is somewhere stands up */
 static void draw_status(const world_t*w,uint8_t col);
 static void present_frame(void);
 static int remains_of_member(int on){ return on_body(on)||(g_on.mouse&&on==g_on.mouse); }
-static void lb_recall(world_t*w,int forget){
+static void party_recall(world_t*w,int forget,int tx,int ty,int se){
     if(g_veh_horse>=0 && g_veh_kind==431) (void)horse_dismount(w);
     else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
     if(!g_armageddon) for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]){   /* the dead rise where they fell, with what their bodies hold, before the move (combat.md §3d steps 2, 6) */
@@ -12579,18 +12594,19 @@ static void lb_recall(world_t*w,int forget){
         for(int k=0;k<g_ow.ninv;k++) if((on_body(g_ow.inv[k].obj_n)||(g_on.mouse&&g_ow.inv[k].obj_n==g_on.mouse))&&g_ow.inv[k].quality==(uint8_t)i) here=1;
         for(int j=0;j<g_ow.nobjs&&!here;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive||o->quality!=(uint8_t)i||!remains_of_member(o->obj_n)) continue;
             for(int k=0;k<g_ow.nobjs&&!here;k++) if(g_wobj[k].parent==(uint16_t)j) here=1; }   /* one that holds something (an older empty one may linger) */
-        if(!here && g_savetmpl && (objects_reconcile(w),1) && sav_find_onmap(g_savetmpl,g_savetmpl_len,i,remains_of_member,w->level,&bx,&by,&bz))
-            (void)travel_to(w,bx,by,bz);                          /* its body on another level: DOS holds every level at once */
-        companion_revive(w,i); }
-    (void)travel_to(w,307,352,0);                                 /* the throne room, on the surface */
+        if(!here && g_savetmpl && (objects_reconcile(w),1) && sav_find_onmap(g_savetmpl,g_savetmpl_len,i,remains_of_member,w->level,&bx,&by,&bz)){
+            (void)travel_to(w,bx,by,bz); here=1; }                /* its body on another level: DOS holds every level at once */
+        if(here||!se) companion_revive(w,i); }
+    (void)travel_to(w,tx,ty,0);                                   /* the throne room (Intanya's hut), on the surface */
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
         g_ahp[a]=g_amaxhp[a]?g_amaxhp[a]:30; g_asleep[a]=g_paralyze[a]=g_poison[a]=0; g_charm[a]=g_ally[a]=0; g_protect[a]=g_curse[a]=0; g_ainvis[a]=0;
         g_pts[a]=(int8_t)(g_adex[a]?g_adex[a]:1); }
     g_spell_light_turns=0; g_infravision=0; g_eclipse=0; g_storm=0; g_time_stop=0;         /* every timer ends (combat.md §3d) */
     for(int i=2;i<U6_MAX_ACTORS;i++){ if(g_wt_force[i]==0x9b){ g_wt_force[i]=0; g_sched_st[i]=1; g_sched_pending=1; }
-        if(i>=0xe0&&actor_objn(i)==382){ g_atile[i]=0xffff; g_ahp[i]=0; } }                 /* the temporary guards go */
-    teleport_party(w,307,352);                                    /* the revived stand beside the Avatar */
-    while(!((g_hour>=8&&g_hour<12)||(g_hour>=14&&g_hour<18))){ w->clock+=15; g_hour=clock_hour(w); g_minutes=clock_minutes(w); }
+        if(!se&&i>=0xe0&&actor_objn(i)==382){ g_atile[i]=0xffff; g_ahp[i]=0; } }             /* the temporary guards go */
+    teleport_party(w,tx,ty);                                      /* the revived stand beside the Avatar */
+    if(se){ w->clock+=7u*24u*60u; g_hour=clock_hour(w); g_minutes=clock_minutes(w); }   /* a week on, the same hour */
+    else while(!((g_hour>=8&&g_hour<12)||(g_hour>=14&&g_hour<18))){ w->clock+=15; g_hour=clock_hour(w); g_minutes=clock_minutes(w); }
     for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y;                    /* time passed: townsfolk are where the hour puts them */
         if(is_party_member(i) || g_atile[i]==0xffff || (int)g_actz[i]!=g_cur_level) continue;
         if(forget){ g_alert[i]=0; if(!g_temp[i] && i<160) g_hostile[i]=0; }   /* the hunters forget the party */
@@ -14072,7 +14088,7 @@ static int first_start(void)
 
 /* the game layers (docs/design/game_layer.md) */
 static const GameObjs objs_none;                    /* MD: no U6 object numbers; its own land with item 13 */
-static const GameObjs objs_se = { .use_takes={302,307}, .str_weapons={24,29,33,34,94,118,119}, .boomerang=39, .holder={59,60,258,181,188,183,182,184,97} };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
+static const GameObjs objs_se = { .use_takes={302,307}, .str_weapons={24,29,33,34,94,118,119}, .boomerang=39, .body=249, .body_first=249, .body_n=1, .deep_sleeper=294, .holder={59,60,258,181,188,183,182,184,97} };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
 static const GameLayer gl_u6 = {
     .on=&objs_u6, .talk=u6_talk, .use=use_object_inner, .asks_count=1, .see="Thou dost see ", .rest=u6_rest, .use_pack=u6_use_pack,
     .use_at=u6_use_at, .usable=use_usable, .use_under=1, .bot_door=u6_bot_door, .ready_on=u6_ready_fx_on, .ready_off=u6_ready_fx_off,
@@ -14135,10 +14151,12 @@ static int se_hit_rule(int att,int wobj,int def,int role)
     return -1; }
 /* a blow that landed on actor def, or on object oi; 1 = all it does is done here (0x1b47d) */
 static int se_blow(int att,int def,int oi,int wobj,int*wm)
-{   if(def<0){ if(oi>=0 && wobj==209 && g_wobj[oi].obj_n==17){ (void)persist_obj_new(242,0,g_wobj[oi].x,g_wobj[oi].y,0); build_blocked(); return 1; } return 0; }
+{   if(def<0){ if(oi<0) return 0;
+        if(wobj==209 && g_wobj[oi].obj_n==17){ (void)persist_obj_new(242,0,g_wobj[oi].x,g_wobj[oi].y,0); build_blocked(); return 1; }
+        se_obj_wound(oi,*wm<0?1:combat_damage(*wm,0,&g_crng)); return 1; }   /* rolled 1-d (0x1b234) */
     if(wobj==1){ se_spear_plain(att);
         if(actor_objn(def)==294){ hit_flash(def); g_asleep[def]=255; return 1; }   /* the tyrannosaurus sleeps */
-        actor_wound(att,def,g_ahp[def]?g_ahp[def]:30,1); return 1; }
+        actor_wound(0,def,g_ahp[def]?g_ahp[def]:30,1); return 1; }   /* this kill pays nothing (0x1b47d) */
     if(wobj==32 && se_rand(0,1) && !g_protect[def] && !se_immune(def)){ hit_flash(def); se_poisoned(def); return 1; }
     if(wobj==21 && g_se_charged) *wm=40;
     return 0; }
@@ -14147,6 +14165,83 @@ static int se_wound_to(int def)
 {   if(actor_objn(def)==328 && def!=54) return 54;
     if(se_immune(def)){ g_ahp[def]=255; return -1; }
     return def; }
+/* the words for any death (0x1a6ad; se_combat.md §3d): the named people fall; an orchid dies in silence */
+static void se_death_words(int def){ if(actor_objn(def)==282) return; int n=msg_tail(); n=msg_name(n,def); msgcat(n,def<16?" falls!":" killed!"); }
+static int se_kill_exp(int v){ return monster_exp_se(actor_objn(v)); }
+/* blood (248, temporary), 1 time in 2 when chance */
+static void se_blood(int x,int y,int chance)
+{   int M=((g_wp&&g_wp->level==0)?U6_SURFACE_TILES:256)-1; if(chance && !se_rand(0,1)) return;
+    (void)temp_obj_new(248,se_rand(0,2),x&M,y&M,0); }
+/* a big creature's second piece of remains, its quality the victim */
+static void se_piece(int on,int fr,int x,int y,int id,int temp)
+{   int M=((g_wp&&g_wp->level==0)?U6_SURFACE_TILES:256)-1;
+    if(temp) (void)temp_obj_new(on,fr,x&M,y&M,id); else (void)persist_obj_new(on,fr,x&M,y&M,id); }
+/* what a death does before its remains (0x1a6ad, 0x18764; se_combat.md §3d): the story, a rider off its turtle,
+ * the big creatures' second piece, the blood; 1 = no remains, its things go with it */
+static int se_dying(int id,int temp)
+{   world_t*w=(world_t*)g_wp; int fr=0;
+    if(id==23) g_cg.talk_flags[53]|=0x20;
+    if(id==180) g_cg.talk_flags[48]|=0x80;
+    if(g_se_rider[id] && (!w || !se_dismount(w,id))) return 1;    /* in open water a rider leaves nothing */
+    int on=actor_objn(id), f=monster_type_flags(on), x=g_actx[id], y=g_acty[id];
+    int body=(id==11||id==31||id==47||id==55||(f&0x1800))?0:monster_remains(on,&fr);
+    int big=(on==284||on==289||on==294||on==297||on==303||on==305);
+    switch(body?on:0){
+    case 284: case 289: case 305: se_piece(body,fr+1,x+1,y,id,temp); for(int i=0;i<3;i++) se_blood(x+1-i,y,1); break;
+    case 303: se_piece(body,fr+1,x,y+1,id,temp); for(int j=0;j<3;j++) se_blood(x,y+1-j,1); break;
+    case 294: se_piece(body,17,x,y+2,id,temp); for(int i=0;i<2;i++) for(int j=0;j<4;j++) se_blood(x-i,y+2-j,1); break;
+    case 297: se_piece(body,fr+1,x+1,y,id,temp); break;
+    default: if((f&0x2000) && id>=16 && !big) se_blood(x,y,0); }
+    return body==0; }
+/* a tree falls northward (0x1a99b, 0x1a29f; se_combat.md §3f): its parts go, the fallen pieces lie, and whoever
+ * it falls on is pushed to the first free tile around (by column) and hurt 2-20, or with none crushed */
+static void se_fell(world_t*w,int oi)
+{   static const int16_t PART[3][3]={{264,-2,-1},{265,0,-2},{266,-2,-3}};
+    static const int16_t FALL[5][4]={{260,1,0,-2},{261,1,-1,-2},{261,5,1,-2},{261,9,1,-4},{262,3,1,-5}};
+    int x=g_wobj[oi].x, y=g_wobj[oi].y, M=((w->level==0)?U6_SURFACE_TILES:256)-1;
+    obj_destroy(oi);
+    for(int k=0;k<3;k++){ int j=obj_idx_at((x+PART[k][1])&M,(y+PART[k][2])&M,PART[k][0]); if(j>=0&&g_wobj[j].alive) obj_destroy(j); }
+    for(int k=0;k<5;k++) (void)persist_obj_new(FALL[k][0],FALL[k][1],(x+FALL[k][2])&M,(y+FALL[k][3])&M,0);
+    build_blocked();
+    for(int i=0;i<2;i++) for(int j=0;j<5;j++){ int cx=(x+i)&M, cy=(y-6+j)&M, a, moved=0;
+        if((i==0&&j==4) || (a=actor_on(w,cx,cy))<0) continue;
+        for(int c=0;c<3&&!moved;c++) for(int r=0;r<3&&!moved;r++){ int nx=(cx+c-1)&M, ny=(cy+r-1)&M;
+            if((c==1&&r==1) || !step_ok(w,a,nx,ny)) continue;
+            if(a==1){ w->px=(uint16_t)nx; w->py=(uint16_t)ny; } else { g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; }
+            moved=1; }
+        actor_wound(0,a,moved?se_rand(1,10)+se_rand(1,10):(g_ahp[a]?g_ahp[a]:30),0); }
+    build_blocked(); }
+/* a blow on a thing (0x1a99b; se_combat.md §3f): the stackable and the countless take nothing; it flashes; the
+ * count drops, or the thing breaks without a word. The control panel and the dark moonstone wait for their scenes */
+static void se_obj_wound(int oi,int dmg)
+{   wobj_t*o=&g_wobj[oi]; int on=o->obj_n, x=o->x, y=o->y;
+    if(is_stackable(on) || !o->qty || on==222 || on==147 || !g_wp) return;
+    if(iabs_gl(x-(int)g_wp->px)<=5 && iabs_gl(y-(int)g_wp->py)<=5){ fx_show(g_wp,x,y,0x101,1); fx_clear(g_wp); }
+    if((int)o->qty>dmg){ o->qty=(uint16_t)(o->qty-dmg); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; return; }
+    if(on==263){ se_fell((world_t*)g_wp,oi); return; }
+    obj_destroy(oi);
+    if(on==127) (void)temp_obj_new(128,0,x,y,0);                   /* a bamboo pole */
+    build_blocked(); }
+/* the leader falls (0x17a33, 0x27566, 0x8cb:0xc73; se_combat.md §3e): a week later the party wakes in Intanya's
+ * hut, healed and good, with three quarters of its experience */
+static void draw_status(const world_t*w,uint8_t col);
+static void present_frame(void);
+static void se_avatar_death(world_t*w)
+{
+    music_stop_all();
+    if(g_se_rider[1]) (void)se_dismount(w,1);                     /* off the turtle where it fell, when there is shore */
+    msgcat(0,"\nOvercome by your wounds, you fall unconscious..... "); draw_status(w,C_BLACK); present_frame();
+    view_dissolve(w,1);
+    if(g_veh_kind==237 && g_veh_o[0]>=0){ wobj_t*o=&g_wobj[g_veh_o[0]];   /* the raft stays where it was, beached */
+        o->obj_n=233; o->tile=(uint16_t)(basetile(233)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; g_veh_o[0]=-1; }
+    party_recall(w,0,412,291,1);
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        se_unride(a); g_agood[a]=1; g_achaos[a]=0; g_align_hostile[a]=0; g_hostile[a]=0;
+        g_aexp[a]=(uint16_t)(((uint32_t)g_aexp[a]*3u)/4u); }
+    g_combat_mode=0; g_pending_verb=0; g_show_inv=0; if(g_talking) end_talk();
+    memset(g_dragged,0,sizeof g_dragged);
+    { int n=msg_tail(); msgcat(n,"\n....You awaken in Intanya's hut, feeling restored."); }
+    sync_party_hp(); build_blocked(); music_resume_area(w->level); }
 /* what a shot uses up or leaves where it ended (0x19b5a) */
 static void se_shot_spend(const world_t*w,int att,int wobj,int sx,int sy,int lx,int ly,int id)
 {   int am=weapon_ammo(wobj), pack=(se_party_side(att)||att<224); (void)sx; (void)sy;
@@ -14183,7 +14278,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -17664,7 +17759,54 @@ int main(int argc, char **argv)
                     dbg_num("SE combat blowgun poisons=", g_poison[b]==255 && strstr(g_msg,"poisoned!")!=0);
                     SE_ARM(1); g_ahp[b]=20; g_msg[0]=0; (void)se_blow(1,b,-1,1,&wm);
                     dbg_num("SE combat shamap kills=", g_ahp[b]==0 && has_readied(1,26) && !has_readied(1,1)); }
-                  if(b>=0){ g_atile[b]=0xffff; g_temp[b]=0; } if(t>=0){ g_atile[t]=0xffff; g_temp[t]=0; } } }
+                  if(b>=0){ g_atile[b]=0xffff; g_temp[b]=0; } if(t>=0){ g_atile[t]=0xffff; g_temp[t]=0; } }
+                /* DEATH and BREAKING (se_combat.md §3c-3f) */
+                { int g=se_beast_new(&w,x3,y3,296,0), t=se_beast_new(&w,x1,y1,294,0); uint16_t e0=g_aexp[1];
+                  if(g>=0 && t>=0){ int body, blood;
+                    g_asleep[t]=255; actor_hit(1,t,10,28);
+                    dbg_num("SE death T-rex sleeps on=", g_asleep[t]==255);
+                    g_align_hostile[g]=1; g_ahp[g]=10; g_msg[0]=0; actor_wound(1,g,50,1);
+                    body=obj_idx_at(x3,y3,280); blood=obj_idx_at(x3,y3,248);
+                    dbg_num("SE death killed words=", strstr(g_msg,"killed!")!=0 && g_ahp[g]==0);
+                    dbg_num("SE death gorilla remains=", body>=0 && g_wobj[body].tile==basetile(280)+21 && g_wobj[body].quality==(uint8_t)g && blood>=0);
+                    dbg_num("SE death gorilla exp 95=", g_aexp[1]==(uint16_t)(e0+95));
+                    if(body>=0) obj_destroy(body); if(blood>=0) obj_destroy(blood);
+                    g_aexp[1]=9990; grant_exp(1,95); dbg_num("SE death exp stops 9999=", g_aexp[1]==9999); g_aexp[1]=e0;
+                    g=se_beast_new(&w,x3,y3,299,0); if(g>=0){ actor_wound(1,g,50,1); body=obj_idx_at(x3,y3,107);
+                        dbg_num("SE death roast pteranodon=", body>=0); if(body>=0) obj_destroy(body); }
+                    g=se_beast_new(&w,x3,y3,289,0); if(g>=0){ int b2; actor_wound(1,g,90,1); body=obj_idx_at(x3,y3,280); b2=obj_idx_at((x3+1)&M,y3,280);
+                        dbg_num("SE death allosaurus two pieces=", body>=0 && b2>=0 && g_wobj[body].tile==basetile(280)+8 && g_wobj[b2].tile==basetile(280)+9);
+                        if(body>=0) obj_destroy(body); if(b2>=0) obj_destroy(b2);
+                        for(int i=-1;i<=1;i++){ int bl=obj_idx_at((x3+i)&M,y3,248); if(bl>=0) obj_destroy(bl); } }
+                    g_msg[0]=0; se_death_words(5); dbg_num("SE death named falls=", strstr(g_msg,"falls!")!=0);
+                    { uint8_t f53=g_cg.talk_flags[53]; g_cg.talk_flags[53]=0; (void)se_dying(23,0);
+                      dbg_num("SE death actor 23 story flag=", g_cg.talk_flags[53]==0x20); g_cg.talk_flags[53]=f53;
+                      int bl=obj_idx_at(g_actx[23],g_acty[23],248); if(bl>=0) obj_destroy(bl); }
+                    g_atile[t]=0xffff; g_temp[t]=0; build_blocked(); }
+                  /* a tree, its parts, felled northward onto a creature; a bamboo plant cut to a pole */
+                  { int tx=x3, ty=(y3+6)&M, cy=(ty-3)&M, tr, p1, c;
+                    for(int k=0;k<4 && actor_on(&w,(tx+1)&M,cy)>=0;k++) cy=(ty-6+k)&M;   /* a tile it falls on that nobody holds */
+                    tr=persist_obj_new(263,3,tx,ty,0); p1=persist_obj_new(264,3,(tx-2)&M,(ty-1)&M,0); c=se_beast_new(&w,(tx+1)&M,cy,296,0);
+                    if(tr>=0 && p1>=0 && c>=0){ int f0, f4; g_wobj[tr].qty=5; g_ahp[c]=30; build_blocked();
+                      se_obj_wound(tr,3); dbg_num("SE break tree count drops=", g_wobj[tr].alive && g_wobj[tr].qty==2);
+                      se_obj_wound(tr,4); f0=obj_idx_at(tx,(ty-2)&M,260); f4=obj_idx_at((tx+1)&M,(ty-5)&M,262);
+                      dbg_num("SE break tree felled=", !g_wobj[tr].alive && !g_wobj[p1].alive && f0>=0 && f4>=0);
+                      dbg_num("SE break tree hurts below=", g_ahp[c]<30);
+                      { static const int16_t FL[5][4]={{260,1,0,-2},{261,1,-1,-2},{261,5,1,-2},{261,9,1,-4},{262,3,1,-5}};
+                        for(int k=0;k<5;k++){ int o=obj_idx_at((tx+FL[k][2])&M,(ty+FL[k][3])&M,FL[k][0]); if(o>=0) obj_destroy(o); } } }
+                    if(c>=0){ g_atile[c]=0xffff; g_temp[c]=0; } build_blocked();
+                    tr=persist_obj_new(263,3,tx,ty,0); if(tr>=0){ int f0; g_wobj[tr].qty=5; build_blocked(); se_blast(tx,ty,0,0); f0=obj_idx_at(tx,(ty-2)&M,260);
+                      dbg_num("SE break grenade fells tree=", !g_wobj[tr].alive && f0>=0);
+                      { static const int16_t FL[5][4]={{260,1,0,-2},{261,1,-1,-2},{261,5,1,-2},{261,9,1,-4},{262,3,1,-5}};
+                        for(int k=0;k<5;k++){ int o=obj_idx_at((tx+FL[k][2])&M,(ty+FL[k][3])&M,FL[k][0]); if(o>=0) obj_destroy(o); } } build_blocked(); } }
+                  { int bp=persist_obj_new(127,0,x3,y3,0); if(bp>=0){ int pole; g_wobj[bp].qty=1; se_obj_wound(bp,5); pole=obj_idx_at(x3,y3,128);
+                      dbg_num("SE break bamboo pole=", !g_wobj[bp].alive && pole>=0); if(pole>=0) obj_destroy(pole); build_blocked(); } }
+                  /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
+                  { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
+                    se_avatar_death(&w);
+                    dbg_num("SE death leader at the hut=", w.px==412 && w.py==291 && w.level==0);
+                    dbg_num("SE death leader restored=", g_ahp[1]>0 && g_aexp[1]==750 && w.clock==ck+7u*24u*60u && strstr(g_msg,"Intanya's hut")!=0);
+                    w.clock=ck; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); g_aexp[1]=ex; g_ahp[1]=hp; teleport_party(&w,sx,sy); } } }
               #undef SE_ARM
               memcpy(g_aready[1],s1,sizeof s1); equip_refold(1); teleport_party(&w,ox,oy); build_blocked();
               memcpy(g_party,sp,sizeof g_party); g_nparty=sn; g_inv_sel=-1; g_msg[0]=0; }

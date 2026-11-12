@@ -146,8 +146,82 @@ What it uses (the attacker's pack):
 
 **The wound** (0x1a99b; any damage, a blow's or a blast's): only on the party's level. A hit on the
 queen (328) is taken by actor 54. The 0x1810d actors (above) take no harm at all: their hit points are set
-to 255. The breaking of things (the bamboo plant, trees, the control panel, the dark moonstone) and the
-death are item 6's next slice.
+to 255. A hit on the raft (237) is taken by a party member: a random one when the party is more than
+one, else the leader. A blow that wakes (0x1a181): the struck one flashes (tile 257, sound 7, or 8 for a
+party member) and a sleeper stands up, unless its own kind is the tyrannosaurus (294), which sleeps on.
+The wound comes off the hit points; at 0 or below the actor dies (§3d).
+
+### 3d. A death (0x1a6ad, 0x18764)
+
+- **The words**: `<Name> killed!`, or `<Name> falls!` for actors 0-15 (the named people), whatever killed
+  it; a carnivorous orchid (282) dies in silence (§3f), and so does anyone while a scene runs (DS:0xa39).
+- **The story**: actor 23's death sets talk flag 5 of actor 53; actor 180's sets talk flag 7 of actor 48
+  (the talk flags of converse.md §6c, DS:0x6efc by actor).
+- **The experience**: only a blow (0x1b47d) pays, to the striker, and only for an evil or chaotic victim
+  (status bit 0x20). From the creature table (§4), by the victim's kind: (A × damage + (HP + armour) ×
+  dexterity) / 16, where A is the strength for a creature with flag 0x20, else the dexterity. A kind
+  not in the table pays nothing. Experience stops at 9999 (0x186f7). The spear of shamap's kill (§3c)
+  and a blast (§3b) pay nothing.
+- **The party**: a companion who dies leaves the party (the leader stays, and falls, §3e).
+- **A rider** (307) gets off its turtle first, as U)se does (se_use.md §5w); with no shore beside it,
+  `Only next to land!` and it leaves nothing.
+- **The remains** (0x18764), by the victim's kind:
+
+  | kind | remains |
+  |---|---|
+  | 310-316, 318, 320-326, 317 | a body (249) in frames 0-15, in the order 310 311 312 313 314 315 316 318 320 321 322 323 324 325 326 317 |
+  | 283, 284, 288, 289, 294, 296, 297, 301, 303, 305, 327, 330-337 | a dead creature (280) in frame 1, 3, 6, 8, 13, 21, 23, 25, 27, 30, 33, 35, 37, 39, 41, 43, 45, 46, 47 |
+  | 299 baby pteranodon | a roast pteranodon (107) |
+  | anything else | nothing |
+
+  Actors 11, 31, 47 and 55 leave nothing, nor does a kind with flag 0x800 or 0x1000. The remains stand on
+  the victim's tile with its quality = the victim and hold what it carried (0xbf8f); they are temporary
+  for actors 192 and up. The big creatures add a second piece, the next frame of the same remains, with
+  blood around it, each blood a 1-in-2 chance:
+
+  | kind | second piece | blood (each tile) |
+  |---|---|---|
+  | 284, 289, 305 | at (x+1, y) | (x+1, y), (x, y), (x-1, y) |
+  | 303 | at (x, y+1) | (x, y+1), (x, y), (x, y-1) |
+  | 294 | frame 17 at (x, y+2) | the 2 × 4 tiles from (x-1, y-1) to (x, y+2) |
+  | 297 | at (x+1, y) | none |
+
+  Any other kind with flag 0x2000, for actors 16 and up, leaves one blood (248, a random frame 0-2,
+  temporary) on its tile. A temporary actor's slot is freed.
+- **The leader** falling is §3e.
+
+### 3e. The leader falls (0x17a33, 0x27566, 0x8cb:0xc73)
+
+When the Avatar (actor 1) is dead: `Overcome by your wounds, you fall unconscious..... `, and then, a
+week later (the day moves on 7, the hour stays), `....You awaken in Intanya's hut, feeling restored.`:
+
+- every dead companion of the party stands up at its body with what the body held, and joins again;
+- the party is at (412, 291) on the surface;
+- each member gets off its turtle, wakes, is cured, has all its hit points and turns good (status bits
+  0x60 = 0x40), and keeps three quarters of its experience;
+- whoever was attacking the party (worktype 0x9b) goes back to its schedule (0x81).
+
+### 3f. Things broken (0x1a99b)
+
+A blow on an object, or a blast's 30 on a tree (0x218f5, se_use.md §5b): a stackable thing (the 48 kinds at DS:0x806) or one whose count is 0 takes
+nothing. Otherwise it flashes; a count above the damage drops by the damage, else the thing breaks,
+without a word:
+
+- **the bamboo plant** (127) leaves a bamboo pole (128, temporary) on its tile; the plants on the map have
+  a count of 0, so a blow does not cut them;
+- **a tree** (263, its parts 264 at (x-2, y-1), 265 at (x, y-2) and 266 at (x-2, y-3)) falls northward
+  (sound 31): fallen-tree pieces 260 frame 1 at (x, y-2), 261 frame 1 at (x-1, y-2), 261 frame 5 at
+  (x+1, y-2), 261 frame 9 at (x+1, y-4) and 262 frame 3 at (x+1, y-5), all lasting. Each actor on the tiles
+  it falls across (the 2 × 5 mask at DS:0x10af: x..x+1, y-6..y-2, all but (x, y-2)) is pushed to the first free tile around it (by column) and takes 2-20 (two rolls of
+  1-10); with no free tile it takes all its hit points;
+- **the control panel** (222) and **the dark moonstone** (147) start scenes of the story: a later slice;
+- **anything else** is gone.
+
+The carnivorous orchids (282, a head; 292, its stalk, whose quality is the head) take their wounds by
+0x1a3f0: a stalk's wound goes to its head (a stalk that is an actor gives half to every head); a head
+that dies takes its stalk with it, step by step along its direction, and when its root (the head's
+quality) has no heads left the root dies too and leaves an orchid bulb (78). They come with SE's eggs and
+creatures' doings (item 6, later).
 
 ## 4. The creature table (segment 0x2f43)
 
@@ -209,8 +283,12 @@ thing not in the table reads the word before the flags (0x1000) and no stats.
 | 292 carnivorous orchid | 0 | 0 | 0 | 5 | 0 | 10 | 0x60 | 0x1011 |
 
 ## 5. Open questions
-- What flags 0x08, 0x400, 0x800, 0x1000, 0x2000 and 0x4000 mean.
-- Death, experience and remains (0x1a181, 0x1a6ad), and the breaking of things in 0x1a99b (127 the bamboo
-  plant to a pole, a tree felled into 260/261, the control panel 222, the dark moonstone 147).
-- The carnivorous orchids (282, 292) take a wound by 0x1a3f0, not yet read.
+- What flags 0x08, 0x400 and 0x4000 mean; 0x800 and 0x1000 mean "no remains", 0x2000 "bleeds" (§3d).
+- 0x1a6ad would pay 500 for a victim whose saved look (-0x4ac2) tests against 0 (`test $0, …`), which never
+  holds, so DOS never pays it; what was meant is unknown, and nothing is built.
+- 0x1a3f0 hands back as "experience" whatever is in a register: a head's remaining hit points when it
+  lives, 10 when the root dies, 0 for a stalk. To be decided with the orchids.
+- The scenes of the control panel (0x1ded4: the crystals 256 turn into 223, a blast of 1-30 around it,
+  actors 47, 31, 55, 35 and 11 die, actor 5 comes back) and the dark moonstone (0x1e34e).
+- The flash when a creature with flag 0x1000 dies near the party (0x359:0xd58).
 - A readied flintlock keeps its load in the engine per actor; the save keeps it with item 10.

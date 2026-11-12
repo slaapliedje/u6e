@@ -74,11 +74,14 @@ int main(void){
     CHECK(weapon_shoots(31) && weapon_shoots(39) && weapon_shoots(241) && !weapon_shoots(26) && !weapon_shoots(21), "SE: what always shoots");
     CHECK(weapon_missile(31)==566 && weapon_missile(40)==263 && weapon_missile(26)==547 && weapon_missile(21)==266, "SE missile tiles");
     CHECK(weapon_ammo(31)==45 && weapon_ammo(40)==41 && weapon_ammo(32)==36 && weapon_ammo(37)==26 && weapon_ammo(50)==0, "SE ammunition");
+    { int fr=-1; CHECK(monster_remains(317,&fr)==249 && fr==15 && monster_remains(296,&fr)==280 && fr==21 && monster_remains(299,&fr)==107 && monster_remains(302,&fr)==0, "SE remains");
+      CHECK(monster_exp_se(296)==95 && monster_exp_se(294)==(60*150+(255+255)*5)/16 && monster_exp_se(323)==(45*10+(10+8)*45)/16 && monster_exp_se(999)==0, "SE experience"); }
     hits=0; for(int i=0;i<N;i++) hits += combat_hit(16,16,&r);    /* threshold 15: rolls 15..30 hit, 16 in 30 */
     { double p=100.0*hits/N; printf("SE hit%% 16v16 = %.1f (expect ~53.3)\n", p); CHECK(p>50.5 && p<56, "SE hits on the threshold"); }
     rules_select(RULES_U6);
     CHECK(weapon_dmg(43)==15 && armour_ac(22)==7 && equip_class(22)==EQ_BODY, "U6 tables back");
     CHECK(weapon_ammo(41)==0 && weapon_missile(41)==566 && weapon_shoots(41), "U6 shooting back");
+    { int fr=-1; CHECK(monster_remains(363,&fr)==339 && fr==0 && monster_remains(342,&fr)==338, "U6 remains back"); }
 
     printf(fails? "\n%d CHECK(S) FAILED\n" : "\nALL COMBAT TESTS PASS\n", fails);
     return fails?1:0;
