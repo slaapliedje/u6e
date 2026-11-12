@@ -27,6 +27,7 @@ int weapon_is(int obj_n);     /* §6c: fights when readied */
 int weapon_shoots(int obj_n); /* §6c: shoots at any distance */
 int combat_dist(int dx,int dy);   /* §6c the distance table */
 int weapon_missile(int obj_n);/* §6b the missile tile a weapon shoots; 0 = none        */
+int weapon_ammo(int obj_n);      /* SE: the ammunition a weapon takes from the pack (se_combat.md §3a); 0 = none */
 int armour_ac(int obj_n);     /* §5 armour-class contribution of a readied item; 0 if not armour */
 
 #endif

@@ -29,6 +29,7 @@ these). Each row says what DOS does, so any of them can be put back.
 | 10 | A breakable container thrown and broken spills what it held onto the tile | se_move.md §6 | Moves it there, then deletes it with everything in it |
 | 11 | A tar fire's waves burn only the fires the pour started | se_use.md §5q | Each wave takes every fire of its quality in the loaded objects, so a campfire nearby burns out; the engine holds the whole world, not DOS's loaded area |
 | 12 | The modern weapons can't be readied by those who don't know them at any frame | se_combat.md §1 | Compares the whole object word, so a loaded flintlock (frame 1) can be readied by anyone |
+| 13 | A blow whose hit roll fails misses | se_combat.md §3a | 0x1b47d compares the roll's result with -1 only, so a failed roll (0) strikes anyway: every blow that reaches someone lands |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
@@ -42,5 +43,5 @@ these). Each row says what DOS does, so any of them can be put back.
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the
 ceiling, the trap doors, the drum's scene), combat (item 6: the totems, the bell, fire's harm, a
-readied flintlock; SE's creature table for the turtle's other numbers), SE's music and sounds (item 9),
+SE's creature table for the turtle's other numbers), SE's music and sounds (item 9),
 the border (item 8).

@@ -72,18 +72,82 @@ set. Everything else hits on dexterity.
 
 ## 3. A blow (0x1b47d, 0x1af13, 0x1b234)
 
-1. Out of the weapon's range: no blow.
-2. **The hit:** a thing that isn't an actor is always hit. The spear of shamap on the tyrannosaurus
-   (294) and a lit torch on a web (17) always hit; the black staff on the drone or the queen hits 7
-   times in 8. Otherwise the roll 1-30 hits when it is at least (the defender's dexterity + 30 - the
-   attacker's dexterity or strength) / 2 (the Myrmidex drone and queen defend at 20). U6 needs the roll
-   to be over that.
-3. **The damage:** a weapon of damage d from 2 to 254 rolls 1-d; the defender's armour class a, when
-   over 0, takes 1-a off. Nothing left: `<Name> grazed.`. Otherwise the blow lands.
-4. A creature with flag 0x40 poisons with a blow that lands, 1 time in 4, unless the defender is
-   protected (actor status 0x01, as U6's protection) or immune (0x1810d: an actor whose own kind is
-   the tyrannosaurus 294 or an apatosaurus 286/287, and actors 11, 25, 31, 33, 35, 47 and 55):
-   `<Name> poisoned!` (the name with a capital).
+### 3a. Before the blow
+
+**The player's A)ttack** (0x1b9e7) strikes once with each readied weapon in turn, or once bare-handed.
+Before each, with nothing printed yet:
+- the bow (31) without an arrow (45) in the attacker's pack: `Out of arrows!`; the modern rifle (40)
+  without a rifle bullet (41): `Out of ammunition!`; the blowgun (32) without a poisoned dart (36):
+  `Out of darts!`; the atl atl (37) without a spear (26): `Out of spears!`. A readied one doesn't count
+  (0xa5d:0x80a passes over status 0x18).
+- the bamboo flintlock (50) unloaded (frame 0): `Flintlock not loaded!`.
+
+Each of these ends that weapon's blow; no time passes for it. Then the target is named as for U6, and the
+blow (0x1b47d) is struck.
+
+**The blow (0x1b47d; weapon, target tile, attacker):**
+1. A rider on a turtle (307) fights bare-handed, whatever it has readied.
+2. The black staff (21) is charged (quality 1) when the target is a Myrmidex drone (323) or the queen
+   (328), and uncharged otherwise.
+3. Past the weapon's range (§2; the charged staff 7): `Out of range!`.
+4. **What can be struck:** a web (17) only with the lit torch (209) or a grenade (137, 138); a tree
+   (263) only with a grenade or the fire axe (118). Otherwise `Not possible.`
+5. A fighter other than the player whose weapon lacks its ammunition (as above) does nothing, silently. An
+   unloaded flintlock is loaded instead (0x21e67, se_use.md §5k: one gunpowder from the fighter's pack,
+   `<Name>: Flintlock loaded.` or `<Name> doesn't have any gunpowder.`).
+6. **Shot, not swung:** the blow flies (3b) when the target is more than one tile away, or always with the
+   bow, the bamboo flintlock, the modern rifle, the atl atl, the blowgun, the grenades, the boomerang, the
+   devices (240, 241) and the charged staff.
+7. **The hit** (0x1af13): a thing that isn't an actor is always hit. The spear of shamap on the
+   tyrannosaurus (294) and a lit torch on a web (17) always hit; the charged staff on a drone or the queen
+   hits 7 times in 8. Otherwise the roll 1-30 hits when it is at least (the defender's dexterity + 30 - the
+   attacker's dexterity or strength) / 2 (a drone or the queen defends at 20). U6 needs the roll to be over
+   that. **DOS slip:** 0x1b47d tests the result only against -1, which by then it never is, so in DOS a
+   failed roll strikes anyway (se_deviations.md 13).
+8. Nobody on the tile where it ends, or the attacker itself: nothing more.
+
+### 3b. The flight (0x19b5a)
+
+What flies: the bow an arrow (tile 566), the atl atl a spear (547), the blowgun a dart (557), the rifle
+and the flintlock a bullet (tile 263), a grenade the lit grenade (701), a device the activated device
+(1029), the charged staff a bolt (tile 266); a thrown weapon (1, 26, 27, 39, 44) flies as itself.
+It goes as far as the weapon's range toward the target, and stops early on what blocks it. Whoever stands
+where it ends is the one struck: the same roll, or a new one if it stopped short of the target.
+Sounds: 2 for the spears, axes, knives, bow and devices; 5 the blowgun; 3 the boomerang; 4 the rifle and
+the flintlock; 0x1e the grenades; 0x12 and then 0x1e the charged staff.
+
+What it uses (the attacker's pack):
+- **The bow, the rifle, the blowgun, the atl atl:** one arrow, bullet, dart or spear. A spear from the atl
+  atl that was the last of its stack lands where the flight ended, unless the tile loses it (deep water,
+  0x1e61c, 0xf71, and nothing there to land on: 0x1f4cd); the others are spent.
+- **The bamboo flintlock** unloads (frame 0).
+- **A thrown weapon** (1, 26, 27, 44) lands where the flight ended (unless that tile loses it and nobody
+  stood there), and the next of its kind in the pack is readied in its place.
+- **A grenade or a device** is gone; it bursts where the flight ended (a grenade 0x19a41, a device
+  0x19ac1: the blasts of se_use.md, a grenade 1-20 to each actor in it that isn't of a stackable kind, a
+  device 1-35 to drones and the queen only; then the grenades in the 3x3 go off, its webs go, its boulders
+  roll and its trees take 30). A grenade (137) or device (240) in the pack is readied in its place.
+- **The boomerang** flies back to the attacker afterwards (0x276b:0x390), as a picture only.
+
+### 3c. The blow lands
+
+- **The spear of shamap** (1) becomes a plain spear (26), wherever it is. The tyrannosaurus falls asleep
+  (status 0x04); anyone else takes damage equal to its hit points.
+- **The blowgun** (32): 1 time in 2, unless the defender is protected (status 0x01) or immune (the
+  0x1810d list below), the defender is poisoned instead of hurt: `<Name> poisoned!`. Otherwise the blow does
+  its damage.
+- **A lit torch on a web** makes a fire (242) on the web's tile (0xa5d:0xeb6, status 0x20).
+- **Otherwise** (0x1b234): a weapon of damage d from 2 to 254 rolls 1-d; the defender's armour class a,
+  when over 0, takes 1-a off. Nothing left: `<Name> grazed.`. Otherwise the blow lands.
+- A creature with flag 0x40 poisons with a blow that lands, 1 time in 4, unless the defender is
+  protected (actor status 0x01, as U6's protection) or immune (0x1810d: an actor whose own kind is
+  the tyrannosaurus 294 or an apatosaurus 286/287, and actors 11, 25, 31, 33, 35, 47 and 55):
+  `<Name> poisoned!` (the name with a capital).
+
+**The wound** (0x1a99b; any damage, a blow's or a blast's): only on the party's level. A hit on the
+queen (328) is taken by actor 54. The 0x1810d actors (above) take no harm at all: their hit points are set
+to 255. The breaking of things (the bamboo plant, trees, the control panel, the dark moonstone) and the
+death are item 6's next slice.
 
 ## 4. The creature table (segment 0x2f43)
 
@@ -146,5 +210,7 @@ thing not in the table reads the word before the flags (0x1000) and no stats.
 
 ## 5. Open questions
 - What flags 0x08, 0x400, 0x800, 0x1000, 0x2000 and 0x4000 mean.
-- The special blows (the spear of shamap, the blowgun, the boomerang, the lit torch on a web), ammunition
-  and shooting are item 6's next slice.
+- Death, experience and remains (0x1a181, 0x1a6ad), and the breaking of things in 0x1a99b (127 the bamboo
+  plant to a pole, a tree felled into 260/261, the control panel 222, the dark moonstone 147).
+- The carnivorous orchids (282, 292) take a wound by 0x1a3f0, not yet read.
+- A readied flintlock keeps its load in the engine per actor; the save keeps it with item 10.

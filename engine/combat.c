@@ -83,11 +83,20 @@ int weapon_is(int obj_n){ return (obj_n==91 && g_rules==RULES_U6) || weapon_dmg(
 /* §6c: never mind the distance, this weapon shoots (the morning star and halberd never do) */
 int weapon_shoots(int obj_n)
 {
-    if (g_rules == RULES_SE) return 0;           /* SE's shooting: item 6's next slice */
+    if (g_rules == RULES_SE) switch (obj_n){     /* se_combat.md §3a 6 (the charged staff: the game layer) */
+        case 31: case 32: case 37: case 39: case 40: case 50: case 137: case 138: case 240: case 241: return 1;
+        default: return 0; }
     switch (obj_n){
     case 33: case 37: case 41: case 42: case 49: case 50: case 79: case 80: case 83: case 91: return 1;
     default: return 0;
     }
+}
+
+/* SE: what a weapon shoots, carried in the pack (se_combat.md §3a); 0 = none */
+int weapon_ammo(int obj_n)
+{
+    if (g_rules != RULES_SE) return 0;
+    switch (obj_n){ case 31: return 45; case 40: return 41; case 32: return 36; case 37: return 26; default: return 0; }
 }
 
 /* §6c distance: a table, not the larger of dx and dy */
@@ -103,7 +112,16 @@ int combat_dist(int dx,int dy)
 /* §6b the tile a weapon throws or shoots (0 = not a missile weapon). */
 int weapon_missile(int obj_n)
 {
-    if (g_rules == RULES_SE) return 0;
+    if (g_rules == RULES_SE) switch (obj_n){     /* se_combat.md §3b */
+        case 31: return 566;   /* bow: an arrow       */
+        case 37: case 26: return 547;   /* atl atl, spear: a spear */
+        case 32: return 557;   /* blowgun: a dart     */
+        case 40: case 50: return 263;   /* rifle, flintlock: a bullet */
+        case 137: case 138: return 701;   /* a lit grenade */
+        case 240: case 241: return 1029;  /* an activated device */
+        case 21: return 266;   /* the charged staff's bolt */
+        case 1: return 512; case 27: return 548; case 39: return 560; case 44: return 565;   /* thrown as themselves */
+        default: return 0; }
     switch (obj_n){
     case 33: return 398;   /* sling: a stone      */
     case 36: return 547;   /* spear               */

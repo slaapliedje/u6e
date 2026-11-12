@@ -129,3 +129,9 @@ list once SE's seams exist.
   damage rolls, poison from a blow, and SE's 47-creature table, read from its GAME.EXE. The engine's
   combat, equip and monster tables answer for SE when it is loaded (rules_select). Left in item 4: SE's
   look and search texts. Next in item 6: the special blows, ammunition and shooting, death and experience.
+- 2026-11-12: item 6's blows (rules/se_combat.md §3): ammunition and its words, the flintlock's load (kept
+  while readied, loaded by a fighter in combat), shooting and the flight's tiles, thrown weapons landing with
+  a spare readied, grenades and devices thrown into their blasts, what can be struck (webs, trees), the
+  spear of shamap, the blowgun's poison, a torch on a web, the charged black staff, the queen's wound and
+  the unharmed actors. DOS slip 13 (a failed hit roll strikes anyway) built as the intent. Next in item 6:
+  death, experience and remains, and the breaking of things (bamboo, trees, the control panel).

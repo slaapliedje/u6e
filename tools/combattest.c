@@ -71,10 +71,14 @@ int main(void){
     { mon_base_t mb; CHECK(monster_base(294,&mb) && mb.str==60 && mb.hp==255 && mb.dmg==150 && mb.align==ALIGN_CHAOTIC, "SE tyrannosaurus row");
       CHECK(monster_base(323,&mb) && mb.align==ALIGN_EVIL && monster_base(310,&mb) && mb.align==ALIGN_GOOD && monster_base(303,&mb) && mb.align==ALIGN_NEUTRAL, "SE alignments"); }
     CHECK((monster_type_flags(302)&0x200) && monster_movetype(302)==MT_WATER_HIGH && monster_movetype(288)==MT_AIR_LOW && monster_str_based(294) && !monster_str_based(323), "SE creature flags");
+    CHECK(weapon_shoots(31) && weapon_shoots(39) && weapon_shoots(241) && !weapon_shoots(26) && !weapon_shoots(21), "SE: what always shoots");
+    CHECK(weapon_missile(31)==566 && weapon_missile(40)==263 && weapon_missile(26)==547 && weapon_missile(21)==266, "SE missile tiles");
+    CHECK(weapon_ammo(31)==45 && weapon_ammo(40)==41 && weapon_ammo(32)==36 && weapon_ammo(37)==26 && weapon_ammo(50)==0, "SE ammunition");
     hits=0; for(int i=0;i<N;i++) hits += combat_hit(16,16,&r);    /* threshold 15: rolls 15..30 hit, 16 in 30 */
     { double p=100.0*hits/N; printf("SE hit%% 16v16 = %.1f (expect ~53.3)\n", p); CHECK(p>50.5 && p<56, "SE hits on the threshold"); }
     rules_select(RULES_U6);
     CHECK(weapon_dmg(43)==15 && armour_ac(22)==7 && equip_class(22)==EQ_BODY, "U6 tables back");
+    CHECK(weapon_ammo(41)==0 && weapon_missile(41)==566 && weapon_shoots(41), "U6 shooting back");
 
     printf(fails? "\n%d CHECK(S) FAILED\n" : "\nALL COMBAT TESTS PASS\n", fails);
     return fails?1:0;
