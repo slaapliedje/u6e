@@ -10,9 +10,9 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 >                  addresses below, code segment base 0x1dbd0). The disassembly stays outside the repo.
 > - References   : none
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
-> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick and the strips; not yet against DOS running
+> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom and the wire screen; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips)
+> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -85,13 +85,13 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 95 bottle of liquor | drunk; past three drinks the Avatar staggers, §5o | 0x21c2d | yes |
 | 131 digging stick | clay from a clay tile beside its holder, §5p | 0x21f60 | yes |
 | 134 cloth strips | `On ` a person: bind their wounds, §5p | 0x23c06 | yes |
-| 136 metal bucket | | 0x235a9 | no |
+| 136 metal bucket | tar or water into it; tar poured sets fires, water puts them out, §5q | 0x235a9 | yes, but the fire's harm (item 6) |
 | 137 240 grenades, devices | light, §5b | 0x21671 | yes, but trees |
-| 143 machine | | 0x25b44 | no |
-| 148 jungle drum | | 0x2542b | no |
-| 165 loom | | 0x23f9e | no |
+| 143 machine | a gem in, a fruit out, §5r | 0x25b44 | yes |
+| 148 jungle drum | with the drumsticks and the tribes united, the scene underground, §5r | 0x2542b | item 11 |
+| 165 loom | `On ` flax: cloth, §5r | 0x23f9e | yes |
 | 173 242 254 257 oven, fire, fire pit | the fire's `On ` (§5) | 0x2215f | yes |
-| 177 wire screen | sift | 0x23b10 | no |
+| 177 wire screen | sulfur from a sulphur pit, §5r | 0x23b10 | yes |
 | 186 brazier | | in the switch | no |
 | 190 metal head | | 0x24147 | no |
 | 191 tarred cloth strips | | 0x23777 | no |
@@ -468,6 +468,74 @@ things):
   body.` and `That person is beyond help.`;
 - anything else: `nothing`.
 Where SE's save keeps the levels is item 10.
+
+### 5q. The metal bucket (0x235a9) and fire
+
+The bucket (136) holds what it holds inside it: 10 tar (139) or 10 water (140). Its frame shows it: 0
+empty, 1 tar, 2 water.
+
+**Empty**, U)se looks at the eight tiles around its holder (or its own tile on the map), column by
+column from the west; on each tile, at each thing there:
+- a tar pit (229): 10 tar go into it, frame 1, `You got some tar in the bucket.`;
+- else water: a wet tile (tile flags 1, bit 0x01), or a fountain (162, 166), the well (200), the
+  waterfall (150) or the falls (151): 10 water, frame 2, `You got some water in the bucket.` DOS tests
+  the wet tile at (x, holder's y - i + j) for the column i and row j it is at, not (x, y): a slip, kept.
+  A tile with nothing on it is still tested for wet once.
+The first one found ends it; none: `There is nothing to get in the bucket.`
+
+**Tar** asks `On ` (holder, range from the holder for a thing on the map):
+- cloth strips (134): `cloth strips`, `You tarred some cloth strips.` As many tar go as there are strips;
+  the acting member gets as many tarred cloth strips (191) as there was tar for, if the strips were in
+  their pack, else they lie where the strips were; the strips go (all, or as many as there was tar for).
+  With no more tar than strips the bucket is emptied;
+- a pteranodon nest (171), or a dinosaur egg (111) lying on one: `pteranodon nest`; a fire (242) and a
+  burned nest (76, frame 3) on the nest's tile, and the fire burns (below). More than 4 tar: one goes;
+  else the bucket is emptied;
+- a dinosaur egg not on a nest: `dinosaur egg`, a fire on its tile, and it burns. No tar goes (a slip,
+  kept);
+- a web (17): `web`, a lasting fire (242, quality 2) and a fire on its tile, and it burns. No tar goes;
+- anything else, or a tile with nothing on it (in reach, else `Out of range!`; no tile, `nothing!`): its
+  name; one tar goes (the last empties the bucket); unless the tile is wet, a lasting fire and a fire,
+  and it burns.
+Nothing of these done: `No effect.`
+
+**A fire burns** (0x22a28): what is on its tile: a person takes the tile's harm (the hazard routine,
+0x359:0xda8: item 6); a thing on the burnable list (DS:0x118a, the fire's incinerate list, §5) or an egg
+(230) goes, the egg with what it holds; a web or a nest that goes lights a fire on every web around it
+(the 8 tiles). Then the fire itself goes. The new fires burn next, wave after wave (0x22b5e and 0x22c39
+take turns, marking each wave's fires with quality 0 or 1), until a wave lights none; the view is drawn
+between waves. The lasting fire (quality 2) isn't in the waves and stays.
+
+**Difference** (for SE's register, item 12): each DOS wave takes every fire of the wave's quality in the
+loaded objects, so a campfire nearby with quality 0 would burn out with the first wave. The engine holds
+the whole world rather than DOS's loaded area, so its waves take only the fires the pour started.
+
+**Water** asks `On ` (holder; range for a thing on the map). All the water goes and the frame is 0, then:
+a fire (242, 254): `You put the fire out.` and it goes; burnt logs burning (207, frame 2): `You put the
+fire out.`, frame 0; anything else, or a tile (its name first; no tile, `nothing!`): `You pour the water
+out.`
+
+### 5r. The machine, the jungle drum, the loom and the wire screen
+
+**The machine (143)** takes the first diamond, emerald or ruby (72, 73, 74) in the leader's pack (not in
+a container), one of the stack: `You put a gem in the machine.`, and a fruit (197) lies on the machine's
+tile. None: `You don't have any gems.` DOS plays sound 0x20.
+
+**The jungle drum (148)** needs small bones (91, the drumsticks) somewhere in the leader's pack, else
+`You have nothing with which to play the drum.` With them, if bit 0x08 of talk flag 1 is clear and bit
+0x80 is set in talk flags 16, 17, 19, 20, 27, 29, 32, 34, 40, 48 and 53 (the tribes), the scene
+(0x1e1ac): song 17, the message area cleared, the blue eyes, talk flag 1 gets 0x08, the party goes to
+(243,204) on level 1, the hole in the ceiling (22) there turns frame + 1, and if the acting member
+carries object 21 its picture is lent to tile 268; then the view and the place's song. Otherwise
+nothing happens. The move between levels is item 11, so the drum comes with it.
+
+**The loom (165)** asks `On ` for the leader (range from the leader): on flax (210), `You wove cloth from
+the flax.`, one flax goes, and one cloth (180) goes to the leader if the flax was carried (else at their
+feet), or lies where the flax was. Anything else: `No effect.`
+
+**The wire screen (177)** looks at the eight tiles around its holder, column by column from the west;
+the first sulphur pit (231): `You made some sulphur powder.` and 10 sulfur (123) to the holder, else at
+the holder's feet. The pit stays. None: `There is nothing to sift.`
 
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as

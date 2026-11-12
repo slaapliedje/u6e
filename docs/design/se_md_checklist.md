@@ -31,7 +31,8 @@ list once SE's seams exist.
    bucket, skinning, the camera, the raft and turtles, flintlocks, grenades), read case by case.
 6. Combat and the party's powers: Triolo's and Intanya's invocations (Heluzz, Aphazz, Motazz),
    offerings, ranged weapons, monsters; the totems (rules/se_use.md §5n); fallen creatures as bodies in their actor slots (status 0x10)
-   and the bell on a fallen tyrannosaurus (rules/se_use.md §5i); trees in a blast (§5b); a readied
+   and the bell on a fallen tyrannosaurus (rules/se_use.md §5i); the hazard routine (fire and other
+   harmful tiles, 0x359:0xda8, used by the bucket's fires §5q); trees in a blast (§5b); a readied
    flintlock's frame (loading, firing; §5k).
 7. Rest and food: SE's rest rules and the dream at the first rest.
 8. Panel and screens: SCREEN.LZC and BKGRND.LZC, SE's portraits, cursor and font as DOS draws them.
@@ -39,7 +40,7 @@ list once SE's seams exist.
 10. Saves: SE's objlist layout, the 8 slots.
 11. Levels: the underground levels, the trap door, level transitions (SE's level change 0x8cb:0x855:
     the rope, the hole in the ceiling, the trap door 160, the stairs 259 and the gem's trap door sealing
-    behind the party, caves 163 and 227).
+    behind the party, caves 163 and 227; the jungle drum's scene, rules/se_use.md §5r).
 12. Register: SE's own deviations list, worked to zero like U6's.
 
 ## Martian Dreams
@@ -107,5 +108,6 @@ list once SE's seams exist.
   giving (16 things or the weight), its nine containers (what each takes, the jar's picture), and the
   mortar's grinding (se_use.md §5l); and SE's D)rop (§6: things lost, breakables, the squished pot, into a
   container, the device going off). The stalks, the bones and the jug of plachta (se_use.md §5m); the totems go to item 6
-  (§5n). The folded skin, the fire extinguisher and the liquor (§5o). The digging stick and the cloth strips (§5p). Next:
-  §3's order from the metal bucket (136).
+  (§5n). The folded skin, the fire extinguisher and the liquor (§5o). The digging stick and the cloth strips (§5p). The metal bucket and fire (§5q; the burning
+  of people waits for item 6's hazard). The machine, the loom and the wire screen (§5r); the jungle drum's
+  scene goes to item 11. Next: §3's order from the brazier (186).

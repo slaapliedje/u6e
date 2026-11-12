@@ -6249,6 +6249,9 @@ static int use_actor(void); static int carry_over(int a,int extra);
 #define SEON_PLACHTA 5                                      /* the jug of plachta (0x254bc) */
 #define SEON_EXTING 6                                       /* the fire extinguisher (0x243e9) */
 #define SEON_STRIPS 7                                       /* cloth strips (0x23c06) */
+#define SEON_TAR 8                                          /* a bucket of tar (0x22d11) */
+#define SEON_WATER 9                                        /* a bucket of water (0x23364) */
+#define SEON_LOOM 10                                        /* the loom (0x23f9e) */
 static int g_se_on_tx=-1, g_se_on_ty;                        /* the tile the answer named (a bare one too) */
 static int g_se_on_idx=-1, g_se_on_row=-1;                  /* the thing that asked: on the map, or its pack row */
 static int g_se_on_actor=1;                                 /* who holds the thing that asked */
@@ -6557,15 +6560,123 @@ static int se_strips_on(int id,int idx,int row,int n)
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; }
         if(g_wobj[idx].obj_n==249||g_wobj[idx].obj_n==248){ msgcat(n,"a body.\nThat person is beyond help."); return 0; } }
     (void)row; msgcat(n,"nothing"); return 0; }
+static void se_pack_put(int cid,int on,int q,int own); static void se_destroy_all(int i); static void present_map(void);
+/* ---- the metal bucket (se_use.md §5q): it holds 10 tar (139) or 10 water (140) inside it; frame 0 empty, 1 tar, 2 water ---- */
+static int se_bkt_n(int idx,int row,int on){                   /* how much of on it holds */
+    int n=0; if(idx>=0){ for(int j=0;j<g_ow.nobjs;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)idx && g_wobj[j].obj_n==on) n+=g_wobj[j].qty?g_wobj[j].qty:1; }
+    else if(row>=0 && g_ow.inv[row].id){ for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].in==g_ow.inv[row].id && g_ow.inv[k].obj_n==on) n+=g_ow.inv[k].qty?g_ow.inv[k].qty:1; }
+    return n; }
+static void se_bkt_take(int idx,int row,int on,int q){          /* 0xa5d:0x22f7 */
+    if(idx>=0){ for(int j=0;j<g_ow.nobjs&&q>0;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)idx && g_wobj[j].obj_n==on){ int h=g_wobj[j].qty?g_wobj[j].qty:1;
+            if(h>q){ g_wobj[j].qty=(uint16_t)(h-q); q=0; } else { q-=h; obj_destroy(j); } } }
+    else if(row>=0 && g_ow.inv[row].id){ int id=g_ow.inv[row].id; for(int k=g_ow.ninv-1;k>=0&&q>0;k--) if(g_ow.inv[k].in==id && g_ow.inv[k].obj_n==on){ int h=g_ow.inv[k].qty?g_ow.inv[k].qty:1, t=h<q?h:q; pack_row_take(k,t); q-=t; } } }
+static void se_bkt_frame(int idx,int row,int fr){
+    if(idx>=0){ g_wobj[idx].tile=(uint16_t)(basetile(136)+fr); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+    else if(row>=0) g_ow.inv[row].tile=(uint16_t)(basetile(136)+fr); }
+static void se_bkt_fill(int idx,int row,int on){
+    if(idx>=0){ int c=persist_obj_new(on,0,g_wobj[idx].x,g_wobj[idx].y,0); if(c>=0){ g_wobj[c].qty=10; g_wobj[c].alive=0; g_wobj[c].parent=(uint16_t)idx; } }
+    else { if(!g_ow.inv[row].id) g_ow.inv[row].id=(uint16_t)++g_inv_next; se_pack_put(g_ow.inv[row].id,on,10,g_ow.inv[row].owner); } }
+/* the bucket's place: its holder's tile, or its own */
+static void se_bkt_where(int idx,int row,int*x,int*y){
+    if(idx>=0 && g_wobj[idx].alive){ *x=g_wobj[idx].x; *y=g_wobj[idx].y; } else se_actor_xy(row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):use_actor(),x,y); }
+static int se_bucket(int idx,int row){
+    int fr=idx>=0?se_frame(idx):(int)g_ow.inv[row].tile-basetile(136), hx, hy;
+    if(fr==1||fr==2){ g_se_on=fr==1?SEON_TAR:SEON_WATER; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):use_actor(); g_se_on_idx=idx; g_se_on_row=row; g_next_verb='X'; return 0; }
+    se_bkt_where(idx,row,&hx,&hy);
+    for(int i=0;i<3;i++) for(int j=0;j<3;j++){ int x=hx+i-1, y=hy+j-1, k, any=0; if(i==1&&j==1) continue;
+        for(k=0;k<g_ow.nobjs;k++){ const wobj_t*o=&g_wobj[k]; if(!o->alive||o->x!=x||o->y!=y) continue; any=1;
+            if(o->obj_n==229){ se_bkt_fill(idx,row,139); se_bkt_frame(idx,row,1); msgcat(0,"\nYou got some tar in the bucket."); return 1; }
+            if((g_tflags1[world_tile(g_wp,x,hy-i+j)&0x7ff]&1) || o->obj_n==162||o->obj_n==200||o->obj_n==166||o->obj_n==150||o->obj_n==151){   /* DOS's wet tile: (x, y-i+j), a slip */
+                se_bkt_fill(idx,row,140); se_bkt_frame(idx,row,2); msgcat(0,"\nYou got some water in the bucket."); return 1; } }
+        if(!any && (g_tflags1[world_tile(g_wp,x,hy-i+j)&0x7ff]&1)){ se_bkt_fill(idx,row,140); se_bkt_frame(idx,row,2); msgcat(0,"\nYou got some water in the bucket."); return 1; } }
+    msgcat(0,"\nThere is nothing to get in the bucket."); return 1; }
+/* fire burns what is on its tile (0x22a28): a person takes the tile's harm, a burnable thing goes (a web or a nest lights the
+ * webs around it, an egg goes with what it holds), then the fire goes; the new fires burn next, in waves (0x22b5e/0x22c39) */
+static int16_t g_sw_fire[64]; static int g_sw_n;
+static void se_burn1(int f,int gen){
+    int x=g_wobj[f].x, y=g_wobj[f].y, ft=g_wobj[f].tile;
+    for(int k=0;k<g_ow.nobjs;k++){ wobj_t*o=&g_wobj[k]; int on; if(!o->alive||o->x!=x||o->y!=y||k==f) continue; on=o->obj_n;
+        if(!(on_list(SE_BURNS,16,on)||on==230)) continue;
+        if(on==17||on==171){ obj_destroy(k);
+            for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int wi; if(!dx&&!dy) continue; wi=obj_idx_at(x+dx,y+dy,17);
+                if(wi>=0 && g_wobj[wi].alive){ int nf=persist_obj_new(242,0,x+dx,y+dy,gen); if(nf>=0 && g_sw_n<64) g_sw_fire[g_sw_n++]=(int16_t)nf; } } }
+        else if(on==230) se_destroy_all(k); else obj_destroy(k); }
+    for(int a=0;a<U6_MAX_ACTORS;a++){ int ax,ay; if(g_gl->hazard && actor_pos(a,&ax,&ay) && ax==x && ay==y) g_gl->hazard(a,ft); }
+    obj_destroy(f); }
+static void se_burn(int f){
+    int gen=1; g_sw_n=0; se_burn1(f,gen);
+    while(g_sw_n){ int16_t cur[64]; int n=g_sw_n; memcpy(cur,g_sw_fire,sizeof(int16_t)*(size_t)n); g_sw_n=0; gen^=1;
+        build_blocked(); if(g_wp){ compose_map(g_wp); present_map(); vsync_pump(); }
+        for(int k=0;k<n;k++) if(g_wobj[cur[k]].alive) se_burn1(cur[k],gen); }
+    build_blocked(); }
+/* a bucket of tar's "On " (0x22d11) */
+static int se_tar_on(int idx,int row,int n)
+{
+    int bi=g_se_on_idx, br=g_se_on_row, a=g_se_on_actor, hx, hy, done=0, empty=0, tx=g_se_on_tx, ty=g_se_on_ty; se_actor_xy(a,&hx,&hy);
+    int on=idx>=0?g_wobj[idx].obj_n:row>=0?g_ow.inv[row].obj_n:-1;
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy; if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    if(on==134){ int m=use_actor(), t=se_bkt_n(bi,br,139), q=idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty, g, mine, sx=0, sy=0; if(!q) q=1;
+        n=msgcat(n,"cloth strips\nYou tarred some cloth strips."); done=1; se_bkt_take(bi,br,139,q);
+        g=t<q?t:q; mine=row>=0 && (g_ow.inv[row].owner?g_ow.inv[row].owner:1)==m;
+        if(idx>=0){ sx=g_wobj[idx].x; sy=g_wobj[idx].y; } else se_actor_xy(g_ow.inv[row].owner?g_ow.inv[row].owner:1,&sx,&sy);
+        if(t>=q){ int rr=row; if(br>row && row>=0) br--; se_use_up(idx,rr,1); } else { if(idx>=0) g_wobj[idx].qty=(uint16_t)(q-t); else g_ow.inv[row].qty=(uint16_t)(q-t); }
+        if(!(mine && se_give(m,191,g))) se_drop_new(191,g,sx,sy);
+        if(t<=q) empty=1; }
+    else if((on==171||on==111) && idx>=0){ int x=g_wobj[idx].x, y=g_wobj[idx].y, nest=on==171?idx:obj_idx_at(x,y,171);
+        if(nest<0){ int f; msgcat(n,"dinosaur egg"); done=1; f=persist_obj_new(242,0,tx,ty,0); build_blocked(); if(f>=0) se_burn(f); }
+        else { int f; msgcat(n,"pteranodon nest"); x=g_wobj[nest].x; y=g_wobj[nest].y; f=persist_obj_new(242,0,x,y,0); persist_obj_new(76,3,x,y,0); build_blocked();
+            if(f>=0) se_burn(f); done=1;
+            if(se_bkt_n(bi,br,139)>4) se_bkt_take(bi,br,139,1); else empty=1; } }
+    else if(on==17 && idx>=0){ int f; msgcat(n,"web"); persist_obj_new(242,0,tx,ty,2); f=persist_obj_new(242,0,tx,ty,0); build_blocked(); if(f>=0) se_burn(f); done=1; }
+    else { char nm[40];
+        if(tx<0){ msgcat(n,"nothing!"); return 0; }
+        if(tx-hx<-1||tx-hx>1||ty-hy<-1||ty-hy>1){ msgcat(n,"Out of range!"); return 0; }
+        obj_name(idx>=0?g_wobj[idx].tile:world_tile(g_wp,tx,ty),nm,sizeof nm); n=msgcat(n,nm);
+        if(se_bkt_n(bi,br,139)>1) se_bkt_take(bi,br,139,1); else empty=1;
+        if(!(g_tflags1[world_tile(g_wp,tx,ty)&0x7ff]&1)){ int f; done=1; persist_obj_new(242,0,tx,ty,2); f=persist_obj_new(242,0,tx,ty,0); build_blocked(); if(f>=0) se_burn(f); } }
+    if(empty){ se_bkt_take(bi,br,139,se_bkt_n(bi,br,139)); se_bkt_frame(bi,br,0); }
+    else if(!done) msgcat(n,"\nNo effect.");
+    g_se_on_idx=g_se_on_row=-1; return 1;
+}
+/* a bucket of water's "On " (0x23364): it is all poured; a fire goes out */
+static int se_water_on(int idx,int row,int n)
+{
+    int bi=g_se_on_idx, br=g_se_on_row, a=g_se_on_actor, hx, hy; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy, on=g_wobj[idx].obj_n;
+        if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; }
+        se_bkt_take(bi,br,140,se_bkt_n(bi,br,140)); se_bkt_frame(bi,br,0);
+        if(on==242||on==254){ msgcat(n,"\nYou put the fire out."); obj_destroy(idx); build_blocked(); }
+        else if(on==207 && se_frame(idx)==2){ msgcat(n,"\nYou put the fire out."); g_wobj[idx].tile=(uint16_t)basetile(207); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+        else msgcat(n,"\nYou pour the water out.");
+        g_se_on_idx=g_se_on_row=-1; return 1; }
+    if(row>=0){ se_bkt_take(bi,br,140,se_bkt_n(bi,br,140)); se_bkt_frame(bi,br,0); msgcat(n,"\nYou pour the water out."); g_se_on_idx=g_se_on_row=-1; return 1; }
+    if(g_se_on_tx<0){ msgcat(n,"nothing!"); return 0; }
+    { char nm[40]; obj_name(world_tile(g_wp,g_se_on_tx,g_se_on_ty),nm,sizeof nm); n=msgcat(n,nm); n=msgcat(n,"\n"); }
+    se_bkt_take(bi,br,140,se_bkt_n(bi,br,140)); se_bkt_frame(bi,br,0); msgcat(n,"You pour the water out.");
+    g_se_on_idx=g_se_on_row=-1; return 1;
+}
+/* the loom's "On " (0x23f9e, se_use.md §5r): flax into cloth */
+static int se_loom_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy, on; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy; if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    on=idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n;
+    if(on!=210){ msgcat(n,"\nNo effect."); return 0; }
+    msgcat(n,"\nYou wove cloth from the flax.");
+    if(row>=0){ if(!se_give(a,180,1)) se_drop_new(180,1,hx,hy); }
+    else se_drop_new(180,1,g_wobj[idx].x,g_wobj[idx].y);
+    se_use_up(idx,row,0); return 1; }
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
 static int se_on_target(int idx,int row)
 {
     int n=msgcat(msg_end(),"\nOn ");
     if(idx<0 && row<0){ if(g_se_on==SEON_EXTING && g_se_on_tx>=0){ g_se_on=0; g_verb_pts=5; return se_exting_tile(g_se_on_tx,g_se_on_ty,n); }
+        if(g_se_on==SEON_TAR){ g_se_on=0; g_verb_pts=5; return se_tar_on(-1,-1,n); }
+        if(g_se_on==SEON_WATER){ g_se_on=0; g_verb_pts=5; return se_water_on(-1,-1,n); }
         msgcat(n,"nothing!"); g_se_on=0; return 0; }
     n=look_thing(n,idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty,0);
     n=msgcat(n,"\n");
-    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE && g_se_on!=SEON_PLACHTA && g_se_on!=SEON_EXTING){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
+    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE && g_se_on!=SEON_PLACHTA && g_se_on!=SEON_EXTING && g_se_on!=SEON_TAR && g_se_on!=SEON_WATER && g_se_on!=SEON_LOOM){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); g_se_on=0; return 0; } }
     int r=0, k=g_se_on; g_se_on=0; g_verb_pts=5;
     if(k==SEON_FIRE) r=se_fire_on(idx,row,n);
@@ -6574,6 +6685,9 @@ static int se_on_target(int idx,int row)
     else if(k==SEON_VINE) r=se_vine_on(idx,row,n);
     else if(k==SEON_PLACHTA) r=se_plachta_on(idx,row,n);
     else if(k==SEON_EXTING) r=se_exting_on(idx,row,n);
+    else if(k==SEON_TAR) r=se_tar_on(idx,row,n);
+    else if(k==SEON_WATER) r=se_water_on(idx,row,n);
+    else if(k==SEON_LOOM) r=se_loom_on(idx,row,n);
     return r;
 }
 static int se_on_map(world_t*w,int dx,int dy)
@@ -6702,6 +6816,20 @@ static int se_dig(int a){
         t=world_tile(g_wp,x+dx,y+dy)&0xff; if(!((t>=0x20&&t<=0x2f)||t==0xbe)) continue;
         msgcat(0,"\nYou get some clay."); if(!se_give(a,192,1)) se_drop_new(192,1,x+dx,y+dy); return 1; }
     msgcat(0,"\nThere is nothing to dig!"); return 1; }
+/* the machine (0x25b44, se_use.md §5r): a gem from the leader's pack, and a fruit comes out on the machine's tile */
+static int se_machine(int idx){
+    int lead=g_nparty?g_party[0].actor:1, k;
+    for(k=0;k<g_ow.ninv;k++){ int on=g_ow.inv[k].obj_n; if((g_ow.inv[k].owner?g_ow.inv[k].owner:1)==lead && !g_ow.inv[k].in && (on==72||on==73||on==74)) break; }
+    if(k>=g_ow.ninv){ msgcat(0,"\nYou don't have any gems."); return 1; }
+    pack_row_take(k,1); msgcat(0,"\nYou put a gem in the machine.");
+    persist_obj_new(197,0,g_wobj[idx].x,g_wobj[idx].y,0); build_blocked(); return 1; }
+/* the wire screen (0x23b10, se_use.md §5r): ten sulfur from the first sulfur deposit (231) around its holder */
+static int se_sift(int a){
+    int x,y; se_actor_xy(a,&x,&y);
+    for(int dx=-1;dx<=1;dx++) for(int dy=-1;dy<=1;dy++){ if(!dx&&!dy) continue;
+        if(obj_idx_at(x+dx,y+dy,231)<0) continue;
+        msgcat(0,"\nYou made some sulphur powder."); if(!se_give(a,123,10)) se_drop_new(123,10,x,y); return 1; }
+    msgcat(0,"\nThere is nothing to sift."); return 1; }
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
@@ -6730,6 +6858,10 @@ static int se_use_object(int idx)
     if(o==50) return se_flintlock(idx,-1,use_actor());
     if(o==25||o==44||o==52){ g_se_on=SEON_KNIFE; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }   /* knives and scissors ask "On " */
     if(o==29||o==119){ g_se_on=SEON_HAMMER; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }   /* the hammers too */
+    if(o==136) return se_bucket(idx,-1);
+    if(o==143) return se_machine(idx);
+    if(o==177) return se_sift(use_actor());
+    if(o==165){ g_se_on=SEON_LOOM; g_se_on_actor=g_nparty?g_party[0].actor:1; g_next_verb='X'; return 0; }   /* the loom: the leader's On */
     if(o==134){ g_se_on=SEON_STRIPS; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
     if(o==94){ g_se_on=SEON_EXTING; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }
     if(o==63){ g_se_on=SEON_PLACHTA; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
@@ -6763,6 +6895,8 @@ static int se_use_pack(world_t*w,int on)
     if(on==51 && row>=0) return se_camera(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==50 && row>=0) return se_flintlock(-1,row,a);
     if(on==25||on==44||on==52||on==29||on==119){ g_se_on=(on==29||on==119)?SEON_HAMMER:SEON_KNIFE; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; g_next_verb='X'; return 0; }
+    if(on==136 && row>=0) return se_bucket(-1,row);
+    if(on==177 && row>=0) return se_sift(g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==134 && row>=0){ g_se_on=SEON_STRIPS; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
     if(on==94 && row>=0){ g_se_on=SEON_EXTING; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_next_verb='X'; return 0; }
     if(on==63 && row>=0){ g_se_on=SEON_PLACHTA; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
@@ -16748,6 +16882,63 @@ int main(int argc, char **argv)
                   dbg_num("SE strips no help=", strstr(g_msg,"doesn't need any help.")!=0 && objworld_count(&g_ow,134)==1);
                   pack_take(1,134,1); g_actx[a9]=ax; g_acty[a9]=ay; g_actz[a9]=az; g_ahp[a9]=h0; }
               g_inv_sel=-1; g_msg[0]=0; }
+            /* BUCKET (§5q): ten tar from a tar pit; tar on three cloth strips makes three tarred strips; tar poured on a web burns it
+             * and the web beside it, a lasting fire stays; water from a fountain puts a fire out */
+            { int ex=-1, ey=0, sx=0, sy=0;
+              for(int d=0;d<8&&ex<0;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1}; int ok=1;
+                  for(int k=1;k<=2;k++){ int x=(int)w.px+DX[d]*k, y=(int)w.py+DY[d]*k; if(objworld_at(&g_ow,x,y)>=0||(g_tflags1[world_tile(&w,x,y)&0x7ff]&1)) ok=0; }
+                  if(ok){ sx=DX[d]; sy=DY[d]; ex=(int)w.px+sx; ey=(int)w.py+sy; } }
+              dbg_num("SE bucket spot found=", ex>=0);
+              if(ex>=0){ int tp=persist_obj_new(229,0,ex,ey,0); build_blocked(); vm_new(1,136,0,1); int br=-1;
+#define SE_BR() do{ br=-1; for(int k_=0;k_<g_ow.ninv;k_++) if(g_ow.inv[k_].obj_n==136) br=k_; }while(0)
+                  SE_BR(); g_inv_sel=br; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,136); SE_BR();
+                  dbg_num("SE bucket tar=", br>=0 && (int)g_ow.inv[br].tile-basetile(136)==1 && se_bkt_n(-1,br,139)==10 && strstr(g_msg,"You got some tar in the bucket.")!=0);
+                  obj_destroy(tp); build_blocked();
+                  vm_new(1,134,0,3); int sr=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==134) sr=k;
+                  SE_BR(); g_inv_sel=br; g_next_verb=0; se_use_pack(&w,136); dbg_num("SE bucket tar asks On=", g_next_verb=='X' && g_se_on==SEON_TAR); g_next_verb=0;
+                  int t0=objworld_count(&g_ow,191); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==134) sr=k;
+                  g_msg[0]=0; se_on_pack(&w,sr); SE_BR();
+                  dbg_num("SE bucket tarred strips=", objworld_count(&g_ow,191)-t0==3 && objworld_count(&g_ow,134)==0 && br>=0 && se_bkt_n(-1,br,139)==7);
+                  int w1=persist_obj_new(17,0,ex,ey,0), w2=persist_obj_new(17,0,ex+sx,ey+sy,0); build_blocked();
+                  SE_BR(); g_se_on=SEON_TAR; g_se_on_actor=1; g_se_on_idx=-1; g_se_on_row=br; g_msg[0]=0; se_on_map(&w,sx,sy);
+                  { int lasting=-1; for(int k=0;k<g_ow.nobjs;k++) if(g_wobj[k].alive&&g_wobj[k].obj_n==242&&g_wobj[k].x==ex&&g_wobj[k].y==ey) lasting=k;
+                    dbg_num("SE bucket web fire=", !g_wobj[w1].alive && !g_wobj[w2].alive && lasting>=0 && g_wobj[lasting].quality==2);
+                    if(lasting>=0) obj_destroy(lasting); }
+                  pack_take(1,136,1); pack_take(1,191,3);
+                  int fo=persist_obj_new(162,0,ex,ey,0); build_blocked(); vm_new(1,136,0,1); SE_BR(); g_inv_sel=br; g_msg[0]=0; se_use_pack(&w,136); SE_BR();
+                  dbg_num("SE bucket water=", br>=0 && (int)g_ow.inv[br].tile-basetile(136)==2 && se_bkt_n(-1,br,140)==10);
+                  obj_destroy(fo); int fi=persist_obj_new(242,0,ex,ey,0); build_blocked();
+                  g_inv_sel=br; g_next_verb=0; se_use_pack(&w,136); g_next_verb=0; g_msg[0]=0; se_on_map(&w,sx,sy); SE_BR();
+                  dbg_num("SE bucket fire out=", !g_wobj[fi].alive && strstr(g_msg,"You put the fire out.")!=0 && br>=0 && (int)g_ow.inv[br].tile==basetile(136) && se_bkt_n(-1,br,140)==0);
+                  pack_take(1,136,1); build_blocked(); g_inv_sel=-1; g_msg[0]=0;
+#undef SE_BR
+              } }
+            /* MACHINE (§5r): no gems; then a ruby goes in and a fruit comes out on its tile */
+            { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
+                  if(objworld_at(&g_ow,(int)w.px+DX[d],(int)w.py+DY[d])<0){ ex=(int)w.px+DX[d]; ey=(int)w.py+DY[d]; break; } }
+              int mc=persist_obj_new(143,0,ex,ey,0); build_blocked(); pack_take(1,72,99); pack_take(1,73,99); pack_take(1,74,99);
+              g_msg[0]=0; se_use_object(mc); dbg_num("SE machine no gems=", strstr(g_msg,"You don't have any gems.")!=0);
+              vm_new(1,74,0,2); g_msg[0]=0; se_use_object(mc);
+              dbg_num("SE machine fruit=", strstr(g_msg,"You put a gem in the machine.")!=0 && objworld_count(&g_ow,74)==1 && obj_idx_at(ex,ey,197)>=0);
+              { int f=obj_idx_at(ex,ey,197); if(f>=0) obj_destroy(f); } obj_destroy(mc); pack_take(1,74,1); build_blocked(); g_msg[0]=0; }
+            /* LOOM (§5r): flax from the pack woven into cloth */
+            { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
+                  if(objworld_at(&g_ow,(int)w.px+DX[d],(int)w.py+DY[d])<0){ ex=(int)w.px+DX[d]; ey=(int)w.py+DY[d]; break; } }
+              int lm=persist_obj_new(165,0,ex,ey,0); build_blocked(); vm_new(1,210,0,2); int c0=objworld_count(&g_ow,180), r_=-1;
+              g_next_verb=0; se_use_object(lm); dbg_num("SE loom asks On=", g_next_verb=='X' && g_se_on==SEON_LOOM); g_next_verb=0;
+              for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==210) r_=k;
+              g_msg[0]=0; se_on_pack(&w,r_);
+              dbg_num("SE loom cloth=", objworld_count(&g_ow,180)-c0==1 && objworld_count(&g_ow,210)==1 && strstr(g_msg,"You wove cloth from the flax.")!=0);
+              obj_destroy(lm); pack_take(1,210,1); pack_take(1,180,1); build_blocked(); g_msg[0]=0; }
+            /* WIRE SCREEN (§5r): nothing to sift; then ten sulfur beside a deposit */
+            { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
+                  if(objworld_at(&g_ow,(int)w.px+DX[d],(int)w.py+DY[d])<0){ ex=(int)w.px+DX[d]; ey=(int)w.py+DY[d]; break; } }
+              vm_new(1,177,0,1); int r_=-1, s0=objworld_count(&g_ow,123); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==177) r_=k;
+              g_inv_sel=r_; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,177); dbg_num("SE sift nothing=", strstr(g_msg,"There is nothing to sift.")!=0);
+              int dp=persist_obj_new(231,0,ex,ey,0); build_blocked(); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==177) r_=k;
+              g_inv_sel=r_; g_msg[0]=0; se_use_pack(&w,177);
+              dbg_num("SE sift sulfur=", objworld_count(&g_ow,123)-s0==10 && g_wobj[dp].alive && strstr(g_msg,"You made some sulphur powder.")!=0);
+              obj_destroy(dp); pack_take(1,177,1); pack_take(1,123,10); build_blocked(); g_inv_sel=-1; g_msg[0]=0; }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }
