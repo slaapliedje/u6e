@@ -1072,6 +1072,7 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'skin spot found=1' 'skin unfolded=1' 'skin carried no room=1' 'exting asks On=1' 'exting fire out=1' 'exting bare nothing=1' 'liquor drunk=1' \
 	             'dig clay near=1' 'dig clay=1' 'strips asks On=1' 'strips bound=1' 'strips no help=1' \
 	             'bucket spot found=1' 'bucket tar=1' 'bucket tar asks On=1' 'bucket tarred strips=1' 'bucket web fire=1' 'bucket water=1' 'bucket fire out=1' 'machine no gems=1' 'machine fruit=1' 'loom asks On=1' 'loom cloth=1' 'sift nothing=1' 'sift sulfur=1' \
+	             'crate shut opens=1' 'crate open refused=1' 'logs lit=1' 'logs cold refused=1' 'brazier unlit refused=1' 'brazier fire=1' 'head statue joins=1' 'tarstrip asks On=1' 'tarstrip torch=1' 'tarstrip need powder=1' 'tarstrip grenade=1' 'clay pot=1' 'powder asks On=1' 'powder loads=1' 'torch lit=1' 'torch hands full=1' 'torch incinerates=1' 'torch burned out=1' 'fish no water=1' 'fish water near=1' 'fish caught some=1' 'crystals nobody=1' 'crystals rafkin=1' \
 	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"

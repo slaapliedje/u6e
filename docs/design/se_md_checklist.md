@@ -110,4 +110,6 @@ list once SE's seams exist.
   container, the device going off). The stalks, the bones and the jug of plachta (se_use.md §5m); the totems go to item 6
   (§5n). The folded skin, the fire extinguisher and the liquor (§5o). The digging stick and the cloth strips (§5p). The metal bucket and fire (§5q; the burning
   of people waits for item 6's hazard). The machine, the loom and the wire screen (§5r); the jungle drum's
-  scene goes to item 11. Next: §3's order from the brazier (186).
+  scene goes to item 11. The crate as DOS opens it (it was wrong), the brazier, the burnt logs, the metal head and the
+  tarred strips (§5s). The clay, the gunpowder and the torches (§5t). The fishing pole and the crystal garden (§5u). Next: §3's order from
+  the tar pit (229).

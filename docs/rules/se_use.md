@@ -10,9 +10,9 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 >                  addresses below, code segment base 0x1dbd0). The disassembly stays outside the repo.
 > - References   : none
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
-> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom and the wire screen; not yet against DOS running
+> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen, the crate's opening, the brazier, the burnt logs, the metal head, the tarred strips, the clay, the gunpowder, the torches, the fishing pole and the crystal garden; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen)
+> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen, the crate, the brazier, the logs, the head, the tarred strips, the clay, the gunpowder, the torches, the fishing pole, the crystal garden)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -62,7 +62,7 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 161 door | Yunapotli's door, §4 | 0x253d0 | yes |
 | 275 door | the swinging door, §4 | 0x246a8 | yes |
 | 93 102-111 113 114 120 197 213 214 | food: `You eat the food.`, one of a stack (or the thing) used up; nothing more | 0x21df5 | yes |
-| 188 crate | open (frame 0): `Searching here, you find A, B and C.`, the contents spill out; shut: nothing | 0x1ec8a | yes |
+| 188 crate | shut (frame 1): it opens (frame 0); else `Not possible.`; then the search (0x1ec8a): an open crate within a tile of the leader spills what it holds, `Searching here, you find A, B and C.` (or `nothing.`); any other frame, nothing more | in the switch, 0x1ec8a | yes |
 | 6 giant gem | set on the gem stand: noon and the trap door, §5d | 0x24302 | yes |
 | 10 magnesium ribbon | burn one: a flash; wakes the giant stone head, §5e | 0x24f6b | yes |
 | 20 rope | in solo mode `Not in solo mode!`; else climb (0x8cb:0x855, SE's level changes: item 11) | in the switch | item 11 |
@@ -92,15 +92,15 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 165 loom | `On ` flax: cloth, §5r | 0x23f9e | yes |
 | 173 242 254 257 oven, fire, fire pit | the fire's `On ` (§5) | 0x2215f | yes |
 | 177 wire screen | sulfur from a sulphur pit, §5r | 0x23b10 | yes |
-| 186 brazier | | in the switch | no |
-| 190 metal head | | 0x24147 | no |
-| 191 tarred cloth strips | | 0x23777 | no |
-| 192 clay | | 0x2204a | no |
-| 204 gunpowder | | 0x24c0a | no |
-| 207 burnt logs | | in the switch | no |
-| 208 209 torches, lit torch | | 0x20ecc, 0x25686 | no |
-| 212 fishing pole | | 0x21b48 | no |
-| 216 crystal garden | | 0x25d54 | no |
+| 186 brazier | a frame with bit 0x02 (unlit): `Not possible.`; else a fire: its `On ` (§5) | in the switch | yes |
+| 190 metal head | on the headless statue: the statue (actor 11) joins, §5s | 0x24147 | yes |
+| 191 tarred cloth strips | `On `: a torch from a branch, a grenade from a fired pot, §5s | 0x23777 | yes |
+| 192 clay | a soft clay pot, §5t | 0x2204a | yes |
+| 204 gunpowder | `On ` a flintlock: loaded, §5t | 0x24c0a | yes |
+| 207 burnt logs | frame 0: `Not possible.`; frame 1: frame 2, `You started a fire.`; frame 2 (burning): a fire's `On ` (§5); others: nothing | in the switch | yes |
+| 208 209 torches, lit torch | a torch is lit into a free hand; a lit torch's `On ` burns and incinerates, §5t | 0x20ecc, 0x25686 | yes |
+| 212 fishing pole | a fish, 1 time in 5, beside deep water, §5u | 0x21b48 | yes |
+| 216 crystal garden | Rafkin or Johann finds potassium nitrate, §5u | 0x25d54 | yes |
 | 229 tar pit | | 0x23211 | no |
 | 233 237 raft | | 0x21c98 | no |
 | 247 headless metal statue | | 0x2423a | no |
@@ -536,6 +536,57 @@ feet), or lies where the flax was. Anything else: `No effect.`
 **The wire screen (177)** looks at the eight tiles around its holder, column by column from the west;
 the first sulphur pit (231): `You made some sulphur powder.` and 10 sulfur (123) to the holder, else at
 the holder's feet. The pit stays. None: `There is nothing to sift.`
+
+### 5s. The metal head and the tarred cloth strips
+
+**The metal head (190)** looks at the eight tiles around its holder, column by column from the west.
+The first headless metal statue (247): the head and the statue go, actor 11 (the golden statue) is put
+on the holder's own tile (as DOS does) and joins the party (it doesn't count against the five, §4),
+talk flag 11 gets 0x40, and `You replace the statue's missing head.` None: `No effect.`
+
+**The tarred cloth strips (191)** ask `On ` (holder, range from the holder):
+- a tree branch (206): `You make a torch` (DOS has no full stop). One strip and the branch go; a torch
+  (208) goes to the holder if the branch was theirs (else at their feet), or lies where the branch was;
+- a fired clay pot (133): a new line, then the holder needs 5 gunpowder (204) in one stack in their pack,
+  else `You need five pinches of gunpowder to make a grenade.` With it: 5 gunpowder, one strip and the
+  pot go, `You made a grenade.`, and a grenade (137) goes to the holder as the torch does;
+- anything else: `No effect.`
+
+### 5t. Clay, gunpowder and torches
+
+**Clay (192):** one goes, `You shaped a small, soft pot from the clay.`, and a soft clay pot (132) goes to
+the holder if the clay was carried (else at their feet), or lies where the clay was.
+
+**Gunpowder (204)** asks `On ` (holder, range): on a bamboo flintlock (50), frame 1 `Flintlock already
+loaded.`, else one gunpowder goes, the flintlock is frame 1, `Flintlock loaded.` (no names here, unlike
+§5k). Anything else: `No effect.`
+
+**A torch (208)** is lit by the acting member: with both arms holding something, `Your hands are full.`;
+else one torch goes and a lit torch (209) is readied in the first free arm with 100 fuel (its quality).
+(When the arms are full DOS also writes 100 into the quality of whatever object its spare register
+names: a slip without an effect the engine can copy.) Each turn, 1 time in 2, a readied lit torch burns
+one fuel (DOS takes as many as the turns that pass at once); at 1 or less it goes out: `A torch burned
+out.` and it is gone. A lit torch in the party lights the dark (lighting.md).
+
+**A lit torch (209)** asks `On ` (holder, range; no answer `nothing!`):
+- a pteranodon nest, a dinosaur egg or a web: as the tar does (§5q), without the lasting fire;
+- a thing on the burnable list (§5): `You incinerated the <name>.` and it goes;
+- gunpowder: whoever carries it takes 1-30 harm, it blows as a grenade (§5b) where it lies or where its
+  carrier stands, and it goes;
+- anything else: `No effect.` The torch stays.
+
+### 5u. The fishing pole and the crystal garden
+
+**The fishing pole (212)** looks for deep water (map tile 0x0c) around its holder, but DOS steps both
+axes with one counter, so it only looks at (x-1, y-1), the holder's own tile and (x+1, y+1) (a slip,
+kept). The first deep water: 1 time in 5, a fish (213) to the holder, `You caught a fish!` (too heavy, or
+the other 4 times: `You didn't get a fish.`). None: `You need to stand next to deep water.`
+
+**The crystal garden (216)** needs Rafkin (actor 7), or else Johann (5), in the party, not dead (status
+0x10), not asleep (0x04) and on screen. Then 10 potassium nitrate (130) to the leader: `Rafkin identifies
+some potassium nitrate, and you scrape a quantity from the crystal.` (or Johann); too heavy: `You are
+carrying too much already.` Neither: `There is nobody in the party who can identify which crystals are
+useful.` The garden stays.
 
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as

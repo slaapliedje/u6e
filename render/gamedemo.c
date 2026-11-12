@@ -6252,6 +6252,9 @@ static int use_actor(void); static int carry_over(int a,int extra);
 #define SEON_TAR 8                                          /* a bucket of tar (0x22d11) */
 #define SEON_WATER 9                                        /* a bucket of water (0x23364) */
 #define SEON_LOOM 10                                        /* the loom (0x23f9e) */
+#define SEON_TARSTRIP 11                                    /* tarred cloth strips (0x23777) */
+#define SEON_POWDER 12                                      /* gunpowder (0x24c0a) */
+#define SEON_LTORCH 13                                      /* a lit torch (0x25686) */
 static int g_se_on_tx=-1, g_se_on_ty;                        /* the tile the answer named (a bare one too) */
 static int g_se_on_idx=-1, g_se_on_row=-1;                  /* the thing that asked: on the map, or its pack row */
 static int g_se_on_actor=1;                                 /* who holds the thing that asked */
@@ -6387,7 +6390,12 @@ static void se_detonate(void)
                dev=g_aready[a][sl]==241; (void)equip_unready(g_aready[a],sl); equip_refold(a); se_actor_xy(a,&x,&y); } } }
     if(x>=0) se_blast(x,y,dev,0);
 }
-static void se_fuse_tick(const world_t*w){ (void)w; if(g_se_fuse>0 && --g_se_fuse==0) se_detonate(); }
+static void se_fuse_tick(const world_t*w){ (void)w; if(g_se_fuse>0 && --g_se_fuse==0) se_detonate();
+    for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor, sl=-1;          /* a lit torch burns down 1 time in 2 (0x359:0x11b6) */
+        for(int k=0;k<EQ_NSLOTS;k++) if(g_aready[a][k]==209) sl=k;
+        if(sl<0 || !rng_range(&g_crng,2)) continue;
+        if(g_torch_fuel[a]<=1){ msgcat(msg_end(),"\nA torch burned out."); g_aready[a][sl]=0; equip_refold(a); g_torch_fuel[a]=0; }
+        else g_torch_fuel[a]--; } }
 /* U)se a grenade or a device (0x21671), on the map (idx), in the pack (row) or readied by a (slot sl) */
 static int se_light(int idx,int row,int a,int sl)
 {
@@ -6666,6 +6674,60 @@ static int se_loom_on(int idx,int row,int n)
     if(row>=0){ if(!se_give(a,180,1)) se_drop_new(180,1,hx,hy); }
     else se_drop_new(180,1,g_wobj[idx].x,g_wobj[idx].y);
     se_use_up(idx,row,0); return 1; }
+/* tarred cloth strips' "On " (0x23777, se_use.md §5s): a torch from a branch; a grenade from a fired pot and 5 gunpowder */
+static int se_tarstrip_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy, on, mine, si=g_se_on_idx, sr=g_se_on_row; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy; if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    on=idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n;
+    mine=row>=0 && (g_ow.inv[row].owner?g_ow.inv[row].owner:1)==a;
+    if(on==206||on==133){ int mk=on==206?208:137, tx=idx>=0?g_wobj[idx].x:hx, ty=idx>=0?g_wobj[idx].y:hy;
+        if(on==133){ int k; msgcat(n,"\n"); for(k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==204 && (g_ow.inv[k].owner?g_ow.inv[k].owner:1)==a) break;
+            if(k>=g_ow.ninv || g_ow.inv[k].qty<5){ msgcat(n,"\nYou need five pinches of gunpowder to make a grenade."); return 0; }
+            { int gone=g_ow.inv[k].qty<=5; pack_row_take(k,5); if(gone){ if(row>k) row--; if(sr>k) sr--; } } }
+        { int gone=sr>=0 && g_ow.inv[sr].qty<=1; se_use_up(si,sr,0); if(gone && row>sr) row--; }   /* one strip */
+        msgcat(n,on==206?"\nYou make a torch":"\nYou made a grenade.");
+        se_use_up(idx,row,0);
+        if(!(mine && se_give(a,mk,1))) se_drop_new(mk,1,mine?hx:tx,mine?hy:ty);
+        g_se_on_idx=g_se_on_row=-1; return 1; }
+    msgcat(n,"\nNo effect."); return 0; }
+/* gunpowder's "On " (0x24c0a, se_use.md §5t): a flintlock loaded */
+static int se_powder_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy, on, fr; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy; if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    on=idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n;
+    if(on!=50){ msgcat(n,"\nNo effect."); return 0; }
+    fr=idx>=0?se_frame(idx):(int)g_ow.inv[row].tile-basetile(50);
+    if(fr==1){ msgcat(n,"\nFlintlock already loaded."); return 0; }
+    { int pr=g_se_on_row, gone=pr>=0 && g_ow.inv[pr].qty<=1; se_use_up(g_se_on_idx,pr,0); if(gone && row>pr) row--; g_se_on_idx=g_se_on_row=-1; }
+    if(idx>=0){ g_wobj[idx].tile=(uint16_t)(basetile(50)+1); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+    else g_ow.inv[row].tile=(uint16_t)(basetile(50)+1);
+    msgcat(n,"\nFlintlock loaded."); return 1; }
+/* a lit torch's "On " (0x25686, se_use.md §5t): it burns a nest, an egg or a web as tar does, incinerates the burnable, and sets
+ * gunpowder off; the torch stays */
+static int se_ltorch_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy, tx=g_se_on_tx, ty=g_se_on_ty, on; se_actor_xy(a,&hx,&hy);
+    if(idx<0 && row<0){ msgcat(n,"nothing!"); return 0; }
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy; if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    on=idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n;
+    if((on==171||on==111) && idx>=0){ int x=g_wobj[idx].x, y=g_wobj[idx].y, nest=on==171?idx:obj_idx_at(x,y,171), f;
+        if(nest<0){ msgcat(n,"dinosaur egg"); f=persist_obj_new(242,0,tx,ty,0); build_blocked(); if(f>=0) se_burn(f); return 1; }
+        msgcat(n,"pteranodon nest"); x=g_wobj[nest].x; y=g_wobj[nest].y; f=persist_obj_new(242,0,x,y,0); persist_obj_new(76,3,x,y,0); build_blocked();
+        if(f>=0) se_burn(f); return 1; }
+    if(on==17 && idx>=0){ int f; msgcat(n,"web"); f=persist_obj_new(242,0,tx,ty,0); build_blocked(); if(f>=0) se_burn(f); return 1; }
+    if(on_list(SE_BURNS,16,on)){ char nm[40]; obj_name(idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,nm,sizeof nm);
+        n=msgcat(n,"\nYou incinerated the "); n=msgcat(n,nm); msgcat(n,"."); se_use_up(idx,row,1); build_blocked(); return 1; }
+    if(on==204){ int x=tx, y=ty;
+        if(row>=0){ int c=g_ow.inv[row].owner?g_ow.inv[row].owner:1; actor_wound(-1,c,1+(int)rng_range(&g_crng,30),0); se_actor_xy(c,&x,&y); }
+        se_use_up(idx,row,1); se_blast(x,y,0,0); return 1; }
+    msgcat(n,"\nNo effect."); return 0; }
+/* a torch (0x20ecc): lit into a free hand of the acting member, 100 fuel */
+static int se_torch(int idx,int row,int m){
+    int sl=!g_aready[m][EQ_ARM]?EQ_ARM:!g_aready[m][EQ_ARM2]?EQ_ARM2:-1;
+    if(sl<0){ msgcat(0,"\nYour hands are full."); return 0; }
+    se_use_up(idx,row,0); g_aready[m][sl]=209; equip_refold(m); g_torch_fuel[m]=100; return 1; }
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
 static int se_on_target(int idx,int row)
 {
@@ -6673,10 +6735,11 @@ static int se_on_target(int idx,int row)
     if(idx<0 && row<0){ if(g_se_on==SEON_EXTING && g_se_on_tx>=0){ g_se_on=0; g_verb_pts=5; return se_exting_tile(g_se_on_tx,g_se_on_ty,n); }
         if(g_se_on==SEON_TAR){ g_se_on=0; g_verb_pts=5; return se_tar_on(-1,-1,n); }
         if(g_se_on==SEON_WATER){ g_se_on=0; g_verb_pts=5; return se_water_on(-1,-1,n); }
+        if(g_se_on==SEON_LTORCH){ g_se_on=0; g_verb_pts=5; return se_ltorch_on(-1,-1,n); }
         msgcat(n,"nothing!"); g_se_on=0; return 0; }
     n=look_thing(n,idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty,0);
     n=msgcat(n,"\n");
-    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE && g_se_on!=SEON_PLACHTA && g_se_on!=SEON_EXTING && g_se_on!=SEON_TAR && g_se_on!=SEON_WATER && g_se_on!=SEON_LOOM){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
+    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE && g_se_on!=SEON_PLACHTA && g_se_on!=SEON_EXTING && g_se_on!=SEON_TAR && g_se_on!=SEON_WATER && g_se_on!=SEON_LOOM && g_se_on!=SEON_TARSTRIP && g_se_on!=SEON_POWDER && g_se_on!=SEON_LTORCH){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); g_se_on=0; return 0; } }
     int r=0, k=g_se_on; g_se_on=0; g_verb_pts=5;
     if(k==SEON_FIRE) r=se_fire_on(idx,row,n);
@@ -6688,6 +6751,9 @@ static int se_on_target(int idx,int row)
     else if(k==SEON_TAR) r=se_tar_on(idx,row,n);
     else if(k==SEON_WATER) r=se_water_on(idx,row,n);
     else if(k==SEON_LOOM) r=se_loom_on(idx,row,n);
+    else if(k==SEON_TARSTRIP) r=se_tarstrip_on(idx,row,n);
+    else if(k==SEON_POWDER) r=se_powder_on(idx,row,n);
+    else if(k==SEON_LTORCH) r=se_ltorch_on(idx,row,n);
     return r;
 }
 static int se_on_map(world_t*w,int dx,int dy)
@@ -6830,18 +6896,61 @@ static int se_sift(int a){
         if(obj_idx_at(x+dx,y+dy,231)<0) continue;
         msgcat(0,"\nYou made some sulphur powder."); if(!se_give(a,123,10)) se_drop_new(123,10,x,y); return 1; }
     msgcat(0,"\nThere is nothing to sift."); return 1; }
+/* the metal head (0x24147, se_use.md §5s): on the headless statue (247) beside its holder, the statue is actor 11, who joins */
+static int se_head(int idx,int row,int a){
+    int x,y; se_actor_xy(a,&x,&y);
+    for(int dx=-1;dx<=1;dx++) for(int dy=-1;dy<=1;dy++){ int st; if(!dx&&!dy) continue;
+        st=obj_idx_at(x+dx,y+dy,247); if(st<0||!g_wobj[st].alive) continue;
+        se_use_up(idx,row,1); obj_destroy(st); build_blocked();
+        g_actx[11]=(uint16_t)x; g_acty[11]=(uint16_t)y; g_actz[11]=(uint8_t)g_cur_level;   /* where the holder stands, as DOS puts it */
+        se_join(11); g_cg.talk_flags[11]|=0x40;
+        msgcat(0,"\nYou replace the statue's missing head."); return 1; }
+    msgcat(0,"\nNo effect."); return 0; }
+/* clay (0x2204a, se_use.md §5t): a soft pot from one clay */
+static int se_clay(int idx,int row,int a){
+    int x,y; if(idx>=0){ x=g_wobj[idx].x; y=g_wobj[idx].y; } else se_actor_xy(a,&x,&y);
+    se_use_up(idx,row,0);
+    if(!(row>=0 && se_give(a,132,1))) se_drop_new(132,1,x,y);
+    msgcat(0,"\nYou shaped a small, soft pot from the clay."); return 1; }
+/* the fishing pole (0x21b48, se_use.md §5u): deep water (map tile 0x0c) on the diagonal through the holder, as DOS looks */
+static int se_fish(int a){
+    int x,y; se_actor_xy(a,&x,&y);
+    for(int i=0;i<3;i++) for(int j=0;j<3;j++){ if(i==1&&j==1) continue;
+        if((world_tile(g_wp,x+i-1,y+i-1)&0xff)!=0x0c) continue;                 /* DOS steps both axes by i: a slip, kept */
+        if(se_rand(0,4)==0 && se_give(a,213,1)) msgcat(0,"\nYou caught a fish!"); else msgcat(0,"\nYou didn't get a fish.");
+        return 1; }
+    msgcat(0,"\nYou need to stand next to deep water."); return 1; }
+/* the crystal garden (0x25d54, se_use.md §5u): Rafkin (7), else Johann (5), in the party, alive, awake and on screen, finds
+ * potassium nitrate: 10 to the leader */
+static int se_crystals(void){
+    int who=-1, lead=g_nparty?g_party[0].actor:1;
+    static const uint8_t W[2]={7,5};
+    for(int k=0;k<2&&who<0;k++){ int id=W[k]; if(is_party_member(id) && !g_adead[id] && !g_asleep[id] && se_on_screen(id)) who=id; }
+    if(who<0){ msgcat(0,"\nThere is nobody in the party who can identify which crystals are useful."); return 1; }
+    if(!se_give(lead,130,10)){ msgcat(0,"\nYou are carrying too much already."); return 1; }
+    msgcat(0,who==7?"\nRafkin identifies some potassium nitrate, and you scrape a quantity from the crystal.":"\nJohann identifies some potassium nitrate, and you scrape a quantity from the crystal.");
+    return 1; }
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
     if(o==234||o==161||o==275) return se_use_door(idx);
     if(o==173||o==242||o==254||o==257){ g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }   /* the oven and the fires ask "On " */
-    if(o==188){                                      /* the crate: searched only open, frame 0 (0x1ec8a) */
-        if(se_frame(idx)!=0) return 0;
-        int n=msgcat(0,"\nSearching here, you find ");
+    if(o==188){                                      /* the crate: a shut one (frame 1) opens, else "Not possible."; then the search (0x1ec8a) */
+        int fr=se_frame(idx), n=0;
+        if(fr==1){ g_wobj[idx].tile=(uint16_t)basetile(188); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+        else n=msgcat(0,"\nNot possible.");
+        if(se_frame(idx)!=0) return 0;               /* the search takes only an open crate */
+        n=msgcat(n,"\nSearching here, you find ");
         int found=spill_container(idx,&n); if(!found) n=msgcat(n,"nothing");
         msgcat(n,".");
-        return found?1:0;
+        return 1;
     }
+    if(o==186){ if(se_frame(idx)&2){ msgcat(0,"\nNot possible."); return 0; } g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }   /* the brazier: lit, a fire */
+    if(o==207){ int fr=se_frame(idx);                /* burnt logs: 0 not possible, 1 lit, 2 burning (a fire) */
+        if(fr==0){ msgcat(0,"\nNot possible."); return 0; }
+        if(fr==1){ g_wobj[idx].tile=(uint16_t)(basetile(207)+2); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; msgcat(0,"\nYou started a fire."); return 1; }
+        if(fr==2){ g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }
+        return 1; }
     if(o==137||o==240) return se_light(idx,-1,0,0);
     if(o==6) return se_gem(idx,-1,use_actor());
     if(o==10) return se_ribbon(idx,-1,use_actor());
@@ -6860,6 +6969,14 @@ static int se_use_object(int idx)
     if(o==29||o==119){ g_se_on=SEON_HAMMER; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }   /* the hammers too */
     if(o==136) return se_bucket(idx,-1);
     if(o==143) return se_machine(idx);
+    if(o==190) return se_head(idx,-1,use_actor());
+    if(o==192) return se_clay(idx,-1,use_actor());
+    if(o==208) return se_torch(idx,-1,use_actor());
+    if(o==212) return se_fish(use_actor());
+    if(o==216) return se_crystals();
+    if(o==209){ g_se_on=SEON_LTORCH; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }
+    if(o==204){ g_se_on=SEON_POWDER; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
+    if(o==191){ g_se_on=SEON_TARSTRIP; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
     if(o==177) return se_sift(use_actor());
     if(o==165){ g_se_on=SEON_LOOM; g_se_on_actor=g_nparty?g_party[0].actor:1; g_next_verb='X'; return 0; }   /* the loom: the leader's On */
     if(o==134){ g_se_on=SEON_STRIPS; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
@@ -6896,6 +7013,13 @@ static int se_use_pack(world_t*w,int on)
     if(on==50 && row>=0) return se_flintlock(-1,row,a);
     if(on==25||on==44||on==52||on==29||on==119){ g_se_on=(on==29||on==119)?SEON_HAMMER:SEON_KNIFE; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; g_next_verb='X'; return 0; }
     if(on==136 && row>=0) return se_bucket(-1,row);
+    if(on==190 && row>=0) return se_head(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
+    if(on==192 && row>=0) return se_clay(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
+    if(on==208 && row>=0) return se_torch(-1,row,a);
+    if(on==212) return se_fish(row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a);
+    if(on==209){ g_se_on=SEON_LTORCH; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; g_next_verb='X'; return 0; }
+    if(on==204 && row>=0){ g_se_on=SEON_POWDER; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
+    if(on==191 && row>=0){ g_se_on=SEON_TARSTRIP; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
     if(on==177 && row>=0) return se_sift(g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==134 && row>=0){ g_se_on=SEON_STRIPS; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
     if(on==94 && row>=0){ g_se_on=SEON_EXTING; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_next_verb='X'; return 0; }
@@ -16939,6 +17063,90 @@ int main(int argc, char **argv)
               g_inv_sel=r_; g_msg[0]=0; se_use_pack(&w,177);
               dbg_num("SE sift sulfur=", objworld_count(&g_ow,123)-s0==10 && g_wobj[dp].alive && strstr(g_msg,"You made some sulphur powder.")!=0);
               obj_destroy(dp); pack_take(1,177,1); pack_take(1,123,10); build_blocked(); g_inv_sel=-1; g_msg[0]=0; }
+            /* CRATE, BURNT LOGS, BRAZIER (§3): a shut crate opens and spills; an open one is "Not possible." then searched; logs
+             * at frame 1 light, at 0 refuse; a brazier at frame 2 refuses, at 0 asks "On " */
+            { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
+                  if(objworld_at(&g_ow,(int)w.px+DX[d],(int)w.py+DY[d])<0){ ex=(int)w.px+DX[d]; ey=(int)w.py+DY[d]; break; } }
+              int cr=persist_obj_new(188,1,ex,ey,0), ch=persist_obj_new(109,0,ex,ey,0); if(ch>=0){ g_wobj[ch].alive=0; g_wobj[ch].parent=(uint16_t)cr; } build_blocked();
+              g_msg[0]=0; se_use_object(cr);
+              dbg_num("SE crate shut opens=", se_frame(cr)==0 && ch>=0 && g_wobj[ch].alive && strstr(g_msg,"Searching here, you find")!=0 && strstr(g_msg,"Not possible")==0);
+              if(ch>=0) obj_destroy(ch); build_blocked(); g_msg[0]=0; se_use_object(cr);
+              dbg_num("SE crate open refused=", strstr(g_msg,"Not possible.")!=0 && strstr(g_msg,"you find nothing.")!=0);
+              obj_destroy(cr); int lg=persist_obj_new(207,1,ex,ey,0); build_blocked(); g_msg[0]=0; se_use_object(lg);
+              dbg_num("SE logs lit=", se_frame(lg)==2 && strstr(g_msg,"You started a fire.")!=0);
+              g_wobj[lg].tile=(uint16_t)basetile(207); g_msg[0]=0; se_use_object(lg); dbg_num("SE logs cold refused=", strstr(g_msg,"Not possible.")!=0);
+              obj_destroy(lg); int bz=persist_obj_new(186,2,ex,ey,0); build_blocked(); g_msg[0]=0; se_use_object(bz);
+              dbg_num("SE brazier unlit refused=", strstr(g_msg,"Not possible.")!=0);
+              g_wobj[bz].tile=(uint16_t)basetile(186); g_next_verb=0; se_use_object(bz); dbg_num("SE brazier fire=", g_next_verb=='X' && g_se_on==SEON_FIRE); g_next_verb=0; g_se_on=0;
+              obj_destroy(bz); build_blocked(); g_msg[0]=0; }
+            /* METAL HEAD (§5s): on the headless statue beside the Avatar: the statue becomes actor 11, who joins */
+            { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
+                  if(objworld_at(&g_ow,(int)w.px+DX[d],(int)w.py+DY[d])<0){ ex=(int)w.px+DX[d]; ey=(int)w.py+DY[d]; break; } }
+              int st=persist_obj_new(247,0,ex,ey,0); build_blocked(); vm_new(1,190,0,1); int r_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==190) r_=k;
+              uint16_t ax=g_actx[11], ay=g_acty[11]; uint8_t az=g_actz[11]; int np=g_nparty;
+              g_inv_sel=r_; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,190);
+              dbg_num("SE head statue joins=", is_party_member(11) && !g_wobj[st].alive && objworld_count(&g_ow,190)==0 && (g_cg.talk_flags[11]&0x40) && strstr(g_msg,"You replace the statue's missing head.")!=0);
+              if(is_party_member(11)){ for(int p=0;p<g_nparty;p++) if(g_party[p].actor==11){ for(int q=p;q<g_nparty-1;q++) g_party[q]=g_party[q+1]; g_nparty--; break; } }
+              g_nparty=np; g_actx[11]=ax; g_acty[11]=ay; g_actz[11]=az; g_cg.talk_flags[11]&=(uint8_t)~0x40; g_inv_sel=-1; g_msg[0]=0; }
+            /* TARRED STRIPS (§5s): a torch from a branch; a fired pot without enough gunpowder refused; with five, a grenade */
+            { pack_take(1,191,99); pack_take(1,206,99); pack_take(1,133,99); pack_take(1,137,99); vm_new(1,191,0,3); vm_new(1,206,0,1); int r_=-1, t0=objworld_count(&g_ow,208);
+#define SE_RW(on) do{ r_=-1; for(int k_=0;k_<g_ow.ninv;k_++) if(g_ow.inv[k_].obj_n==(on)) r_=k_; }while(0)
+              SE_RW(191); g_inv_sel=r_; g_use_readied=0; g_next_verb=0; se_use_pack(&w,191); dbg_num("SE tarstrip asks On=", g_next_verb=='X' && g_se_on==SEON_TARSTRIP); g_next_verb=0;
+              SE_RW(206); g_msg[0]=0; se_on_pack(&w,r_);
+              dbg_num("SE tarstrip torch=", objworld_count(&g_ow,208)-t0==1 && objworld_count(&g_ow,206)==0 && objworld_count(&g_ow,191)==2 && strstr(g_msg,"You make a torch")!=0);
+              pack_take(1,204,99); vm_new(1,133,0,1); vm_new(1,204,0,3); SE_RW(191); g_se_on=SEON_TARSTRIP; g_se_on_actor=1; g_se_on_idx=-1; g_se_on_row=r_;
+              SE_RW(133); g_msg[0]=0; se_on_pack(&w,r_); dbg_num("SE tarstrip need powder=", strstr(g_msg,"five pinches")!=0 && objworld_count(&g_ow,133)==1);
+              vm_new(1,204,0,3); int g0=objworld_count(&g_ow,137); SE_RW(191); g_se_on=SEON_TARSTRIP; g_se_on_actor=1; g_se_on_idx=-1; g_se_on_row=r_;
+              SE_RW(133); g_msg[0]=0; se_on_pack(&w,r_);
+              dbg_num("SE tarstrip grenade=", objworld_count(&g_ow,137)-g0==1 && objworld_count(&g_ow,204)==1 && objworld_count(&g_ow,133)==0 && objworld_count(&g_ow,191)==1 && strstr(g_msg,"You made a grenade.")!=0);
+              pack_take(1,191,9); pack_take(1,208,1); pack_take(1,137,1); pack_take(1,204,9); g_inv_sel=-1; g_msg[0]=0;
+#undef SE_RW
+            }
+            /* CLAY (§5t): a soft pot from one clay */
+            { pack_take(1,132,99); vm_new(1,192,0,2); int r_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==192) r_=k;
+              int c0=objworld_count(&g_ow,192); g_inv_sel=r_; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,192);
+              dbg_num("SE clay pot=", objworld_count(&g_ow,132)==1 && c0-objworld_count(&g_ow,192)==1 && strstr(g_msg,"You shaped a small, soft pot from the clay.")!=0);
+              pack_take(1,132,1); pack_take(1,192,9); g_inv_sel=-1; g_msg[0]=0; }
+            /* GUNPOWDER (§5t): on a flintlock it loads it; again, already loaded */
+            { pack_take(1,204,99); pack_take(1,50,99); vm_new(1,204,0,2); vm_new(1,50,0,1); int r_=-1, f_=-1;
+              for(int k=0;k<g_ow.ninv;k++){ if(g_ow.inv[k].obj_n==204) r_=k; if(g_ow.inv[k].obj_n==50) f_=k; }
+              g_inv_sel=r_; g_use_readied=0; g_next_verb=0; se_use_pack(&w,204); dbg_num("SE powder asks On=", g_next_verb=='X' && g_se_on==SEON_POWDER); g_next_verb=0;
+              g_msg[0]=0; se_on_pack(&w,f_); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==50) f_=k;
+              dbg_num("SE powder loads=", f_>=0 && g_ow.inv[f_].tile==basetile(50)+1 && objworld_count(&g_ow,204)==1 && strstr(g_msg,"Flintlock loaded.")!=0);
+              pack_take(1,204,9); pack_take(1,50,1); g_inv_sel=-1; g_msg[0]=0; }
+            /* TORCHES (§5t): a torch lit into a free hand (fuel 100); both hands full refuses; the lit torch incinerates a basket;
+             * the fuel burns down and the torch burns out */
+            { uint16_t r0=g_aready[1][EQ_ARM], r1=g_aready[1][EQ_ARM2]; uint8_t f0=g_torch_fuel[1]; g_aready[1][EQ_ARM]=0; g_aready[1][EQ_ARM2]=0; equip_refold(1);
+              vm_new(1,208,0,2); int r_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==208) r_=k;
+              g_inv_sel=r_; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,208);
+              dbg_num("SE torch lit=", g_aready[1][EQ_ARM]==209 && g_torch_fuel[1]==100 && objworld_count(&g_ow,208)==1);
+              g_aready[1][EQ_ARM2]=52; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==208) r_=k;
+              g_inv_sel=r_; g_msg[0]=0; se_use_pack(&w,208); dbg_num("SE torch hands full=", strstr(g_msg,"Your hands are full.")!=0 && objworld_count(&g_ow,208)==1);
+              g_aready[1][EQ_ARM2]=0; vm_new(1,183,0,1); r_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==183) r_=k;
+              g_se_on=SEON_LTORCH; g_se_on_actor=1; g_msg[0]=0; se_on_pack(&w,r_);
+              dbg_num("SE torch incinerates=", objworld_count(&g_ow,183)==0 && strstr(g_msg,"You incinerated the")!=0);
+              g_torch_fuel[1]=1; for(int t=0;t<40 && g_aready[1][EQ_ARM]==209;t++) se_fuse_tick(&w);
+              dbg_num("SE torch burned out=", g_aready[1][EQ_ARM]==0 && g_torch_fuel[1]==0 && strstr(g_msg,"A torch burned out.")!=0);
+              pack_take(1,208,9); g_aready[1][EQ_ARM]=r0; g_aready[1][EQ_ARM2]=r1; g_torch_fuel[1]=f0; equip_refold(1); g_inv_sel=-1; g_msg[0]=0; }
+            /* FISHING POLE (§5u): no deep water here; beside it, a fish 1 time in 5 */
+            { vm_new(1,212,0,1); int r_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==212) r_=k;
+              int wx=-1, wy=0; for(int r=1;r<40&&wx<0;r++) for(int yy=-r;yy<=r&&wx<0;yy++) for(int xx=-r;xx<=r&&wx<0;xx++) if((world_tile(&w,(int)w.px+xx,(int)w.py+yy)&0xff)==0x0c){ wx=(int)w.px+xx; wy=(int)w.py+yy; }
+              g_inv_sel=r_; g_use_readied=0; g_msg[0]=0; se_use_pack(&w,212);
+              dbg_num("SE fish no water=", strstr(g_msg,"You need to stand next to deep water.")!=0 || (world_tile(&w,(int)w.px-1,(int)w.py-1)&0xff)==0x0c || (world_tile(&w,(int)w.px+1,(int)w.py+1)&0xff)==0x0c);
+              dbg_num("SE fish water near=", wx>=0);
+              if(wx>=0){ uint16_t px0=w.px, py0=w.py; int got=0, miss=0; w.px=(uint16_t)(wx+1); w.py=(uint16_t)(wy+1); int f0=objworld_count(&g_ow,213);
+                  for(int t=0;t<40;t++){ g_inv_sel=r_; g_msg[0]=0; se_use_pack(&w,212); if(strstr(g_msg,"You caught a fish!")) got++; if(strstr(g_msg,"You didn't get a fish.")) miss++; }
+                  dbg_num("SE fish caught some=", got>0 && miss>0 && got+miss==40 && objworld_count(&g_ow,213)-f0==got);
+                  pack_take(1,213,got); w.px=px0; w.py=py0; }
+              pack_take(1,212,1); g_inv_sel=-1; g_msg[0]=0; }
+            /* CRYSTAL GARDEN (§5u): nobody to identify; with Rafkin (7) in the party and on screen, ten potassium nitrate */
+            { int cg=persist_obj_new(216,0,(int)w.px+1,(int)w.py,0); build_blocked(); g_msg[0]=0; se_use_object(cg);
+              dbg_num("SE crystals nobody=", strstr(g_msg,"There is nobody in the party who can identify")!=0);
+              int np=g_nparty; uint16_t ax=g_actx[7], ay=g_acty[7]; uint8_t az=g_actz[7], sl=g_asleep[7], dd=g_adead[7];
+              g_party[g_nparty].actor=7; g_nparty++; g_actx[7]=(uint16_t)(w.px+1); g_acty[7]=(uint16_t)(w.py+1); g_actz[7]=(uint8_t)g_cur_level; g_asleep[7]=0; g_adead[7]=0;
+              int n0=objworld_count(&g_ow,130); g_msg[0]=0; se_use_object(cg);
+              dbg_num("SE crystals rafkin=", objworld_count(&g_ow,130)-n0==10 && strstr(g_msg,"Rafkin identifies some potassium nitrate")!=0);
+              g_nparty=np; g_actx[7]=ax; g_acty[7]=ay; g_actz[7]=az; g_asleep[7]=sl; g_adead[7]=dd; pack_take(1,130,10); obj_destroy(cg); build_blocked(); g_msg[0]=0; }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }
