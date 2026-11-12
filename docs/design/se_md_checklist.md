@@ -119,3 +119,8 @@ list once SE's seams exist.
   intent over DOS's slips: eleven fixed (the gem on the hour, the charcoal message, the mortar, the fishing
   pole, the thrown lit grenade, the folded skin, the bucket's water, tar on webs and eggs, the gem stand,
   thrown containers spilling, the fire waves). ScummVM's SE U)se, looked at first, is mostly unwritten.
+- 2026-11-12: item 5: the vehicles (rules/se_use.md §5w), read from SE's GAME.EXE and built: the raft
+  (four paddlers, a 2x2 vessel on water, N/E/S/W, landing by the shore), the turtles and their riders
+  (307, swimmers on deep water, a turtle left behind on landing), the turtle bait. Every case of SE's
+  U)se switch is now built but those waiting on items 6 and 11. Three engine choices went to
+  se_deviations.md for the user.

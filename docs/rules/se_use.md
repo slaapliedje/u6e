@@ -71,7 +71,7 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 29 119 rock hammer, metal hammer | `On `: a blue stone off the blue boulder, charcoal from burnt logs, §5g | 0x21436 | yes |
 | 42 vine | `On ` a hole: it becomes a rope down, §5h | 0x24fde | yes |
 | 43 bell | `On ` a fallen tyrannosaurus: the bell on its neck, §5i | 0x21293 | item 6 |
-| 47 turtle bait | a turtle (302) comes up beside the holder, near water, in a part of the sea | 0x24783 | with the raft and turtles |
+| 47 turtle bait | a turtle (302) comes up beside the holder, near water, in a part of the sea, §5w | 0x24783 | yes |
 | 49 notebook | Jimmy's shorthand, §5j | 0x24d88 | yes |
 | 50 bamboo flintlock | load with gunpowder, §5k | 0x21e67 | yes, but readied (item 6) |
 | 51 camera | a picture (its quality is the film left), and the ribbon's flash, §5e | 0x24edf | yes |
@@ -102,11 +102,11 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 212 fishing pole | a fish, 1 time in 5, beside deep water, §5u | 0x21b48 | yes |
 | 216 crystal garden | Rafkin or Johann finds potassium nitrate, §5u | 0x25d54 | yes |
 | 229 tar pit | `On ` cloth strips: all tarred, §5v | 0x23211 | yes |
-| 233 237 raft | | 0x21c98 | no |
+| 233 237 raft | board with four paddlers; aboard, land next to the shore, §5w | 0x21c98 | yes |
 | 247 headless metal statue | with the metal head carried, the statue (actor 11) joins, §5s | 0x2423a | yes |
 | 252 crystals | `On ` a person: healed to the full, the poison gone, §5v | 0x25972 | yes |
-| 302 turtle | | 0x24b00 | no |
-| 307 | | 0x249a9 | no |
+| 302 turtle | mount it, §5w | 0x24b00 | yes |
+| 307 a rider on a turtle | dismount next to the shore, §5w | 0x249a9 | yes |
 
 ## 4. Doors
 
@@ -603,6 +603,68 @@ HP (§5p) is healed to it and their poison (status bit 0x08) goes: their name, t
 and one crystal goes. At the maximum: `<name> Doesn't need any help.` (DOS's capital D). A fallen person,
 a body or blood: `a body.` and `That person is beyond help.` Anything else: `nothing`.
 
+### 5w. The vehicles: the raft, the turtles and their riders (307)
+
+SE's vehicles are actors, as U6's are. **The raft** is a 2x2 thing (its tile is the bottom-right one;
+233 lies on the map, 237 carries the party, both at frame 3). **A rider on a turtle** is the member
+itself drawn as obj 307, the turtle beneath it; each member mounts a turtle of its own.
+
+**The shore** (0x1dbd:0xa29): map tiles 0x20-0x2f and 0xbe.
+
+**The raft (233, 237; 0x21c98).** The thing chosen stands for its actor (0x1810:0x3329: a map
+object of an actor kind with a quality names that actor). In order:
+1. Solo mode: `Not in solo mode!`.
+2. Fewer than 4 in the party: `You don't have enough people to paddle.`
+3. The members carrying a paddle (12) are counted, up to 4: a paddle anywhere in the pack, not a
+   readied one (0xa5d:0x80a).
+4. Aboard, and the thing is the raft carrying the party: one of the raft's four tiles is shore
+   (0x130f:0x14e): the party lands (below); else `Only next to land.`
+5. Fewer than 4 paddlers: `You would need at least four people carrying paddles to operate the raft
+   effectively.`
+6. The raft more than a tile from the party: `Out of range!`.
+7. The party boards (0x130f:0x21cb): actor 0 becomes the raft (237, frame 3) where the raft lay, with
+   the raft's quantity, in the party; the members go inside it; the raft object goes; the party is
+   where the raft is. No words.
+
+**Landing** (0x130f:0x2343): a raft (233, frame 3) is made on the party's tile with actor 0's
+quantity; actor 0 goes; the party stands on that tile again (0x8cb:0x754). No words.
+
+**The raft moves** (0x130f:0x265, the movement routine, with actor 0 as the raft):
+- only N, E, S or W; a diagonal fails;
+- the two tiles of its leading edge must be water (tile flags 1 bit 0x01): moving E they are (x+1, y)
+  and (x+1, y-1), W (x-2, y) and (x-2, y-1), N (x, y-2) and (x-1, y-2), S (x, y+1) and (x-1, y+1);
+- for each of its four tiles, if that tile is shore now and the tile it moves onto is shore too, it
+  fails (0x132b6): the raft can't slide along the shore;
+- on the leading edge, an object whose tile is neither water (flags 1 bit 0x01) nor ignored
+  (tileflags3 bit 0x10) blocks it, and so does any actor but actor 0.
+
+**The turtle (302; 0x24b00)**, an actor on the tile. When the leader isn't a rider, the leader
+mounts it. When the leader rides already, the first member (in party order) within a tile of the turtle
+who isn't a rider mounts it; nobody: `You're already on a turtle!`. Mounting: the turtle goes, the
+member moves onto its tile and becomes 307 with the turtle's frame (0x24965), and the party's tile
+becomes that tile. No words.
+
+**A rider (307; 0x249a9)** dismounts onto the first shore tile around it (x-1 to x+1 by column, then y,
+its own tile skipped; nothing else is tested): it moves there and is itself again (its own obj_n and a
+frame for its facing), the party's tile becomes that tile, and a turtle (302) is made where it was, a
+friend (status 0x40) that wanders (worktype 0x8f). No shore around: `Only next to land!` (with `!`,
+the raft's has `.`).
+
+**Swimmers** (the turtle, a rider; creature type flag 0x200, DS 0x2f43:0x1b4): they move only onto deep
+water (tile flags 1 bits 0x01 and 0x02); an object there blocks them unless its tile is 12 or ignored
+(tileflags3 bit 0x10), and so does an actor. A party with riders and walkers moves apart on the water.
+
+**The turtle bait (47; 0x24783).** A turtle is made (SE's creature maker 0x2667:0x15d: strength 15,
+dexterity 5, intelligence 4, HP 25, each rolled as v - v/2 + two rolls of 0 to v/2), a friend that
+stands (worktype 0). The eight tiles around the bait's holder (aboard: the raft), by column: the first
+where the turtle can move (as a swimmer) takes it. A water tile (flags 1 bit 0x01) among those looked at
+before that counts as "near water".
+- None takes it: the turtle goes; not near water: `You must be near water.` and the bait stays; else one
+  bait goes and `Nothing takes the bait.`
+- Taken, but the holder is outside x 0x335-0x3ed or y 0xe7-0x1e7: the turtle goes, `Nothing takes the
+  bait.` Either way one bait goes and the view is drawn again. A taken turtle in that part of the sea
+  stays, without words.
+
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as
   objects only.
@@ -610,4 +672,6 @@ a body or blood: `a body.` and `That person is beyond help.` Anything else: `not
 - The gem scene's 0x5d0:0x25ad (a buffer at DS:0xb65f) and the palette call 0x276b:0x245a (colour 2 to
   black?) are not read; DOS running would show them.
 - What status bit 0x20 means for the things SE's object maker makes (§5f).
-- Item 5 covers the remaining cases, one handler at a time.
+- What SE's save keeps for actor 0 aboard and for a rider (item 10); the engine's load forgets who rides.
+- How the party gathers after landing (0x8cb:0x754) and what a vehicle step costs: not read; the engine
+  uses its own gathering and the walking cost.

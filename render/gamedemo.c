@@ -119,6 +119,11 @@ typedef struct GameLayer {
     int  (*bot_door)(const wobj_t *o);                          /* the bot's door list (bot_harness.md): 0-3 open, 4-7 shut, 8+ locked; -1 = not a door */
     int  (*use_ground)(world_t *w, int tx, int ty, int n);      /* U)se on a tile with nothing on it, in reach: the map tile decides (se_use.md §1); n = the echo so far */
     int  (*use_pack)(world_t *w, int on);                       /* U)se a thing in the pack or readied (usecode_use.md) */
+    int  (*rides)(void);                                        /* the leader rides one of the game's creatures (SE's turtle): U)se on itself is the use */
+    /* movement */
+    int  (*veh_move)(world_t *w, int dx, int dy);               /* a step aboard the game's own vessel: its cost, 0 = no move; -1 = U6's vessels (vehicles.md) */
+    int  (*lead_step)(world_t *w, int dx, int dy);              /* the leader's step by the game's own rule (a rider): 1 moved, 0 blocked; -1 = on foot */
+    int  (*can_enter)(const world_t *w, int x, int y, int on);  /* may a creature of obj_n on step onto (x,y) by the game's rule; -1 = by its movement type (combat.md §7c) */
     int  (*push_select)(world_t *w, int dx, int dy);            /* M)ove: pick the thing on the map; NULL = U6's (usecode_use.md) */
     int  (*push_to)(world_t *w, int dx, int dy);                /* M)ove's "To ": push it a tile; NULL = U6's */
     int  (*move_to)(world_t *w, int dx, int dy);                /* M)ove's "To " for a thing in the pack, at the crosshair; NULL = U6's (equipment.md §5) */
@@ -3328,9 +3333,16 @@ static int mover_type(void)
     if(g_mover!=lm || g_abase[g_mover]!=lb || g_basetile!=lt){
         lm=g_mover; lb=g_abase[g_mover]; lt=g_basetile; lmt=monster_movetype(actor_objn(g_mover)); }
     return lmt; }
+/* the current mover's obj_n, kept as mover_type keeps its type */
+static int mover_objn(void)
+{   static int lm=-1, lon; static uint16_t lb; static const uint8_t *lt;
+    if(g_mover<0) return 0;
+    if(g_mover!=lm || g_abase[g_mover]!=lb || g_basetile!=lt){ lm=g_mover; lb=g_abase[g_mover]; lt=g_basetile; lon=actor_objn(g_mover); }
+    return lon; }
 /* may the current mover step onto (x,y)? by its creature type's movement type */
 static int mover_can_enter(const world_t*w,int x,int y)
 {   int mt=mover_type();
+    if(g_mover>=0 && g_gl->can_enter){ int r=g_gl->can_enter(w,x,y,mover_objn()); if(r>=0) return r; }   /* the game's own rule (SE's swimmers) */
     if(g_mover>=0){ int on=actor_objn(g_mover);          /* DOS's tile test (combat.md §7c) */
         if(on==g_on.burrower && on){ int t=world_tile(w,x,y); if(!(t>=0&&t<2048&&(g_tflags[t]&0x08))) return 0; return objworld_at(&g_ow,x&(U6_SURFACE_TILES-1),y&(U6_SURFACE_TILES-1))<0; }   /* rot worms burrow: only ground that tileflags2 bit 3 marks */
         if(on==g_on.mouse && on) for(int k=0;k<3;k++){ if(g_on.mouse_hole[k] && obj_idx_at(x&(U6_SURFACE_TILES-1),y&(U6_SURFACE_TILES-1),g_on.mouse_hole[k])>=0) return 1; } }   /* a mouse: its holes */
@@ -6975,6 +6987,7 @@ static int se_statue(int idx){
     g_actx[11]=(uint16_t)x; g_acty[11]=(uint16_t)y; g_actz[11]=(uint8_t)g_cur_level;   /* where the statue stood */
     se_join(11); g_cg.talk_flags[11]|=0x40;
     msgcat(0,"\nYou replace the statue's missing head."); return 1; }
+static int se_bait(world_t*w,int idx,int row);   /* the turtle bait (defined with the vehicles) */
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
@@ -7003,6 +7016,7 @@ static int se_use_object(int idx)
     if(o==59||o==60) return se_grind(idx,-1);
     if(o==92) return se_unfold(idx);
     if(o==131) return se_dig(use_actor());
+    if(o==47) return g_wp?se_bait((world_t*)g_wp,idx,-1):0;
     if(o==95){ se_use_up(idx,-1,1); if(g_alcohol<255) g_alcohol++; msgcat(0,"\nYou drink it."); return 1; }   /* the bottle of liquor (0x21c2d) */
     if(o>=79&&o<=82){ if(!se_give(use_actor(),211,1)){ msgcat(0,"\nYou are carrying too much already."); return 0; }   /* bones, the skeleton (0x23f4b) */
         msgcat(0,"\nYou got some rib bones."); return 1; }
@@ -7056,6 +7070,7 @@ static int se_use_pack(world_t*w,int on)
     if((on==59||on==60) && row>=0) return se_grind(-1,row);
     if(on==92) return se_unfold(-1);
     if(on==131 && row>=0) return se_dig(g_ow.inv[row].owner?g_ow.inv[row].owner:1);
+    if(on==47 && row>=0) return se_bait(w,-1,row);
     if(on==95 && row>=0){ se_use_up(-1,row,1); if(g_alcohol<255) g_alcohol++; msgcat(0,"\nYou drink it."); return 1; }
     if(on==51 && row>=0) return se_camera(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==50 && row>=0) return se_flintlock(-1,row,a);
@@ -7232,7 +7247,7 @@ static uint8_t  g_veh_hz;            /* its saved z                             
 static int      g_horse_moved=-1;    /* last horse actor left somewhere new (dismount) -> its position is saved */
 
 static int g_tmpdm_invalidate(void){ g_tmp_valid=0; g_dm_valid=0; return 0; }   /* teleport: full view rebuild */
-static int veh_aboard(void){ return g_veh_kind==412||g_veh_kind==414||g_veh_kind==415||g_veh_kind==423; }   /* in a vessel (not a horse) */
+static int veh_aboard(void){ return g_veh_kind==412||g_veh_kind==414||g_veh_kind==415||g_veh_kind==423||g_veh_kind==237; }   /* in a vessel (not a horse); 237 = SE's raft (se_use.md §5w) */
 static int ship_aboard(void){ return g_veh_kind==412; }
 static int use_transition_object(world_t *w, int idx);   /* ladders/holes (defined with the level code below) */
 static int npc_at(const world_t*w,int x,int y);           /* (defined with the NPC code below) */
@@ -7600,6 +7615,7 @@ static int veh_can_fly(const world_t*w,int x,int y){ return air_low_can_enter(w,
  * MOVEMENT COST (wind.md §2), 0 = no move. */
 static int vehicle_try_move(world_t*w,int dx,int dy)
 {   int kind=g_veh_kind, heading;
+    if(g_gl->veh_move){ int c=g_gl->veh_move(w,dx,dy); if(c>=0) return c; }   /* the game's own vessel */
     if(kind==423){                                                   /* balloon: only the wind moves it */
         if(g_wind==WIND_CALM){ msgcat(0,"Thou canst not move without wind!"); return 0; }
         heading=(g_wind+4)&7; dx=D8X[heading]; dy=D8Y[heading]; }
@@ -7665,7 +7681,8 @@ static int player_step(world_t*w,int dx,int dy)
             else if(rng_range(&g_crng,4)!=0){ dx=(int)rng_range(&g_crng,3)-1; dy=(int)rng_range(&g_crng,3)-1; msgcat(0,"Hic!"); } }   /* drunk (usecode_use.md Food) */
         if((dx||dy) && g_on.codex_way && !g_cg.on_quest && w->level==0 && obj_idx_at((w->px+dx)&(U6_SURFACE_TILES-1),(w->py+dy)&(U6_SURFACE_TILES-1),g_on.codex_way)>=0){   /* the way to the Codex (usecode_use.md) */
             msgcat(0,"\"Thou art not upon a Sacred Quest!\nPassage denied!\""); return 0; }
-        stepped=(dx||dy) && !avatar_way_blocked((int)((w->px+dx)&(U6_SURFACE_TILES-1)),(int)((w->py+dy)&(U6_SURFACE_TILES-1))) ? world_try_move(w,dx,dy) : 0;
+        { int r=g_gl->lead_step?g_gl->lead_step(w,dx,dy):-1;   /* a rider steps by the game's rule */
+          stepped=r>=0?r:((dx||dy) && !avatar_way_blocked((int)((w->px+dx)&(U6_SURFACE_TILES-1)),(int)((w->py+dy)&(U6_SURFACE_TILES-1))) ? world_try_move(w,dx,dy) : 0); }
         if(!stepped && (dx||dy) && g_solo_m && g_on.mouse && actor_objn(1)==g_on.mouse){   /* a mouse alone goes by its holes, as its walker rule has it (combat.md §7c) */
             int nx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ny=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), hole=0;
             for(int k=0;k<3;k++) if(g_on.mouse_hole[k] && obj_idx_at(nx,ny,g_on.mouse_hole[k])>=0) hole=1;
@@ -7714,6 +7731,151 @@ static int horse_dismount(world_t*w)
     g_veh_horse=-1; g_veh_kind=0; g_avatar_ovr=0;
     if(placed) msgcat(0,"You dismount.");
     return 1; }
+/* ---- Savage Empire's vehicles (se_use.md §5w): the raft (2x2, bottom-right tile is its own), the
+ * turtles and their riders (307: the member drawn on its turtle). The raft is a vessel the party is
+ * inside (g_veh_kind 237); a rider is a member with another look, moving as a swimmer. ---- */
+static uint8_t  g_se_rider[U6_MAX_ACTORS];   /* rides a turtle */
+static uint16_t g_se_rtile[U6_MAX_ACTORS];   /* its own tile, to stand up as */
+static int se_shore(int t){ return (t>=0x20&&t<=0x2f)||t==0xbe; }   /* 0x1dbd:0xa29 */
+static int se_wtile(const world_t*w,int x,int y){ int M=U6_SURFACE_TILES-1; return world_tile(w,x&M,y&M); }
+/* may a swimmer (the turtle, a rider) enter (x,y): deep water, no object but tile 12 or an ignored one */
+static int se_swim_ok(const world_t*w,int x,int y)
+{   int M=U6_SURFACE_TILES-1; x&=M; y&=M;
+    if((g_tflags1[se_wtile(w,x,y)]&3)!=3) return 0;
+    if(objworld_at(&g_ow,x,y)<0) return 1;
+    for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+        if(!o->alive||o->parent!=WOBJ_PARENT_NONE||o->x!=(uint16_t)x||o->y!=(uint16_t)y) continue;
+        if(o->tile==12||(g_tflags3&&(g_tflags3[o->tile]&0x10))) continue;
+        return 0; }
+    return 1; }
+static int se_can_enter(const world_t*w,int x,int y,int on){ return (on==302||on==307)?se_swim_ok(w,x,y):-1; }
+/* a member's look: a rider (307 at frame fr), or itself again */
+static void se_look_set(int a,int tile)
+{   int base, tpd=npc_base_fc(tile,&base);
+    g_atile[a]=(uint16_t)tile; g_abase[a]=(uint16_t)base; g_atpd[a]=(uint8_t)tpd; g_walkf[a]=0;
+    g_facing[a]=tpd?(uint8_t)(((tile-base)/tpd)&3):2;
+    if(a==1) g_avatar_ovr=g_se_rider[1]?(uint16_t)tile:0; }
+static void se_ride(int a,int fr){ if(!g_se_rider[a]){ g_se_rtile[a]=g_atile[a]; g_se_rider[a]=1; } se_look_set(a,basetile(307)+fr); }
+static void se_unride(int a){ if(!g_se_rider[a]) return; g_se_rider[a]=0; se_look_set(a,g_se_rtile[a]); }
+static int se_rides(void){ return g_se_rider[1]; }
+/* the leader on a turtle steps as a swimmer (§5w); -1 = on foot */
+static int avatar_way_blocked(int x,int y);
+static int se_lead_step(world_t*w,int dx,int dy)
+{   if(!g_se_rider[1]) return -1;
+    if(!dx&&!dy) return 0;
+    int M=U6_SURFACE_TILES-1, nx=(w->px+dx)&M, ny=(w->py+dy)&M;
+    if(!se_swim_ok(w,nx,ny)||avatar_way_blocked(nx,ny)) return 0;
+    int cost=game_move_cost(w,dx,dy), d=dy<0?0:dy>0?2:dx>0?1:3;
+    w->px=(uint16_t)nx; w->py=(uint16_t)ny; w->turns++; world_spend(w,cost);
+    g_veh_phase^=1; se_look_set(1,basetile(307)+d*2+g_veh_phase);
+    return 1; }
+/* a turtle made by SE's creature maker (0x2667:0x15d): its rolls, a friend; wt 0 stands, 0x8f wanders */
+static int summon_alloc(void); static int iabs_(int v);
+static int se_roll(int v){ int h=v/2; return h?v-h+se_rand(0,h)+se_rand(0,h):v; }
+static void hatched_worktype(int s,int wt);
+static int se_turtle_new(const world_t*w,int x,int y,int wt)
+{   int s=summon_alloc(); if(s<0) return -1;
+    int base, tpd=npc_base_fc(basetile(302),&base);
+    g_atile[s]=(uint16_t)base; g_abase[s]=(uint16_t)base; g_atpd[s]=(uint8_t)tpd; g_facing[s]=2; g_walkf[s]=0;
+    g_actx[s]=(uint16_t)x; g_acty[s]=(uint16_t)y; g_actz[s]=(uint8_t)w->level;
+    g_astr[s]=(uint8_t)se_roll(15); g_adex[s]=(uint8_t)se_roll(5); g_aint[s]=(uint8_t)se_roll(4);
+    { int hp=se_roll(25); g_ahp[s]=(uint8_t)hp; g_amaxhp[s]=(uint8_t)hp; }
+    g_alevel[s]=1; g_aexp[s]=0; g_amaxmana[s]=0; g_amana[s]=0;
+    g_aweapon[s]=0; g_aac[s]=0; g_aflee[s]=0; g_asleep[s]=g_paralyze[s]=0; g_ainvis[s]=0;
+    g_summon[s]=0; g_summon_life[s]=0; g_temp[s]=1; g_charm[s]=0;
+    g_align_hostile[s]=0; g_hostile[s]=0; g_alert[s]=0; g_agood[s]=0; g_achaos[s]=0; g_wt_force[s]=0; g_sched_st[s]=0; g_pts[s]=(int8_t)(g_adex[s]?g_adex[s]:1);
+    hatched_worktype(s,wt);
+    return s; }
+/* the turtle (0x24b00): the leader mounts it, or, riding already, the first member beside it on foot */
+static int se_turtle_mount(world_t*w,int t)
+{   int tx=g_actx[t], ty=g_acty[t], a=1, fr=npc_tile(t)-basetile(302);
+    if(g_se_rider[1]){ a=-1;
+        for(int p=0;p<g_nparty&&a<0;p++){ int m=g_party[p].actor,mx,my; if(m==1||g_se_rider[m]||!actor_pos(m,&mx,&my)) continue;
+            if(iabs_(tx-mx)<=1&&iabs_(ty-my)<=1) a=m; }
+        if(a<0){ msgcat(0,"\nYou're already on a turtle!"); return 0; } }
+    g_atile[t]=0xffff; g_temp[t]=0;                            /* the turtle goes */
+    if(a==1){ w->px=(uint16_t)tx; w->py=(uint16_t)ty; }
+    else { g_actx[a]=(uint16_t)tx; g_acty[a]=(uint16_t)ty; }    /* (DOS moves the view there too) */
+    se_ride(a,fr<0||fr>7?4:fr);
+    (void)g_tmpdm_invalidate(); return 1; }
+/* a rider (0x249a9): onto the first shore tile around, by column; a turtle stays where it was */
+static int se_dismount(world_t*w,int a)
+{   int x,y; if(a==1){ x=w->px; y=w->py; } else if(!actor_pos(a,&x,&y)) return 0;
+    for(int i=0;i<3;i++) for(int j=0;j<3;j++){ int M=U6_SURFACE_TILES-1, nx=(x+i-1)&M, ny=(y+j-1)&M;
+        if((i==1&&j==1)||!se_shore(se_wtile(w,nx,ny))) continue;
+        if(a==1){ w->px=(uint16_t)nx; w->py=(uint16_t)ny; } else { g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; }
+        se_unride(a);
+        (void)se_turtle_new(w,x,y,0x8f);
+        (void)g_tmpdm_invalidate(); return 1; }
+    msgcat(0,"\nOnly next to land!"); return 0; }
+/* a paddle carried, not readied (0xa5d:0x80a) */
+static int se_paddler(int a){ for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n==12 && (g_ow.inv[r].owner?g_ow.inv[r].owner:1)==a) return 1; return 0; }
+/* one of the raft's four tiles is shore (0x130f:0x14e) */
+static int se_raft_shore(const world_t*w,int x,int y){ for(int i=0;i<2;i++) for(int j=0;j<2;j++) if(se_shore(se_wtile(w,x-i,y-j))) return 1; return 0; }
+static int se_raft_land(world_t*w)
+{   if(!se_raft_shore(w,w->px,w->py)){ msgcat(0,"\nOnly next to land."); return 0; }
+    wobj_t*o=&g_wobj[g_veh_o[0]]; o->obj_n=233; o->tile=(uint16_t)(basetile(233)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE;
+    veh_show_party(w,(int)w->px,(int)w->py);
+    g_veh_kind=0; g_avatar_ovr=0; g_veh_o[0]=-1;
+    build_blocked(); (void)g_tmpdm_invalidate(); return 1; }
+/* the raft (0x21c98): idx = the raft on the map, or the one carrying the party */
+static int se_raft(world_t*w,int idx)
+{   if(g_solo_on){ msgcat(0,"\nNot in solo mode!"); return 0; }
+    if(g_nparty<4){ msgcat(0,"\nYou don't have enough people to paddle."); return 0; }
+    int pad=0; for(int p=0;p<g_nparty&&pad<4;p++) pad+=se_paddler(g_party[p].actor);
+    if(g_veh_kind==237 && (idx<0||idx==g_veh_o[0])) return se_raft_land(w);
+    if(pad<4){ msgcat(0,"\nYou would need at least four people carrying paddles to operate the raft effectively."); return 0; }
+    wobj_t*o=&g_wobj[idx]; int ex=(int)w->px-o->x, ey=(int)w->py-o->y;
+    if(ex>1||ex<-2||ey>1||ey<-2){ msgcat(0,"\nOut of range!"); return 0; }
+    moved_register(idx);
+    o->obj_n=237; o->tile=(uint16_t)(basetile(237)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE;
+    g_veh_kind=237; g_veh_o[0]=idx; g_veh_o[1]=g_veh_o[2]=-1; g_combat_mode=0;
+    g_veh_face=2; g_veh_phase=0;
+    w->px=o->x; w->py=o->y;
+    veh_hide_party(); build_blocked(); (void)g_tmpdm_invalidate();
+    return 1; }
+/* a thing on the raft's leading edge stops it unless its tile is water or ignored; so does an actor */
+static int se_raft_blocked(const world_t*w,int x,int y)
+{   int M=U6_SURFACE_TILES-1; x&=M; y&=M;
+    if(!(g_tflags1[se_wtile(w,x,y)]&1)) return 1;
+    for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+        if(j==g_veh_o[0]||!o->alive||o->parent!=WOBJ_PARENT_NONE||o->x!=(uint16_t)x||o->y!=(uint16_t)y) continue;
+        if((g_tflags1[o->tile]&1)||(g_tflags3&&(g_tflags3[o->tile]&0x10))) continue;
+        return 1; }
+    return npc_at(w,x,y)>=0; }
+/* a step of the raft (§5w): N E S W only; water on its leading edge; never shore to shore; the cost of a vessel's step */
+static int se_raft_move(world_t*w,int dx,int dy)
+{   if(g_veh_kind!=237) return -1;
+    if((!dx&&!dy)||(dx&&dy)) return 0;
+    int x=w->px, y=w->py, nx=x+dx, ny=y+dy, M=U6_SURFACE_TILES-1;
+    for(int i=0;i<2;i++) for(int j=0;j<2;j++) if(se_shore(se_wtile(w,x-i,y-j))&&se_shore(se_wtile(w,nx-i,ny-j))) return 0;
+    { int ax=dx<0?nx-1:nx, ay=dy<0?ny-1:ny, bx=dx?ax:nx-1, by=dy?ay:ny-1;   /* the leading edge */
+      if(se_raft_blocked(w,ax,ay)||se_raft_blocked(w,bx,by)) return 0; }
+    g_wobj[g_veh_o[0]].x=(uint16_t)(nx&M); g_wobj[g_veh_o[0]].y=(uint16_t)(ny&M);
+    g_veh_face=veh_face_of(dx,dy); w->px=(uint16_t)(nx&M); w->py=(uint16_t)(ny&M);
+    build_blocked(); return 5; }
+/* the turtle bait (0x24783): a turtle comes up beside its holder, near water, in one part of the sea */
+static int se_bait(world_t*w,int idx,int row)
+{   int hx=w->px, hy=w->py;
+    if(row>=0){ int a=g_ow.inv[row].owner?g_ow.inv[row].owner:1; if(!veh_aboard()&&a!=1) (void)actor_pos(a,&hx,&hy); }
+    else if(idx>=0){ hx=g_wobj[idx].x; hy=g_wobj[idx].y; }
+    int s=se_turtle_new(w,w->px,w->py,0), found=0, near=0;
+    for(int i=0;i<3&&!found;i++) for(int j=0;j<3&&!found;j++){ int M=U6_SURFACE_TILES-1, x=(hx+i-1)&M, y=(hy+j-1)&M;
+        if(i==1&&j==1) continue;
+        if(!near&&(g_tflags1[se_wtile(w,x,y)]&1)) near=1;
+        if(s>=0&&se_swim_ok(w,x,y)&&!(x==(int)w->px&&y==(int)w->py&&!veh_aboard())&&npc_occupied(s,x,y)==0){ g_actx[s]=(uint16_t)x; g_acty[s]=(uint16_t)y; found=1; } }
+    if(!found){ if(s>=0){ g_atile[s]=0xffff; g_temp[s]=0; }
+        if(!near){ msgcat(0,"\nYou must be near water."); return 0; }
+        se_use_up(idx,row,0); msgcat(0,"\nNothing takes the bait."); return 1; }
+    if(hx<0x335||hx>0x3ed||hy<0xe7||hy>0x1e7){ g_atile[s]=0xffff; g_temp[s]=0; msgcat(0,"\nNothing takes the bait."); }
+    (void)g_tmpdm_invalidate(); se_use_up(idx,row,0); return 1; }
+/* SE's U)se before its switch (§5w): aboard the raft, a rider, the raft, a turtle */
+static int se_use_at(world_t*w,int tx,int ty,int dx,int dy,int idx)
+{   if(!dx&&!dy&&g_veh_kind==237) return se_raft(w,-1);
+    if(!dx&&!dy&&g_se_rider[1]) return se_dismount(w,1);
+    { int t=npc_at(w,tx,ty); if(t>=0){ int on=actor_objn(t); if(on==302) return se_turtle_mount(w,t); if(on==307) return se_dismount(w,t); } }
+    if(idx>=0&&(g_wobj[idx].obj_n==233||g_wobj[idx].obj_n==237)) return se_raft(w,idx);
+    return -1; }
 /* ---- L)ook as DOS has it (usecode_use.md) ---- */
 static void look_view(int id,int thing,const char*cap);         /* the portrait above the scroll (defined with the status view) */
 static int actor_objn(int i);
@@ -7845,7 +8007,7 @@ static int do_verb(world_t*w,int verb,int dx,int dy)
     if(verb!='U') return do_verb_at(w,verb,dx,dy);
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
     int idx=objworld_at(&g_ow,tx,ty), id=(dx||dy)?npc_at(w,tx,ty):-1, n=msgcat(0,"Use-");
-    if(g_veh_kind && !dx && !dy){ g_msg[0]=0; return do_verb_at(w,verb,dx,dy); }   /* aboard: leaving is the use */
+    if((g_veh_kind||(g_gl->rides&&g_gl->rides())) && !dx && !dy){ g_msg[0]=0; return do_verb_at(w,verb,dx,dy); }   /* aboard or riding: leaving is the use */
     if(id>=0){ int t=actor_objn(id);                             /* what U)se takes (usecode_use.md) */
         if(!on_in(g_on.use_takes,3,t)){ id=-1; idx=use_under(tx,ty,-1); if(idx<0){ msgcat(n,USE_NOTHING); g_verb_pts=0; return 0; } } }
     else if(idx>=0 && g_tflags3 && (g_tflags3[g_wobj[idx].tile]&0x10)){ int o_=g_wobj[idx].obj_n;   /* a vessel is an actor in DOS */
@@ -12606,6 +12768,7 @@ static int load_game(world_t *w)
     if(g_talking) end_talk();
     g_show_inv = 0; g_show_status = 0; g_pending_verb = 0;
     g_veh_kind = 0; g_veh_horse = -1; g_avatar_hide = 0; g_avatar_ovr = 0;   /* re-boarded below if the save says so */
+    memset(g_se_rider,0,sizeof g_se_rider);                       /* SE's riders stand as the save has them */
     g_nmoved = 0; g_horse_moved = -1;                                        /* every record is at its saved position again */
     for(int i = 0; i < U6_MAX_ACTORS; i++) g_temp[i] = 0;                    /* hatched creatures are not saved */
 
@@ -13896,7 +14059,7 @@ static const GameLayer gl_u6 = {
     .ending=run_ending,
 };
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_ground=se_use_ground, .use_pack=se_use_pack, .burn_tick=se_fuse_tick, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -17256,6 +17419,52 @@ int main(int argc, char **argv)
                     dbg_num("SE fix skin north=", g_wobj[sk].obj_n==92 && strstr(g_msg,"not enough room")!=0); obj_destroy(sk); obj_destroy(bl); build_blocked(); }
                 else dbg_num("SE fix skin north=", 1); }
               g_inv_sel=-1; g_msg[0]=0; }
+            /* THE VEHICLES (se_use.md §5w): the raft boards with four paddlers, moves N/E/S/W on water and lands by the shore;
+             * a turtle carries a rider over deep water and is left behind on landing; the bait brings a turtle in the eastern sea */
+            { int sx=w.px, sy=w.py, sn=g_nparty; static uint8_t sp[sizeof g_party]; memcpy(sp,g_party,sizeof g_party);
+              int rx=-1, ry=0, tx=-1, ty=0, dx_=0, dy_=0;
+              for(int y=0xe8;y<0x1e7&&(rx<0||tx<0);y++) for(int x=0x336;x<0x3ed&&(rx<0||tx<0);x++){
+                  int t=world_tile(&w,x,y);
+                  if(rx<0 && se_shore(t) && world_is_passable(&w,x,y)){ int ok=1;                 /* a raft to the west of a shore tile, with water to its west */
+                      for(int i=1;i<=3&&ok;i++) for(int j=0;j<2&&ok;j++){ int u=world_tile(&w,x-i,y-j); if(!(g_tflags1[u]&1)||se_shore(u)||objworld_at(&g_ow,x-i,y-j)>=0||npc_at(&w,x-i,y-j)>=0) ok=0; }
+                      if(ok){ rx=x-1; ry=y; } }
+                  if(tx<0 && se_shore(t) && world_is_passable(&w,x,y) && npc_at(&w,x,y)<0)        /* a shore tile with deep water beside it, and more beyond */
+                      for(int d=0;d<4&&tx<0;d++){ int ux=x+VDX[d], uy=y+VDY[d];
+                          if(se_swim_ok(&w,ux,uy)&&npc_at(&w,ux,uy)<0&&se_swim_ok(&w,ux+VDX[d],uy+VDY[d])&&npc_at(&w,ux+VDX[d],uy+VDY[d])<0){ tx=x; ty=y; dx_=VDX[d]; dy_=VDY[d]; } } }
+              dbg_num("SE veh spots found=", rx>=0 && tx>=0);
+              if(rx>=0){ static const int M4[3]={2,5,11}; g_nparty=1; g_party[0].actor=1;
+                  int ri=persist_obj_new(233,0,rx,ry,0); g_wobj[ri].tile=(uint16_t)(basetile(233)+3); build_blocked(); teleport_party(&w,rx+1,ry);
+                  g_msg[0]=0; se_use_at(&w,rx,ry,-1,0,ri); dbg_num("SE raft few people=", g_veh_kind==0 && strstr(g_msg,"enough people to paddle")!=0);
+                  for(int k=0;k<3;k++){ g_party[g_nparty].actor=M4[k]; g_party[g_nparty].hp=30; g_nparty++; g_away[M4[k]]=0; }
+                  teleport_party(&w,rx+1,ry);
+                  g_msg[0]=0; se_use_at(&w,rx,ry,-1,0,ri); dbg_num("SE raft no paddles=", g_veh_kind==0 && strstr(g_msg,"four people carrying paddles")!=0);
+                  vm_new(1,12,0,1); for(int k=0;k<3;k++) vm_new(M4[k],12,0,1);
+                  g_msg[0]=0; se_use_at(&w,rx,ry,-1,0,ri); dbg_num("SE raft boarded=", g_veh_kind==237 && w.px==rx && w.py==ry && g_wobj[ri].obj_n==237 && g_avatar_hide && g_actz[2]==0xff);
+                  g_msg[0]=0; se_use_at(&w,rx,ry,0,0,ri); dbg_num("SE raft land refused=", g_veh_kind==237 && strstr(g_msg,"Only next to land.")!=0);
+                  dbg_num("SE raft no diagonal=", !player_step(&w,-1,-1) && w.px==rx);
+                  dbg_num("SE raft west=", player_step(&w,-1,0) && w.px==rx-1 && g_wobj[ri].x==rx-1);
+                  dbg_num("SE raft east=", player_step(&w,1,0) && w.px==rx && g_wobj[ri].x==rx);
+                  g_wobj[ri].x=(uint16_t)(rx+1); w.px=(uint16_t)(rx+1);                          /* beside the shore now */
+                  g_msg[0]=0; do_verb(&w,'U',0,0); dbg_num("SE raft landed=", g_veh_kind==0 && g_wobj[ri].obj_n==233 && se_frame(ri)==3 && !g_avatar_hide && g_actz[2]==g_cur_level);
+                  vm_del(1,12,-1,1); for(int k=0;k<3;k++) vm_del(M4[k],12,-1,1); obj_destroy(ri); build_blocked(); g_nparty=1; }
+              if(tx>=0){ int ux=tx+dx_, uy=ty+dy_; teleport_party(&w,tx,ty);
+                  int t=se_turtle_new(&w,ux,uy,0); g_msg[0]=0; do_verb(&w,'U',dx_,dy_);
+                  dbg_num("SE turtle ridden=", g_se_rider[1] && w.px==ux && w.py==uy && g_atile[t]==0xffff && actor_objn(1)==307);
+                  int t2=se_turtle_new(&w,tx,ty,0); g_msg[0]=0; do_verb(&w,'U',-dx_,-dy_);
+                  dbg_num("SE turtle already=", strstr(g_msg,"already on a turtle")!=0 && g_atile[t2]!=0xffff); g_atile[t2]=0xffff; g_temp[t2]=0;
+                  dbg_num("SE rider swims=", player_step(&w,dx_,dy_) && w.px==ux+dx_ && w.py==uy+dy_);
+                  dbg_num("SE rider back=", player_step(&w,-dx_,-dy_) && w.px==ux);
+                  g_msg[0]=0; do_verb(&w,'U',0,0); { int tu=npc_at(&w,ux,uy);
+                  dbg_num("SE rider landed=", !g_se_rider[1] && se_shore(world_tile(&w,w.px,w.py)) && tu>=0 && actor_objn(tu)==302 && g_wt_force[tu]==0x8f && actor_objn(1)!=307);
+                  if(tu>=0){ g_atile[tu]=0xffff; g_temp[tu]=0; } }
+                  teleport_party(&w,tx,ty); vm_new(1,47,0,2); g_use_readied=0; g_inv_sel=-1; g_msg[0]=0; se_use_pack(&w,47);
+                  { int tb=-1; for(int i=0;i<U6_MAX_ACTORS;i++) if(g_temp[i]&&g_atile[i]!=0xffff&&actor_objn(i)==302&&iabs_(g_actx[i]-tx)<=1&&iabs_(g_acty[i]-ty)<=1) tb=i;
+                    dbg_num("SE bait turtle=", tb>=0 && pack_count(1,47)==1 && se_swim_ok(&w,tb>=0?g_actx[tb]:0,tb>=0?g_acty[tb]:0));
+                    if(tb>=0){ g_atile[tb]=0xffff; g_temp[tb]=0; } }
+                  teleport_party(&w,sx,sy); g_msg[0]=0; se_use_pack(&w,47);
+                  dbg_num("SE bait not near water=", pack_count(1,47)==1 && strstr(g_msg,"You must be near water.")!=0);
+                  pack_take(1,47,1); }
+              memcpy(g_party,sp,sizeof g_party); g_nparty=sn; teleport_party(&w,sx,sy); build_blocked(); g_msg[0]=0; }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

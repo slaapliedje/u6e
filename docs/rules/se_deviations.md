@@ -7,7 +7,7 @@ register is deviations.md.
 > Provenance
 > - Derived from: reading SE's GAME.EXE. The rule specs named in each row cite the routines read.
 > - Validated by: `make check-se-use` checks each fix below.
-> - Last updated: 2026-11-12 (the first rows: the user takes the intent over eleven DOS slips)
+> - Last updated: 2026-11-12 (the first rows: the user takes the intent over eleven DOS slips; the vehicles' engine choices)
 
 ## Fixed by the user's choice (2026-11-12): DOS's own slips we don't copy
 
@@ -29,14 +29,17 @@ these). Each row says what DOS does, so any of them can be put back.
 | 10 | A breakable container thrown and broken spills what it held onto the tile | se_move.md §6 | Moves it there, then deletes it with everything in it |
 | 11 | A tar fire's waves burn only the fires the pour started | se_use.md §5q | Each wave takes every fire of its quality in the loaded objects, so a campfire nearby burns out; the engine holds the whole world, not DOS's loaded area |
 
-## Earlier engine choices (before 2026-11-12), for the user to confirm
+## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
 |---|---|---|
 | A boulder that crushes things spares them by their tile's flags | se_use.md §5c | Reads the flag byte by the thing's place in its object table, not its tile |
 | A rolling boulder stops after 64 rounds | se_use.md §5c | No limit |
+| A member other than the leader mounting or leaving a turtle doesn't move the view | se_use.md §5w | Sets the party's tile to that member's, so the view jumps to it until the leader next moves |
+| The raft carrying the party stays a map object that moves with it (as U6's vessels in the engine) | se_use.md §5w | Actor 0 becomes the raft and the object is deleted; the same on screen, it matters only to the save (item 10) |
+| A step of the raft costs 5, as a vessel's in the engine | se_use.md §5w | Not read yet |
 
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the
 ceiling, the trap doors, the drum's scene), combat (item 6: the totems, the bell, fire's harm, a
-readied flintlock), the vehicles (the raft, the turtles, 307), SE's music and sounds (item 9), the
-border (item 8).
+readied flintlock; SE's creature table for the turtle's other numbers), SE's music and sounds (item 9),
+the border (item 8).
