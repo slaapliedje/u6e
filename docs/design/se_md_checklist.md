@@ -111,5 +111,7 @@ list once SE's seams exist.
   (§5n). The folded skin, the fire extinguisher and the liquor (§5o). The digging stick and the cloth strips (§5p). The metal bucket and fire (§5q; the burning
   of people waits for item 6's hazard). The machine, the loom and the wire screen (§5r); the jungle drum's
   scene goes to item 11. The crate as DOS opens it (it was wrong), the brazier, the burnt logs, the metal head and the
-  tarred strips (§5s). The clay, the gunpowder and the torches (§5t). The fishing pole and the crystal garden (§5u). Next: §3's order from
-  the tar pit (229).
+  tarred strips (§5s). The clay, the gunpowder and the torches (§5t). The fishing pole and the crystal garden (§5u). The tar pit, the headless statue and the crystals (§5v, §5s). Every
+  case of §3 is now built but the raft, the turtles and 307 (one vehicle slice, next) and those
+  waiting on items 6 (the totems, the bell, fire's harm, the readied flintlock) and 11 (the rope, the
+  hole in the ceiling, the drum).

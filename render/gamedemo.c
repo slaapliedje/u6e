@@ -6255,6 +6255,8 @@ static int use_actor(void); static int carry_over(int a,int extra);
 #define SEON_TARSTRIP 11                                    /* tarred cloth strips (0x23777) */
 #define SEON_POWDER 12                                      /* gunpowder (0x24c0a) */
 #define SEON_LTORCH 13                                      /* a lit torch (0x25686) */
+#define SEON_TARPIT 14                                      /* the tar pit (0x23211) */
+#define SEON_CRYSTAL 15                                     /* crystals (0x25972) */
 static int g_se_on_tx=-1, g_se_on_ty;                        /* the tile the answer named (a bare one too) */
 static int g_se_on_idx=-1, g_se_on_row=-1;                  /* the thing that asked: on the map, or its pack row */
 static int g_se_on_actor=1;                                 /* who holds the thing that asked */
@@ -6728,6 +6730,36 @@ static int se_torch(int idx,int row,int m){
     int sl=!g_aready[m][EQ_ARM]?EQ_ARM:!g_aready[m][EQ_ARM2]?EQ_ARM2:-1;
     if(sl<0){ msgcat(0,"\nYour hands are full."); return 0; }
     se_use_up(idx,row,0); g_aready[m][sl]=209; equip_refold(m); g_torch_fuel[m]=100; return 1; }
+/* the tar pit's "On " (0x23211, se_use.md §5v): every cloth strip of the stack tarred */
+static int se_tarpit_on(int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy, on, q, mine, tx, ty; se_actor_xy(a,&hx,&hy);
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy; if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; } }
+    on=idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n;
+    if(on!=134){ msgcat(n,"\nNo effect."); return 0; }
+    q=idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty; if(!q) q=1;
+    mine=row>=0 && (g_ow.inv[row].owner?g_ow.inv[row].owner:1)==a;
+    tx=idx>=0?g_wobj[idx].x:hx; ty=idx>=0?g_wobj[idx].y:hy;
+    msgcat(n,"cloth strips");
+    se_use_up(idx,row,1);
+    if(!(mine && se_give(a,191,q))) se_drop_new(191,q,tx,ty);
+    return 1; }
+/* crystals' "On " (0x25972, se_use.md §5v): a person healed to the full and the poison gone */
+static int se_crystal_on(int id,int idx,int row,int n)
+{
+    int a=g_se_on_actor, hx, hy; se_actor_xy(a,&hx,&hy); (void)row;
+    if(id>=0){ int x=hx, y=hy; char nm[24]; actor_pos(id,&x,&y);
+        if(x-hx<-1||x-hx>1||y-hy<-1||y-hy>1){ msgcat(n,"Out of range!"); return 0; }
+        if(actor_objn(id)==249||actor_objn(id)==248){ msgcat(n,"a body.\nThat person is beyond help."); return 0; }
+        actor_name(id,nm,sizeof nm); n=msgcat(n,nm); n=msgcat(n,"\n");
+        if(se_max_hp(id)<=g_ahp[id]){ n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," Doesn't need any help."); return 0; }
+        g_ahp[id]=(uint8_t)se_max_hp(id); g_poison[id]=0;
+        n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," is healed.");
+        se_use_up(g_se_on_idx,g_se_on_row,0); g_se_on_idx=g_se_on_row=-1; return 1; }
+    if(idx>=0){ int dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy;
+        if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; }
+        if(g_wobj[idx].obj_n==249||g_wobj[idx].obj_n==248){ msgcat(n,"a body.\nThat person is beyond help."); return 0; } }
+    msgcat(n,"nothing"); return 0; }
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
 static int se_on_target(int idx,int row)
 {
@@ -6739,7 +6771,7 @@ static int se_on_target(int idx,int row)
         msgcat(n,"nothing!"); g_se_on=0; return 0; }
     n=look_thing(n,idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty,0);
     n=msgcat(n,"\n");
-    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE && g_se_on!=SEON_PLACHTA && g_se_on!=SEON_EXTING && g_se_on!=SEON_TAR && g_se_on!=SEON_WATER && g_se_on!=SEON_LOOM && g_se_on!=SEON_TARSTRIP && g_se_on!=SEON_POWDER && g_se_on!=SEON_LTORCH){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
+    if(idx>=0 && g_se_on!=SEON_KNIFE && g_se_on!=SEON_HAMMER && g_se_on!=SEON_VINE && g_se_on!=SEON_PLACHTA && g_se_on!=SEON_EXTING && g_se_on!=SEON_TAR && g_se_on!=SEON_WATER && g_se_on!=SEON_LOOM && g_se_on!=SEON_TARSTRIP && g_se_on!=SEON_POWDER && g_se_on!=SEON_LTORCH && g_se_on!=SEON_TARPIT){ int ax,ay; se_leader_pos(&ax,&ay); int dx=(int)g_wobj[idx].x-ax, dy=(int)g_wobj[idx].y-ay;
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); g_se_on=0; return 0; } }
     int r=0, k=g_se_on; g_se_on=0; g_verb_pts=5;
     if(k==SEON_FIRE) r=se_fire_on(idx,row,n);
@@ -6754,14 +6786,15 @@ static int se_on_target(int idx,int row)
     else if(k==SEON_TARSTRIP) r=se_tarstrip_on(idx,row,n);
     else if(k==SEON_POWDER) r=se_powder_on(idx,row,n);
     else if(k==SEON_LTORCH) r=se_ltorch_on(idx,row,n);
+    else if(k==SEON_TARPIT) r=se_tarpit_on(idx,row,n);
     return r;
 }
 static int se_on_map(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-    if(g_se_on==SEON_STRIPS){ int id=npc_at(w,tx,ty), n=msgcat(msg_end(),"\nOn "); g_se_on=0; g_verb_pts=5;   /* a person, or what lies there */
-        return se_strips_on(id,id<0?objworld_at(&g_ow,tx,ty):-1,-1,n); }
+    if(g_se_on==SEON_STRIPS||g_se_on==SEON_CRYSTAL){ int id=npc_at(w,tx,ty), n=msgcat(msg_end(),"\nOn "), k=g_se_on; g_se_on=0; g_verb_pts=5;   /* a person, or what lies there */
+        return k==SEON_STRIPS?se_strips_on(id,id<0?objworld_at(&g_ow,tx,ty):-1,-1,n):se_crystal_on(id,id<0?objworld_at(&g_ow,tx,ty):-1,-1,n); }
     g_se_on_tx=tx; g_se_on_ty=ty; { int r=se_on_target(objworld_at(&g_ow,tx,ty),-1); g_se_on_tx=-1; return r; } }
-static int se_on_pack(world_t*w,int row){ (void)w; g_se_on_tx=-1; if(g_se_on==SEON_STRIPS){ int n=msgcat(msg_end(),"\nOn "); g_se_on=0; return se_strips_on(-1,-1,row,n); } return se_on_target(-1,row); }
+static int se_on_pack(world_t*w,int row){ (void)w; g_se_on_tx=-1; if(g_se_on==SEON_STRIPS||g_se_on==SEON_CRYSTAL){ int n=msgcat(msg_end(),"\nOn "), k=g_se_on; g_se_on=0; return k==SEON_STRIPS?se_strips_on(-1,-1,row,n):se_crystal_on(-1,-1,row,n); } return se_on_target(-1,row); }
 /* ---- the giant gem (se_use.md §5d, 0x24302; M)ove onto the stand does the same) ---- */
 static void sched_pass(const world_t*w);
 /* time passes in one step of n minutes (0x359:0x11b6): the fuse runs down by n, the schedules catch up */
@@ -6930,6 +6963,15 @@ static int se_crystals(void){
     if(!se_give(lead,130,10)){ msgcat(0,"\nYou are carrying too much already."); return 1; }
     msgcat(0,who==7?"\nRafkin identifies some potassium nitrate, and you scrape a quantity from the crystal.":"\nJohann identifies some potassium nitrate, and you scrape a quantity from the crystal.");
     return 1; }
+/* the headless metal statue (0x2423a, se_use.md §5s): with the metal head in the leader's pack, the statue (actor 11) joins */
+static int se_statue(int idx){
+    int lead=g_nparty?g_party[0].actor:1, k, x=g_wobj[idx].x, y=g_wobj[idx].y;
+    for(k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==190 && (g_ow.inv[k].owner?g_ow.inv[k].owner:1)==lead) break;
+    if(k>=g_ow.ninv){ msgcat(0,"\nNo effect."); return 0; }
+    pack_row_take(k,1); obj_destroy(idx); build_blocked();
+    g_actx[11]=(uint16_t)x; g_acty[11]=(uint16_t)y; g_actz[11]=(uint8_t)g_cur_level;   /* where the statue stood */
+    se_join(11); g_cg.talk_flags[11]|=0x40;
+    msgcat(0,"\nYou replace the statue's missing head."); return 1; }
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
@@ -6974,6 +7016,9 @@ static int se_use_object(int idx)
     if(o==208) return se_torch(idx,-1,use_actor());
     if(o==212) return se_fish(use_actor());
     if(o==216) return se_crystals();
+    if(o==247) return se_statue(idx);
+    if(o==252){ g_se_on=SEON_CRYSTAL; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
+    if(o==229){ g_se_on=SEON_TARPIT; g_se_on_actor=(g_show_inv&&g_status_actor>=1)?g_status_actor:(g_nparty?g_party[0].actor:1); g_next_verb='X'; return 0; }   /* the member shown, else the leader */
     if(o==209){ g_se_on=SEON_LTORCH; g_se_on_actor=use_actor(); g_next_verb='X'; return 0; }
     if(o==204){ g_se_on=SEON_POWDER; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
     if(o==191){ g_se_on=SEON_TARSTRIP; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }
@@ -7016,6 +7061,7 @@ static int se_use_pack(world_t*w,int on)
     if(on==190 && row>=0) return se_head(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==192 && row>=0) return se_clay(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==208 && row>=0) return se_torch(-1,row,a);
+    if(on==252 && row>=0){ g_se_on=SEON_CRYSTAL; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
     if(on==212) return se_fish(row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a);
     if(on==209){ g_se_on=SEON_LTORCH; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; g_next_verb='X'; return 0; }
     if(on==204 && row>=0){ g_se_on=SEON_POWDER; g_se_on_actor=g_ow.inv[row].owner?g_ow.inv[row].owner:1; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
@@ -17147,6 +17193,29 @@ int main(int argc, char **argv)
               int n0=objworld_count(&g_ow,130); g_msg[0]=0; se_use_object(cg);
               dbg_num("SE crystals rafkin=", objworld_count(&g_ow,130)-n0==10 && strstr(g_msg,"Rafkin identifies some potassium nitrate")!=0);
               g_nparty=np; g_actx[7]=ax; g_acty[7]=ay; g_actz[7]=az; g_asleep[7]=sl; g_adead[7]=dd; pack_take(1,130,10); obj_destroy(cg); build_blocked(); g_msg[0]=0; }
+            /* TAR PIT (§5v): three cloth strips from the pack all tarred */
+            { pack_take(1,134,99); pack_take(1,191,99); int tp=persist_obj_new(229,0,(int)w.px+1,(int)w.py,0); build_blocked(); vm_new(1,134,0,3); int r_=-1;
+              g_next_verb=0; se_use_object(tp); dbg_num("SE tarpit asks On=", g_next_verb=='X' && g_se_on==SEON_TARPIT); g_next_verb=0;
+              for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==134) r_=k;
+              g_msg[0]=0; se_on_pack(&w,r_); dbg_num("SE tarpit strips=", objworld_count(&g_ow,191)==3 && objworld_count(&g_ow,134)==0);
+              pack_take(1,191,3); obj_destroy(tp); build_blocked(); g_msg[0]=0; }
+            /* HEADLESS STATUE (§5s): U)sed with the head carried, actor 11 stands where it stood and joins */
+            { int st=persist_obj_new(247,0,(int)w.px+1,(int)w.py,0); build_blocked(); g_msg[0]=0; se_use_object(st); dbg_num("SE statue no head=", strstr(g_msg,"No effect.")!=0);
+              vm_new(1,190,0,1); uint16_t ax=g_actx[11], ay=g_acty[11]; uint8_t az=g_actz[11]; int np=g_nparty;
+              g_msg[0]=0; se_use_object(st);
+              dbg_num("SE statue joins=", is_party_member(11) && g_actx[11]==(uint16_t)(w.px+1) && !g_wobj[st].alive && objworld_count(&g_ow,190)==0);
+              g_nparty=np; g_actx[11]=ax; g_acty[11]=ay; g_actz[11]=az; g_cg.talk_flags[11]&=(uint8_t)~0x40; build_blocked(); g_msg[0]=0; }
+            /* CRYSTALS (§5v): a hurt, poisoned member healed to the full; one who is whole needs no help */
+            { int a9=-1; for(int p=0;p<g_nparty;p++) if(g_party[p].actor!=1) a9=g_party[p].actor;
+              if(a9>0){ uint16_t ax=g_actx[a9], ay=g_acty[a9]; uint8_t az=g_actz[a9], h0=g_ahp[a9], p0=g_poison[a9]; int r_=-1;
+                  g_actx[a9]=(uint16_t)(w.px+1); g_acty[a9]=w.py; g_actz[a9]=(uint8_t)g_cur_level; g_ahp[a9]=3; g_poison[a9]=5;
+                  vm_new(1,252,0,2); for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==252) r_=k;
+                  g_inv_sel=r_; g_use_readied=0; g_next_verb=0; se_use_pack(&w,252); g_next_verb=0; g_msg[0]=0; se_on_map(&w,1,0);
+                  dbg_num("SE crystal heals=", g_ahp[a9]==se_max_hp(a9) && g_poison[a9]==0 && objworld_count(&g_ow,252)==1 && strstr(g_msg," is healed.")!=0);
+                  for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==252) r_=k;
+                  g_se_on=SEON_CRYSTAL; g_se_on_actor=1; g_se_on_idx=-1; g_se_on_row=r_; g_msg[0]=0; se_on_map(&w,1,0);
+                  dbg_num("SE crystal no help=", strstr(g_msg,"Doesn't need any help.")!=0 && objworld_count(&g_ow,252)==1);
+                  pack_take(1,252,1); g_actx[a9]=ax; g_acty[a9]=ay; g_actz[a9]=az; g_ahp[a9]=h0; g_poison[a9]=p0; g_inv_sel=-1; g_msg[0]=0; } }
             /* SANITY: object-blocking must not box the Avatar in — count walkable neighbours. */
             { int pn=0; for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){ if(!dx&&!dy) continue;
                 if(world_is_passable(&w,(int)w.px+dx,(int)w.py+dy)) pn++; }

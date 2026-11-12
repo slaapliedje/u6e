@@ -10,9 +10,9 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md item 5
 >                  addresses below, code segment base 0x1dbd0). The disassembly stays outside the repo.
 > - References   : none
 > - Tools        : objdump -m i8086; our objsurvey for the object names (se_md_objn.md)
-> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen, the crate's opening, the brazier, the burnt logs, the metal head, the tarred strips, the clay, the gunpowder, the torches, the fishing pole and the crystal garden; not yet against DOS running
+> - Validated by : doors — `make bot-smoke` (SE leaves the waking hut); `make check-se-use` (SEUSE.BIN) for the doors, ground, fire, food, crate, grenades, gunpowder, the boulder, the giant gem, the ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen, the crate's opening, the brazier, the burnt logs, the metal head, the tarred strips, the clay, the gunpowder, the torches, the fishing pole, the crystal garden, the tar pit, the statue and the crystals; not yet against DOS running
 > - Confidence   : confirmed for the dispatcher, the usable list and the doors; the rest is a map
-> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen, the crate, the brazier, the logs, the head, the tarred strips, the clay, the gunpowder, the torches, the fishing pole, the crystal garden)
+> - Last updated : 2026-11-11 (the giant gem, the magnesium ribbon, the knives, the hammers, the vine, the notebook, the flintlock, the camera, the mortar, the stalks, the bones, the plachta, the skin, the extinguisher, the liquor, the digging stick, the strips, the bucket, the machine, the loom, the wire screen, the crate, the brazier, the logs, the head, the tarred strips, the clay, the gunpowder, the torches, the fishing pole, the crystal garden, the tar pit, the statue, the crystals)
 
 ## 1. The dispatcher (image 0x25e46)
 
@@ -101,10 +101,10 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 208 209 torches, lit torch | a torch is lit into a free hand; a lit torch's `On ` burns and incinerates, §5t | 0x20ecc, 0x25686 | yes |
 | 212 fishing pole | a fish, 1 time in 5, beside deep water, §5u | 0x21b48 | yes |
 | 216 crystal garden | Rafkin or Johann finds potassium nitrate, §5u | 0x25d54 | yes |
-| 229 tar pit | | 0x23211 | no |
+| 229 tar pit | `On ` cloth strips: all tarred, §5v | 0x23211 | yes |
 | 233 237 raft | | 0x21c98 | no |
-| 247 headless metal statue | | 0x2423a | no |
-| 252 crystals | | 0x25972 | no |
+| 247 headless metal statue | with the metal head carried, the statue (actor 11) joins, §5s | 0x2423a | yes |
+| 252 crystals | `On ` a person: healed to the full, the poison gone, §5v | 0x25972 | yes |
 | 302 turtle | | 0x24b00 | no |
 | 307 | | 0x249a9 | no |
 
@@ -544,6 +544,9 @@ The first headless metal statue (247): the head and the statue go, actor 11 (the
 on the holder's own tile (as DOS does) and joins the party (it doesn't count against the five, §4),
 talk flag 11 gets 0x40, and `You replace the statue's missing head.` None: `No effect.`
 
+**The headless metal statue (247)** U)sed does the same when the metal head is anywhere in the leader's
+pack; actor 11 then stands where the statue stood. Without it: `No effect.` (0x2423a)
+
 **The tarred cloth strips (191)** ask `On ` (holder, range from the holder):
 - a tree branch (206): `You make a torch` (DOS has no full stop). One strip and the branch go; a torch
   (208) goes to the holder if the branch was theirs (else at their feet), or lies where the branch was;
@@ -587,6 +590,17 @@ the other 4 times: `You didn't get a fish.`). None: `You need to stand next to d
 some potassium nitrate, and you scrape a quantity from the crystal.` (or Johann); too heavy: `You are
 carrying too much already.` Neither: `There is nobody in the party who can identify which crystals are
 useful.` The garden stays.
+
+### 5v. The tar pit and the crystals
+
+**The tar pit (229)** asks `On ` for the member shown in the panel, else the leader (range from them): on
+cloth strips (134), `cloth strips`, and the whole stack becomes as many tarred cloth strips (191), to that
+member if the strips were theirs, else where the strips were. Anything else: `No effect.`
+
+**The crystals (252)** ask `On ` (holder, range; a person is taken here): a person below their maximum
+HP (§5p) is healed to it and their poison (status bit 0x08) goes: their name, then `<name> is healed.`,
+and one crystal goes. At the maximum: `<name> Doesn't need any help.` (DOS's capital D). A fallen person,
+a body or blood: `a body.` and `That person is beyond help.` Anything else: `nothing`.
 
 ## 6. Open questions
 - Whether actors are in the map window's object index (0xa72c) that the blocked test walks. Taken as
