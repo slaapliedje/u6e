@@ -48,9 +48,9 @@ that does something costs the leader 5.
 3. `To ` and the crosshair: nothing under it: `nobody.`
 4. A thing on the map under the crosshair must be in reach: an actor here (§5), another thing within a
    tile of the leader; else `Out of range!`.
-5. **The gem stand (66):** whatever is moved goes to (x-1, y-1) of the stand, `You place the gem on the
-   stand.`, and the first time the gem's scene (se_use.md §5d). DOS doesn't check that it is the gem (a
-   slip, kept).
+5. **The gem stand (66):** the gem goes to (x-1, y-1) of the stand, `You place the gem on the
+   stand.`, and the first time the gem's scene (se_use.md §5d). DOS takes anything moved
+   onto the stand for the gem; the engine takes only the gem, and anything else is `nobody.` (se_deviations.md 9).
 6. **An actor:** the member itself: `yourself.` (and the 5 points). Else its name and `.`, then:
    `That person is not around!` when not here (§5); `Only within the party!` when not in the party;
    `<name> is carrying too much already.` when its strength x 20 is less than what it carries and the
@@ -103,10 +103,12 @@ leader across and up or down and its tile in the view is seen (not black).
 4. Where it lands:
    - a tile that swallows things: it is gone;
    - thrown more than a tile and on the breakable list (DS:0x1170: 3 6 25 59 60 95 97 132 133 181 184
-     137 63): it is gone (a container with all it holds), `It broke!`; the soft clay pot (132) instead
+     137 63): it is gone, `It broke!` (a container: DOS loses what it held; the engine spills it onto the tile,
+     se_deviations.md 10); the soft clay pot (132) instead
      `The soft clay pot went squish.` and one clay (192) lies there. The list holds the grenade (137),
-     not the lit one (138): DOS's code for a lit grenade bursting where it lands is never reached (a
-     slip, kept), so a thrown lit grenade lands and burns on, as an unlit one breaks;
+     not the lit one (138), so DOS's code for a lit grenade bursting where it lands is never reached and
+     an unlit one breaks instead. The engine's list has the lit one: thrown, it bursts there (a grenade,
+     se_use.md §5b; dropped beside you it lands and burns on) and an unlit one lands whole (se_deviations.md 5);
    - a container there that takes it: into it;
    - the activated device (241): the fuse is cleared and it goes off there (se_use.md §5b);
    - else it lies there. An orchid bulb (78) dropped gets status bit 0x20 (§7).

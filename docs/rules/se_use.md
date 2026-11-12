@@ -264,8 +264,7 @@ column by column, west first, and stops after the column it found one in. For ea
 
 None found: `No effect.` The new game has one stand, at (170,483); the gem goes to (169,482).
 
-M)ove of a carried thing onto a stand does the same (0x2071f, rules/se_move.md §3), without the
-search. The gem is also on the breakable list (§5c, M)ove): thrown
+M)ove of the gem onto a stand does the same (0x2071f, rules/se_move.md §3), without the search. The gem is also on the breakable list (§5c, M)ove): thrown
 more than a tile, it breaks.
 
 **The scene**, in order:
@@ -276,7 +275,7 @@ more than a tile, it breaks.
 - the clock runs on: if the minute isn't 0, to the next hour, then an hour at a time until 12:00. Each
   step is one pass of the world for that many minutes (0x359:0x11b6): a lit fuse runs down by that much
   and blows if it runs out, and the schedules catch up. On the hour exactly, no time passes at all, even
-  far from noon (a DOS slip, kept);
+  far from noon (a DOS slip; the engine runs on to noon from the hour too, se_deviations.md 1);
 - a trap door (160) is made at (192,460), level 0, frame 1 (the open one);
 - talk flag 1 gets bit 0x02, so the scene never comes again;
 - the "light" object (11) takes map tile 284's picture (a beam) in place of its own (522), until the game
@@ -348,7 +347,7 @@ and with bit 0x80 as well the 3 back, kept between 1 and 30.
 | on | what happens |
 |----|--------------|
 | the blue boulder (172) | a roll of 1-30 below (45 - strength) / 2: `Glanced off!`; else `A piece of rock flakes off.` and a blue stone (58) to the holder, else onto the holder's tile. The boulder stays |
-| burnt logs (207), frame 0 | 1 to strength charcoal (129). If the holder carries a charcoal stack that can take it (no more than 255), it joins that stack and nothing is said (a DOS slip, kept); else `You made some charcoal.` and a new stack to the holder, else onto the holder's tile. The logs stay |
+| burnt logs (207), frame 0 | 1 to strength charcoal (129). If the holder carries a charcoal stack that can take it (no more than 255), it joins that stack and DOS says nothing (the engine says `You made some charcoal.` here too, se_deviations.md 2); else `You made some charcoal.` and a new stack to the holder, else onto the holder's tile. The logs stay |
 | anything else | `No effect.` |
 
 ### 5h. The vine (0x24fde)
@@ -407,7 +406,8 @@ Then:
   seen first: `The mixture in the <container> is wrong.`;
 - **no corn**: charcoal, sulfur and potassium nitrate in that order: the smallest stack's worth goes from
   each (a stack no bigger goes whole); if one is missing, `You're missing some ingredients.` and it
-  stops there, but what was taken from those before it stays gone (a DOS slip, kept). With all three:
+  stops there, but in DOS what was taken from those before it stays gone (the engine checks all three first and
+  takes nothing, se_deviations.md 3). With all three:
   that much gunpowder (204) goes into the container and `You mix a batch of gunpowder.`
 
 SE's containers and how things get into them are rules/se_move.md.
@@ -436,7 +436,7 @@ invocations are item 6.
 **The folded skin (92)** unfolds where it lies into the skin (245) at its frame + 3, a 2x2 thing anchored
 at the folded skin's tile. Carried, or no room: `There is not enough room to unfold the skin.` No room
 means a thing at (x-1, y) or (x-1, y-1) (DOS means to look at the whole 2x2 but looks at that column
-twice: a slip, kept), or an impassable tile (tile flags 1, bit 0x02) at (x-1, y), (x, y-1) or (x-1, y-1).
+twice: a slip; the engine looks at the three tiles, se_deviations.md 6), or an impassable tile (tile flags 1, bit 0x02) at (x-1, y), (x, y-1) or (x-1, y-1).
 
 **The fire extinguisher (94)** asks `On ` as the knives do (holder, range from the holder):
 - a fire (242, 254): `You put the fire out.` and it goes;
@@ -479,7 +479,7 @@ column from the west; on each tile, at each thing there:
 - a tar pit (229): 10 tar go into it, frame 1, `You got some tar in the bucket.`;
 - else water: a wet tile (tile flags 1, bit 0x01), or a fountain (162, 166), the well (200), the
   waterfall (150) or the falls (151): 10 water, frame 2, `You got some water in the bucket.` DOS tests
-  the wet tile at (x, holder's y - i + j) for the column i and row j it is at, not (x, y): a slip, kept.
+  the wet tile at (x, holder's y - i + j) for the column i and row j it is at, not (x, y): a slip; the engine tests (x, y), se_deviations.md 7.
   A tile with nothing on it is still tested for wet once.
 The first one found ends it; none: `There is nothing to get in the bucket.`
 
@@ -491,9 +491,10 @@ The first one found ends it; none: `There is nothing to get in the bucket.`
 - a pteranodon nest (171), or a dinosaur egg (111) lying on one: `pteranodon nest`; a fire (242) and a
   burned nest (76, frame 3) on the nest's tile, and the fire burns (below). More than 4 tar: one goes;
   else the bucket is emptied;
-- a dinosaur egg not on a nest: `dinosaur egg`, a fire on its tile, and it burns. No tar goes (a slip,
-  kept);
-- a web (17): `web`, a lasting fire (242, quality 2) and a fire on its tile, and it burns. No tar goes;
+- a dinosaur egg not on a nest: `dinosaur egg`, a fire on its tile, and it burns. DOS takes no tar (the engine takes one,
+  se_deviations.md 8);
+- a web (17): `web`, a lasting fire (242, quality 2) and a fire on its tile, and it burns. DOS takes no tar (the
+  engine takes one, se_deviations.md 8);
 - anything else, or a tile with nothing on it (in reach, else `Out of range!`; no tile, `nothing!`): its
   name; one tar goes (the last empties the bucket); unless the tile is wet, a lasting fire and a fire,
   and it burns.
@@ -506,7 +507,7 @@ Nothing of these done: `No effect.`
 take turns, marking each wave's fires with quality 0 or 1), until a wave lights none; the view is drawn
 between waves. The lasting fire (quality 2) isn't in the waves and stays.
 
-**Difference** (for SE's register, item 12): each DOS wave takes every fire of the wave's quality in the
+**Difference** (se_deviations.md 11): each DOS wave takes every fire of the wave's quality in the
 loaded objects, so a campfire nearby with quality 0 would burn out with the first wave. The engine holds
 the whole world rather than DOS's loaded area, so its waves take only the fires the pour started.
 
@@ -581,8 +582,8 @@ out.` and it is gone. A lit torch in the party lights the dark (lighting.md).
 ### 5u. The fishing pole and the crystal garden
 
 **The fishing pole (212)** looks for deep water (map tile 0x0c) around its holder, but DOS steps both
-axes with one counter, so it only looks at (x-1, y-1), the holder's own tile and (x+1, y+1) (a slip,
-kept). The first deep water: 1 time in 5, a fish (213) to the holder, `You caught a fish!` (too heavy, or
+axes with one counter, so it only looks at (x-1, y-1), the holder's own tile and (x+1, y+1) (a slip; the engine looks at all eight,
+se_deviations.md 4). The first deep water: 1 time in 5, a fish (213) to the holder, `You caught a fish!` (too heavy, or
 the other 4 times: `You didn't get a fish.`). None: `You need to stand next to deep water.`
 
 **The crystal garden (216)** needs Rafkin (actor 7), or else Johann (5), in the party, not dead (status

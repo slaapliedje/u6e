@@ -1060,19 +1060,19 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'ribbon head found=1' 'ribbon used one=1' 'ribbon whisper=1' 'ribbon head wakes=1' \
 	             'knife spot found=1' 'knife asks On=1' 'knife skinned=1' 'knife meat=1' 'knife skin=1' 'knife leftovers=1' \
 	             'knife too tough=1' 'knife strips=10' 'knife cloth left=1' \
-	             'hammer charcoal=1' 'hammer stacked silently=1' 'hammer glances and flakes=1' 'hammer blue stones=1' \
+	             'hammer charcoal=1' 'hammer stacked said=1' 'hammer glances and flakes=1' 'hammer blue stones=1' \
 	             'vine asks On=1' 'vine hole there=1' 'vine rope=1' \
 	             'notebook avatar=1' 'notebook jimmy is 312=1' 'notebook jimmy=1' \
 	             'flintlock no powder=1' 'flintlock loaded=1' 'flintlock already=1' 'camera pictures=2' 'camera out of film=1' \
 	             'move into pouch=1' 'move out of pouch=1' 'move mortar refuses=1' 'mortar gunpowder=2' 'mortar left=3' 'mortar msg=1' \
-	             'jar corn meal frame=1' 'jar one kind=1' 'jar emptied frame=0' 'move a member=1' 'move given=3' 'move onto the stand=1' \
+	             'jar corn meal frame=1' 'jar one kind=1' 'jar emptied frame=0' 'move a member=1' 'move given=3' 'move knife not on stand=1' 'move onto the stand=1' \
 	             'move deep water lost=1' 'move ground kept=1' \
-	             'drop spot found=1' 'drop pot squish=1' 'drop into pouch=2' 'drop device blew=1' 'drop lit grenade lands=1' 'drop lit grenade blew=1' \
+	             'drop spot found=1' 'drop pot squish=1' 'drop into pouch=2' 'drop device blew=1' 'drop lit grenade lands=1' 'drop lit grenade blew=1' 'throw lit grenade bursts=1' 'throw pot spills=1' \
 	             'stalk corn=1' 'bones rib=1' 'plachta asks On=1' 'plachta shamap=1' \
 	             'skin spot found=1' 'skin unfolded=1' 'skin carried no room=1' 'exting asks On=1' 'exting fire out=1' 'exting bare nothing=1' 'liquor drunk=1' \
 	             'dig clay near=1' 'dig clay=1' 'strips asks On=1' 'strips bound=1' 'strips no help=1' \
-	             'bucket spot found=1' 'bucket tar=1' 'bucket tar asks On=1' 'bucket tarred strips=1' 'bucket web fire=1' 'bucket water=1' 'bucket fire out=1' 'machine no gems=1' 'machine fruit=1' 'loom asks On=1' 'loom cloth=1' 'sift nothing=1' 'sift sulfur=1' \
-	             'crate shut opens=1' 'crate open refused=1' 'logs lit=1' 'logs cold refused=1' 'brazier unlit refused=1' 'brazier fire=1' 'head statue joins=1' 'tarstrip asks On=1' 'tarstrip torch=1' 'tarstrip need powder=1' 'tarstrip grenade=1' 'clay pot=1' 'powder asks On=1' 'powder loads=1' 'torch lit=1' 'torch hands full=1' 'torch incinerates=1' 'torch burned out=1' 'fish no water=1' 'fish water near=1' 'fish caught some=1' 'crystals nobody=1' 'crystals rafkin=1' 'tarpit asks On=1' 'tarpit strips=1' 'statue no head=1' 'statue joins=1' 'crystal heals=1' 'crystal no help=1' \
+	             'bucket spot found=1' 'bucket tar=1' 'bucket tar asks On=1' 'bucket tarred strips=1' 'bucket web fire=1' 'bucket web tar used=1' 'bucket water=1' 'bucket fire out=1' 'machine no gems=1' 'machine fruit=1' 'loom asks On=1' 'loom cloth=1' 'sift nothing=1' 'sift sulfur=1' \
+	             'crate shut opens=1' 'crate open refused=1' 'logs lit=1' 'logs cold refused=1' 'brazier unlit refused=1' 'brazier fire=1' 'head statue joins=1' 'tarstrip asks On=1' 'tarstrip torch=1' 'tarstrip need powder=1' 'tarstrip grenade=1' 'clay pot=1' 'powder asks On=1' 'powder loads=1' 'torch lit=1' 'torch hands full=1' 'torch incinerates=1' 'torch burned out=1' 'fish no water=1' 'fish water near=1' 'fish caught some=1' 'crystals nobody=1' 'crystals rafkin=1' 'tarpit asks On=1' 'tarpit strips=1' 'statue no head=1' 'statue joins=1' 'crystal heals=1' 'crystal no help=1' 'fix gem on the hour=1' 'fix mortar keeps=1' 'fix skin north=1' \
 	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=40'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"

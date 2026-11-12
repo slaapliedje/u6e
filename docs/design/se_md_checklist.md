@@ -115,3 +115,7 @@ list once SE's seams exist.
   case of §3 is now built but the raft, the turtles and 307 (one vehicle slice, next) and those
   waiting on items 6 (the totems, the bell, fire's harm, the readied flintlock) and 11 (the rope, the
   hole in the ceiling, the drum).
+- 2026-11-12: SE's register started (rules/se_deviations.md, item 12). The user takes the developers'
+  intent over DOS's slips: eleven fixed (the gem on the hour, the charcoal message, the mortar, the fishing
+  pole, the thrown lit grenade, the folded skin, the bucket's water, tar on webs and eggs, the gem stand,
+  thrown containers spilling, the fire waves). ScummVM's SE U)se, looked at first, is mostly unwritten.
