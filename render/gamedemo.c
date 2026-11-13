@@ -163,6 +163,7 @@ typedef struct GameLayer {
     int  (*hit_rule)(int att,int wobj,int def,int role);         /* a hit by the game's own rule (SE's spear, staff, Myrmidex); -1 = the roll */
     int  (*blow)(int att,int def,int oi,int wobj,int*wm);       /* what a landed blow does instead (def<0: on object oi), or its damage *wm; 1 = all done */
     int  (*wound_to)(int def);                                  /* who takes a wound (SE's queen, the unharmed); -1 = nobody */
+    int  (*wound_own)(int att,int def,int dmg);                 /* a wound the game takes over entirely (SE's orchids); 1 = done */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
     void (*death_words)(int def);                               /* the words for any death (SE, se_combat.md §3d); NULL = U6's "killed!" for a blow */
     int  (*dying)(int id,int temp);                             /* what a death does before its remains (the story, a rider, blood); 1 = it leaves nothing and keeps its things */
@@ -8932,6 +8933,7 @@ static void wake_struck(int a){ if(!(g_on.deep_sleeper && actor_objn(a)==g_on.de
 static int g_bot_tough;
 static void actor_wound(int att,int def,int dmg,int blow)
 {   if(g_gl->wound_to && (def=g_gl->wound_to(def))<0) return;
+    if(g_gl->wound_own && g_gl->wound_own(att,def,dmg)) return;
     int hp=g_ahp[def], party=def==1||is_party_member(def), on=actor_objn(def);
     if(!party&&!hp) hp=30;
     if(party&&g_bot_tough) dmg=0;                             /* BOTTOUGH.TXT: a bot run that tests a quest, not its fights */
@@ -10134,21 +10136,22 @@ static void kit_add(int s,int on,int qty,int quality,int frame,int copies,int fl
 /* a person's things come into memory when it first needs them, and the save writes them from there */
 static void pool_absorb(const uint8_t *d, int32_t n, int32_t ol, int only);
 static void npc_pack(int a){ if(a>=1&&a<U6_MAX_ACTORS&&!g_pooled[a]&&g_savetmpl&&g_objlist_off>=0){ pool_absorb(g_savetmpl,g_savetmpl_len,g_objlist_off,a); g_away[a]=1; equip_refold(a); } }
+static int kit_actor(int a){ return g_gd==&gamedef_se ? (a>=192&&a<U6_MAX_ACTORS&&g_temp[a]) : a>=224; }   /* carries a hatchling's kit (eggs.md §3c, se_eggs.md §4) */
 static int item_count(int a,int on){
     if(a==1||is_party_member(a)) return pack_count(a,on);
-    if(a<224){ npc_pack(a); return pack_count(a,on); }
+    if(!kit_actor(a)){ npc_pack(a); return pack_count(a,on); }
     int c=0; for(int k=0;k<g_nkit[a-160];k++){ const kit_t*e=&g_kit[a-160][k]; if(e->obj_n==on && !(e->flags&KIT_INCHEST)) c+=(int)e->qty*e->copies; }
     return c; }
 static void kit_remove(int a,int k){ int n=g_nkit[a-160]; for(int m=k;m<n-1;m++) g_kit[a-160][m]=g_kit[a-160][m+1]; g_nkit[a-160]=(uint8_t)(n-1); }
 static void item_spend(int a,int on,int n){
-    if(a==1||is_party_member(a)||a<224){ npc_pack(a); pack_take(a,on,n); return; }
+    if(a==1||is_party_member(a)||!kit_actor(a)){ npc_pack(a); pack_take(a,on,n); return; }
     for(int k=0;k<g_nkit[a-160] && n>0;){ kit_t*e=&g_kit[a-160][k]; if(e->obj_n!=on || (e->flags&KIT_INCHEST)){ k++; continue; }
         if((int)e->qty>n){ e->qty=(uint16_t)(e->qty-n); return; }
         n-=e->qty; kit_remove(a,k); } }
 /* one wobj leaves: a spare first if spare_first and there is one, else the readied one; returns 1 if one went */
 static int weapon_spend(int a,int on,int spare_first){
-    int party=(a==1||is_party_member(a)||a<224);
-    if(a<224) npc_pack(a);
+    int party=(a==1||is_party_member(a)||!kit_actor(a));
+    if(!kit_actor(a)) npc_pack(a);
     if(spare_first){
         if(party && pack_count(a,on)>0){ pack_take(a,on,1); return 1; }
         if(!party) for(int k=0;k<g_nkit[a-160];k++){ kit_t*e=&g_kit[a-160][k]; if(e->obj_n==on && !(e->flags&(KIT_READY|KIT_INCHEST))){ if(e->copies>1) e->copies--; else kit_remove(a,k); return 1; } } }
@@ -10216,7 +10219,7 @@ static int summon_creature(int x,int y,uint16_t obj_n,uint8_t mode,uint8_t life,
  * a block change (or a teleport / level change / load) runs the hatch check (§2). */
 #define EGG_MAX 700
 #define EMB_MAX 1200
-typedef struct { uint16_t x, y; uint8_t quality, chance, active, nemb, temp; uint16_t emb, rec; } egg_t;
+typedef struct { uint16_t x, y; uint8_t quality, chance, active, nemb, temp, made; uint16_t emb, rec; } egg_t;   /* made: SE's bulb egg, 1 new, 2 kept, 3 gone (se_eggs.md §2) */
 typedef struct { uint16_t obj_n; uint8_t qty, quality, status; } embryo_t;
 static egg_t    g_eggs[EGG_MAX];
 static embryo_t g_emb[EMB_MAX];
@@ -10242,7 +10245,7 @@ static void eggs_load_level(const uint8_t *d, int32_t n, int level)
             egg_t*e=&g_eggs[g_neggs]; e->x=(uint16_t)x; e->y=(uint16_t)y; e->quality=b[7]; e->chance=b[6];
             e->active=(uint8_t)((b[0]&0x40)?1:0);                      /* already hatched on this approach (saved) */
             e->temp=(uint8_t)((b[0]&0x20)?1:0);                        /* a TEMPORARY egg hatches once (eggs.md §2) */
-            e->nemb=0; e->emb=(uint16_t)g_nemb; e->rec=(uint16_t)k; map[k]=(int16_t)g_neggs++; }
+            e->nemb=0; e->emb=(uint16_t)g_nemb; e->rec=(uint16_t)k; e->made=0; map[k]=(int16_t)g_neggs++; }
         else if(loc==0x08){ int link=((y&0x3f)<<10)|x;                  /* an embryo follows its egg */
             if(link<k && map[link]>=0){ egg_t*e=&g_eggs[map[link]];
                 if(g_nemb<EMB_MAX && e->emb+e->nemb==g_nemb && e->nemb<255){
@@ -10351,6 +10354,107 @@ static void u6_eggs_update(const world_t *w, int teleport)
                 else { hatch_object(eg->x,eg->y,on,em->quality); first_piece=0; } } }
         if(added) build_blocked(); }
 }
+/* ---- Savage Empire's eggs (docs/rules/se_eggs.md) ---- */
+static uint8_t g_se_orc[U6_MAX_ACTORS], g_se_odir[U6_MAX_ACTORS];   /* an orchid root's heads; a head's root and direction (se_eggs.md §4) */
+static int     g_se_egg_made;                                        /* last check: pieces made (test hooks) */
+static void obj_destroy(int idx);
+static int se_slot_alloc(void){ g_view_ct++;                         /* 192-254, lowest first (se_eggs.md §4, §7) */
+    for(int i=192;i<=254;i++) if(g_atile[i]==0xffff){ g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
+            for(int k=0;k<U6_MAX_ACTORS;k++) if(g_last_striker[k]==i) g_last_striker[k]=0; g_last_striker[i]=0; g_se_orc[i]=g_se_odir[i]=0; return i; }
+    return -1; }
+/* a new creature (0x267cd): the table's stats rolled, or 10/10/10 and 30; its kit; the orchid's four heads */
+static int se_hatch_creature(const world_t*w,int x,int y,int on)
+{   int s=se_slot_alloc(); if(s<0) return -1;
+    int M=((w->level==0)?U6_SURFACE_TILES:256)-1, base, tpd=npc_base_fc(basetile(on),&base), st, hp;
+    mon_base_t mb; int row=monster_base(on,&mb);
+    g_atile[s]=(uint16_t)base; g_abase[s]=(uint16_t)base; g_atpd[s]=(uint8_t)tpd; g_facing[s]=2; g_walkf[s]=0;
+    g_actx[s]=(uint16_t)(x&M); g_acty[s]=(uint16_t)(y&M); g_actz[s]=(uint8_t)w->level;
+    if(row){ g_astr[s]=(uint8_t)monster_roll_stat(mb.str,&g_egg_rng); g_adex[s]=(uint8_t)monster_roll_stat(mb.dex,&g_egg_rng);
+        g_aint[s]=(uint8_t)monster_roll_stat(mb.intel,&g_egg_rng); hp=monster_roll_stat(mb.hp,&g_egg_rng); g_alevel[s]=0;
+        st=(mb.align-1)<<5; if(on==316 && !(g_cg.talk_flags[53]&0x80)) st=0x60; }
+    else { g_astr[s]=g_adex[s]=g_aint[s]=10; hp=30; g_alevel[s]=1; st=0x20; }
+    if(hp>255) hp=255;
+    g_ahp[s]=(uint8_t)hp; g_amaxhp[s]=(uint8_t)(hp?hp:1); g_aexp[s]=0; g_amaxmana[s]=g_amana[s]=0;
+    g_aweapon[s]=0; g_aac[s]=0; g_aflee[s]=0; g_asleep[s]=g_paralyze[s]=0; g_ainvis[s]=0;
+    g_summon[s]=0; g_summon_life[s]=0; g_temp[s]=1; g_charm[s]=0;
+    { int h=align_is_hostile(((st&0x60)>>5)+1); g_align_hostile[s]=(uint8_t)h; g_hostile[s]=0; g_alert[s]=(uint8_t)h; g_agood[s]=0; g_achaos[s]=0;
+      g_wt_force[s]=0; g_sched_st[s]=0; g_pts[s]=(int8_t)(g_adex[s]?g_adex[s]:1); }
+    {   uint16_t set[EQ_NSLOTS]={0}; static const uint8_t K320[2]={33,9};      /* the kit (0x2674a) */
+        if(on==320) for(int k=0;k<2;k++) kit_add(s,K320[k],1,0,0,1,equip_ready(set,K320[k])>=0?KIT_READY:0);
+        if(on==316){ kit_add(s,32,1,0,0,1,equip_ready(set,32)>=0?KIT_READY:0); kit_add(s,36,30,0,0,1,0); }
+        for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[s][sl]=set[sl];
+        equip_fold(set,&g_aweapon[s],&g_aac[s]); }
+    if(on==292){ g_se_orc[s]=4;                                      /* the root puts out four heads, N E S W */
+        for(int k=0;k<4;k++){ int h=se_hatch_creature(w,x+VDX[k],y+VDY[k],282); if(h<0) continue;
+            g_se_orc[h]=(uint8_t)s; g_se_odir[h]=(uint8_t)(k*2);
+            g_align_hostile[h]=g_align_hostile[s]; g_alert[h]=g_alert[s]; hatched_worktype(h,13); } }
+    return s; }
+/* may a hatched object go on (x,y)? Not a bare water tile, nor one whose flags have 0x02 or 0x04 */
+static int se_egg_tile_ok(const world_t*w,int x,int y)
+{   int f=g_tflags1[world_tile(w,x,y)]; if(f&0x06) return 0;
+    if((f&1) && objworld_at(&g_ow,x,y)<0) return 0;
+    return 1; }
+/* a later piece is tossed (0x1810:0x394): 8 tries of d4 + d4 - 5 each way, not beside the party unless teleported */
+static int se_toss(const world_t*w,int actor,int oi,int teleport)
+{   int M=((w->level==0)?U6_SURFACE_TILES:256)-1, ox=actor>=0?g_actx[actor]:g_wobj[oi].x, oy=actor>=0?g_acty[actor]:g_wobj[oi].y;
+    for(int t=0;t<8;t++){ int tx=(ox+se_rand(1,4)+se_rand(1,4)-5)&M, ty=(oy+se_rand(1,4)+se_rand(1,4)-5)&M;
+        if(!teleport && iabs_(tx-(int)w->px)<=5 && iabs_(ty-(int)w->py)<=5) continue;
+        if(actor>=0){ g_mover=actor; int ok=mover_can_enter(w,tx,ty)&&!npc_occupied(actor,tx,ty)&&!(tx==(int)w->px&&ty==(int)w->py); g_mover=-1;
+            if(ok){ g_actx[actor]=(uint16_t)tx; g_acty[actor]=(uint16_t)ty; return 1; } }
+        else if(world_is_passable(w,tx,ty)){ g_wobj[oi].x=(uint16_t)tx; g_wobj[oi].y=(uint16_t)ty; return 1; } }
+    return 0; }
+/* one egg hatches (0x26b67) */
+static void se_egg_hatch(const world_t*w,egg_t*eg,int teleport,int*heard)
+{   if(eg->active) return;
+    eg->active=1; g_egg_checked++;
+    if(se_rand(1,100)>eg->chance) return;
+    g_egg_hatched++;
+    int first=1, loud=0, M=((w->level==0)?U6_SURFACE_TILES:256)-1;
+    for(int k=0;k<eg->nemb;k++){ const embryo_t*em=&g_emb[eg->emb+k]; int on=em->obj_n, n=em->qty;
+        if(on==127||on==203) n=se_rand(10,20);
+        else if(on==323){ if(g_cg.talk_flags[1]&0x08) n=1; else if(w->level==1) n=se_rand(5,15); }
+        else if(on==301||on==282||(on>=310&&on<=326)){ if(eg->chance<=100 && n>0) n=se_rand(1,n); }
+        else n=1;
+        for(int c=0;c<n;c++){ int s=-1, oi=-1;
+            if(on<282){ int tx=eg->x, ty=eg->y, fr=0;
+                if(on==167) fr=3;
+                else { tx=(eg->x+se_rand(0,6)-3)&M; ty=(eg->y+se_rand(0,6)-3)&M; if(!se_egg_tile_ok(w,tx,ty)) continue; }   /* slip 14: nothing is made */
+                oi=temp_obj_new(on,fr,tx,ty,0); if(oi<0) continue;
+                if(on==127||on==203) g_wobj[oi].qty=5; }
+            else { s=se_hatch_creature(w,eg->x,eg->y,on); if(s<0){ g_egg_nofree++; continue; }
+                if(g_align_hostile[s]) loud=1;
+                hatched_worktype(s,g_align_hostile[s]?8:0x8f); }
+            g_se_egg_made++;
+            if(first){ first=0; continue; }
+            if(!se_toss(w,s,oi,teleport)){ if(s>=0){ g_atile[s]=0xffff; g_temp[s]=0; } else obj_destroy(oi); g_se_egg_made--; } } }
+    build_blocked();
+    if(loud && !*heard){ static const char*D[8]={"North","Northeast","East","Southeast","South","Southwest","West","Northwest"};
+        int span=M+1, ex=wrap_sub(eg->x,w->px,span), ey=wrap_sub(eg->y,w->py,span), ax=iabs_(ex), ay=iabs_(ey);
+        int sx=ax*2<ay?0:ex<0?-1:1, sy=ay*2<ax?0:ey<0?-1:1, d=sy<0?(sx<0?7:sx>0?1:0):sy>0?(sx<0?5:sx>0?3:4):(sx<0?6:2);
+        int nn=msg_tail(); nn=msgcat(nn,"You hear something to the "); nn=msgcat(nn,D[d]); msgcat(nn,"!"); *heard=1; } }
+static void se_eggs_update(const world_t *w, int teleport)
+{   int bx=w->px>>3, by=w->py>>3, bz=w->level;
+    if(!teleport && bx==g_egg_blk_x && by==g_egg_blk_y && bz==g_egg_blk_z) return;
+    g_egg_blk_x=bx; g_egg_blk_y=by; g_egg_blk_z=bz;
+    g_egg_checked=0; g_egg_hatched=0; g_egg_nofree=0; g_se_egg_made=0;
+    int span=(w->level==0)?U6_SURFACE_TILES:256, heard=0;
+    for(int i=192;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff &&                  /* the unload (0xbcf7) */
+        (wrap_dist(g_actx[i],w->px,span)>20 || wrap_dist(g_acty[i],w->py,span)>20 || (int)g_actz[i]!=w->level)){ g_atile[i]=0xffff; g_temp[i]=0; }
+    temp_purge(w);
+    for(int e=0;e<g_neggs;e++) if(g_eggs[e].made==1) g_eggs[e].made=2;                       /* last time's bulb eggs may go now */
+    for(int i=0;i<(int)g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i]; if(!o->alive || o->parent!=WOBJ_PARENT_NONE) continue;
+        if(wrap_dist(o->x,w->px,span)<=20 && wrap_dist(o->y,w->py,span)<=20) continue;
+        if(o->obj_n==78){ if(g_neggs<EGG_MAX && g_nemb<EMB_MAX){ egg_t*eg=&g_eggs[g_neggs++];      /* a bulb becomes an orchid's egg */
+                eg->x=o->x; eg->y=o->y; eg->quality=0; eg->chance=201; eg->active=0; eg->temp=0; eg->made=1; eg->nemb=1; eg->emb=(uint16_t)g_nemb; eg->rec=0xffff;
+                g_emb[g_nemb].obj_n=292; g_emb[g_nemb].qty=1; g_emb[g_nemb].quality=0; g_emb[g_nemb].status=0x08; g_nemb++; }
+            obj_destroy(i); }
+        else if(g_wtemp[i>>3]&(1u<<(i&7))) obj_destroy(i); }                                 /* any other temporary goes */
+    for(int e=0;e<g_neggs;e++){ egg_t*eg=&g_eggs[e]; if(eg->made==3) continue;
+        int dx=wrap_dist(eg->x,w->px,span), dy=wrap_dist(eg->y,w->py,span);
+        if(dx>20||dy>20){ eg->active=0; if(eg->made==2){ eg->made=3; eg->nemb=0; } continue; }   /* re-armed; a far bulb egg is gone */
+        if(teleport==2 || (dx<=8 && dy<=8 && !teleport)) continue;                           /* a start or load hatches nothing (DS:0x2362) */
+        se_egg_hatch(w,eg,teleport,&heard); }
+    build_blocked(); }
 /* nearest living hostile to (x,y) within `maxd`, or -1 (fills *tx,*ty). */
 /* place a summon of obj_n on the first free/passable tile at or beside (tx,ty). */
 /* Clone (§5c): copy the target actor's appearance/stats/alignment into a new slot beside it. */
@@ -14088,7 +14192,7 @@ static int first_start(void)
 
 /* the game layers (docs/design/game_layer.md) */
 static const GameObjs objs_none;                    /* MD: no U6 object numbers; its own land with item 13 */
-static const GameObjs objs_se = { .use_takes={302,307}, .str_weapons={24,29,33,34,94,118,119}, .boomerang=39, .body=249, .body_first=249, .body_n=1, .deep_sleeper=294, .holder={59,60,258,181,188,183,182,184,97} };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
+static const GameObjs objs_se = { .use_takes={302,307}, .str_weapons={24,29,33,34,94,118,119}, .boomerang=39, .body=249, .body_first=249, .body_n=1, .deep_sleeper=294, .holder={59,60,258,181,188,183,182,184,97}, .egg=230 };   /* SE's named objects, as its GAME.EXE is read (se_md_checklist.md) */
 static const GameLayer gl_u6 = {
     .on=&objs_u6, .talk=u6_talk, .use=use_object_inner, .asks_count=1, .see="Thou dost see ", .rest=u6_rest, .use_pack=u6_use_pack,
     .use_at=u6_use_at, .usable=use_usable, .use_under=1, .bot_door=u6_bot_door, .ready_on=u6_ready_fx_on, .ready_off=u6_ready_fx_off,
@@ -14215,8 +14319,40 @@ static void se_fell(world_t*w,int oi)
  * count drops, or the thing breaks without a word; the control panel and the dark moonstone start their scenes */
 static void se_panel_break(world_t*w,int oi);
 static void se_moonstone_break(world_t*w,int oi);
+/* the carnivorous orchid's wounds (0x1a3f0; se_eggs.md §5): the root shares half among the heads, a stalk passes it to its
+ * head, a head that dies takes its stalks and maybe its root; 10 when the root dies, else 0 (slip 15) */
+static int se_orchid_wound(int id,int oi,int dmg)
+{   world_t*w=(world_t*)g_wp; if(!w) return 0;
+    if(oi>=0){ int h=g_wobj[oi].quality; if(h>0&&h<U6_MAX_ACTORS&&g_atile[h]!=0xffff&&actor_objn(h)==282) (void)se_orchid_wound(h,-1,dmg); return 0; }
+    int on=actor_objn(id);
+    if(on==292){ for(int j=16;j<U6_MAX_ACTORS;j++) if(g_atile[j]!=0xffff&&g_ahp[j]&&actor_objn(j)==282) (void)se_orchid_wound(j,-1,dmg/2); return 0; }
+    if(g_ahp[id]>dmg){ g_ahp[id]=(uint8_t)(g_ahp[id]-dmg); return 0; }
+    int root=g_se_orc[id], dir=g_se_odir[id], x=g_actx[id], y=g_acty[id], M=((w->level==0)?U6_SURFACE_TILES:256)-1;
+    static const uint8_t NEXT[40]={9,2,9,6,0,9,4,9,6,4,9,9,9,0,6,9,9,9,2,0,2,9,9,4,3,5,3,6,7,2,6,2,3,4,3,7,4,2,5,2};   /* DS:0x10c3 */
+    g_se_orc[root]--; g_ahp[id]=0; actor_die(id);
+    if(iabs_(x-(int)w->px)<=5&&iabs_(y-(int)w->py)<=5){ fx_show(w,x,y,0x101,1); fx_clear(w); }
+    for(int t=0;t<64;t++){                                                  /* its stalks, back toward the root */
+        if(dir==0) y++; else if(dir==2) x--; else if(dir==4) y--; else if(dir==6) x++;
+        x&=M; y&=M; int si=-1;
+        for(int i=0;i<(int)g_ow.nobjs&&si<0;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive&&o->parent==WOBJ_PARENT_NONE&&o->obj_n==292&&o->x==x&&o->y==y&&o->quality==id) si=i; }
+        if(si<0) break;
+        int k=((int)g_wobj[si].tile-basetile(292)-2)*4+dir/2; obj_destroy(si);
+        if(k<0||k>=40) break; dir=NEXT[k]; }
+    build_blocked();
+    if(root>0&&root<U6_MAX_ACTORS&&g_atile[root]!=0xffff&&actor_objn(root)==292&&(g_se_orc[root]==0||g_se_orc[root]==255)){
+        int rx=g_actx[root], ry=g_acty[root];
+        (void)temp_obj_new(78,0,rx,ry,0); g_ahp[root]=0; actor_die(root); build_blocked();
+        if(iabs_(rx-(int)w->px)<=5&&iabs_(ry-(int)w->py)<=5){ fx_show(w,rx,ry,0x101,1); fx_clear(w); }
+        return 10; }
+    return 0; }
+static int se_orchid_own(int att,int def,int dmg)
+{   int on=actor_objn(def); if(on!=282&&on!=292) return 0;
+    hit_flash(def);
+    int x=se_orchid_wound(def,-1,dmg); if(x&&att>=1&&att<U6_MAX_ACTORS) grant_exp(att,x);
+    return 1; }
 static void se_obj_wound(int oi,int dmg)
 {   wobj_t*o=&g_wobj[oi]; int on=o->obj_n, x=o->x, y=o->y;
+    if(on==292 && g_wp){ (void)se_orchid_wound(-1,oi,dmg); return; }        /* a stalk passes it to its head (se_eggs.md §5) */
     if(is_stackable(on) || !o->qty || !g_wp) return;
     if(iabs_gl(x-(int)g_wp->px)<=5 && iabs_gl(y-(int)g_wp->py)<=5){ fx_show(g_wp,x,y,0x101,1); fx_clear(g_wp); }
     if((int)o->qty>dmg){ o->qty=(uint16_t)(o->qty-dmg); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; return; }
@@ -14255,6 +14391,8 @@ static void se_panel_scene(world_t*w)
     for(int h=0;h<24;h++) se_time_pass(60);
     for(int i=1;i<U6_MAX_ACTORS;i++){ int on=actor_objn(i); if(on==297||on==301) se_scene_kill(w,i); }
     for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==68) se_rekind(&g_wobj[j],38,0);
+    for(int e=0;e<g_neggs;e++){ egg_t*eg=&g_eggs[e]; int on=eg->nemb?g_emb[eg->emb].obj_n:0;     /* the robots' eggs go: silenced, which the save keeps */
+        if(on==297||on==301){ eg->chance=0; eg->nemb=0; } }
     build_blocked();
     g_msg[0]=0; }                                        /* the scene wipes the message area */
 /* the control panel breaks (0x1a99b; se_combat.md §3g): a burst on the 3x3 around it hurts each it reaches 1-30, the panel
@@ -14299,7 +14437,7 @@ static void se_avatar_death(world_t*w)
     sync_party_hp(); build_blocked(); music_resume_area(w->level); }
 /* what a shot uses up or leaves where it ended (0x19b5a) */
 static void se_shot_spend(const world_t*w,int att,int wobj,int sx,int sy,int lx,int ly,int id)
-{   int am=weapon_ammo(wobj), pack=(se_party_side(att)||att<224); (void)sx; (void)sy;
+{   int am=weapon_ammo(wobj), pack=(se_party_side(att)||!kit_actor(att)); (void)sx; (void)sy;
     g_se_thrown=-1;
     if(am){ int last=0;
         if(am==26 && pack){ npc_pack(att); for(int i=g_ow.ninv-1;i>=0;i--) if(g_ow.inv[i].obj_n==26 && (g_ow.inv[i].owner?g_ow.inv[i].owner:1)==att){ last=g_ow.inv[i].qty<=1; break; } }
@@ -14333,7 +14471,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -16903,7 +17041,7 @@ int main(int argc, char **argv)
      * g_cc_done wins). Headless LOAD.REQ: save -> move away -> restore -> print the round-trip. */
     save_index_load(); g_save_slot=g_save_idx[0]; g_save_copy=0;   /* the slot last used (save_load.md §2b) */
     if(g_menu_journey && !g_cc_done && save_exists(g_save_slot,0)) (void)load_game(&w);
-    eggs_update(&w,1);                                             /* the eggs around the start (like the original's load) */
+    eggs_update(&w,2);                                             /* the eggs around the start (like the original's load; 2 = a load, SE hatches nothing) */
     {   int32_t ll=0; uint8_t*lq=(uint8_t*)plat_load_file("LOAD.REQ",1,&ll);
         if(lq && ll>0 && (lq[0]=='2'||lq[0]=='3')){
             /* PERSISTENCE round-trip (save_load.md §5): a ready change, a dropped item and a sailed
@@ -17868,13 +18006,15 @@ int main(int argc, char **argv)
                     g_actx[11]=(uint16_t)yx; g_acty[11]=(uint16_t)yy; g_actz[11]=(uint8_t)w.level; g_atile[11]=g_abase[11]; g_ahp[11]=30; g_adead[11]=0;
                     pi=persist_obj_new(222,0,x3,y3,0); cr=persist_obj_new(256,3,(x3+1)&M,(y3-1)&M,0); pl=persist_obj_new(68,0,(x3-1)&M,(y3-1)&M,0);
                     rb=se_beast_new(&w,(x3+3)&M,y3,301,0);
+                    int ne0=g_neggs, nm0=g_nemb; egg_t*re=&g_eggs[g_neggs++]; *re=(egg_t){(uint16_t)x3,(uint16_t)y3,0,100,0,1,0,3,(uint16_t)g_nemb,0xffff}; g_emb[g_nemb++]=(embryo_t){297,2,0,0x08};
                     if(pi>=0 && cr>=0 && pl>=0 && rb>=0){ int st;
                       g_wobj[pi].qty=15; build_blocked(); se_obj_wound(pi,20); st=obj_idx_at(yx,yy,son);
                       dbg_num("SE panel crystals dark=", !g_wobj[pi].alive && g_wobj[cr].obj_n==223 && g_wobj[cr].tile==basetile(223)+3);
                       dbg_num("SE panel scene once=", (g_cg.talk_flags[1]&4) && g_wobj[pl].obj_n==38 && w.clock==ck+24u*60u);
                       dbg_num("SE panel Yunapotli statue=", g_ahp[11]==0 && st>=0 && g_wobj[st].tile==basetile(son)+11);
                       dbg_num("SE panel Johann joins=", is_party_member(5) && g_actx[5]==yx && g_acty[5]==yy && g_ahp[5]>0);
-                      dbg_num("SE panel robots stop=", g_ahp[rb]==0 && actor_objn(40)==322 && actor_objn(44)==322); }
+                      dbg_num("SE panel robots stop=", g_ahp[rb]==0 && actor_objn(40)==322 && actor_objn(44)==322 && re->chance==0 && re->nemb==0); }
+                    g_neggs=ne0; g_nemb=nm0;
                     { int mi=persist_obj_new(147,0,x3,y3,0); if(mi>=0){ int half; g_wobj[mi].qty=20; build_blocked();
                         se_obj_wound(mi,10); half=g_wobj[mi].alive && !g_game_over; se_obj_wound(mi,10);
                         dbg_num("SE moonstone ends the game=", half && !g_wobj[mi].alive && g_game_over); g_game_over=0; } }
@@ -17884,6 +18024,50 @@ int main(int argc, char **argv)
                     memcpy(g_atile,at0,sizeof at0); memcpy(g_abase,ab0,sizeof ab0); memcpy(g_actx,ax0,sizeof ax0); memcpy(g_acty,ay0,sizeof ay0);
                     memcpy(g_cg.talk_flags,tf0,sizeof tf0); memcpy(g_party,pp,sizeof pp); g_nparty=pn; if(rb>=0) g_temp[rb]=0;
                     w.clock=ck; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); g_msg[0]=0; sync_party_hp(); build_blocked(); }
+                  /* SE's eggs (se_eggs.md): the chance, the counts, the worktypes, the orchid's heads and wounds, re-arming, the bulb's egg */
+                  { static uint8_t mk0[EGG_MAX], tf0[256]; int ne0=g_neggs, nm0=g_nemb, n0=g_ow.nobjs, px0=w.px, py0=w.py; uint16_t ex0=g_aexp[1];
+                    static uint8_t al0[MAXWOBJ]; for(int j=0;j<n0;j++) al0[j]=g_wobj[j].alive;
+                    memcpy(tf0,g_cg.talk_flags,sizeof tf0);
+                    dbg_num("SE egg map loaded=", ne0>100 && nm0>ne0); dbg_num("SE eggs on the surface ", ne0);
+                    for(int e=0;e<ne0;e++){ mk0[e]=g_eggs[e].made; g_eggs[e].made=3; }                  /* the map's own eggs sit out */
+                    #define SE_EGG(X,Y,CH) (g_eggs[g_neggs]=(egg_t){(uint16_t)((X)&M),(uint16_t)((Y)&M),0,(CH),0,0,0,0,(uint16_t)g_nemb,0xffff}, &g_eggs[g_neggs++])
+                    #define SE_EMB(EG,ON,Q) (g_emb[g_nemb++]=(embryo_t){(ON),(Q),0,0x08}, (EG)->nemb++)
+                    int ex=(int)w.px+12, ey=(int)w.py, c323=0, c301=0, c284=-1, root=-1, h4=0, ok4=1;
+                    egg_t*e1=SE_EGG(ex,ey-3,0); SE_EMB(e1,297,1);
+                    egg_t*e2=SE_EGG(ex,ey,201); SE_EMB(e2,323,7); SE_EMB(e2,301,3); SE_EMB(e2,284,1);
+                    egg_t*e3=SE_EGG(ex,ey+4,201); SE_EMB(e3,292,1);
+                    g_cg.talk_flags[1]|=0x08; g_msg[0]=0;
+                    static uint8_t fr0[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) fr0[i]=g_atile[i]==0xffff;
+                    se_eggs_update(&w,1);
+                    for(int i=192;i<U6_MAX_ACTORS;i++) if(g_atile[i]!=0xffff && g_temp[i] && fr0[i]){ int on=actor_objn(i);
+                        if(on==323) c323++; if(on==301) c301++; if(on==284) c284=i; if(on==292) root=i; }
+                    dbg_num("SE egg chance=", e1->active==1 && e2->active==1);
+                    dbg_num("SE egg counts=", c323==1 && c301>=1 && c301<=3 && strstr(g_msg,"You hear something to the East!")!=0);
+                    dbg_num("SE egg worktype=", c284>=0 && wt_now(c284)==0x8f);
+                    if(root>=0) for(int i=192;i<U6_MAX_ACTORS;i++) if(g_atile[i]!=0xffff && actor_objn(i)==282 && g_se_orc[i]==root){ h4++;
+                        if(wt_now(i)!=13 || g_actx[i]!=(uint16_t)((g_actx[root]+VDX[g_se_odir[i]/2])&M) || g_acty[i]!=(uint16_t)((g_acty[root]+VDY[g_se_odir[i]/2])&M)) ok4=0; }
+                    dbg_num("SE egg orchid heads=", root>=0 && g_se_orc[root]==4 && h4==4 && ok4);
+                    if(root>=0 && h4==4){ int hd[4], nh=0, rx=g_actx[root], ry=g_acty[root];
+                      for(int i=192;i<U6_MAX_ACTORS && nh<4;i++) if(g_atile[i]!=0xffff && actor_objn(i)==282 && g_se_orc[i]==root) hd[nh++]=i;
+                      int st=temp_obj_new(292,2,(g_actx[hd[0]]+(g_se_odir[hd[0]]==2?-1:g_se_odir[hd[0]]==6?1:0))&M,(g_acty[hd[0]]+(g_se_odir[hd[0]]==0?1:g_se_odir[hd[0]]==4?-1:0))&M,hd[0]);
+                      for(int k=0;k<4;k++) g_ahp[hd[k]]=20;
+                      actor_wound(1,root,10,1); int half=g_ahp[hd[1]]==15;
+                      if(st>=0) se_obj_wound(st,30);
+                      dbg_num("SE orchid head=", half && g_atile[hd[0]]==0xffff && g_se_orc[root]==3 && st>=0 && !g_wobj[st].alive);
+                      g_aexp[1]=0; for(int k=1;k<4;k++) actor_wound(1,hd[k],50,1);
+                      dbg_num("SE orchid root=", g_atile[root]==0xffff && obj_idx_at(rx,ry,78)>=0 && g_aexp[1]==10); }
+                    w.px=(uint16_t)((px0+40)&M); se_eggs_update(&w,1);
+                    { int gone=1; for(int i=192;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff) gone=0;
+                      dbg_num("SE egg rearm=", gone && e1->active==0 && e2->active==0); }
+                    { egg_t*b=&g_eggs[g_neggs-1]; dbg_num("SE egg bulb=", b->made==1 && b->nemb==1 && g_emb[b->emb].obj_n==292 && b->chance==201); }
+                    w.px=(uint16_t)px0; w.py=(uint16_t)py0;
+                    for(int i=192;i<U6_MAX_ACTORS;i++) if(g_temp[i]){ g_atile[i]=0xffff; g_temp[i]=0; }
+                    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && (j>=n0 || !al0[j])) obj_destroy(j);
+                    g_neggs=ne0; g_nemb=nm0; for(int e=0;e<ne0;e++) g_eggs[e].made=mk0[e];
+                    memcpy(g_cg.talk_flags,tf0,sizeof tf0); g_aexp[1]=ex0; g_msg[0]=0; g_egg_blk_x=-1; build_blocked();
+                    #undef SE_EGG
+                    #undef SE_EMB
+                  }
                   /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
                   { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
                     se_avatar_death(&w);

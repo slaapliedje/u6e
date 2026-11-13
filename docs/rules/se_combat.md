@@ -154,7 +154,7 @@ The wound comes off the hit points; at 0 or below the actor dies (§3d).
 ### 3d. A death (0x1a6ad, 0x18764)
 
 - **The words**: `<Name> killed!`, or `<Name> falls!` for actors 0-15 (the named people), whatever killed
-  it; a carnivorous orchid (282) dies in silence (§3f), and so does anyone while a scene runs (DS:0xa39).
+  it; a carnivorous orchid (282) dies in silence (§3f; its wounds are se_eggs.md §5), and so does anyone while a scene runs (DS:0xa39).
 - **The story**: actor 23's death sets talk flag 5 of actor 53; actor 180's sets talk flag 7 of actor 48
   (the talk flags of converse.md §6c, DS:0x6efc by actor).
 - **The experience**: only a blow (0x1b47d) pays, to the striker, and only for an evil or chaotic victim
@@ -220,7 +220,7 @@ without a word:
 The carnivorous orchids (282, a head; 292, its stalk, whose quality is the head) take their wounds by
 0x1a3f0: a stalk's wound goes to its head (a stalk that is an actor gives half to every head); a head
 that dies takes its stalk with it, step by step along its direction, and when its root (the head's
-quality) has no heads left the root dies too and leaves an orchid bulb (78). They come with SE's eggs and
+quality) has no heads left the root dies too and leaves an orchid bulb (78). The whole rule is se_eggs.md §5; they come with SE's eggs and
 creatures' doings (item 6, later).
 
 ### 3g. The control panel and the dark moonstone (0x1a99b, 0x1ded4, 0x1e34e)
@@ -277,10 +277,11 @@ the ending (item 9), with these arguments:
 **The engine** builds all of the above except:
 - the sounds, songs and eyes (items 8 and 9);
 - the far table at DS:0x3298 (unknown);
-- the light's picture;
-- the robot eggs, which wait for SE's eggs.
+- the light's picture.
 
 It also:
+- silences the robots' eggs (chance 0, which the save keeps) rather than deleting them, on the whole level
+  rather than DOS's loaded area (se_eggs.md);
 - leaves an actor that is already dead alone;
 - kills an actor on another level without remains;
 - puts Johann beside the Avatar if Yunapotli is not on the current level.

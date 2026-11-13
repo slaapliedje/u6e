@@ -30,6 +30,8 @@ these). Each row says what DOS does, so any of them can be put back.
 | 11 | A tar fire's waves burn only the fires the pour started | se_use.md §5q | Each wave takes every fire of its quality in the loaded objects, so a campfire nearby burns out; the engine holds the whole world, not DOS's loaded area |
 | 12 | The modern weapons can't be readied by those who don't know them at any frame | se_combat.md §1 | Compares the whole object word, so a loaded flintlock (frame 1) can be readied by anyone |
 | 13 | A blow whose hit roll fails misses | se_combat.md §3a | 0x1b47d compares the roll's result with -1 only, so a failed roll (0) strikes anyway: every blow that reaches someone lands |
+| 14 | An egg's object whose scattered tile is refused isn't made | se_eggs.md §3 | Goes on with the last thing it made (or a stale register): that one is tossed again or deleted |
+| 15 | An orchid head's wound pays nothing unless its root dies (then 10) | se_eggs.md §5 | Pays the head's remaining hit points while it lives, and a register's leftover when it dies but the root lives |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
@@ -39,6 +41,8 @@ these). Each row says what DOS does, so any of them can be put back.
 | A member other than the leader mounting or leaving a turtle doesn't move the view | se_use.md §5w | Sets the party's tile to that member's, so the view jumps to it until the leader next moves |
 | The raft carrying the party stays a map object that moves with it (as U6's vessels in the engine) | se_use.md §5w | Actor 0 becomes the raft and the object is deleted; the same on screen, it matters only to the save (item 10) |
 | A step of the raft costs 5, as a vessel's in the engine | se_use.md §5w | Not read yet |
+| Eggs are looked at when the party enters a new 8 x 8 block, within 20 tiles of the party, as U6's are | se_eggs.md §2 | Its 40 x 40 window, moved in steps of 8, with the 20 measured from the window's centre |
+| A hatchling takes the lowest free slot of 192-254 | se_eggs.md §4 | The last slot freed first |
 
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the

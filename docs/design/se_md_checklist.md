@@ -147,3 +147,12 @@ list once SE's seams exist.
   party, two nobles made, a day gone, the robots dead, the floor plates stopped. The moonstone ends the game:
   play stops, and item 9 adds the ending. Waiting on other items: the robot eggs (SE eggs), the songs and eyes
   (items 8 and 9). Next in item 6: the orchids, with SE's creatures and eggs.
+- 2026-11-12: item 6, SE's eggs (rules/se_eggs.md): SE's map eggs load from its save template (the self-test now stages
+  SAVE.SE as the SE bot does) and hatch by DOS's rules: the chance, the counts per kind (bamboo 10-20, drones by talk flag
+  1 and level 1, the people, sergeants and orchids 1 to n), objects scattered, every later piece tossed, assault or
+  wander by alignment, `You hear something to the <direction>!`, hatchlings in slots 192-254 with stats from SE's
+  table and the two men's kits; re-armed beyond 20 tiles, temporaries purged there, a bulb left behind becoming an
+  orchid's egg. The orchid: a root with four heads (worktype 13); its wounds by 0x1a3f0 (root halves to the heads, a
+  stalk to its head, a dead head takes its stalks, the last one the root, leaving a bulb). Slips 14 and 15 built as
+  the intent. Next in item 6: the creatures' doings (worktype 13, the heads reaching out with stalks, SE's AI), then
+  invocations, totems, bell, hazards.
