@@ -164,6 +164,7 @@ typedef struct GameLayer {
     int  (*blow)(int att,int def,int oi,int wobj,int*wm);       /* what a landed blow does instead (def<0: on object oi), or its damage *wm; 1 = all done */
     int  (*wound_to)(int def);                                  /* who takes a wound (SE's queen, the unharmed); -1 = nobody */
     int  (*wound_own)(int att,int def,int dmg);                 /* a wound the game takes over entirely (SE's orchids); 1 = done */
+    int  (*wt_act)(const world_t*w,int i,int wt);               /* a worktype the game does its own way (SE's orchid heads); 1 = done */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
     void (*death_words)(int def);                               /* the words for any death (SE, se_combat.md §3d); NULL = U6's "killed!" for a blow */
     int  (*dying)(int id,int temp);                             /* what a death does before its remains (the story, a rider, blood); 1 = it leaves nothing and keeps its things */
@@ -9830,7 +9831,9 @@ static void wt_act(const world_t*w,int i)
 {   int wt=wt_now(i), p0=g_pts[i];
     g_amoved[i]=0; g_geo_ok=0; g_mover=i;
     if(g_time_stop&&i!=1){ g_pts[i]=0; return; }
+    if(g_gl->wt_act && g_gl->wt_act(w,i,wt)) wt=-1;
     switch(wt){
+    case -1: break;
     case 3: wt_front(w,i); break;
     case 4: wt_rear(w,i); break;
     case 5: wt_flank(w,i); break;
@@ -10377,7 +10380,7 @@ static int se_hatch_creature(const world_t*w,int x,int y,int on)
     g_ahp[s]=(uint8_t)hp; g_amaxhp[s]=(uint8_t)(hp?hp:1); g_aexp[s]=0; g_amaxmana[s]=g_amana[s]=0;
     g_aweapon[s]=0; g_aac[s]=0; g_aflee[s]=0; g_asleep[s]=g_paralyze[s]=0; g_ainvis[s]=0;
     g_summon[s]=0; g_summon_life[s]=0; g_temp[s]=1; g_charm[s]=0;
-    { int h=align_is_hostile(((st&0x60)>>5)+1); g_align_hostile[s]=(uint8_t)h; g_hostile[s]=0; g_alert[s]=(uint8_t)h; g_agood[s]=0; g_achaos[s]=0;
+    { int h=align_is_hostile(((st&0x60)>>5)+1); g_align_hostile[s]=(uint8_t)h; g_hostile[s]=0; g_alert[s]=(uint8_t)h; g_agood[s]=(uint8_t)((st&0x60)==0x40); g_achaos[s]=(uint8_t)((st&0x60)==0x60);
       g_wt_force[s]=0; g_sched_st[s]=0; g_pts[s]=(int8_t)(g_adex[s]?g_adex[s]:1); }
     {   uint16_t set[EQ_NSLOTS]={0}; static const uint8_t K320[2]={33,9};      /* the kit (0x2674a) */
         if(on==320) for(int k=0;k<2;k++) kit_add(s,K320[k],1,0,0,1,equip_ready(set,K320[k])>=0?KIT_READY:0);
@@ -10387,7 +10390,7 @@ static int se_hatch_creature(const world_t*w,int x,int y,int on)
     if(on==292){ g_se_orc[s]=4;                                      /* the root puts out four heads, N E S W */
         for(int k=0;k<4;k++){ int h=se_hatch_creature(w,x+VDX[k],y+VDY[k],282); if(h<0) continue;
             g_se_orc[h]=(uint8_t)s; g_se_odir[h]=(uint8_t)(k*2);
-            g_align_hostile[h]=g_align_hostile[s]; g_alert[h]=g_alert[s]; hatched_worktype(h,13); } }
+            g_align_hostile[h]=g_align_hostile[s]; g_alert[h]=g_alert[s]; g_agood[h]=g_agood[s]; g_achaos[h]=g_achaos[s]; hatched_worktype(h,13); } }
     return s; }
 /* may a hatched object go on (x,y)? Not a bare water tile, nor one whose flags have 0x02 or 0x04 */
 static int se_egg_tile_ok(const world_t*w,int x,int y)
@@ -14350,6 +14353,51 @@ static int se_orchid_own(int att,int def,int dmg)
     hit_flash(def);
     int x=se_orchid_wound(def,-1,dmg); if(x&&att>=1&&att<U6_MAX_ACTORS) grant_exp(att,x);
     return 1; }
+/* the nearest foe of actor v (0x1c491): alive, seen, on its level, within 11; a neutral takes anyone not neutral, a chaotic the
+ * evil and the good, a good one those with the evil bit, an evil one those with the good bit; one retreating only within 5 of
+ * the party; nearest by the square of the distance, a tie to the bigger blow in the table */
+static int se_nearest_foe(int v)
+{   int me=align_of(v), vx=g_actx[v], vy=g_acty[v], best=-1; long bd=0x7fff;
+    for(int s=0;s<U6_MAX_ACTORS;s++){ int sx,sy,a; if(s==v||g_atile[s]==0xffff||!g_ahp[s]||(int)g_actz[s]!=(int)g_actz[v]||g_ainvis[s]||!actor_pos(s,&sx,&sy)) continue;
+        a=align_of(s);
+        if(me==0 && !a) continue;
+        if(me==0x60 && (a==0x60||!a)) continue;
+        if(me==0x40 && !(a&0x20)) continue;
+        if(me==0x20 && !(a&0x40)) continue;
+        if(iabs_(sx-vx)>11||iabs_(sy-vy)>11) continue;
+        if(wt_now(s)==7 && g_wp && (iabs_(sx-(int)g_wp->px)>5||iabs_(sy-(int)g_wp->py)>5)) continue;
+        { long d=(long)(sx-vx)*(sx-vx)+(long)(sy-vy)*(sy-vy); mon_base_t m1,m2;
+          if(d<bd || (d==bd && best>=0 && (monster_base(actor_objn(s),&m1),monster_base(actor_objn(best),&m2),m1.dmg>m2.dmg))){ bd=d; best=s; } } }
+    return best; }
+/* an orchid head reaches one tile along d (0x1d74e): never back on itself, no farther than 5 east-west and 4 north-south of its
+ * root; the tile it leaves takes a stalk (292, temporary, its quality the head, its frame by the turn it makes) */
+static int se_orchid_grow(const world_t*w,int i,int d)
+{   static const uint8_t TURN[16]={3,5,3,6,7,2,6,2,3,4,3,7,4,2,5,2};   /* DS:0x10db */
+    int old=g_se_odir[i]&7, root=g_se_orc[i], M=((w->level==0)?U6_SURFACE_TILES:256)-1, hx=g_actx[i], hy=g_acty[i], nx, ny, ok, st;
+    d&=6; if((d^old)==4) return 0;
+    if(root>0 && root<U6_MAX_ACTORS && g_atile[root]!=0xffff){ int rx=wrap_sub(hx,g_actx[root],M+1), ry=wrap_sub(hy,g_acty[root],M+1);
+        if((rx>5&&d==2)||(rx<-5&&d==6)||(ry>4&&d==4)||(ry<-4&&d==0)) return 0; }
+    nx=(hx+VDX[d/2])&M; ny=(hy+VDY[d/2])&M;
+    g_mover=i; ok=mover_can_enter(w,nx,ny)&&!npc_occupied(i,nx,ny)&&!(nx==(int)w->px&&ny==(int)w->py); g_mover=i;
+    if(!ok) return 0;
+    st=temp_obj_new(292,TURN[(old/2)*4+d/2],hx,hy,i); if(st<0) return 0;
+    g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny; g_se_odir[i]=(uint8_t)d; g_amoved[i]=1; build_blocked(); return 1; }
+/* worktype 13, an orchid head's turn (0x1d8f9): the root sways; a foe of the root beside the head is struck; one within 4 draws
+ * the head along the longer axis, else the shorter; otherwise, or after reaching, 1 in 4 it reaches a random way */
+static int se_wt_act(const world_t*w,int i,int wt)
+{   if(wt!=0xd || actor_objn(i)!=282) return 0;
+    int root=g_se_orc[i], t=-1, hx=g_actx[i], hy=g_acty[i], d;
+    if(root>0 && root<U6_MAX_ACTORS && g_atile[root]!=0xffff){ g_atile[root]=(uint16_t)(g_atile[root]==g_abase[root]?g_abase[root]+1:g_abase[root]); t=se_nearest_foe(root); }
+    if(t>=0){ int dx=g_actx[t]-hx, dy=g_acty[t]-hy;
+        if(iabs_(dx)<2 && iabs_(dy)<2){ enemy_attack(i,t); pay(i,10); return 1; }
+        if(iabs_(dx)<5 && iabs_(dy)<5){
+            if(iabs_(dx)>iabs_(dy)){ if(se_orchid_grow(w,i,dx>0?2:6)) goto reach; d=dy>0?4:0; }
+            else { if(se_orchid_grow(w,i,dy>0?4:0)) goto reach; d=dx>0?2:6; }
+            (void)se_orchid_grow(w,i,d); pay(i,10); return 1; } }
+reach:
+    if(se_rand(0,3)){ g_pts[i]=0; return 1; }
+    d=se_rand(0,3)*2; if(d==(g_se_odir[i]&7)) d^=4;
+    (void)se_orchid_grow(w,i,d); pay(i,10); return 1; }
 static void se_obj_wound(int oi,int dmg)
 {   wobj_t*o=&g_wobj[oi]; int on=o->obj_n, x=o->x, y=o->y;
     if(on==292 && g_wp){ (void)se_orchid_wound(-1,oi,dmg); return; }        /* a stalk passes it to its head (se_eggs.md §5) */
@@ -14471,7 +14519,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18035,7 +18083,13 @@ int main(int argc, char **argv)
                     int ex=(int)w.px+12, ey=(int)w.py, c323=0, c301=0, c284=-1, root=-1, h4=0, ok4=1;
                     egg_t*e1=SE_EGG(ex,ey-3,0); SE_EMB(e1,297,1);
                     egg_t*e2=SE_EGG(ex,ey,201); SE_EMB(e2,323,7); SE_EMB(e2,301,3); SE_EMB(e2,284,1);
-                    egg_t*e3=SE_EGG(ex,ey+4,201); SE_EMB(e3,292,1);
+                    int ox3=-1, oy3=-1;                                           /* an open 5x5 for the orchid */
+                    for(int r=3;r<16 && ox3<0;r++) for(int v=-r;v<=r && ox3<0;v++) for(int t=-r;t<=r && ox3<0;t++){ if(iabs_(t)!=r&&iabs_(v)!=r) continue;
+                        int cx=((int)w.px+t)&M, cy=((int)w.py+v)&M, open=1;
+                        for(int yy=-2;yy<=2&&open;yy++) for(int xx=-2;xx<=2&&open;xx++){ int qx=(cx+xx)&M, qy=(cy+yy)&M; if(!world_is_passable(&w,qx,qy)||obj_blocks_at(qx,qy)||(qx==(int)w.px&&qy==(int)w.py)||npc_at(&w,qx,qy)>=0) open=0; }
+                        if(open){ ox3=cx; oy3=cy; } }
+                    if(ox3<0){ ox3=ex; oy3=ey+4; }
+                    egg_t*e3=SE_EGG(ox3,oy3,201); SE_EMB(e3,292,1);
                     g_cg.talk_flags[1]|=0x08; g_msg[0]=0;
                     static uint8_t fr0[U6_MAX_ACTORS]; for(int i=0;i<U6_MAX_ACTORS;i++) fr0[i]=g_atile[i]==0xffff;
                     se_eggs_update(&w,1);
@@ -18050,6 +18104,18 @@ int main(int argc, char **argv)
                     if(root>=0 && h4==4){ int hd[4], nh=0, rx=g_actx[root], ry=g_acty[root];
                       for(int i=192;i<U6_MAX_ACTORS && nh<4;i++) if(g_atile[i]!=0xffff && actor_objn(i)==282 && g_se_orc[i]==root) hd[nh++]=i;
                       int st=temp_obj_new(292,2,(g_actx[hd[0]]+(g_se_odir[hd[0]]==2?-1:g_se_odir[hd[0]]==6?1:0))&M,(g_acty[hd[0]]+(g_se_odir[hd[0]]==0?1:g_se_odir[hd[0]]==4?-1:0))&M,hd[0]);
+                      { int h=hd[2], h3=hd[3], v, hp0=0, k, r1, r2, sk;
+                        for(k=1;k<3;k++){ int c=hd[k], dd=g_se_odir[c], tx=(g_actx[c]+VDX[dd/2])&M, ty=(g_acty[c]+VDY[dd/2])&M; g_mover=c;
+                            if(mover_can_enter(&w,tx,ty)&&!npc_occupied(c,tx,ty)){ h=c; g_mover=-1; break; } g_mover=-1; }
+                        int d=g_se_odir[h], ox=g_actx[h], oy=g_acty[h];
+                        r1=se_orchid_grow(&w,h,d); sk=obj_idx_at(ox,oy,292); r2=se_orchid_grow(&w,h,d^4);
+                        dbg_num("SE orchid reaches=", r1 && sk>=0 && g_wobj[sk].quality==h && g_actx[h]==(uint16_t)((ox+VDX[d/2])&M) && g_acty[h]==(uint16_t)((oy+VDY[d/2])&M) && !r2);
+                        g_actx[h]=(uint16_t)((g_actx[root]+6)&M); g_acty[h]=g_acty[root]; g_se_odir[h]=2;
+                        dbg_num("SE orchid leash=", !se_orchid_grow(&w,h,2)); g_actx[h]=(uint16_t)ox; g_acty[h]=(uint16_t)oy; g_se_odir[h]=(uint8_t)d;
+                        v=se_hatch_creature(&w,(g_actx[h3]+VDX[g_se_odir[h3]/2])&M,(g_acty[h3]+VDY[g_se_odir[h3]/2])&M,310);
+                        if(v>=0){ hp0=g_ahp[v]=60; for(k=0;k<6 && g_ahp[v]==hp0;k++){ g_pts[h3]=20; (void)se_wt_act(&w,h3,13); } }
+                        dbg_num("SE orchid strikes=", v>=0 && g_ahp[v]<hp0 && g_atile[root]!=g_abase[root]+2);
+                        if(v>=0){ g_atile[v]=0xffff; g_temp[v]=0; } build_blocked(); }
                       for(int k=0;k<4;k++) g_ahp[hd[k]]=20;
                       actor_wound(1,root,10,1); int half=g_ahp[hd[1]]==15;
                       if(st>=0) se_obj_wound(st,30);

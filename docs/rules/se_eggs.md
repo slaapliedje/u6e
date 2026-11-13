@@ -2,14 +2,15 @@
 
 Games: Savage Empire. U6's eggs are docs/rules/eggs.md; SE keeps the egg object model (an egg with its
 embryos inside, status 0x40 = hatched on this approach) and changes nearly every rule around it.
-Implemented by: /render gamedemo.c (`se_eggs_update`, `se_hatch_creature`, `se_orchid_wound`), /engine
+Implemented by: /render gamedemo.c (`se_eggs_update`, `se_hatch_creature`, `se_orchid_wound`, `se_wt_act`, `se_orchid_grow`, `se_nearest_foe`), /engine
 monsters.c (SE's creature table, se_combat.md §4).
 
 > Provenance
 > - Derived from : SE GAME.EXE (DOS, Turbo C++), read in the RE workspace outside this repo: the window
 >   rebuild 0x8faa, the unload 0xbcf7, the egg scan 0x26f50, the hatch 0x26b67, the creature spawn
 >   0x267cd with its stat roll 0x26712 and kit 0x2674a, the toss 0x1810:0x394, the orchid's wounds 0x1a3f0
->   and the damage routine's call to it (0x1a99b).
+>   and the damage routine's call to it (0x1a99b), the worktype switch 0x17211, the head's turn 0x1d8f9, its reach 0x1d74e and
+>   the foe finder 0x1c491 with its sight test 0x18da4.
 > - References   : none (ScummVM's SE has no egg rules of its own).
 > - Tools        : objdump (i8086) on the unpacked image; our objname/senames dumpers.
 > - Validated by  : SEUSE self-test wants "SE egg ..." / "SE orchid ..." (§8); NOT yet compared with DOS running.
@@ -108,11 +109,36 @@ The damage routine hands every wound of a 282 or a 292 here, after the hit's fla
 What it gives the striker as experience: 10 when the root dies, else nothing. DOS gives the head's
 remaining hit points when it lives and an unset register when it dies but the root lives (slip 15, §7).
 
-## 6. Not built here
-- How the heads reach out and leave stalks, and what worktype 13 does in SE (the creatures' doings,
-  item 6).
+## 6. The heads' turn (worktype 13, 0x1d8f9; the switch 0x17211)
+
+SE's worktype switch (0x17211) holds U6's case list (4, 6-0x10, 0x13, 0x82-0x85, 0x8b-0x8f, 0x90, 0x94, 0x96, 0x99,
+0x9a, 0x9b); worktype 13 is the orchid head's own. Each turn of a head:
+1. Its root sways: the root's frame flips between 0 and 1.
+2. The root's nearest foe (0x1c491, below) is looked for.
+3. A foe beside the head (within one tile on both axes) is struck by the head, and it pays 10.
+4. A foe within 4 on both axes draws it: the head tries to reach one tile along the longer axis toward the foe
+   (a tie: the north-south axis). If that fails it reaches along the other axis instead, and pays 10.
+5. Otherwise, and after a reach in step 4 succeeds: 3 times in 4 its turn ends (points to 0); 1 time in 4 it reaches
+   a random way (north, east, south or west; the way it already faces becomes its opposite, which is always refused)
+   and pays 10.
+
+**A reach (0x1d74e)** one tile along a way: refused back on itself (the opposite of the head's direction); refused
+east when the head is more than 5 east of its root, west more than 5 west, south more than 4 south, north more than
+4 north; refused when the head can't step there. The tile it leaves takes a stalk: a 292 object, temporary, its
+quality the head, its frame from the old and new ways (DS:0x10db, 4 by 4); the head now faces the new way. With no
+room for the stalk the head steps back.
+
+**The nearest foe (0x1c491)** of an actor: any living actor on its level, seen (not invisible), within 11 tiles
+on both axes, by alignment: a neutral one takes anyone who isn't neutral; a chaotic one the evil and the good; a
+good one anyone with the evil bit (evil or chaotic); an evil one anyone with the good bit (good or chaotic). One in
+the retreat worktype (7) counts only within 5 of the party. Nearest by the square of the distance; a tie goes to
+the one whose creature-table damage is higher.
+
+## 6b. Not built here
 - The frames of §4 and the big creatures' pieces (the renderer draws SE's creatures from their roster).
 - The sound with the message (item 9).
+- DOS's sight test also refuses a target whose own tile has a flag bit 0x10 and one with bit 0x10 of its far table
+  at DS:0x4602; the engine tests invisibility only.
 
 ## 7. Slips and engine choices
 - Slip 14: a refused tile for an object embryo makes nothing (DOS reuses the last thing it made).
@@ -124,7 +150,8 @@ remaining hit points when it lives and an unset register when it dies but the ro
 
 ## 8. Test hook
 SEUSE self-test: `SE egg chance`, `SE egg counts`, `SE egg orchid heads`, `SE egg worktype`,
-`SE egg rearm`, `SE egg bulb`, `SE orchid head`, `SE orchid root`.
+`SE egg rearm`, `SE egg bulb`, `SE orchid reaches`, `SE orchid leash`, `SE orchid strikes`, `SE orchid head`,
+`SE orchid root`.
 
 ## 9. Open questions
 - What the bulb's egg being temporary means for planting orchids: as read, an orchid only grows back
@@ -132,6 +159,9 @@ SEUSE self-test: `SE egg chance`, `SE egg counts`, `SE egg orchid heads`, `SE eg
 - The 0x02 bit DOS sets on a hatched egg.
 - Object 247's cleared quality.
 - A wound to a root reaches every orchid head among actors 16-255, not only its own (built as read).
+- A head's random reach turns the way it faces into its opposite, which the reach always refuses: so it never reaches
+  straight on and a quarter of its random reaches do nothing. Perhaps meant as "never back on itself" (U6's vine says
+  so); built as read until the user decides.
 
 ## Status
-IN PROGRESS: §1-§5 built; §6 waits on the creatures' doings.
+IN PROGRESS: §1-§6 built; the other worktypes' SE differences are not read yet.

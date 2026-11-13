@@ -156,3 +156,8 @@ list once SE's seams exist.
   stalk to its head, a dead head takes its stalks, the last one the root, leaving a bulb). Slips 14 and 15 built as
   the intent. Next in item 6: the creatures' doings (worktype 13, the heads reaching out with stalks, SE's AI), then
   invocations, totems, bell, hazards.
+- 2026-11-12: item 6, the orchid heads' turn (rules/se_eggs.md §6): SE's worktype switch 0x17211 has U6's case list, so
+  the engine's scheduler stays and only worktype 13 is SE's own (game-layer hook wt_act): the root sways, a foe of the
+  root beside the head is struck, one within 4 draws the head out (a stalk left on each tile it leaves, 5 by 4 tiles
+  from the root at most), else 1 in 4 a random reach. SE's foe finder 0x1c491 built for it. Next in item 6: the other
+  worktypes read against U6's (their SE differences), then invocations, totems, bell, hazards.
