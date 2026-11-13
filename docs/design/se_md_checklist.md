@@ -161,3 +161,11 @@ list once SE's seams exist.
   root beside the head is struck, one within 4 draws the head out (a stalk left on each tile it leaves, 5 by 4 tiles
   from the root at most), else 1 in 4 a random reach. SE's foe finder 0x1c491 built for it. Next in item 6: the other
   worktypes read against U6's (their SE differences), then invocations, totems, bell, hazards.
+- 2026-11-12: item 6, SE's turns (rules/se_ai.md): every worktype routine read against U6's. Built through the gl_se
+  wt_act hook: CLOSE (8/0x9b) with SE's foe finder and the grenade/device area target, RANGE (4: steps back from a foe
+  within 2, `<name> has no ranged weapons!`, keeps within 5 x 4 of the leader), WILD (6, charmed actors), FLEE (one
+  routine for 7/9/0x13/0x9a: never fights back, heals unless in the party), 0xa to the leader, 0xb, 0xe, the dance
+  (0xf/0x10/0x8b-0x8e: the dancer's look 329), and 3/5/0x12/0x97/0x98 pay 5. Combat modes CMND/RANGE/FLEE/CLOSE
+  (WILD for the charmed) on the inventory button. Slip 16 (orchid reach) switched by the user; slips 17-19 built as the
+  intent; g_dos_slips is the one setting a future "as DOS" option would flip. Next in item 6: invocations, totems, bell,
+  hazards.

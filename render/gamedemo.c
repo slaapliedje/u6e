@@ -165,6 +165,8 @@ typedef struct GameLayer {
     int  (*wound_to)(int def);                                  /* who takes a wound (SE's queen, the unharmed); -1 = nobody */
     int  (*wound_own)(int att,int def,int dmg);                 /* a wound the game takes over entirely (SE's orchids); 1 = done */
     int  (*wt_act)(const world_t*w,int i,int wt);               /* a worktype the game does its own way (SE's orchid heads); 1 = done */
+    const char*const*cmode_name;                                 /* the combat modes' names by worktype-2 (NULL: U6's) */
+    int  (*cmode_next)(int m);                                  /* the mode button's next mode (NULL: U6's 2..8) */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
     void (*death_words)(int def);                               /* the words for any death (SE, se_combat.md §3d); NULL = U6's "killed!" for a blow */
     int  (*dying)(int id,int temp);                             /* what a death does before its remains (the story, a rider, blood); 1 = it leaves nothing and keeps its things */
@@ -3647,9 +3649,11 @@ static int member_fwd(int i){ return i==1||is_party_member(i); }
 static int sleep_shape(int on)
 {   for(unsigned k=0;k<g_on.nsleep;k++) if(g_on.sleep[k][0]==on) return g_on.sleep[k][1];
     return 0; }
+static uint8_t g_se_dance[U6_MAX_ACTORS];                  /* SE: dancing, the dancer's frame + 1 (se_ai.md §7) */
 static int npc_tile(int i)
 {
     int tpd=g_atpd[i];
+    if(g_se_dance[i]) return basetile(329)+g_se_dance[i]-1;
     if(g_on.musician&&!g_sched_st[i]&&!g_wt_force[i]&&g_atpd[i]&&!member_fwd(i)&&g_actors[i].nsched>0&&npc_worktype(i)==0x95) return basetile(g_on.musician)+4;   /* a musician playing (DOS's shape 392) */
     if(g_asleep[i]&&i>1){ int sh=sleep_shape(actor_objn(i));
         { int bed=g_on.bed?obj_idx_at(g_actx[i],g_acty[i],g_on.bed):-1; if(bed>=0){ int f=(int)g_wobj[bed].tile-basetile(g_on.bed); if(f==0||f==6) return basetile(g_on.bed_sleeper)+(f?1:0); } }
@@ -8435,8 +8439,10 @@ static void draw_panel_buttons(int inv)
     blit_tile(0xc0,IVB_Y,0x180,1);
     blit_tile(0xd0,IVB_Y,inv?0x181:0x182,1);
     if(i<g_nparty-1) blit_tile(0xe0,IVB_Y,0x184,1);
-    if(inv && i>0){ static const char*const cm[7]={"COMMAND","FRONT","REAR","FLANK","BERSERK","RETREAT","ASSAULT"};   /* a companion's combat mode */
+    if(inv && i>0){ static const char*const cm_u6[7]={"COMMAND","FRONT","REAR","FLANK","BERSERK","RETREAT","ASSAULT"};   /* a companion's combat mode */
+        const char*const*cm=g_gl->cmode_name?g_gl->cmode_name:cm_u6;
         int m=g_cmode[g_status_actor]; if(m<2||m>8) m=8;
+        if(g_gl->cmode_name && g_charm[g_status_actor]) m=6;                /* SE: a charmed companion is WILD (se_ai.md §1) */
         blit_tile(0xf0,IVB_Y,0x187,1);
         ui_text(0x100+(56-ui_textw(cm[m-2]))/2,PTXT_Y(11),cm[m-2],C_BLACK); } }
 static void iv_weight(int x,int y,int w10,int cap)
@@ -8567,7 +8573,7 @@ static int panel_action(world_t*w,int x,int y)
         else if(b==2){ if(inv){ g_inv_open=0; g_show_inv=0; g_show_status=1; } else { g_show_status=0; g_inv_open=1; g_show_inv=1; } }
         else if(b==3 && i<g_nparty-1) g_status_actor=g_party[i+1].actor;
         return 0; }
-    if(inv && i>0 && y>=IVB_Y && y<IVB_Y+16 && x>=0xf0 && x<0x100){ int m=g_cmode[g_status_actor]+1; g_cmode[g_status_actor]=(uint8_t)(m>8||m<2?2:m); return 0; }   /* the next combat mode */
+    if(inv && i>0 && y>=IVB_Y && y<IVB_Y+16 && x>=0xf0 && x<0x100){ int m=g_gl->cmode_next?g_gl->cmode_next(g_cmode[g_status_actor]):g_cmode[g_status_actor]+1; g_cmode[g_status_actor]=(uint8_t)(m>8||m<2?2:m); return 0; }   /* the next combat mode */
     if(!inv) return 0;
     if(x>=0x110&&x<0x120&&y>=0x10&&y<0x20&&g_iv_cont){ int cr=iv_cont_row();                /* the open thing's picture: a move out of it, or back up a level */
         if(g_pending_verb=='W'&&cr>=0){ g_pending_verb=0; return g_gl->move_into?g_gl->move_into(w,cr):pack_move_into(w,cr); }
@@ -10358,6 +10364,7 @@ static void u6_eggs_update(const world_t *w, int teleport)
         if(added) build_blocked(); }
 }
 /* ---- Savage Empire's eggs (docs/rules/se_eggs.md) ---- */
+static int     g_dos_slips;                                          /* 1 = the DOS games' own slips kept (se_deviations.md); 0 = as meant */
 static uint8_t g_se_orc[U6_MAX_ACTORS], g_se_odir[U6_MAX_ACTORS];   /* an orchid root's heads; a head's root and direction (se_eggs.md §4) */
 static int     g_se_egg_made;                                        /* last check: pieces made (test hooks) */
 static void obj_destroy(int idx);
@@ -14384,8 +14391,120 @@ static int se_orchid_grow(const world_t*w,int i,int d)
     g_actx[i]=(uint16_t)nx; g_acty[i]=(uint16_t)ny; g_se_odir[i]=(uint8_t)d; g_amoved[i]=1; build_blocked(); return 1; }
 /* worktype 13, an orchid head's turn (0x1d8f9): the root sways; a foe of the root beside the head is struck; one within 4 draws
  * the head along the longer axis, else the shorter; otherwise, or after reaching, 1 in 4 it reaches a random way */
+/* the area target (0x1c661; se_ai.md §8): the tile around the leader whose 3x3 holds the most foes; grenades (mode 0)
+ * never where a good one or the thrower stands, devices (mode 1) count only the myrmidex */
+static int se_area_target(const world_t*w,int i,int mode)
+{   int best=-1, bs=0;
+    for(int ox=0;ox<11;ox++) for(int oy=0;oy<9;oy++){ int cx=(int)w->px+ox-5, cy=(int)w->py+oy-4, c=actor_on(w,cx,cy), n=0, out=0;
+        if(c<0||c>=U6_MAX_ACTORS||!g_ahp[c]) continue;
+        for(int ax=-1;ax<=1&&!out;ax++) for(int ay=-1;ay<=1&&!out;ay++){ int s2=actor_on(w,cx+ax,cy+ay), al;
+            if(s2<0||s2>=U6_MAX_ACTORS) continue;
+            al=align_of(s2);
+            if(((al==0x40&&g_ahp[s2])||s2==i) && !mode){ out=1; break; }
+            if(g_ahp[s2]&&(al==0x20||al==0x60)&&(!mode||actor_objn(s2)==323||actor_objn(s2)==328)){ n++; if(!ax&&!ay) n++; } }
+        if(out) continue;
+        if(n>bs||(n==bs&&se_rand(0,1))){ bs=n; best=c; } }
+    return best; }
+/* a grenade or device in hand turns the aim to the area target */
+static int se_retarget(const world_t*w,int i,int wp,int t)
+{   if(wp==137||wp==138) return se_area_target(w,i,0);
+    if(wp==240||wp==241) return se_area_target(w,i,1);
+    return t; }
+/* in reach and clear: strike (1); blocked: a sidestep tile (0); beyond: the target's tile (0) */
+static int se_strike_or_aim(const world_t*w,int i,int t,int wp,int*gx,int*gy)
+{   int x=g_actx[i], y=g_acty[i], tx=x, ty=y, d, r=wp?weapon_range(wp):1; (void)actor_where(t,&tx,&ty);
+    d=combat_dist(tx-x,ty-y);
+    if(d<=r){ if(d<=1||missile_reaches(w,x,y,tx,ty)){ wt_strike(w,i,t,wp,x,y,tx,ty); return 1; }
+        if(se_rand(0,1)){ *gx=x-(ty-y); *gy=y+(tx-x); } else { *gx=x+(ty-y); *gy=y-(tx-x); }
+        if(g_dos_slips){ (void)walk_to(w,i,*gx,*gy); }               /* slip 17: DOS walks to the sidestep twice */
+        return 0; }
+    *gx=tx; *gy=ty; return 0; }
+/* CLOSE (8, 0x9b; 0x1c86d) */
+static void se_close(const world_t*w,int i)
+{   int t=se_nearest_foe(i), tx=0, ty=0, gx, gy, wp;
+    if(t>=0){ (void)actor_where(t,&tx,&ty); wp=actor_pick_weapon(i,combat_dist(tx-g_actx[i],ty-g_acty[i])); t=se_retarget(w,i,wp,t); }
+    else wp=0;
+    if(t<0){ wander(w,i); return; }
+    if(se_strike_or_aim(w,i,t,wp,&gx,&gy)) return;
+    (void)walk_to(w,i,gx,gy); }
+/* RANGE's weapon (0x1ca68): readied, range 3 or more; the longer range until one reaches, then the bigger blow */
+static int se_pick_ranged(int i,int d)
+{   int best=0, br=0, bd=0;
+    for(int sl=0;sl<EQ_NSLOTS;sl++){ int on=g_aready[i][sl], r; if(!on||(r=weapon_range(on))<3) continue;
+        if(br<d){ if(r>br){ br=r; best=on; bd=weapon_dmg(on); } }
+        else if(weapon_dmg(on)>bd){ br=r; bd=weapon_dmg(on); best=on; } }
+    return best; }
+/* RANGE (4; 0x1cba9) */
+static void se_range(const world_t*w,int i)
+{   int x=g_actx[i], y=g_acty[i], t=se_nearest_foe(i), tx=x, ty=y, wp, gx, gy;
+    if(t>=0) (void)actor_where(t,&tx,&ty);
+    wp=se_pick_ranged(i,combat_dist(tx-x,ty-y));
+    if(t>=0 && iabs_(tx-x)<3 && iabs_(ty-y)<3){ (void)walk_to(w,i,x-(tx-x),y-(ty-y)); return; }
+    if(!wp){ char nm[32]; int n=msg_tail(); actor_name(i,nm,sizeof nm); n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," has no ranged weapons!\n"); return; }
+    if(iabs_(x-(int)w->px)>5||iabs_(y-(int)w->py)>4){ (void)walk_to(w,i,(int)w->px,(int)w->py); return; }
+    t=se_retarget(w,i,wp,t);
+    if(t<0){ wander(w,i); return; }
+    if(!se_strike_or_aim(w,i,t,wp,&gx,&gy)) (void)walk_to(w,i,gx,gy); }
+/* WILD (6 and the charmed; 0x1ce85): U6's berserk with SE's area targets */
+static void se_wild(const world_t*w,int i)
+{   int a=align_of(i), x=g_actx[i], y=g_acty[i], best=-1, bs=0, tx, ty, wp, gx, gy;
+    for(int j=0;j<U6_MAX_ACTORS;j++){ int ax,ay,b; if(j==i||g_atile[j]==0xffff||!g_ahp[j]||!actor_where(j,&ax,&ay)) continue;
+        if(iabs_(ax-x)>8||iabs_(ay-y)>8||!can_target(i,j)) continue;
+        b=align_of(j);
+        if(a==0x40&&b!=0x20) continue; if(a==0x20&&b!=0x40) continue; if(a==0x60&&(b==0x60||!b)) continue;
+        { int sc=g_astr[j]+g_adex[j]+g_aint[j]; if(sc>bs){ bs=sc; best=j; } } }
+    if(best<0){ se_close(w,i); pay(i,5); return; }
+    tx=x; ty=y; (void)actor_where(best,&tx,&ty); wp=actor_pick_weapon(i,combat_dist(tx-x,ty-y)); best=se_retarget(w,i,wp,best);
+    if(best>=0 && !se_strike_or_aim(w,i,best,wp,&gx,&gy)){ int p0=g_pts[i]; if(!walk_to(w,i,gx,gy)){ g_pts[i]=(int8_t)p0; se_close(w,i); } }
+    pay(i,5); }
+/* FLEE (7, 9, 0x13, 0x9a; 0x1d1ca) */
+static void se_flee(const world_t*w,int i)
+{   int x=g_actx[i], y=g_acty[i], t;
+    if(iabs_(x-(int)w->px)>7||iabs_(y-(int)w->py)>7){ g_pts[i]=0; return; }
+    t=se_nearest_foe(i);
+    if(t<0){ wander(w,i); return; }
+    { int ax=x, ay=y, dx, dy; (void)actor_where(t,&ax,&ay); dx=ax-x; dy=ay-y;
+      if(iabs_(dx)<8&&iabs_(dy)<8){ int p0=g_pts[i]; if(!walk_to(w,i,x-dx,y-dy)) g_pts[i]=(int8_t)p0; }
+      else if(align_of(i)==0x40) (void)walk_to(w,i,(int)w->px,(int)w->py);
+      else wander(w,i); }
+    if(!member(i) && !se_rand(0,3)){ int mx=g_amaxhp[i]?g_amaxhp[i]:30;
+        if(g_ahp[i]<mx) g_ahp[i]++;
+        if(g_ahp[i]*4/mx>0){ g_aflee[i]=0; g_wt_force[i]=g_wt_keep[i]; } } }
+/* 0xe (0x1d5a9): 16 tries at a tile within 4, an actor of another alignment there is struck (slip 18); a grenade or device: the area target */
+static void se_stationary(const world_t*w,int i)
+{   int a=align_of(i), x=g_actx[i], y=g_acty[i], t=se_nearest_foe(i), wp=0;
+    if(!a){ pay(i,5); return; }
+    if(t>=0){ int tx=x, ty=y; (void)actor_where(t,&tx,&ty); wp=actor_pick_weapon(i,combat_dist(tx-x,ty-y)); }
+    if(wp==137||wp==138||wp==240||wp==241){ int c=se_retarget(w,i,wp,t), tx=x, ty=y; if(c>=0){ (void)actor_where(c,&tx,&ty); wt_strike(w,i,c,wp,x,y,tx,ty); return; } }
+    for(int k=0;k<16;k++){ int tx=x+se_rand(0,8)-4, ty=y+se_rand(0,8)-4, j=actor_on(w,tx,ty), b;
+        if(j<0||j>=U6_MAX_ACTORS||j==i||!g_ahp[j]||!can_target(i,j)) continue;
+        b=align_of(j); if(b==a||!b) continue;
+        wp=actor_pick_weapon(i,combat_dist(tx-x,ty-y)); wt_strike(w,i,j,wp,x,y,tx,ty); return; }
+    pay(i,5); }
+/* the dance (0xf, 0x10, 0x8b-0x8e): the dancer's look, 0-3 for the people, 4-7 for others (slip 19: DOS adds to the last frame) */
+static void se_dance(int i)
+{   int on=actor_objn(i), f=(on>=310&&on<=326)?se_rand(0,3):se_rand(4,7);
+    if(g_dos_slips && g_se_dance[i]) f=((g_se_dance[i]-1)+f)&63;
+    g_se_dance[i]=(uint8_t)(f+1); pay(i,5); }
+static int se_cmode_next(int m){ return m==2?4:m==4?7:m==7?8:2; }        /* CMND, RANGE, FLEE, CLOSE (0x6fb1) */
+static const char*const SE_CMODE[7]={"CMND","","RANGE","","WILD","FLEE","CLOSE"};
+/* SE's worktypes (se_ai.md): its own CLOSE, RANGE, WILD, FLEE, 0xa, 0xb, 0xe, dance and orchid; 3, 5 and U6's
+ * extras pay 5; the rest are U6's */
 static int se_wt_act(const world_t*w,int i,int wt)
-{   if(wt!=0xd || actor_objn(i)!=282) return 0;
+{   int dance=(wt==0xf||wt==0x10||(wt>=0x8b&&wt<=0x8e));
+    if(!dance) g_se_dance[i]=0;
+    if(g_charm[i]) wt=6;
+    switch(wt){
+    case 4: se_range(w,i); return 1;
+    case 6: se_wild(w,i); return 1;
+    case 7: case 9: case 0x13: case 0x9a: se_flee(w,i); return 1;
+    case 8: case 0x9b: se_close(w,i); return 1;
+    case 0xa: if(member_near(w,g_actx[i],g_acty[i])&&!se_rand(0,1)) (void)walk_to(w,i,(int)w->px,(int)w->py); else roam_ten(w,i,g_actx[i],g_acty[i]); return 1;
+    case 0xb: if(member_near(w,g_actx[i],g_acty[i])&&!se_rand(0,7)){ g_wt_force[i]=8; se_close(w,i); } else roam_ten(w,i,g_actx[i],g_acty[i]); return 1;
+    case 0xe: se_stationary(w,i); return 1;
+    case 3: case 5: case 0x12: case 0x97: case 0x98: pay(i,5); return 1;
+    default: if(dance){ se_dance(i); return 1; } }
+    if(wt!=0xd || actor_objn(i)!=282) return 0;
     int root=g_se_orc[i], t=-1, hx=g_actx[i], hy=g_acty[i], d;
     if(root>0 && root<U6_MAX_ACTORS && g_atile[root]!=0xffff){ g_atile[root]=(uint16_t)(g_atile[root]==g_abase[root]?g_abase[root]+1:g_abase[root]); t=se_nearest_foe(root); }
     if(t>=0){ int dx=g_actx[t]-hx, dy=g_acty[t]-hy;
@@ -14396,7 +14515,9 @@ static int se_wt_act(const world_t*w,int i,int wt)
             (void)se_orchid_grow(w,i,d); pay(i,10); return 1; } }
 reach:
     if(se_rand(0,3)){ g_pts[i]=0; return 1; }
-    d=se_rand(0,3)*2; if(d==(g_se_odir[i]&7)) d^=4;
+    d=se_rand(0,3)*2;
+    if(g_dos_slips){ if(d==(g_se_odir[i]&7)) d^=4; }                      /* DOS: the way it faces turns back, always refused */
+    else if((d^(g_se_odir[i]&7))==4) d=g_se_odir[i]&7;                    /* slip 16: never back on itself, so straight on */
     (void)se_orchid_grow(w,i,d); pay(i,10); return 1; }
 static void se_obj_wound(int oi,int dmg)
 {   wobj_t*o=&g_wobj[oi]; int on=o->obj_n, x=o->x, y=o->y;
@@ -14519,7 +14640,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18134,6 +18255,38 @@ int main(int argc, char **argv)
                     #undef SE_EGG
                     #undef SE_EMB
                   }
+                  /* SE's turns (se_ai.md): CLOSE strikes and walks, RANGE steps away or has nothing, FLEE runs, the dance, the modes */
+                  { int ax0=-1, ay0=-1, n0=g_ow.nobjs; static uint8_t al0[MAXWOBJ]; for(int j=0;j<n0;j++) al0[j]=g_wobj[j].alive;
+                    for(int r=2;r<16 && ax0<0;r++) for(int v=-r;v<=r && ax0<0;v++) for(int t=-r;t<=r && ax0<0;t++){ if(iabs_(t)!=r&&iabs_(v)!=r) continue;
+                        int cx=((int)w.px+t)&M, cy=((int)w.py+v)&M, open=1;
+                        for(int yy=-2;yy<=2&&open;yy++) for(int xx=-2;xx<=2&&open;xx++){ int qx=(cx+xx)&M, qy=(cy+yy)&M; if(!world_is_passable(&w,qx,qy)||obj_blocks_at(qx,qy)||(qx==(int)w.px&&qy==(int)w.py)||npc_at(&w,qx,qy)>=0) open=0; }
+                        if(open){ ax0=(cx-1)&M; ay0=cy; } }
+                    dbg_num("SE ai spot found=", ax0>=0);
+                    int lpx=w.px, lpy=w.py; if(ax0>=0){ w.px=(uint16_t)((ax0+1)&M); w.py=(uint16_t)((ay0+2)&M); }   /* the leader beside the patch, for FLEE's 7 */
+                    if(ax0>=0){ int jg=se_hatch_creature(&w,ax0,ay0,333), mm=se_hatch_creature(&w,(ax0+1)&M,ay0,310), hp0=0, k, d0, d1;
+                      if(jg>=0 && mm>=0){
+                        g_ahp[mm]=hp0=200; hatched_worktype(jg,8);
+                        for(k=0;k<8 && g_ahp[mm]==hp0;k++){ g_pts[jg]=30; wt_act(&w,jg); }
+                        dbg_num("SE ai close strikes=", g_ahp[mm]<hp0);
+                        g_actx[mm]=(uint16_t)((ax0+2)&M); g_ahp[mm]=200; d0=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1));
+                        g_pts[jg]=30; wt_act(&w,jg); d1=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1));
+                        dbg_num("SE ai close walks=", d1<d0);
+                        g_actx[jg]=(uint16_t)ax0; g_acty[jg]=(uint16_t)ay0; g_actx[mm]=(uint16_t)((ax0+1)&M); g_acty[mm]=(uint16_t)ay0; hatched_worktype(jg,0x0e); g_wt_force[jg]=WT_MOTIONLESS_FORCED;
+                        hatched_worktype(mm,4); { uint16_t set[EQ_NSLOTS]={0}; (void)equip_ready(set,31); memcpy(g_aready[mm],set,sizeof set); }
+                        d0=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1)); g_pts[mm]=30; wt_act(&w,mm); d1=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1));
+                        dbg_num("SE ai range steps away=", d1>d0);
+                        memset(g_aready[mm],0,sizeof g_aready[mm]); g_actx[mm]=(uint16_t)((ax0+3)&M); g_acty[mm]=(uint16_t)ay0; g_msg[0]=0; g_pts[mm]=30; wt_act(&w,mm);
+                        dbg_num("SE ai range none=", strstr(g_msg,"has no ranged weapons!")!=0);
+                        g_actx[mm]=(uint16_t)((ax0+1)&M); hatched_worktype(mm,7); d0=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1)); g_pts[mm]=30; wt_act(&w,mm); d1=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1));
+                        dbg_num("SE ai flee runs=", d1>d0);
+                        hatched_worktype(mm,0x8b); g_pts[mm]=30; { int x1=g_actx[mm]; wt_act(&w,mm); int tl=npc_tile(mm)-basetile(329);
+                          int ok=g_actx[mm]==x1 && tl>=0 && tl<=3; hatched_worktype(mm,8); g_pts[mm]=30; wt_act(&w,mm);
+                          dbg_num("SE ai dance=", ok && !g_se_dance[mm]); }
+                        { int m=2, okm=1; static const uint8_t WANT[4]={4,7,8,2}; for(k=0;k<4;k++){ m=se_cmode_next(m); if(m!=WANT[k]) okm=0; }
+                          dbg_num("SE ai modes=", okm && !strcmp(SE_CMODE[6-2],"WILD") && !strcmp(SE_CMODE[8-2],"CLOSE")); } }
+                      if(jg>=0){ g_atile[jg]=0xffff; g_temp[jg]=0; } if(mm>=0){ g_atile[mm]=0xffff; g_temp[mm]=0; g_se_dance[mm]=0; } }
+                    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && (j>=n0 || !al0[j])) obj_destroy(j);
+                    w.px=(uint16_t)lpx; w.py=(uint16_t)lpy; g_msg[0]=0; build_blocked(); }
                   /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
                   { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
                     se_avatar_death(&w);

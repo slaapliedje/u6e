@@ -13,7 +13,8 @@ register is deviations.md.
 
 The user's rule (row 12 added 2026-11-12 under it, as plain as the first eleven): where DOS's code plainly can't do what it was written to do, the engine does what it
 was meant to do (ScummVM was looked at first: its SE U)se is mostly unwritten, so it decides none of
-these). Each row says what DOS does, so any of them can be put back.
+these). Each row says what DOS does, so any of them can be put back; from slip 16 on, the engine's `g_dos_slips`
+setting (not yet offered to the player) puts DOS's way back at each slip's site.
 
 | # | Difference | Where | What DOS does |
 |---|---|---|---|
@@ -32,6 +33,10 @@ these). Each row says what DOS does, so any of them can be put back.
 | 13 | A blow whose hit roll fails misses | se_combat.md §3a | 0x1b47d compares the roll's result with -1 only, so a failed roll (0) strikes anyway: every blow that reaches someone lands |
 | 14 | An egg's object whose scattered tile is refused isn't made | se_eggs.md §3 | Goes on with the last thing it made (or a stale register): that one is tossed again or deleted |
 | 15 | An orchid head's wound pays nothing unless its root dies (then 10) | se_eggs.md §5 | Pays the head's remaining hit points while it lives, and a register's leftover when it dies but the root lives |
+| 16 | An orchid head's random reach never goes back on itself (that way becomes straight on) | se_eggs.md §6 | Turns the way it already faces into its opposite, which the reach refuses: never straight on, a quarter of the reaches wasted |
+| 17 | A fighter whose line of fire is blocked sidesteps one tile | se_ai.md §2 | Walks to the sidestep tile twice (falls into the walk meant for a target out of range) |
+| 18 | A creature in worktype 0xe strikes only an actor standing on the tile it picks | se_ai.md §6 | Looks its target up before picking the tile, with coordinates not yet set, then swings at the picked tile, mostly empty ground |
+| 19 | A dancer shows the new dance frame | se_ai.md §7 | Adds the new frame to the one it shows, running past the dancer's eight frames |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |

@@ -119,8 +119,8 @@ SE's worktype switch (0x17211) holds U6's case list (4, 6-0x10, 0x13, 0x82-0x85,
 4. A foe within 4 on both axes draws it: the head tries to reach one tile along the longer axis toward the foe
    (a tie: the north-south axis). If that fails it reaches along the other axis instead, and pays 10.
 5. Otherwise, and after a reach in step 4 succeeds: 3 times in 4 its turn ends (points to 0); 1 time in 4 it reaches
-   a random way (north, east, south or west; the way it already faces becomes its opposite, which is always refused)
-   and pays 10.
+   a random way (north, east, south or west) and pays 10. DOS turns the way it already faces into its opposite,
+   which the reach always refuses; the engine (slip 16) turns the way back into straight on instead.
 
 **A reach (0x1d74e)** one tile along a way: refused back on itself (the opposite of the head's direction); refused
 east when the head is more than 5 east of its root, west more than 5 west, south more than 4 south, north more than
@@ -143,6 +143,7 @@ the one whose creature-table damage is higher.
 ## 7. Slips and engine choices
 - Slip 14: a refused tile for an object embryo makes nothing (DOS reuses the last thing it made).
 - Slip 15: an orchid head's wound gives no experience unless the root dies (DOS gives a register's leftover).
+- Slip 16: a head's random reach never goes back on itself (DOS: never straight on; the user's choice, 2026-11-12).
 - Engine: eggs are looked at when the party enters a new 8 x 8 block or teleports, within 20 tiles of
   the party (DOS: its 40 x 40 window, moved by 8), as U6's are.
 - Engine: free slots are taken lowest first, not last freed first.
@@ -159,9 +160,6 @@ SEUSE self-test: `SE egg chance`, `SE egg counts`, `SE egg orchid heads`, `SE eg
 - The 0x02 bit DOS sets on a hatched egg.
 - Object 247's cleared quality.
 - A wound to a root reaches every orchid head among actors 16-255, not only its own (built as read).
-- A head's random reach turns the way it faces into its opposite, which the reach always refuses: so it never reaches
-  straight on and a quarter of its random reaches do nothing. Perhaps meant as "never back on itself" (U6's vine says
-  so); built as read until the user decides.
 
 ## Status
 IN PROGRESS: §1-§6 built; the other worktypes' SE differences are not read yet.
