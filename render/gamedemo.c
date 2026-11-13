@@ -14212,16 +14212,71 @@ static void se_fell(world_t*w,int oi)
         actor_wound(0,a,moved?se_rand(1,10)+se_rand(1,10):(g_ahp[a]?g_ahp[a]:30),0); }
     build_blocked(); }
 /* a blow on a thing (0x1a99b; se_combat.md §3f): the stackable and the countless take nothing; it flashes; the
- * count drops, or the thing breaks without a word. The control panel and the dark moonstone wait for their scenes */
+ * count drops, or the thing breaks without a word; the control panel and the dark moonstone start their scenes */
+static void se_panel_break(world_t*w,int oi);
+static void se_moonstone_break(world_t*w,int oi);
 static void se_obj_wound(int oi,int dmg)
 {   wobj_t*o=&g_wobj[oi]; int on=o->obj_n, x=o->x, y=o->y;
-    if(is_stackable(on) || !o->qty || on==222 || on==147 || !g_wp) return;
+    if(is_stackable(on) || !o->qty || !g_wp) return;
     if(iabs_gl(x-(int)g_wp->px)<=5 && iabs_gl(y-(int)g_wp->py)<=5){ fx_show(g_wp,x,y,0x101,1); fx_clear(g_wp); }
     if((int)o->qty>dmg){ o->qty=(uint16_t)(o->qty-dmg); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; return; }
     if(on==263){ se_fell((world_t*)g_wp,oi); return; }
+    if(on==222){ se_panel_break((world_t*)g_wp,oi); return; }
+    if(on==147){ se_moonstone_break((world_t*)g_wp,oi); return; }
     obj_destroy(oi);
     if(on==127) (void)temp_obj_new(128,0,x,y,0);                   /* a bamboo pole */
     build_blocked(); }
+/* a death in a story scene (0x1a6ad with DS:0xa39 set): no words, no experience. One already dead is let be; one off
+ * this level dies without remains (the engine holds this level's objects only) */
+static void se_scene_kill(world_t*w,int id)
+{   if(id<1||id>=U6_MAX_ACTORS||g_atile[id]==0xffff||!g_ahp[id]) return;
+    g_ahp[id]=0;
+    if(is_party_member(id)){ companion_die(w,id); return; }
+    if(g_actz[id]!=w->level){ g_atile[id]=0xffff; g_charm[id]=g_ally[id]=0; if(!(id>=160||g_temp[id]||g_summon[id])) g_adead[id]=1; build_blocked(); return; }
+    actor_die(id); }
+/* what changes kind keeps its frame (the crystals), or takes frame 0 (DOS writes the whole word: the floor plates) */
+static void se_rekind(wobj_t*o,int on,int keep)
+{   int fr=keep?(int)o->tile-basetile(o->obj_n):0; o->obj_n=(uint16_t)on; o->tile=(uint16_t)(basetile(on)+fr);
+    if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; }
+/* the control panel's scene (0x1ded4; se_combat.md §3g): Yunapotli drops what it has and stays a statue; Spector,
+ * Huitlapacti, Zipactriotl, Katalkotl and Yunapotli die; Johann comes back where Yunapotli stood and joins; Moctapotl and
+ * Oaxtepac become nobles; a day goes by; every robosaurus and argent sergeant dies; the floor plates stop */
+static void se_panel_scene(world_t*w)
+{   static const uint8_t DIE[5]={47,31,55,35,11};
+    int x=(int)w->px, y=(int)w->py;
+    if(g_atile[11]!=0xffff && g_ahp[11] && (is_party_member(11)||g_actz[11]==w->level)){ int on=actor_objn(11);
+        se_actor_xy(11,&x,&y); npc_pack(11); gear_to_body(11,-1,x,y);
+        if(on) (void)persist_obj_new(on,11,x,y,0); }
+    for(int k=0;k<5;k++) se_scene_kill(w,DIE[k]);
+    if(g_abase[5]){ g_actx[5]=(uint16_t)x; g_acty[5]=(uint16_t)y; g_actz[5]=(uint8_t)w->level; g_atile[5]=g_abase[5];
+        g_adead[5]=0; g_lost[5]=0; g_asleep[5]=g_paralyze[5]=g_poison[5]=0; g_ahp[5]=(uint8_t)se_max_hp(5); se_join(5); sync_party_hp(); }
+    for(int a=40;a<=44;a+=4){ int lit=g_atile[a]!=0xffff; g_abase[a]=(uint16_t)basetile(322); if(lit) g_atile[a]=g_abase[a]; }
+    g_cg.talk_flags[40]|=0x80; g_cg.talk_flags[1]|=4; g_cg.talk_flags[49]|=0x20;
+    for(int h=0;h<24;h++) se_time_pass(60);
+    for(int i=1;i<U6_MAX_ACTORS;i++){ int on=actor_objn(i); if(on==297||on==301) se_scene_kill(w,i); }
+    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==68) se_rekind(&g_wobj[j],38,0);
+    build_blocked();
+    g_msg[0]=0; }                                        /* the scene wipes the message area */
+/* the control panel breaks (0x1a99b; se_combat.md §3g): a burst on the 3x3 around it hurts each it reaches 1-30, the panel
+ * goes, the large crystals go dark (256 to 223), and the first time (talk flag 1, bit 4) the scene */
+static void se_panel_break(world_t*w,int oi)
+{   int x=g_wobj[oi].x, y=g_wobj[oi].y, ex[9], ey[9], ids[16], n;
+    for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
+    n=rays_from(w,x,y,9,ex,ey,0x106,0,ids,16);
+    for(int k=0;k<n;k++) if(!is_stackable(actor_objn(ids[k]))) actor_wound(-1,ids[k],se_rand(1,30),0);
+    obj_destroy(oi);
+    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].obj_n==256) se_rekind(&g_wobj[j],223,1);
+    build_blocked();
+    if(!(g_cg.talk_flags[1]&4)) se_panel_scene(w); }
+/* the dark moonstone breaks (0x1a99b, 0x1e34e; se_combat.md §3g): three bursts around it, twice each, that hurt nobody; it
+ * goes, and the game is over (DOS leaves for SAVAGE.EXE's ending, item 9) */
+static void se_moonstone_break(world_t*w,int oi)
+{   static const int16_t T[3]={0x104,0x106,0x102};
+    int x=g_wobj[oi].x, y=g_wobj[oi].y, ex[9], ey[9], ids[16];
+    for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
+    for(int r=0;r<3;r++) for(int t=0;t<2;t++) (void)rays_from(w,x,y,9,ex,ey,T[r],0,ids,16);
+    obj_destroy(oi); build_blocked();
+    g_msg[0]=0; g_game_over=1; }
 /* the leader falls (0x17a33, 0x27566, 0x8cb:0xc73; se_combat.md §3e): a week later the party wakes in Intanya's
  * hut, healed and good, with three quarters of its experience */
 static void draw_status(const world_t*w,uint8_t col);
@@ -17801,6 +17856,34 @@ int main(int argc, char **argv)
                         for(int k=0;k<5;k++){ int o=obj_idx_at((tx+FL[k][2])&M,(ty+FL[k][3])&M,FL[k][0]); if(o>=0) obj_destroy(o); } } build_blocked(); } }
                   { int bp=persist_obj_new(127,0,x3,y3,0); if(bp>=0){ int pole; g_wobj[bp].qty=1; se_obj_wound(bp,5); pole=obj_idx_at(x3,y3,128);
                       dbg_num("SE break bamboo pole=", !g_wobj[bp].alive && pole>=0); if(pole>=0) obj_destroy(pole); build_blocked(); } }
+                  /* the control panel: a burst, the crystals dark, the scene once; the dark moonstone ends the game */
+                  { static uint8_t al0[MAXWOBJ], hp0[U6_MAX_ACTORS], ad0[U6_MAX_ACTORS], ls0[U6_MAX_ACTORS], az0[U6_MAX_ACTORS], tf0[256];
+                    static uint16_t at0[U6_MAX_ACTORS], ab0[U6_MAX_ACTORS], ax0[U6_MAX_ACTORS], ay0[U6_MAX_ACTORS];
+                    int n0=g_ow.nobjs, yx=x3, yy=(y3+2)&M, son=actor_objn(11), pi, cr, pl, rb; uint32_t ck=w.clock; static uint8_t pp[sizeof g_party], pl0[MAXWOBJ]; int pn=g_nparty;
+                    for(int j=0;j<n0;j++){ al0[j]=g_wobj[j].alive; pl0[j]=g_wobj[j].alive && g_wobj[j].obj_n==68; }
+                    memcpy(hp0,g_ahp,sizeof hp0); memcpy(ad0,g_adead,sizeof ad0); memcpy(ls0,g_lost,sizeof ls0); memcpy(az0,g_actz,sizeof az0);
+                    memcpy(at0,g_atile,sizeof at0); memcpy(ab0,g_abase,sizeof ab0); memcpy(ax0,g_actx,sizeof ax0); memcpy(ay0,g_acty,sizeof ay0);
+                    memcpy(tf0,g_cg.talk_flags,sizeof tf0); memcpy(pp,g_party,sizeof pp);
+                    g_cg.talk_flags[1]&=(uint8_t)~4;
+                    g_actx[11]=(uint16_t)yx; g_acty[11]=(uint16_t)yy; g_actz[11]=(uint8_t)w.level; g_atile[11]=g_abase[11]; g_ahp[11]=30; g_adead[11]=0;
+                    pi=persist_obj_new(222,0,x3,y3,0); cr=persist_obj_new(256,3,(x3+1)&M,(y3-1)&M,0); pl=persist_obj_new(68,0,(x3-1)&M,(y3-1)&M,0);
+                    rb=se_beast_new(&w,(x3+3)&M,y3,301,0);
+                    if(pi>=0 && cr>=0 && pl>=0 && rb>=0){ int st;
+                      g_wobj[pi].qty=15; build_blocked(); se_obj_wound(pi,20); st=obj_idx_at(yx,yy,son);
+                      dbg_num("SE panel crystals dark=", !g_wobj[pi].alive && g_wobj[cr].obj_n==223 && g_wobj[cr].tile==basetile(223)+3);
+                      dbg_num("SE panel scene once=", (g_cg.talk_flags[1]&4) && g_wobj[pl].obj_n==38 && w.clock==ck+24u*60u);
+                      dbg_num("SE panel Yunapotli statue=", g_ahp[11]==0 && st>=0 && g_wobj[st].tile==basetile(son)+11);
+                      dbg_num("SE panel Johann joins=", is_party_member(5) && g_actx[5]==yx && g_acty[5]==yy && g_ahp[5]>0);
+                      dbg_num("SE panel robots stop=", g_ahp[rb]==0 && actor_objn(40)==322 && actor_objn(44)==322); }
+                    { int mi=persist_obj_new(147,0,x3,y3,0); if(mi>=0){ int half; g_wobj[mi].qty=20; build_blocked();
+                        se_obj_wound(mi,10); half=g_wobj[mi].alive && !g_game_over; se_obj_wound(mi,10);
+                        dbg_num("SE moonstone ends the game=", half && !g_wobj[mi].alive && g_game_over); g_game_over=0; } }
+                    for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && (j>=n0 || !al0[j])) obj_destroy(j);
+                    for(int j=0;j<n0;j++) if(pl0[j]) se_rekind(&g_wobj[j],68,0);
+                    memcpy(g_ahp,hp0,sizeof hp0); memcpy(g_adead,ad0,sizeof ad0); memcpy(g_lost,ls0,sizeof ls0); memcpy(g_actz,az0,sizeof az0);
+                    memcpy(g_atile,at0,sizeof at0); memcpy(g_abase,ab0,sizeof ab0); memcpy(g_actx,ax0,sizeof ax0); memcpy(g_acty,ay0,sizeof ay0);
+                    memcpy(g_cg.talk_flags,tf0,sizeof tf0); memcpy(g_party,pp,sizeof pp); g_nparty=pn; if(rb>=0) g_temp[rb]=0;
+                    w.clock=ck; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); g_msg[0]=0; sync_party_hp(); build_blocked(); }
                   /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
                   { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
                     se_avatar_death(&w);

@@ -142,3 +142,8 @@ list once SE's seams exist.
   three quarters of the experience), things with a count breaking (bamboo to a pole, trees felled onto
   whoever stands there, by a blow or a grenade's 30). Next in item 6: the
   control panel's and the dark moonstone's scenes, the orchids with SE's creatures and eggs.
+- 2026-11-12: item 6's control panel and dark moonstone (rules/se_combat.md §3g). The panel's burst darkens the
+  large crystals. Its scene, once: Yunapotli left a statue, five of the Kotl's people dead, Johann back in the
+  party, two nobles made, a day gone, the robots dead, the floor plates stopped. The moonstone ends the game:
+  play stops, and item 9 adds the ending. Waiting on other items: the robot eggs (SE eggs), the songs and eyes
+  (items 8 and 9). Next in item 6: the orchids, with SE's creatures and eggs.

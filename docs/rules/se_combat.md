@@ -214,7 +214,7 @@ without a word:
   (x+1, y-2), 261 frame 9 at (x+1, y-4) and 262 frame 3 at (x+1, y-5), all lasting. Each actor on the tiles
   it falls across (the 2 × 5 mask at DS:0x10af: x..x+1, y-6..y-2, all but (x, y-2)) is pushed to the first free tile around it (by column) and takes 2-20 (two rolls of
   1-10); with no free tile it takes all its hit points;
-- **the control panel** (222) and **the dark moonstone** (147) start scenes of the story: a later slice;
+- **the control panel** (222) and **the dark moonstone** (147) start scenes of the story (§3g);
 - **anything else** is gone.
 
 The carnivorous orchids (282, a head; 292, its stalk, whose quality is the head) take their wounds by
@@ -222,6 +222,70 @@ The carnivorous orchids (282, a head; 292, its stalk, whose quality is the head)
 that dies takes its stalk with it, step by step along its direction, and when its root (the head's
 quality) has no heads left the root dies too and leaves an orchid bulb (78). They come with SE's eggs and
 creatures' doings (item 6, later).
+
+### 3g. The control panel and the dark moonstone (0x1a99b, 0x1ded4, 0x1e34e)
+
+The new game has one control panel, at (215,197) on level 3 with a count of 15, among the large crystals
+(256), and one dark moonstone, at (67,67) on level 1 with a count of 20.
+
+**The panel breaks:**
+1. sound 0;
+2. the burst of the grenade's kind (0x276b:0xe85, tile 0x106): nine rays from the panel to the 3x3 around it.
+   Each actor it reaches, and one on the panel's own tile, takes 1-30 through the damage routine. The
+   blow's attacker usually stands there too;
+3. the panel goes;
+4. every large crystal (256) among the objects held (0x100-0xbff: the current level in the engine) becomes
+   the dark one (223), keeping its frame;
+5. if talk flag 1 lacks bit 0x04, the scene.
+
+**The panel's scene (0x1ded4).** DS:0xa39 is set for it, so its deaths say nothing. In order:
+- song 16 plays (0x2701:0x190); afterwards the place's song comes back (0x2701:0x1f1);
+- the message area is cleared; the eyes in the top border turn blue (map tiles 373 and 374, as in the gem
+  scene, se_use.md §5d);
+- Yunapotli (actor 11) takes frame 11. Everything it holds is put down where it stands (0xa5d:0x739 gives an
+  object's first content, 0xa5d:0x1c76 moves it). An object of its own look (the automaton 319, frame 11) is
+  made there;
+- Spector (47), Huitlapacti (31), Zipactriotl (55), Katalkotl (35) and Yunapotli (11) die (0x1a6ad, §3d).
+  Only Katalkotl leaves remains, since 11, 31, 47 and 55 are on the no-remains list. A companion among them
+  leaves the party;
+- Johann (actor 5) is moved to Yunapotli's tile. His status loses bit 0x10 (the dead flag), his HP become
+  the maximum (0x1810:0x62a) and he joins the party (0xf8d:0x290, se_use.md §4);
+- Moctapotl (40) and Oaxtepac (44) become nobles (322, frame 0), in both the live look and the saved look
+  (the far table at DS:-0x4ac2). Bit 0x80 of their bytes in the far table at DS:0x3298 is cleared;
+- talk flags: Moctapotl's gets 0x80, flag 1 gets 0x04 (the scene never comes again), Tlapatla's (49) gets 0x20;
+- a day passes: 24 passes of the world, an hour each (0x359:0x11b6);
+- every actor that is a robosaurus (297) or an argent sergeant (301) dies (0x1a6ad), with its remains;
+- among the objects: each floor plate (68) becomes the inert one (38, frame 0). Each egg (230) whose first
+  content is a robosaurus or an argent sergeant goes, with it;
+- the light object (11) takes map tile 285's picture in place of its own (522). As in the gem scene, no
+  light object is in the game's data, so nothing shows it.
+
+**The moonstone breaks:**
+- three rounds, each a sound 0 and the same burst twice: tile 0x104, then 0x106, then 0x102. What the
+  bursts reach is not used, so nobody is hurt;
+- the stone goes;
+- the scene (0x1e34e): song 12, the message area cleared, the blue eyes.
+
+Then DOS ends the game. It shuts down its sound and video and runs `savage.exe` (DS:0x127b), which plays
+the ending (item 9), with these arguments:
+- the game directory;
+- `D`, `B` and `Y` followed by the day, month and year, the digits made by writing day+99 (month+99,
+  year+100) and putting the letter over the first digit;
+- `LA` when Aiela's talk flag (actor 2) has 0x20, else `LT` when Tristia's (51) has, else nothing: the
+  companion the ending shows.
+
+**The engine** builds all of the above except:
+- the sounds, songs and eyes (items 8 and 9);
+- the far table at DS:0x3298 (unknown);
+- the light's picture;
+- the robot eggs, which wait for SE's eggs.
+
+It also:
+- leaves an actor that is already dead alone;
+- kills an actor on another level without remains;
+- puts Johann beside the Avatar if Yunapotli is not on the current level.
+
+The moonstone ends play (the game is over). Item 9 adds the ending itself.
 
 ## 4. The creature table (segment 0x2f43)
 
@@ -288,7 +352,8 @@ thing not in the table reads the word before the flags (0x1000) and no stats.
   holds, so DOS never pays it; what was meant is unknown, and nothing is built.
 - 0x1a3f0 hands back as "experience" whatever is in a register: a head's remaining hit points when it
   lives, 10 when the root dies, 0 for a stalk. To be decided with the orchids.
-- The scenes of the control panel (0x1ded4: the crystals 256 turn into 223, a blast of 1-30 around it,
-  actors 47, 31, 55, 35 and 11 die, actor 5 comes back) and the dark moonstone (0x1e34e).
+- What bit 0x80 of the bytes in the far table at DS:0x3298 means; the panel's scene clears it for actors 40 and
+  44 (§3g).
+- Where DOS puts the remains of an actor on another level when a scene kills it (the engine leaves none).
 - The flash when a creature with flag 0x1000 dies near the party (0x359:0xd58).
 - A readied flintlock keeps its load in the engine per actor; the save keeps it with item 10.
