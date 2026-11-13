@@ -175,3 +175,8 @@ list once SE's seams exist.
   frenzy. Charm, curse, protection and frenzy change the hit rolls and armour and wear off as time passes (SE's
   own rolls, gl_se status_tick). Slips 20-21 built as the intent. Next in item 6: the bell, hazards (fire), the
   big creatures' reach.
+- 2026-11-12: item 6, the bell and harmful tiles. The bell's `On ` takes an actor: a sleeping tyrannosaurus wears it
+  once (talk flag 0xff; actor 181 sets talk flag 20 bit 0x80). SE's hazard routine (se_combat.md §3h): lava, webs,
+  fires, the myrmidex's dust, the orchid's stalks, with the things on a tile before the ground (gl_se hazard,
+  hazard_obj_first); creature flags 0x08 fire-proof and 0x10 fire doubled. Next in item 6: fallen creatures as bodies in
+  their actor slots (status 0x10), the big creatures' reach and pieces, a readied flintlock's frame.

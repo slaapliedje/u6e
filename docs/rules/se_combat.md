@@ -288,6 +288,26 @@ It also:
 
 The moonstone ends play (the game is over). Item 9 adds the ending itself.
 
+### 3h. Harmful tiles (0x359:0xda8; who is checked, 0x45a4)
+
+Each actor is checked when it steps onto a tile and for every actor on the level near the party as time passes,
+once per pass (a mark at bit 0x08 of its byte in the far table at DS:0x4602). Passed over: the dead, actor
+object 233, and creatures whose table flags have both 0x100 and 0x400. The things on its tile come first: one whose
+tile has tile flag 3 bit 0x04 covers the ground and nothing harms; the first whose tile has tile flag 1 bit 0x08
+(harmful), or an orchid's stalk (292), harms by its tile; with neither, a harmful ground tile harms by its tile.
+
+By the tile:
+- **lava** (15-27, 170, 171): 1-40, doubled for flag 0x10, none for flag 0x08 or the protected (se_invoke.md §4);
+- **a web** (528-537): unless protected or a giant spider (336), when its strength is under a roll of 1-30 it is
+  held (paralysed): `<name> is stuck in a web!`;
+- **a fire** (the lit campfire 899, fire 1030 and 1067-1071, the fire pit 1076-1079): 1-15, doubled for flag
+  0x10, none for flag 0x08 or the protected;
+- **dust** (935): only the myrmidex (323, 328), 1-7;
+- **an orchid's stalk** (1354-1359): 1-5, none for the protected or an orchid head (282).
+
+So in the creature table, flag 0x08 is "fire does not harm" and 0x10 "fire harms double". The engine checks the
+party's actors at each step and all actors near the party each turn, as for U6 (combat.md §5).
+
 ## 4. The creature table (segment 0x2f43)
 
 47 creatures, by obj_n (0x2f43:2, ended by 0), then a byte column each: strength (0x63), dexterity
@@ -348,7 +368,7 @@ thing not in the table reads the word before the flags (0x1000) and no stats.
 | 292 carnivorous orchid | 0 | 0 | 0 | 5 | 0 | 10 | 0x60 | 0x1011 |
 
 ## 5. Open questions
-- What flags 0x08, 0x400 and 0x4000 mean; 0x800 and 0x1000 mean "no remains", 0x2000 "bleeds" (§3d).
+- What flags 0x400 and 0x4000 mean (0x08 is fire-proof, 0x10 fire doubled, §3h); 0x800 and 0x1000 mean "no remains", 0x2000 "bleeds" (§3d).
 - 0x1a6ad would pay 500 for a victim whose saved look (-0x4ac2) tests against 0 (`test $0, …`), which never
   holds, so DOS never pays it; what was meant is unknown, and nothing is built.
 - 0x1a3f0 hands back as "experience" whatever is in a register: a head's remaining hit points when it

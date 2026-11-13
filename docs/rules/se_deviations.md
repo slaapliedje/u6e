@@ -39,6 +39,7 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 19 | A dancer shows the new dance frame | se_ai.md §7 | Adds the new frame to the one it shows, running past the dancer's eight frames |
 | 20 | Motazz's frenzy gives +3 strength to every wild fighter | se_invoke.md §4 | Gives it only to one also cursed (the bonus sits inside the curse test) |
 | 21 | An invocation's resist roll weighs the foe against Triolo | se_invoke.md §4 | Weighs it against the actor numbered by the shown member's party slot |
+| 22 | The bell takes a lying tyrannosaurus by either of its tiles | se_use.md §5i | Reads the second tile's actor and then tests the tile's own object, so that tile gives `No effect.` (the engine shows no second tile, so this is moot until it does) |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |

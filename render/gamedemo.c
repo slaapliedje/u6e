@@ -158,6 +158,7 @@ typedef struct GameLayer {
     void (*touch)(int att,int def);                             /* what a creature's blow does besides harm: dragging, dissolving, robbing, poison (combat.md) */
     void (*shot_spend)(const world_t*w,int att,int wobj,int sx,int sy,int lx,int ly,int id);   /* what a shot uses up or leaves behind: arrows, bolts, thrown things, wands (combat.md) */
     void (*hazard)(int a,int t);                                /* what a harmful tile or field does to one on it, by tile number (combat.md §5) */
+    uint8_t hazard_obj_first;                                   /* SE: the things on a tile are looked at before the ground (se_combat.md §6) */
     int  (*foe_cast)(const world_t*w,int i,int tid,int tx,int ty);   /* a hostile's charge roll and spell (combat.md §7b); 1 = cast */
     int  (*atk_check)(const world_t*w,int att,int*wobj,int tx,int ty,int dist,int*ranged,int stage,int n);   /* the game's own refusals around a blow: stage 0 the player's before the name, 1 the blow's (SE, se_combat.md §3a); -1 = strike on, else its cost; NULL = U6's range and ammunition */
     int  (*hit_rule)(int att,int wobj,int def,int role);         /* a hit by the game's own rule (SE's spear, staff, Myrmidex); -1 = the roll */
@@ -6293,6 +6294,7 @@ static int use_actor(void); static int carry_over(int a,int extra);
 #define SEON_LTORCH 13                                      /* a lit torch (0x25686) */
 #define SEON_TARPIT 14                                      /* the tar pit (0x23211) */
 #define SEON_CRYSTAL 15                                     /* crystals (0x25972) */
+#define SEON_BELL 17                                        /* the bell (0x21293) */
 static int g_se_on_tx=-1, g_se_on_ty;                        /* the tile the answer named (a bare one too) */
 static int g_se_on_idx=-1, g_se_on_row=-1;                  /* the thing that asked: on the map, or its pack row */
 static int g_se_on_actor=1;                                 /* who holds the thing that asked */
@@ -6800,6 +6802,23 @@ static int se_crystal_on(int id,int idx,int row,int n)
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; }
         if(g_wobj[idx].obj_n==249||g_wobj[idx].obj_n==248){ msgcat(n,"a body.\nThat person is beyond help."); return 0; } }
     msgcat(n,"nothing"); return 0; }
+static int iabs_(int v);
+/* the bell's "On " (0x21293, se_use.md §5i): a sleeping tyrannosaurus (DOS: a lying beast, 280 at frame 13 or 17) gets it once */
+static int se_bell_on(int id,int idx,int row,int n)
+{   int a=g_se_on_actor, hx, hy; char nm[32]; se_actor_xy(a,&hx,&hy);
+    if(g_se_on_idx>=0){ hx=g_wobj[g_se_on_idx].x; hy=g_wobj[g_se_on_idx].y; }      /* a bell on the ground measures from itself */
+    if(id<0&&idx<0&&row<0){ msgcat(n,"nothing!"); return 0; }
+    if(id>=0){ int x=hx, y=hy; actor_pos(id,&x,&y); actor_name(id,nm,sizeof nm); n=msgcat(n,nm); n=msgcat(n,"\n");
+        if(iabs_(x-hx)>1||iabs_(y-hy)>1){ msgcat(n,"Out of range!"); return 0; }
+        if(actor_objn(id)!=294){ msgcat(n,"No effect."); return 0; }
+        if(!g_asleep[id]){ msgcat(n,"No effect."); return 0; }
+        if(g_cg.talk_flags[id]){ msgcat(n,"\nIt already has a bell on its neck."); return 0; }
+        se_use_up(g_se_on_idx,g_se_on_row,0); g_se_on_idx=g_se_on_row=-1;
+        g_cg.talk_flags[id]=0xff; if(id==181) g_cg.talk_flags[20]|=0x80;
+        msgcat(n,"\nYou put the bell on the dinosaur's neck."); return 1; }
+    n=look_thing(n,idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,idx>=0?g_wobj[idx].qty:g_ow.inv[row].qty,0); n=msgcat(n,"\n");
+    if(idx>=0 && (iabs_((int)g_wobj[idx].x-hx)>1||iabs_((int)g_wobj[idx].y-hy)>1)){ msgcat(n,"Out of range!"); return 0; }
+    msgcat(n,"No effect."); return 0; }
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
 static int se_offer_on(int idx,int row);
 static int se_on_target(int idx,int row)
@@ -6833,10 +6852,11 @@ static int se_on_target(int idx,int row)
 }
 static int se_on_map(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
+    if(g_se_on==SEON_BELL){ int id=npc_at(w,tx,ty), n=msgcat(msg_end(),"\nOn "); g_se_on=0; g_verb_pts=5; return se_bell_on(id,id<0?objworld_at(&g_ow,tx,ty):-1,-1,n); }
     if(g_se_on==SEON_STRIPS||g_se_on==SEON_CRYSTAL){ int id=npc_at(w,tx,ty), n=msgcat(msg_end(),"\nOn "), k=g_se_on; g_se_on=0; g_verb_pts=5;   /* a person, or what lies there */
         return k==SEON_STRIPS?se_strips_on(id,id<0?objworld_at(&g_ow,tx,ty):-1,-1,n):se_crystal_on(id,id<0?objworld_at(&g_ow,tx,ty):-1,-1,n); }
     g_se_on_tx=tx; g_se_on_ty=ty; { int r=se_on_target(objworld_at(&g_ow,tx,ty),-1); g_se_on_tx=-1; return r; } }
-static int se_on_pack(world_t*w,int row){ (void)w; g_se_on_tx=-1; if(g_se_on==SEON_STRIPS||g_se_on==SEON_CRYSTAL){ int n=msgcat(msg_end(),"\nOn "), k=g_se_on; g_se_on=0; return k==SEON_STRIPS?se_strips_on(-1,-1,row,n):se_crystal_on(-1,-1,row,n); } return se_on_target(-1,row); }
+static int se_on_pack(world_t*w,int row){ (void)w; g_se_on_tx=-1; if(g_se_on==SEON_BELL){ int n=msgcat(msg_end(),"\nOn "); g_se_on=0; g_verb_pts=5; return se_bell_on(-1,-1,row,n); } if(g_se_on==SEON_STRIPS||g_se_on==SEON_CRYSTAL){ int n=msgcat(msg_end(),"\nOn "), k=g_se_on; g_se_on=0; return k==SEON_STRIPS?se_strips_on(-1,-1,row,n):se_crystal_on(-1,-1,row,n); } return se_on_target(-1,row); }
 /* ---- the giant gem (se_use.md §5d, 0x24302; M)ove onto the stand does the same) ---- */
 static void sched_pass(const world_t*w);
 /* time passes in one step of n minutes (0x359:0x11b6): the fuse runs down by n, the schedules catch up */
@@ -7020,7 +7040,8 @@ static int se_totem(int on,int has_acting);
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
-    if(o>=86&&o<=88) return se_totem(o,0);                         /* a totem on the ground: only a leading Triolo (se_use.md §5n) */
+    if(o>=86&&o<=88) return se_totem(o,0);
+    if(o==43){ g_se_on=SEON_BELL; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }   /* the bell asks "On " (se_use.md §5i) */                         /* a totem on the ground: only a leading Triolo (se_use.md §5n) */
     if(o==234||o==161||o==275) return se_use_door(idx);
     if(o==173||o==242||o==254||o==257){ g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }   /* the oven and the fires ask "On " */
     if(o==188){                                      /* the crate: a shut one (frame 1) opens, else "Not possible."; then the search (0x1ec8a) */
@@ -7085,7 +7106,7 @@ static int se_use_object(int idx)
 /* U)se a thing in the pack or readied (the same switch, 0x25e46): the row is the one chosen */
 static int g_use_slot=-1;                                   /* the readied slot being used (panel_select_slot), or -1 */
 /* ---- the totems' invocations (0x12ef7; docs/rules/se_invoke.md) ---- */
-static int align_of(int i); static int wt_now(int i); static int iabs_(int v); static int member(int i); static void charm_end(int id);
+static int align_of(int i); static int wt_now(int i); static int member(int i); static void charm_end(int id);
 static int se_hatch_creature(const world_t*w,int x,int y,int on);
 static int g_se_offer;                                        /* the invocation asked: totem << 4 (Heluzz 0, Aphazz 0x10, Motazz 0x20) */
 /* the actors in the 11 x 9 around the leader (0x126e4) */
@@ -7206,6 +7227,7 @@ static int se_use_pack(world_t*w,int on)
     if(!se_usable(on)){ msgcat(0,"\nNot possible."); return 0; }
     g_verb_pts=5;
     if(on==137||on==240) return se_light(-1,row,a,g_use_slot);
+    if(on==43){ g_se_on=SEON_BELL; g_se_on_actor=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; g_se_on_idx=-1; g_se_on_row=row; g_next_verb='X'; return 0; }
     if(on>=86&&on<=88){ int ac=(g_show_inv&&g_status_actor>=1)?g_status_actor:use_actor(), own=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; return se_totem(on,own==ac); }
     if(on==6 && row>=0) return se_gem(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==10 && row>=0) return se_ribbon(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
@@ -10188,6 +10210,13 @@ static void u6_hazard_hit(int a,int t)
     if(t==1167){ if(prot||(f&MF_SLEEP_IMMUNE)||g_asleep[a]) return; g_asleep[a]=255; return; } }
 static void hazard_check(const world_t*w,int a)
 {   int x,y,on; if(a<1||a>=U6_MAX_ACTORS||g_hz_done[a]||g_atile[a]==0xffff||!g_ahp[a]||!actor_where(a,&x,&y)) return;
+    if(g_gl->hazard_obj_first){ int b=((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1)), f;    /* SE (0x45a4): the things there first, then the ground */
+        on=actor_objn(a); f=monster_type_flags(on); if(on==233||(f&0x500)==0x500) return;
+        for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]]; if(!o->alive||o->x!=x||o->y!=y) continue;
+            if(g_tflags3 && (g_tflags3[o->tile]&4)) return;                      /* something there covers the ground */
+            if((g_tflags1[o->tile]&8)||o->obj_n==292){ hazard_hit(a,o->tile); return; } }
+        { int t=world_tile(w,x,y); if(g_tflags1[t]&8) hazard_hit(a,t); }
+        return; }
     on=actor_objn(a); if((on&&(on==g_on.balloon||on==g_on.skiff||on==g_on.raft||on==g_on.ship))||(monster_flags(on)&MF_FLIES)) return;
     { int t=world_tile(w,x,y); if(g_tflags1[t]&8){ hazard_hit(a,t); return; } }
     for(int i=0;i<g_nfields;i++) if(g_fields[i].x==x&&g_fields[i].y==y&&(g_tflags1[g_fields[i].tile]&8||g_fields[i].kind<3)){ hazard_hit(a,g_fields[i].tile); return; }
@@ -14455,6 +14484,17 @@ static void se_fell(world_t*w,int oi)
  * count drops, or the thing breaks without a word; the control panel and the dark moonstone start their scenes */
 static void se_panel_break(world_t*w,int oi);
 static void se_moonstone_break(world_t*w,int oi);
+/* what a harmful tile does to one on it (0x359:0xda8; se_combat.md §6): lava, webs, fires, dust for the myrmidex, the orchid's stalks */
+static void se_hazard_hit(int a,int t)
+{   int on=actor_objn(a), f=monster_type_flags(on), prot=g_se_prot[a]!=0, d; char nm[32];
+    g_hz_done[a]=1;
+    if(!g_ahp[a]) return;
+    if(((t>=15&&t<=27)||t==170||t==171) && !prot && !(f&8)){ d=se_rand(1,40); if(f&0x10) d*=2; actor_wound(-1,a,d,0); }
+    if(t>=528&&t<=537){ if(prot||str_adj(a)>=se_rand(1,30)||on==336) return;
+        g_paralyze[a]=255; actor_name(a,nm,sizeof nm); { int n=msgcat(msg_tail(),"\n"); n=msgcat(n,nm); msgcat(n," is stuck in a web!"); } return; }
+    if(t==899||t==1030||(t>=1067&&t<=1071)||(t>=1076&&t<=1079)){ if(prot||(f&8)) return; d=se_rand(1,15); if(f&0x10) d*=2; actor_wound(-1,a,d,0); return; }
+    if(t==935){ if(on==323||on==328) actor_wound(-1,a,se_rand(1,7),0); return; }
+    if(t>=1354&&t<=1359){ if(prot||on==282) return; actor_wound(-1,a,se_rand(1,5),0); return; } }
 /* the carnivorous orchid's wounds (0x1a3f0; se_eggs.md §5): the root shares half among the heads, a stalk passes it to its
  * head, a head that dies takes its stalks and maybe its root; 10 when the root dies, else 0 (slip 15) */
 static int se_orchid_wound(int id,int oi,int dmg)
@@ -14766,7 +14806,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18448,6 +18488,30 @@ int main(int argc, char **argv)
                     g_spell_light_turns=(uint8_t)l0; g_combat_mode=cm; g_status_actor=sa; g_show_inv=si_; g_se_on=0; g_peer_on=0; g_msg[0]=0; build_blocked();
                     #undef SE_ROW
                   }
+                  /* the bell on a sleeping tyrannosaurus (se_use.md §5i); harmful tiles (se_combat.md §6) */
+                  { static uint8_t tf0[256]; int tr, jg, row, h0, si_=g_show_inv; memcpy(tf0,g_cg.talk_flags,sizeof tf0); g_show_inv=0;
+                    tr=se_hatch_creature(&w,((int)w.px+1)&M,w.py,294);
+                    if(tr>=0){ g_cg.talk_flags[tr]=0; inv_add_objn(43,1);
+                      g_msg[0]=0; (void)se_use_pack(&w,43); (void)se_on_map(&w,1,0);
+                      dbg_num("SE bell awake no effect=", strstr(g_msg,"No effect.")!=0 && objworld_count(&g_ow,43)==1);
+                      g_asleep[tr]=255; g_msg[0]=0; (void)se_use_pack(&w,43); (void)se_on_map(&w,1,0);
+                      dbg_num("SE bell on the neck=", strstr(g_msg,"You put the bell on the dinosaur's neck.")!=0 && g_cg.talk_flags[tr]==0xff && objworld_count(&g_ow,43)==0);
+                      inv_add_objn(43,1); g_msg[0]=0; (void)se_use_pack(&w,43); (void)se_on_map(&w,1,0);
+                      dbg_num("SE bell already=", strstr(g_msg,"It already has a bell on its neck.")!=0);
+                      row=-1; for(int q=0;q<g_ow.ninv;q++) if(g_ow.inv[q].obj_n==43) row=q; if(row>=0) pack_row_take(row,g_ow.inv[row].qty);
+                      g_atile[tr]=0xffff; g_temp[tr]=0; g_asleep[tr]=0; }
+                    jg=se_hatch_creature(&w,((int)w.px+3)&M,w.py,333);
+                    if(jg>=0){ int dr=se_hatch_creature(&w,((int)w.px+4)&M,w.py,323), st;
+                      g_ahp[jg]=h0=200; se_hazard_hit(jg,1030); dbg_num("SE hazard fire=", g_ahp[jg]<h0 && g_ahp[jg]>=h0-15);
+                      g_ahp[jg]=h0; g_se_prot[jg]=1; se_hazard_hit(jg,1030); se_hazard_hit(jg,15); dbg_num("SE hazard protected=", g_ahp[jg]==h0); g_se_prot[jg]=0;
+                      g_ahp[jg]=h0; se_hazard_hit(jg,15); dbg_num("SE hazard lava=", g_ahp[jg]<h0 && g_ahp[jg]>=h0-40);
+                      g_ahp[jg]=h0; se_hazard_hit(jg,935); { int ok=g_ahp[jg]==h0; if(dr>=0){ g_ahp[dr]=100; se_hazard_hit(dr,935); ok=ok&&g_ahp[dr]<100; } dbg_num("SE hazard dust=", ok && dr>=0); }
+                      g_astr[jg]=1; g_msg[0]=0; for(int k=0;k<20&&!g_paralyze[jg];k++) se_hazard_hit(jg,528);
+                      dbg_num("SE hazard web=", g_paralyze[jg] && strstr(g_msg,"is stuck in a web!")!=0); g_paralyze[jg]=0;
+                      g_ahp[jg]=h0; st=temp_obj_new(292,2,g_actx[jg],g_acty[jg],0); build_blocked(); memset(g_hz_done,0,sizeof g_hz_done); hazard_check(&w,jg);
+                      dbg_num("SE hazard stalk=", st>=0 && g_ahp[jg]<h0 && g_ahp[jg]>=h0-5); if(st>=0) obj_destroy(st); memset(g_hz_done,0,sizeof g_hz_done);
+                      g_atile[jg]=0xffff; g_temp[jg]=0; if(dr>=0){ g_atile[dr]=0xffff; g_temp[dr]=0; } }
+                    memcpy(g_cg.talk_flags,tf0,sizeof tf0); g_show_inv=si_; g_msg[0]=0; g_se_on=0; build_blocked(); }
                   /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
                   { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
                     se_avatar_death(&w);

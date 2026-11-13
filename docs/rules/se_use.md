@@ -369,8 +369,11 @@ slot with a body's object number (249 or 280) and status bit 0x10 (such an actor
   actor 181 (the new game's tyrannosaurus at (421,584)) talk flag 20 gets bit 0x80.
 Anything else: `No effect.` (DOS also notes a frame-17 target's quality, then never uses it.)
 
-Waits for item 6: the engine doesn't yet turn SE's fallen creatures into bodies in their actor slots,
-and its `On ` takes things, not actors.
+The engine (2026-11-12): the bell's `On ` takes the actor on the chosen tile; a sleeping tyrannosaurus (294
+with its sleep, which DOS shows as the lying beast 280 at frame 13) is what DOS's frame-13 test finds. DOS's
+frame 17 is the lying beast's second tile, whose quality names the actor; DOS reads the quality and then tests
+the piece itself, so that tile always gives `No effect.` The engine has no second tile for a sleeping actor,
+so only the actor's own tile is offered (slip 22 is the intent: either tile would do).
 
 ### 5j. Jimmy's notebook (0x24d88)
 
@@ -387,8 +390,9 @@ The acting member loads it (whoever holds it). Frame 1 is loaded:
 - else one gunpowder goes, the flintlock turns to frame 1, and `Flintlock loaded.` for the leader, else
   `<name>: Flintlock loaded.`
 
-The engine keeps a readied thing's object number but not its frame, so a readied flintlock is loaded
-with item 6, where firing it unloads it.
+The engine keeps a readied thing's object number but not its frame, so a readied flintlock's load is kept
+per actor (built with the blows, se_combat.md §3a-3c: readying a loaded one keeps the load, firing unloads it,
+unreadying puts the frame back on the object).
 
 ### 5l. The mortar and the grinding stone (0x210ad)
 
@@ -500,7 +504,7 @@ The first one found ends it; none: `There is nothing to get in the bucket.`
 Nothing of these done: `No effect.`
 
 **A fire burns** (0x22a28): what is on its tile: a person takes the tile's harm (the hazard routine,
-0x359:0xda8: item 6); a thing on the burnable list (DS:0x118a, the fire's incinerate list, §5) or an egg
+0x359:0xda8: se_combat.md §3h); a thing on the burnable list (DS:0x118a, the fire's incinerate list, §5) or an egg
 (230) goes, the egg with what it holds; a web or a nest that goes lights a fire on every web around it
 (the 8 tiles). Then the fire itself goes. The new fires burn next, wave after wave (0x22b5e and 0x22c39
 take turns, marking each wave's fires with quality 0 or 1), until a wave lights none; the view is drawn
