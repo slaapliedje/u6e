@@ -193,3 +193,11 @@ list once SE's seams exist.
   wakes (slip 26), a thing 246 under a sleeper shows it, sleepers wake 1 in 21; the bell takes the tyrannosaurus by
   its second tile (slip 22 built). A readied flintlock loads by U)se and shows its load on the figure. Engine choice
   for the user: the dead leave a map object, not a body in their actor slot (matters to item 10's saves).
+- 2026-11-13: item 4 finished (rules/se_look.md). SE's L)ook read from its GAME.EXE and built (gl_se look/look_pack):
+  `You see ` and the thing only (no weights, damage or books), the count list of 47 kinds, the bucket's tar or water,
+  the sundial by day, the statue's note, a big creature's piece naming the creature, sleepers by their saved object
+  (slip 27), the bare map with no search line; the search only for containers and bodies beside the leader (not a
+  shut crate or the empty jar). SE's G)et built (gl_se get): `nothing!`, `Out of range!`, `Not possible.`, the body
+  searched as it is taken (`Searching the body, you find ...`), the lit torch into a hand (slip 28), the egg and skin
+  into their carried forms, a handful of diamonds, the bulb taking its egg. Engine choices for the user: the pooled
+  gold, and the dead looked at as their remains object.

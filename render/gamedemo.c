@@ -172,6 +172,10 @@ typedef struct GameLayer {
     void (*status_tick)(void);                                  /* the game's own wear-offs (SE's invocations); U6's protect/curse/charm rolls then stay out */
     int  (*big_step)(const world_t*w,int i,int d);              /* a step the game takes its own way (SE's big creatures); -1 = the ordinary step */
     int  (*actor_tile)(int i);                                  /* the tile an actor shows as it stands (SE's big creatures); -1 = by facing and gait */
+    int  (*look)(world_t*w,int dx,int dy);                     /* L)ook on the map the game's own way (SE); NULL = U6's */
+    void (*look_pack)(const invitem_t*it);                      /* L)ook at a carried thing (SE); NULL = U6's */
+    int  (*get)(world_t*w,int dx,int dy);                       /* G)et the game's own way (SE); NULL = U6's */
+    int  (*counted)(int on);                                    /* named with a count (SE's list); NULL = U6's */
     int  (*sleep_body)(int i);                                  /* what a sleeper lies as when no sleep table names it (obj | frame<<10); 0 = as it stands */
     uint8_t wake_odds;                                          /* a sleeper wakes 1 time in this many per turn; 0 = 16 */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
@@ -8066,6 +8070,7 @@ static int actor_objn(int i);
 static void open_book_page(void);
 /* these have a count, and always print it, 1 included; anything else its article */
 static int look_counted(int on){
+    if(g_gl->counted) return g_gl->counted(on);
     static const uint16_t c[]={88,90,63,77,55,56,65,66,67,68,69,70,71,72,337,128,129,83,335,89,91,92};
     for(unsigned i=0;i<sizeof c/sizeof*c;i++) if(c[i]==on) return 1;
     return 0; }
@@ -8119,6 +8124,7 @@ static int look_search(int idx,int n)
     return found>0; }
 static int do_look(world_t*w,int dx,int dy)
 {
+    if(g_gl->look) return g_gl->look(w,dx,dy);
     int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
     int near=dx>=-1&&dx<=1&&dy>=-1&&dy<=1, n=msgcat(0,g_gl->see);
     { static uint8_t pl[VT*VT],pv[VT*VT]; int vx=VT/2+dx,vy=VT/2+dy;       /* what shows black is darkness */
@@ -8161,7 +8167,8 @@ static int do_look(world_t*w,int dx,int dy)
 }
 /* L)ook at a carried thing: no search; the book opens its page, a book reads */
 static void look_pack_item(const invitem_t*it)
-{   int count, n=msgcat(0,g_gl->see), on=it->obj_n;
+{   if(g_gl->look_pack){ g_gl->look_pack(it); return; }
+    int count, n=msgcat(0,g_gl->see), on=it->obj_n;
     n=look_thing(n,on,it->tile,it->qty,&count);
     n=look_details(n,on,count,obj_weight10(on,look_counted(on)?it->qty:1));
     if((look_book_far(on)||look_book_near(on)) && it->quality){ msgcat(n,":"); look_read(it->quality); return; }
@@ -8233,6 +8240,7 @@ static int do_verb_at(world_t*w,int verb,int dx,int dy)
     if(verb=='U' && idx>=0 && g_on.doorway && g_wobj[idx].obj_n==g_on.doorway)   /* a door hung in a doorway: U)se works the door, not the arch (usecode_use.md Doors) */
         for(int dn=g_on.door_first;dn<g_on.door_first+g_on.door_n;dn++){ int di=obj_idx_at(tx,ty,dn); if(di>=0 && g_wobj[di].alive){ idx=di; break; } }
     int recompose=0, n=0;
+    if(verb=='G' && g_gl->get) return g_gl->get(w,dx,dy);
     if(verb=='G'){
         if(idx>=0 && on_in(g_on.moongate,2,g_wobj[idx].obj_n)){   /* a moongate stands on the tile: take what lies beneath it */
             int alt=-1; for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
@@ -14994,8 +15002,112 @@ static int se_ready_ok(int a,int on,int n)
     if((on==40||on==50||on==137) && a!=1 && a!=4 && a!=5 && a!=7){ char nm[24]; actor_name(a,nm,sizeof nm);
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
+/* ---- SE's L)ook, its search and G)et (se_look.md) ---- */
+static const uint16_t SE_COUNTED[]={36,45,41,54,55,56,72,70,73,74,102,103,104,105,108,109,110,210,132,44,133,115,120,123,129,137,180,130,192,134,139,140,191,204,206,214,93,48,10,47,26,240,211,252,27,208,69};
+static int se_counted(int on){ return on_list(SE_COUNTED,(int)(sizeof SE_COUNTED/sizeof*SE_COUNTED),on); }   /* named with their count (§4) */
+#define SE_NOTE "\nSearching here, you find a piece of paper with notes written on it:\n\n\"The statue is of the same materials and workmanship as that golden head Fritz found.  It appears to be a mechanism of some sort.  I will have to talk to Fritz about this...&"
+/* what the bucket holds of tar or water: on the map (idx) or in the pack (id) */
+static int se_held_n(int idx,int id,int on)
+{   int c=0;
+    if(idx>=0){ for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive&&o->parent==(uint16_t)idx&&o->obj_n==on) c+=o->qty?o->qty:1; } }
+    else if(id) for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].in==(uint16_t)id&&g_ow.inv[k].obj_n==on) c+=g_ow.inv[k].qty?g_ow.inv[k].qty:1;
+    return c; }
+/* the statue's note, the bucket's load, the "." and the sundial's time (§2) */
+static int se_look_tail(int n,int on,int fr,int q,int idx,int id)
+{   if(on==247 && !q) n=msgcat(n,SE_NOTE);
+    if(on==136 && (fr==1||fr==2)){ int c=se_held_n(idx,id,fr==1?139:140);
+        n=msgcat(n," holding "); n=msgcat_int(n,c); n=msgcat(n,c==1?" pint of ":" pints of "); n=msgcat(n,fr==1?"tar":"water"); }
+    n=msgcat(n,".");
+    if(on==146 && g_hour>=5 && g_hour<20){ int h=g_hour, mm=g_minutes%60;
+        n=msgcat(n,"\n\n\nThe time is "); n=msgcat_int(n,h==0?12:h>12?h-12:h); n=msgcat(n,":");
+        g_msg[n++]=(char)('0'+mm/10); g_msg[n++]=(char)('0'+mm%10); g_msg[n]=0; n=msgcat(n,h<12?" A.M.":" P.M."); }
+    return n; }
+/* the search beside the leader: a container or a body; 1 = things came out */
+static int se_search(int idx,int n)
+{   int on=g_wobj[idx].obj_n, any=0;
+    if(!is_holder(on) && on!=249) return 0;
+    if((on==188 && se_frame(idx)!=0) || on==97) return 0;              /* a shut crate, the empty jar */
+    for(int j=0;j<g_ow.nobjs&&!any;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)idx) any=1;
+    if(!any){ msgcat(n,"\n\nSearching here, you find nothing."); return 0; }
+    n=msgcat(n,"\n\nSearching here, you find "); (void)spill_container(idx,&n); msgcat(n,".");
+    return 1; }
+static int se_look(world_t*w,int dx,int dy)
+{   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), hx, hy, n=msgcat(0,"You see ");
+    char nm[40];
+    { static uint8_t pl[VT*VT],pv[VT*VT]; int vx=VT/2+dx,vy=VT/2+dy;       /* what shows black is darkness */
+      compute_predim_light(w,pl,pv);
+      if(vx>=0&&vx<VT&&vy>=0&&vy<VT&&!pl[vy*VT+vx]){ msgcat(n,"darkness."); return 0; } }
+    int id=(dx||dy)?npc_at(w,tx,ty):(veh_aboard()?-1:use_actor());
+    int idx=use_under(tx,ty,-1);                                        /* the first thing not ignored */
+    if(id<0 && idx>=0){ int on=g_wobj[idx].obj_n, q=g_wobj[idx].quality, b=se_big_base(on);   /* a piece names its creature */
+        if(b && b!=on && q && q<U6_MAX_ACTORS && g_atile[q]!=0xffff) id=q; }
+    if(id>=0){
+        if(id==1||is_party_member(id)) actor_name(id,nm,sizeof nm);
+        else { int t=npc_tile(id); n=msgcat(n,look_article(t));
+            if(g_asleep[id] && id>1 && (id>=16||!g_dos_slips)) t=g_atile[id];   /* asleep: by its saved object (slip 27 below 16) */
+            obj_name(t,nm,sizeof nm); }
+        n=msgcat(n,nm);
+        if(actor_objn(id)==294 && g_cg.talk_flags[id]==0xff) n=msgcat(n," with a bell around its neck");
+        msgcat(n,".");
+        look_view(id,0,nm);
+        return 1; }
+    if(idx<0){ int t=world_tile(w,tx,ty);                               /* the bare map: no search */
+        obj_name(t,nm,sizeof nm); n=msgcat(n,nm[0]?look_article(t):""); n=msgcat(n,nm[0]?nm:"nothing"); msgcat(n,".");
+        return 0; }
+    int on=g_wobj[idx].obj_n, t=g_wobj[idx].tile;
+    n=look_thing(n,on,t,g_wobj[idx].qty,0);
+    n=se_look_tail(n,on,t-basetile(on),g_wobj[idx].quality,idx,0);
+    se_leader_pos(&hx,&hy);
+    if(tx-hx<-1||tx-hx>1||ty-hy<-1||ty-hy>1) return 0;
+    return se_search(idx,n); }
+/* a carried thing: never searched (its stored place is its holder) */
+static void se_look_pack(const invitem_t*it)
+{   int n=msgcat(0,"You see "), on=it->obj_n;
+    n=look_thing(n,on,it->tile,it->qty,0);
+    (void)se_look_tail(n,on,(int)it->tile-basetile(on),it->quality,-1,it->id); }
+/* into the leader's pack, a holder with what it holds; 0 = refused */
+static int se_take(int idx,int a)
+{   int a0=g_ow.add_owner, ok; if(a!=1) g_ow.add_owner=(uint8_t)a;
+    g_ow.no_merge=(uint8_t)is_holder(g_wobj[idx].obj_n);
+    ok=objworld_get(&g_ow,idx);
+    if(ok && g_ow.no_merge){ g_ow.inv[g_ow.ninv-1].id=(uint16_t)++g_inv_next; pack_takes_children(idx,g_ow.inv[g_ow.ninv-1].id,0); }
+    g_ow.no_merge=0; g_ow.add_owner=(uint8_t)a0;
+    if(ok) build_blocked();
+    return ok; }
+#define SE_TOO_MUCH "You are carrying too much already."
+static int se_get(world_t*w,int dx,int dy)
+{   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), a=use_actor(), hx, hy;
+    int idx=use_under(tx,ty,-1), n=msgcat(0,"Get-");                     /* an actor or an ignored thing gives way to what is under it */
+    if(idx<0){ msgcat(n,"nothing!"); g_verb_pts=0; return 0; }
+    int on=g_wobj[idx].obj_n, q=g_wobj[idx].qty?g_wobj[idx].qty:1, x=g_wobj[idx].x, y=g_wobj[idx].y;
+    n=look_thing(n,on,g_wobj[idx].tile,g_wobj[idx].qty,0); n=msgcat(n,"\n");
+    se_leader_pos(&hx,&hy);
+    if(tx-hx<-1||tx-hx>1||ty-hy<-1||ty-hy>1){ msgcat(n,"Out of range!"); return 0; }
+    int wt=obj_weight10(on,se_counted(on)?q:1)+(on==249?0:look_held(idx,0));
+    if(wt==255 || !objworld_can_get(&g_ow,on)){ msgcat(n,"Not possible."); return 0; }
+    if(carry_over(a,wt)){ msgcat(n,"\nThe total is too heavy."); return 0; }
+    g_verb_pts=3;
+    if(take_gold(idx)) return 1;                                        /* the pooled gold (engine choice) */
+    if(on==249){ int any=0;                                              /* the body: what it holds comes out, then it is taken */
+        for(int j=0;j<g_ow.nobjs&&!any;j++) if(!g_wobj[j].alive && g_wobj[j].parent==(uint16_t)idx) any=1;
+        n=msgcat(n,"\nSearching the body, you find ");
+        if(any){ (void)spill_container(idx,&n); n=msgcat(n,"."); } else n=msgcat(n,"nothing.");
+        if(!se_take(idx,a)) msgcat(n,"\n" SE_TOO_MUCH);
+        build_blocked(); return 1; }
+    if(on==209){ int sl=!g_aready[a][EQ_ARM]?EQ_ARM:!g_aready[a][EQ_ARM2]?EQ_ARM2:-1;   /* the lit torch into a free hand */
+        if(sl<0){ msgcat(n,"Your hands are full."); return 0; }
+        obj_destroy(idx); g_aready[a][sl]=209; equip_refold(a); g_torch_fuel[a]=100; build_blocked(); return 1; }
+    if(on==111 || on==245){ if(!se_give(a,on==111?106:92,1)){ msgcat(n,SE_TOO_MUCH); return 0; }   /* the egg, the skin: their carried forms */
+        obj_destroy(idx); build_blocked(); return 1; }
+    if(on==71){ int32_t room=(int32_t)g_astr[a]*20-actor_carried(a); int r=se_rand(3,11), c=room*10>=r?r:(int)(room*10);   /* a handful of the pile */
+        if(c>0 && !se_give(a,72,c)){ msgcat(n,SE_TOO_MUCH); return 0; }
+        obj_destroy(idx); build_blocked(); return 1; }
+    if(!se_take(idx,a)){ msgcat(n,SE_TOO_MUCH); return 0; }
+    if(on==78) for(int e=0;e<g_neggs;e++){ egg_t*eg=&g_eggs[e];           /* the bulb's egg goes with it */
+        if(eg->made!=3 && eg->x==(uint16_t)x && eg->y==(uint16_t)y && eg->nemb && g_emb[eg->emb].obj_n==292){ eg->nemb=0; eg->active=0; eg->made=3; } }
+    return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18231,6 +18343,40 @@ int main(int argc, char **argv)
               g_inv_sel=r_; g_msg[0]=0; se_use_pack(&w,177);
               dbg_num("SE sift sulfur=", objworld_count(&g_ow,123)-s0==10 && g_wobj[dp].alive && strstr(g_msg,"You made some sulphur powder.")!=0);
               obj_destroy(dp); pack_take(1,177,1); pack_take(1,123,10); build_blocked(); g_inv_sel=-1; g_msg[0]=0; }
+            /* L)OOK, THE SEARCH, G)ET (se_look.md): counts, the bucket, the sundial, the statue's note, a container searched
+             * beside the leader, a shut crate not, the body searched as it is taken, the torch into a hand, the egg, the
+             * diamonds, out of range */
+            { int ex=(int)w.px, ey=(int)w.py, ddx=0, ddy=0; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
+                  if(objworld_at(&g_ow,(int)w.px+DX[d],(int)w.py+DY[d])<0 && npc_at(&w,(int)w.px+DX[d],(int)w.py+DY[d])<0){ ex=(int)w.px+DX[d]; ey=(int)w.py+DY[d]; ddx=DX[d]; ddy=DY[d]; break; } }
+              int o_=persist_obj_new(72,0,ex,ey,0); build_blocked(); g_msg[0]=0; (void)do_look(&w,ddx,ddy);
+              dbg_num("SE look count=", strstr(g_msg,"You see 1 diamond.")!=0 && strstr(g_msg,"weigh")==0 && strstr(g_msg,"Searching")==0);
+              obj_destroy(o_); o_=persist_obj_new(136,1,ex,ey,0); { int c=persist_obj_new(139,0,ex,ey,0); if(c>=0){ g_wobj[c].qty=10; g_wobj[c].alive=0; g_wobj[c].parent=(uint16_t)o_; } } build_blocked();
+              g_msg[0]=0; (void)do_look(&w,ddx,ddy); dbg_num("SE look bucket=", strstr(g_msg,"a metal bucket of tar holding 10 pints of tar.")!=0);
+              obj_destroy(o_); o_=persist_obj_new(146,0,ex,ey,0); build_blocked(); { int h0=g_hour, m0=g_minutes; g_hour=8; g_minutes=8*60+5;
+                g_msg[0]=0; (void)do_look(&w,ddx,ddy); int day=strstr(g_msg,"sundial.\n\n\nThe time is 8:05 A.M.")!=0; g_hour=21; g_minutes=21*60;
+                g_msg[0]=0; (void)do_look(&w,ddx,ddy); dbg_num("SE look sundial=", day && strstr(g_msg,"The time")==0); g_hour=h0; g_minutes=m0; }
+              obj_destroy(o_); o_=persist_obj_new(247,0,ex,ey,0); build_blocked(); g_msg[0]=0; (void)do_look(&w,ddx,ddy);
+              dbg_num("SE look statue=", strstr(g_msg,"a piece of paper with notes written on it:")!=0);
+              obj_destroy(o_); o_=persist_obj_new(182,0,ex,ey,0); { int c=persist_obj_new(72,0,ex,ey,0); if(c>=0){ g_wobj[c].qty=3; g_wobj[c].alive=0; g_wobj[c].parent=(uint16_t)o_; } } build_blocked();
+              g_msg[0]=0; (void)do_look(&w,ddx,ddy); { int k=use_under(ex,ey,o_); dbg_num("SE look search=", strstr(g_msg,".\n\nSearching here, you find 3 diamonds.")!=0 && k>=0 && g_wobj[k].obj_n==72); if(k>=0) obj_destroy(k); }
+              obj_destroy(o_); o_=persist_obj_new(188,1,ex,ey,0); { int c=persist_obj_new(72,0,ex,ey,0); if(c>=0){ g_wobj[c].alive=0; g_wobj[c].parent=(uint16_t)o_; } } build_blocked();
+              g_msg[0]=0; (void)do_look(&w,ddx,ddy); dbg_num("SE look shut crate=", strstr(g_msg,"crate.")!=0 && strstr(g_msg,"Searching")==0);
+              obj_destroy(o_); build_blocked(); g_msg[0]=0; (void)do_look(&w,ddx,ddy); dbg_num("SE look map=", strncmp(g_msg,"You see ",8)==0 && strstr(g_msg,"Searching")==0);
+              o_=persist_obj_new(249,0,ex,ey,0); { int c=persist_obj_new(72,0,ex,ey,0); if(c>=0){ g_wobj[c].qty=2; g_wobj[c].alive=0; g_wobj[c].parent=(uint16_t)o_; } } build_blocked();
+              { int b0=objworld_count(&g_ow,249), s0=g_astr[1]; g_astr[1]=250; g_msg[0]=0; (void)do_verb(&w,'G',ddx,ddy); int k=use_under(ex,ey,-1);
+                dbg_num("SE get body=", strstr(g_msg,"Searching the body, you find 2 diamonds.")!=0 && objworld_count(&g_ow,249)==b0+1 && k>=0 && g_wobj[k].obj_n==72);
+                if(k>=0) obj_destroy(k); pack_take(1,249,1); g_astr[1]=(uint8_t)s0; }
+              { uint16_t r0=g_aready[1][EQ_ARM], r1=g_aready[1][EQ_ARM2]; g_aready[1][EQ_ARM]=0; g_aready[1][EQ_ARM2]=0; equip_refold(1);
+                o_=persist_obj_new(209,0,ex,ey,0); build_blocked(); g_msg[0]=0; (void)do_verb(&w,'G',ddx,ddy);
+                dbg_num("SE get torch=", g_aready[1][EQ_ARM]==209 && g_torch_fuel[1]==100 && !g_wobj[o_].alive);
+                g_aready[1][EQ_ARM]=r0; g_aready[1][EQ_ARM2]=r1; g_torch_fuel[1]=0; equip_refold(1); }
+              { int e0=objworld_count(&g_ow,106); o_=persist_obj_new(111,0,ex,ey,0); build_blocked(); g_msg[0]=0; (void)do_verb(&w,'G',ddx,ddy);
+                dbg_num("SE get egg=", objworld_count(&g_ow,106)==e0+1 && !g_wobj[o_].alive); pack_take(1,106,1); }
+              { int d0=objworld_count(&g_ow,72); o_=persist_obj_new(71,0,ex,ey,0); build_blocked(); g_msg[0]=0; (void)do_verb(&w,'G',ddx,ddy); int got=objworld_count(&g_ow,72)-d0;
+                dbg_num("SE get diamonds=", got>=3 && got<=11 && !g_wobj[o_].alive); pack_take(1,72,got); }
+              { o_=persist_obj_new(72,0,(int)w.px+2,(int)w.py,0); build_blocked(); g_msg[0]=0; (void)do_verb(&w,'G',2,0);
+                dbg_num("SE get range=", strstr(g_msg,"Out of range!")!=0 && g_wobj[o_].alive); obj_destroy(o_); }
+              build_blocked(); g_msg[0]=0; }
             /* CRATE, BURNT LOGS, BRAZIER (§3): a shut crate opens and spills; an open one is "Not possible." then searched; logs
              * at frame 1 light, at 0 refuse; a brazier at frame 2 refuses, at 0 asks "On " */
             { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};

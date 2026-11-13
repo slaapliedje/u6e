@@ -44,6 +44,8 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 24 | A pteranodon's quarter turn needs room on the cells it will cover | se_big.md §5 | Tests (x-1, y) from north or south and (x, y-1) from east or west, as for the two-cell animals; but the pteranodon is wide facing north or south, so DOS tests cells it already covers. The engine tests (x, y-1) and (x-1, y) |
 | 26 | A big creature that wakes stands up whole | se_combat.md §3i | Only the tyrannosaurus gets its pieces back; the others wake with none, their second remains left lying. The engine rebuilds every big creature facing north, as hatching does (the tyrannosaurus's tail in frame 1 where DOS gives 3) |
 | 25 | The gorilla's and the raft's old facing is read as frame / 8 | se_big.md §5 | DOS reads frame / 16, so south reads as east and west as south; it matters only for a diagonal turn, which no step makes (the engine makes none) |
+| 27 | A sleeping or dead actor below 16 is named by what it was | se_look.md §2, §7 | Actors 16 and up asleep or dead are named by their saved object; those below 16 (out of the party) by the tile they show, so a sleeper reads `a body`. The engine names them all by their saved object |
+| 28 | A lit torch picked up goes into the leader's free hand | se_look.md §5, §7 | Only when the leader is the member whose inventory is shown; otherwise it is marked readied in no hand. The engine always uses the leader's first free hand |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
@@ -58,6 +60,8 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | A dead or unloaded big creature's pieces are removed | se_big.md §7 | Deletes the pieces and leaves the second remains (§3i); only a creature with no remains is moved to level 6 |
 | A death leaves the remains as a map object holding the victim's things, and the actor leaves the map | se_combat.md §3i | The actor stays in its slot as its remains (status bit 0x10); the same on screen, it matters to the save (item 10) and to who stands up at Intanya's hut |
 
+| Looking at a dead creature names its remains object and searches it like a body | se_look.md §7 | The dead actor is looked at as an actor: named by what it was, never searched (follows from the row above) |
+| G)et of gold puts it in the party's pool, as everywhere else in the engine | se_look.md §5 | Gold (69) is a counted thing taken into the leader's pack |
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the
 ceiling, the trap doors, the drum's scene), combat (item 6: the totems, the bell, fire's harm, a
