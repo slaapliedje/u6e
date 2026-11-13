@@ -169,6 +169,8 @@ typedef struct GameLayer {
     const char*const*cmode_name;                                 /* the combat modes' names by worktype-2 (NULL: U6's) */
     int  (*cmode_next)(int m);                                  /* the mode button's next mode (NULL: U6's 2..8) */
     void (*status_tick)(void);                                  /* the game's own wear-offs (SE's invocations); U6's protect/curse/charm rolls then stay out */
+    int  (*big_step)(const world_t*w,int i,int d);              /* a step the game takes its own way (SE's big creatures); -1 = the ordinary step */
+    int  (*actor_tile)(int i);                                  /* the tile an actor shows as it stands (SE's big creatures); -1 = by facing and gait */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
     void (*death_words)(int def);                               /* the words for any death (SE, se_combat.md §3d); NULL = U6's "killed!" for a blow */
     int  (*dying)(int id,int temp);                             /* what a death does before its remains (the story, a rider, blood); 1 = it leaves nothing and keeps its things */
@@ -3665,6 +3667,7 @@ static int npc_tile(int i)
         { int bed=g_on.bed?obj_idx_at(g_actx[i],g_acty[i],g_on.bed):-1; if(bed>=0){ int f=(int)g_wobj[bed].tile-basetile(g_on.bed); if(f==0||f==6) return basetile(g_on.bed_sleeper)+(f?1:0); } }
 
         if(sh) return basetile(sh&0x3ff)+(sh>>10); }
+    if(g_gl->actor_tile){ int t=g_gl->actor_tile(i); if(t>=0) return t; }
     if(tpd<2) return g_atile[i];
     int st=npc_sit_tile_c(i); if(st>=0) return st;         /* seated NPC (e.g. Lord British) — cached search */
     int wf;
@@ -7108,6 +7111,7 @@ static int g_use_slot=-1;                                   /* the readied slot 
 /* ---- the totems' invocations (0x12ef7; docs/rules/se_invoke.md) ---- */
 static int align_of(int i); static int wt_now(int i); static int member(int i); static void charm_end(int id);
 static int se_hatch_creature(const world_t*w,int x,int y,int on);
+static void se_big_hatch(const world_t*w,int i); static void se_big_drop(int i);
 static int g_se_offer;                                        /* the invocation asked: totem << 4 (Heluzz 0, Aphazz 0x10, Motazz 0x20) */
 /* the actors in the 11 x 9 around the leader (0x126e4) */
 static int se_invoke_near(int*out,int cap)
@@ -9772,12 +9776,14 @@ static int try_dir(const world_t*w,int i,int d)
 {   d&=7; int M=U6_SURFACE_TILES-1, x=g_actx[i], y=g_acty[i], nx=(x+D8X[d])&M, ny=(y+D8Y[d])&M;
     pay(i,walk_points(w,x,y));
     if(member(i)&&g_combat_mode&&(iabs_(nx-(int)w->px)>8||iabs_(ny-(int)w->py)>8)) return 0;
+    if(g_gl->big_step){ int r=g_gl->big_step(w,i,d); if(r>=0) return r; }
     if(!step_ok(w,i,nx,ny)) return 0;
     step_to(i,nx,ny,d); return 1; }
 static int try_diag(const world_t*w,int i,int a,int b)
 {   if(g_on.no_diag&&actor_objn(i)==g_on.no_diag) return 0;
     int d=(b==0&&a==6)?7:(a+b)>>1, M=U6_SURFACE_TILES-1, x=g_actx[i], y=g_acty[i], nx=(x+D8X[d])&M, ny=(y+D8Y[d])&M;
     pay(i,walk_points(w,x,y));
+    if(g_gl->big_step){ int r=g_gl->big_step(w,i,d); if(r>=0) return r; }
     if(!step_ok(w,i,nx,y) && !step_ok(w,i,x,ny)) return 0;
     if(!step_ok(w,i,nx,ny)) return 0;
     step_to(i,nx,ny,d); return 1; }
@@ -10553,6 +10559,7 @@ static int se_hatch_creature(const world_t*w,int x,int y,int on)
         for(int k=0;k<4;k++){ int h=se_hatch_creature(w,x+VDX[k],y+VDY[k],282); if(h<0) continue;
             g_se_orc[h]=(uint8_t)s; g_se_odir[h]=(uint8_t)(k*2);
             g_align_hostile[h]=g_align_hostile[s]; g_alert[h]=g_alert[s]; g_agood[h]=g_agood[s]; g_achaos[h]=g_achaos[s]; hatched_worktype(h,13); } }
+    se_big_hatch(w,s);
     return s; }
 /* may a hatched object go on (x,y)? Not a bare water tile, nor one whose flags have 0x02 or 0x04 */
 static int se_egg_tile_ok(const world_t*w,int x,int y)
@@ -10604,7 +10611,7 @@ static void se_eggs_update(const world_t *w, int teleport)
     g_egg_checked=0; g_egg_hatched=0; g_egg_nofree=0; g_se_egg_made=0;
     int span=(w->level==0)?U6_SURFACE_TILES:256, heard=0;
     for(int i=192;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff &&                  /* the unload (0xbcf7) */
-        (wrap_dist(g_actx[i],w->px,span)>20 || wrap_dist(g_acty[i],w->py,span)>20 || (int)g_actz[i]!=w->level)){ g_atile[i]=0xffff; g_temp[i]=0; }
+        (wrap_dist(g_actx[i],w->px,span)>20 || wrap_dist(g_acty[i],w->py,span)>20 || (int)g_actz[i]!=w->level)){ se_big_drop(i); g_atile[i]=0xffff; g_temp[i]=0; }
     temp_purge(w);
     for(int e=0;e<g_neggs;e++) if(g_eggs[e].made==1) g_eggs[e].made=2;                       /* last time's bulb eggs may go now */
     for(int i=0;i<(int)g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i]; if(!o->alive || o->parent!=WOBJ_PARENT_NONE) continue;
@@ -14449,6 +14456,7 @@ static void se_piece(int on,int fr,int x,int y,int id,int temp)
  * the big creatures' second piece, the blood; 1 = no remains, its things go with it */
 static int se_dying(int id,int temp)
 {   world_t*w=(world_t*)g_wp; int fr=0;
+    se_big_drop(id);                                                /* its pieces go with it (se_big.md §7) */
     if(id==23) g_cg.talk_flags[53]|=0x20;
     if(id==180) g_cg.talk_flags[48]|=0x80;
     if(g_se_rider[id] && (!w || !se_dismount(w,id))) return 1;    /* in open water a rider leaves nothing */
@@ -14576,10 +14584,145 @@ static int se_retarget(const world_t*w,int i,int wp,int t)
 {   if(wp==137||wp==138) return se_area_target(w,i,0);
     if(wp==240||wp==241) return se_area_target(w,i,1);
     return t; }
+/* ---- the big creatures (se_big.md) ---- */
+static const int8_t SEB_DX[4]={0,1,0,-1}, SEB_DY[4]={-1,0,1,0};
+static uint8_t g_se_bph[U6_MAX_ACTORS];                          /* the three-phase walk's way back (0x4602 bit 0x80) */
+/* the creature a kind belongs to (0xa5d:0xdef); 0 = none */
+static int se_big_base(int on)
+{   switch(on){ case 284: case 285: return 284; case 289: case 290: return 289; case 293: case 294: case 295: return 294;
+    case 297: case 298: return 297; case 303: case 304: return 303; case 305: case 306: return 305; } return 0; }
+/* its kinds and frame shifts (0xa5d:0xd5b): [0] the creature, then its pieces; -1 = none */
+static void se_big_list(int base,int k[3],int s[3])
+{   if(base==294){ k[0]=294; k[1]=293; k[2]=295; s[0]=1; s[1]=2; s[2]=1; }
+    else { k[0]=base; k[1]=base+1; k[2]=-1; s[0]=1; s[1]=0; s[2]=0; } }
+/* a kind of normal size (0x131dd, §4) */
+static int se_normal_size(int on){ return (on>=307&&on<=326)||on>=336||on==282||on==291||on==292||on==299||on==301||on==302; }
+static int se_two_cell(int on){ return on==283||on==300||on==327||(on>=330&&on<=335); }   /* 0x130f2 */
+static int se_big_phases(int on){ return (on==288||on==289||on==294)?3:2; }
+static int se_big_mask(void){ return ((g_wp&&g_wp->level==0)?U6_SURFACE_TILES:256)-1; }
+/* actor i's piece of kind on (-1: any of its kinds) beside (x,y) in facing q, its tile naming the way back */
+static int se_big_piece(int i,int x,int y,int q,int on)
+{   int M=se_big_mask(), px=(x+SEB_DX[q])&M, py=(y+SEB_DY[q])&M, base=se_big_base(actor_objn(i)), b=((py>>4)&(OBKT-1))*OBKT+((px>>4)&(OBKT-1));
+    for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]];
+        if(!o->alive||o->parent!=WOBJ_PARENT_NONE||o->x!=px||o->y!=py||o->quality!=i) continue;
+        if(on>=0 ? o->obj_n!=on : (o->obj_n==base||se_big_base(o->obj_n)!=base)) continue;
+        if(g_tflags1[o->tile&2047]&(0x80>>((q+2)&3))) return g_obkt_idx[k]; }
+    return -1; }
+/* any big creature's piece on (x,y) */
+static int se_piece_on(int x,int y)
+{   int b=((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1));
+    for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]];
+        if(o->alive&&o->parent==WOBJ_PARENT_NONE&&o->x==x&&o->y==y&&se_big_base(o->obj_n)&&o->quality&&o->obj_n!=se_big_base(o->obj_n)) return 1; }
+    return 0; }
+static void se_obj_put(int j,int x,int y,int fr)
+{   wobj_t*o=&g_wobj[j]; if(x>=0){ o->x=(uint16_t)x; o->y=(uint16_t)y; } if(fr>=0) o->tile=(uint16_t)(basetile(o->obj_n)+fr);
+    if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; g_view_ct++; }
+/* room for a turning creature on (x,y) (0x1415d) */
+static int se_big_room(const world_t*w,int i,int x,int y)
+{   int M=se_big_mask(), b; x&=M; y&=M;
+    if(g_tflags1[world_tile(w,x,y)]&0x06) return 0;
+    if(actor_on(w,x,y)>=0 && actor_on(w,x,y)!=i) return 0;
+    b=((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1));
+    for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){ const wobj_t*o=&g_wobj[g_obkt_idx[k]];
+        if(o->alive&&o->parent==WOBJ_PARENT_NONE&&o->x==x&&o->y==y&&(g_tflags1[o->tile&2047]&2)&&o->quality!=i) return 0; }
+    return 1; }
+/* the turn toward facing f (0x142e4's big branch, §5); 0 = no room */
+static int se_big_turn(const world_t*w,int i,int f)
+{   int on=actor_objn(i), k[3], s[3], P=se_big_phases(on), x=g_actx[i], y=g_acty[i], fr=(int)g_atile[i]-basetile(on), c, r, old, ph, code;
+    se_big_list(on,k,s); if(fr<0) fr=0; c=fr>>s[0]; r=c%P; old=(c/P)&3;
+    if(P==3){ if(r==0){ g_se_bph[i]=0; ph=1; } else if(r==1) ph=g_se_bph[i]?0:2; else { g_se_bph[i]=1; ph=1; } }
+    else ph=r?0:1;
+    code=P*f+ph+1;
+    if(!(old&1)&&(f&1)){ if(on==294){ if(!se_big_room(w,i,x-2,y-1)||!se_big_room(w,i,x+1,y-1)||!se_big_room(w,i,x-2,y)||!se_big_room(w,i,x+1,y)) return 0; }
+                         else if(!se_big_room(w,i,x-1,y)||!se_big_room(w,i,x+1,y)) return 0; }
+    if((old&1)&&!(f&1)){ if(on==294){ if(!se_big_room(w,i,x-1,y-2)||!se_big_room(w,i,x-1,y+1)||!se_big_room(w,i,x,y-2)||!se_big_room(w,i,x,y+1)) return 0; }
+                         else if(!se_big_room(w,i,x,y-1)||!se_big_room(w,i,x,y+1)) return 0; }
+    {   int fl=g_tflags1[g_atile[i]&2047], pc[2]={-1,-1}, pq[2]={0,0}, M=se_big_mask();
+        for(int j=1;j<3&&k[j]>=0;j++) for(int q=0;q<4;q++) if((fl&(0x80>>q)) && (pc[j-1]=se_big_piece(i,x,y,q,k[j]))>=0){ pq[j-1]=q; break; }
+        g_atile[i]=(uint16_t)(basetile(on)+(code<<s[0])-1);
+        for(int j=0;j<2;j++) if(pc[j]>=0){ int q=pq[j];
+            if((old^f)&1) se_obj_put(pc[j],(x+SEB_DY[q])&M,(y+SEB_DX[q])&M,(code<<s[j+1])-1); else se_obj_put(pc[j],-1,-1,(code<<s[j+1])-1); }
+        if(((old^f)&1) && (pc[0]>=0||pc[1]>=0)) build_blocked(); }        /* the pieces are found by place again for the carry */
+    return 1; }
+/* the pieces follow a creature that moved from (ox,oy) (0xb0f8) */
+static void se_big_carry(int i,int ox,int oy)
+{   int fl=g_tflags1[g_atile[i]&2047], pc[4], M=se_big_mask();
+    for(int q=0;q<4;q++) pc[q]=(fl&(0x80>>q))?se_big_piece(i,ox,oy,q,-1):-1;
+    for(int q=0;q<4;q++) if(pc[q]>=0) se_obj_put(pc[q],(g_actx[i]+SEB_DX[q])&M,(g_acty[i]+SEB_DY[q])&M,-1); }
+/* the tiles a step to (x,y) facing f is tested on (§4); the count */
+static int se_big_probes(int on,int f,int x,int y,int px[2],int py[2])
+{   static const int8_t T294[4][4]={{0,-2,-1,-2},{1,0,1,-1},{0,1,-1,1},{-2,0,-2,-1}}, T296[4][4]={{0,-1,-1,-1},{0,0,0,-1},{0,0,-1,0},{-1,0,-1,-1}};
+    int n=1; px[0]=x; py[0]=y;
+    if(on==294||on==296){ const int8_t*t=on==294?T294[f]:T296[f]; px[0]=x+t[0]; py[0]=y+t[1]; px[1]=x+t[2]; py[1]=y+t[3]; n=2; }
+    else if(on==284||on==289||on==297||on==303||on==305){ px[0]=x+SEB_DX[f]; py[0]=y+SEB_DY[f]; }
+    else if(on==283||on==300||on==327||(on>=330&&on<=335)){ if(f==3) px[0]=x-1; if(f==0) py[0]=y-1; }
+    else if(on==288){ px[1]=(f&1)?x:x-1; py[1]=(f&1)?y-1:y; n=2; }
+    return n; }
+/* a step of a creature not of normal size (0x1693c, §3); -1 = an ordinary step */
+static int se_big_step(const world_t*w,int i,int d)
+{   int on=actor_objn(i), M=U6_SURFACE_TILES-1, x=g_actx[i], y=g_acty[i], nx, ny, px[2], py[2], n, big;
+    if(on<=0||se_normal_size(on)||on==329) return -1;
+    if(d&1) return 0;
+    nx=(x+D8X[d])&M; ny=(y+D8Y[d])&M; n=se_big_probes(on,d>>1,nx,ny,px,py);
+    for(int k=0;k<n;k++){ px[k]&=M; py[k]&=M; if(!step_ok(w,i,px[k],py[k])||se_piece_on(px[k],py[k])) return 0; }
+    big=se_big_base(on)==on;
+    if(big && !se_big_turn(w,i,d>>1)) return 0;
+    if(se_two_cell(on)){ int fr=(int)g_atile[i]-basetile(on), old=(fr>>2)&3, f=d>>1;     /* its own turn (0x142e4 at 0x1461e) */
+        if(fr<0) fr=0;
+        if(!(old&1)&&(f&1)&&!se_big_room(w,i,x-1,y)) return 0;
+        if((old&1)&&!(f&1)&&!se_big_room(w,i,x,y-1)) return 0;
+        g_atile[i]=(uint16_t)(basetile(on)+(2*f+((fr&2)?0:1)+1)*2-1); }
+    step_to(i,nx,ny,d);
+    if(big){ se_big_carry(i,x,y); build_blocked(); }
+    return 1; }
+/* the creature's own frames are drawn as they stand (§2) */
+static int se_actor_tile(int i)
+{   static const uint16_t B[14]={284,289,294,297,303,305,283,300,327,330,331,332,333,334}; int t=g_atile[i];
+    for(int k=0;k<14;k++) if(t>=basetile(B[k])&&t<basetile(B[k]+1)) return t;
+    if(t>=basetile(335)&&t<basetile(335)+16) return t;
+    return -1; }
+/* a new creature's frame and pieces (0x267cd, §6) */
+static void se_big_hatch(const world_t*w,int i)
+{   int on=actor_objn(i), k[3], s[3], x=g_actx[i], y=g_acty[i], M=se_big_mask(), made=0; (void)w;
+    if(on>0&&se_two_cell(on)){ g_atile[i]=(uint16_t)(basetile(on)+1); return; }
+    if(on<=0||se_big_base(on)!=on) return;
+    se_big_list(on,k,s); g_atile[i]=(uint16_t)(basetile(on)+(1<<s[0])-1); g_se_bph[i]=0;
+    for(int j=1;j<3&&k[j]>=0;j++) for(int q=0;q<4;q++){ int pf=(1<<s[j])-1;
+        if(!(g_tflags1[g_atile[i]&2047]&(0x80>>q)) || !(g_tflags1[(basetile(k[j])+pf)&2047]&(0x80>>((q+2)&3)))) continue;
+        if(temp_obj_new(k[j],pf,(x+SEB_DX[q])&M,(y+SEB_DY[q])&M,i)>=0) made=1; break; }
+    if(made) build_blocked(); }
+/* a creature's pieces go with it (§7) */
+static void se_big_drop(int i)
+{   int base=se_big_base(actor_objn(i)), gone=0; if(!base) return;
+    for(int32_t j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j];
+        if(o->alive&&o->parent==WOBJ_PARENT_NONE&&o->quality==i&&o->obj_n!=base&&se_big_base(o->obj_n)==base){ obj_destroy((int)j); gone=1; } }
+    if(gone) build_blocked(); }
+/* the distance from attacker i to (tx,ty) (0x1be13, §8): the table, or 1 inside the box round its head, else 9 */
+static int se_dist(int i,int tx,int ty)
+{   int on=actor_objn(i), x=g_actx[i], y=g_acty[i], fr, f, *b, lo_x, hi_x, lo_y, hi_y;
+    if(i==1&&g_wp){ x=(int)g_wp->px; y=(int)g_wp->py; }
+    if(on<=0||se_normal_size(on)||on==329) return combat_dist(tx-x,ty-y);
+    static int B[5][4][4]={{{-1,1,-2,-1},{0,1,-1,1},{-1,1,0,1},{-2,-1,-1,1}},     /* 283 300 327 330-335 */
+                           {{-1,0,-1,0},{0,1,-1,0},{-1,0,0,1},{-1,0,-1,0}},        /* 288 (slip 23 closed) */
+                           {{-1,1,-2,0},{0,2,-1,1},{-1,1,0,2},{-2,0,-1,1}},        /* 284 289 297 303 305 */
+                           {{-2,1,-2,-1},{0,1,-2,1},{-2,1,0,1},{-2,-1,-2,1}},      /* 296 */
+                           {{-2,1,-3,-1},{0,2,-2,1},{-2,1,0,2},{-3,-1,-2,1}}};     /* 294 */
+    fr=(int)g_atile[i]-basetile(on); if(fr<0) fr=0;
+    if(on==283||on==300||on==327||(on>=330&&on<=335)){ b=&B[0][0][0]; f=fr>>2; }
+    else if(on==288){ b=&B[1][0][0]; f=fr/6; }
+    else if(on==284||on==297||on==303||on==305){ b=&B[2][0][0]; f=fr>>2; }
+    else if(on==289){ b=&B[2][0][0]; f=fr/6; }
+    else if(on==296){ b=&B[3][0][0]; f=fr>>3; }
+    else if(on==294){ b=&B[4][0][0]; f=fr/6; }
+    else return 9;
+    if(f>3) return 9;
+    b+=f*4; lo_x=x+b[0]; hi_x=x+b[1]; lo_y=y+b[2]; hi_y=y+b[3];
+    if(on==288 && g_dos_slips){ if(f==0) hi_y=9999; else if(f==1) lo_x=-9999; else if(f==2) lo_y=-9999; else hi_x=9999; }   /* slip 23: DOS leaves one side open */
+    return (tx>=lo_x&&tx<=hi_x&&ty>=lo_y&&ty<=hi_y)?1:9; }
 /* in reach and clear: strike (1); blocked: a sidestep tile (0); beyond: the target's tile (0) */
 static int se_strike_or_aim(const world_t*w,int i,int t,int wp,int*gx,int*gy)
 {   int x=g_actx[i], y=g_acty[i], tx=x, ty=y, d, r=wp?weapon_range(wp):1; (void)actor_where(t,&tx,&ty);
-    d=combat_dist(tx-x,ty-y);
+    d=se_dist(i,tx,ty);
     if(d<=r){ if(d<=1||missile_reaches(w,x,y,tx,ty)){ wt_strike(w,i,t,wp,x,y,tx,ty); return 1; }
         if(se_rand(0,1)){ *gx=x-(ty-y); *gy=y+(tx-x); } else { *gx=x+(ty-y); *gy=y-(tx-x); }
         if(g_dos_slips){ (void)walk_to(w,i,*gx,*gy); }               /* slip 17: DOS walks to the sidestep twice */
@@ -14588,7 +14731,7 @@ static int se_strike_or_aim(const world_t*w,int i,int t,int wp,int*gx,int*gy)
 /* CLOSE (8, 0x9b; 0x1c86d) */
 static void se_close(const world_t*w,int i)
 {   int t=se_nearest_foe(i), tx=0, ty=0, gx, gy, wp;
-    if(t>=0){ (void)actor_where(t,&tx,&ty); wp=actor_pick_weapon(i,combat_dist(tx-g_actx[i],ty-g_acty[i])); t=se_retarget(w,i,wp,t); }
+    if(t>=0){ (void)actor_where(t,&tx,&ty); wp=actor_pick_weapon(i,se_dist(i,tx,ty)); t=se_retarget(w,i,wp,t); }
     else wp=0;
     if(t<0){ wander(w,i); return; }
     if(se_strike_or_aim(w,i,t,wp,&gx,&gy)) return;
@@ -14604,7 +14747,7 @@ static int se_pick_ranged(int i,int d)
 static void se_range(const world_t*w,int i)
 {   int x=g_actx[i], y=g_acty[i], t=se_nearest_foe(i), tx=x, ty=y, wp, gx, gy;
     if(t>=0) (void)actor_where(t,&tx,&ty);
-    wp=se_pick_ranged(i,combat_dist(tx-x,ty-y));
+    wp=se_pick_ranged(i,se_dist(i,tx,ty));
     if(t>=0 && iabs_(tx-x)<3 && iabs_(ty-y)<3){ (void)walk_to(w,i,x-(tx-x),y-(ty-y)); return; }
     if(!wp){ char nm[32]; int n=msg_tail(); actor_name(i,nm,sizeof nm); n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," has no ranged weapons!\n"); return; }
     if(iabs_(x-(int)w->px)>5||iabs_(y-(int)w->py)>4){ (void)walk_to(w,i,(int)w->px,(int)w->py); return; }
@@ -14806,7 +14949,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18431,7 +18574,7 @@ int main(int argc, char **argv)
                     int lpx=w.px, lpy=w.py; if(ax0>=0){ w.px=(uint16_t)((ax0+1)&M); w.py=(uint16_t)((ay0+2)&M); }   /* the leader beside the patch, for FLEE's 7 */
                     if(ax0>=0){ int jg=se_hatch_creature(&w,ax0,ay0,333), mm=se_hatch_creature(&w,(ax0+1)&M,ay0,310), hp0=0, k, d0, d1;
                       if(jg>=0 && mm>=0){
-                        g_ahp[mm]=hp0=200; hatched_worktype(jg,8);
+                        g_ahp[mm]=hp0=200; hatched_worktype(jg,8); g_atile[jg]=(uint16_t)(basetile(333)+5);   /* facing its foe: a jaguar bites ahead (se_big.md §8) */
                         for(k=0;k<8 && g_ahp[mm]==hp0;k++){ g_pts[jg]=30; wt_act(&w,jg); }
                         dbg_num("SE ai close strikes=", g_ahp[mm]<hp0);
                         g_actx[mm]=(uint16_t)((ax0+2)&M); g_ahp[mm]=200; d0=iabs_(wrap_sub(g_actx[mm],g_actx[jg],M+1));
@@ -18499,7 +18642,7 @@ int main(int argc, char **argv)
                       inv_add_objn(43,1); g_msg[0]=0; (void)se_use_pack(&w,43); (void)se_on_map(&w,1,0);
                       dbg_num("SE bell already=", strstr(g_msg,"It already has a bell on its neck.")!=0);
                       row=-1; for(int q=0;q<g_ow.ninv;q++) if(g_ow.inv[q].obj_n==43) row=q; if(row>=0) pack_row_take(row,g_ow.inv[row].qty);
-                      g_atile[tr]=0xffff; g_temp[tr]=0; g_asleep[tr]=0; }
+                      se_big_drop(tr); g_atile[tr]=0xffff; g_temp[tr]=0; g_asleep[tr]=0; }
                     jg=se_hatch_creature(&w,((int)w.px+3)&M,w.py,333);
                     if(jg>=0){ int dr=se_hatch_creature(&w,((int)w.px+4)&M,w.py,323), st;
                       g_ahp[jg]=h0=200; se_hazard_hit(jg,1030); dbg_num("SE hazard fire=", g_ahp[jg]<h0 && g_ahp[jg]>=h0-15);
@@ -18512,6 +18655,34 @@ int main(int argc, char **argv)
                       dbg_num("SE hazard stalk=", st>=0 && g_ahp[jg]<h0 && g_ahp[jg]>=h0-5); if(st>=0) obj_destroy(st); memset(g_hz_done,0,sizeof g_hz_done);
                       g_atile[jg]=0xffff; g_temp[jg]=0; if(dr>=0){ g_atile[dr]=0xffff; g_temp[dr]=0; } }
                     memcpy(g_cg.talk_flags,tf0,sizeof tf0); g_show_inv=si_; g_msg[0]=0; g_se_on=0; build_blocked(); }
+                  /* the big creatures (se_big.md): hatch, step, turn, blocked, reach, drop */
+                  { int cx=-1, cy=-1;
+                    static const int8_t NEED[8][2]={{0,0},{0,-1},{0,-2},{-1,-1},{1,-1},{2,-1},{3,-1},{0,1}};   /* the walk, the turn's room, the blocker's tile */
+                    for(int r=2;r<14 && cx<0;r++) for(int v=-r;v<=r && cx<0;v++) for(int t=-r;t<=r && cx<0;t++){ if(iabs_(t)!=r&&iabs_(v)!=r) continue;
+                        int qx0=((int)w.px+t)&M, qy0=((int)w.py+v)&M, open=1;
+                        for(int k=0;k<8&&open;k++){ int qx=(qx0+NEED[k][0])&M, qy=(qy0+NEED[k][1])&M; if(!world_is_passable(&w,qx,qy)||obj_blocks_at(qx,qy)||(qx==(int)w.px&&qy==(int)w.py)||npc_at(&w,qx,qy)>=0) open=0; }
+                        if(open){ cx=qx0; cy=qy0; } }
+                    dbg_num("SE big spot found=", cx>=0);
+                    if(cx>=0){ int a=se_hatch_creature(&w,cx,cy,284), p, tr, ok, b;
+                      p=a>=0?obj_idx_at(cx,(cy+1)&M,285):-1;
+                      tr=se_hatch_creature(&w,(cx+3)&M,(cy+3)&M,294);
+                      ok=tr>=0 && g_atile[tr]==basetile(294)+1; { int h=obj_idx_at((cx+3)&M,(cy+2)&M,293), t2=obj_idx_at((cx+3)&M,(cy+4)&M,295);
+                        ok=ok && h>=0 && t2>=0 && g_wobj[h].tile==basetile(293)+3 && g_wobj[t2].tile==basetile(295)+1 && g_wobj[h].quality==tr; }
+                      if(tr>=0){ se_big_drop(tr); g_atile[tr]=0xffff; g_temp[tr]=0; }
+                      dbg_num("SE big hatch=", a>=0 && p>=0 && g_wobj[p].quality==a && g_wobj[p].tile==basetile(285) && g_atile[a]==basetile(284)+1 && ok);
+                      if(a>=0 && p>=0){
+                        g_pts[a]=30; b=try_dir(&w,a,0);
+                        dbg_num("SE big step=", b && g_actx[a]==(uint16_t)cx && g_acty[a]==(uint16_t)((cy-1)&M) && g_wobj[p].x==(uint16_t)cx && g_wobj[p].y==(uint16_t)cy && g_atile[a]==basetile(284)+3 && g_wobj[p].tile==basetile(285)+1 && npc_tile(a)==basetile(284)+3);
+                        g_pts[a]=30; b=try_dir(&w,a,2);
+                        dbg_num("SE big turn=", b && g_actx[a]==(uint16_t)((cx+1)&M) && g_acty[a]==(uint16_t)((cy-1)&M) && g_wobj[p].x==(uint16_t)((cx+2)&M) && g_wobj[p].y==(uint16_t)((cy-1)&M) && g_atile[a]==basetile(284)+5 && g_wobj[p].tile==basetile(285)+2);
+                        { int bl=se_hatch_creature(&w,(cx+3)&M,(cy-1)&M,310), b2, b3;
+                          g_pts[a]=30; b2=try_dir(&w,a,2); g_pts[a]=30; b3=try_dir(&w,a,3);
+                          dbg_num("SE big blocked=", bl>=0 && !b2 && !b3 && g_actx[a]==(uint16_t)((cx+1)&M));
+                          if(bl>=0){ g_atile[bl]=0xffff; g_temp[bl]=0; } }
+                        { int X=(cx+1)&M, Y=(cy-1)&M; dbg_num("SE big reach=", se_dist(a,X+2,Y)==1 && se_dist(a,X+1,Y+1)==1 && se_dist(a,X-1,Y)==9 && se_dist(a,X,Y-2)==9); }
+                        se_big_drop(a); dbg_num("SE big drop=", !g_wobj[p].alive); }
+                      if(a>=0){ se_big_drop(a); g_atile[a]=0xffff; g_temp[a]=0; } }
+                    g_msg[0]=0; build_blocked(); }
                   /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
                   { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
                     se_avatar_death(&w);

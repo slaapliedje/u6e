@@ -40,6 +40,7 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 20 | Motazz's frenzy gives +3 strength to every wild fighter | se_invoke.md §4 | Gives it only to one also cursed (the bonus sits inside the curse test) |
 | 21 | An invocation's resist roll weighs the foe against Triolo | se_invoke.md §4 | Weighs it against the actor numbered by the shown member's party slot |
 | 22 | The bell takes a lying tyrannosaurus by either of its tiles | se_use.md §5i | Reads the second tile's actor and then tests the tile's own object, so that tile gives `No effect.` (the engine shows no second tile, so this is moot until it does) |
+| 23 | The pteranodon's reach is the box round its head | se_big.md §8 | Each of its four boxes lacks one bound, so a foe any distance off on that side counts as in reach; the engine closes the box at the creature's own row or column (the user to confirm the closing) |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
@@ -51,6 +52,7 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | A step of the raft costs 5, as a vessel's in the engine | se_use.md §5w | Not read yet |
 | Eggs are looked at when the party enters a new 8 x 8 block, within 20 tiles of the party, as U6's are | se_eggs.md §2 | Its 40 x 40 window, moved in steps of 8, with the 20 measured from the window's centre |
 | A hatchling takes the lowest free slot of 192-254 | se_eggs.md §4 | The last slot freed first |
+| A dead or unloaded big creature's pieces are removed | se_big.md §7 | Moves the dead actor to the party's place on level 6, and its pieces with it |
 
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the

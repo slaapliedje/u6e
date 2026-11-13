@@ -8,7 +8,7 @@ Implemented by: /render gamedemo.c (gl_se `wt_act` = `se_wt_act`; the combat mod
 > - Derived from : SE GAME.EXE (DOS), read in the RE workspace outside this repo: the worktype switch 0x17211,
 >   assault 0x1c86d, ranged 0x1cba9, wild 0x1ce85, flee 0x1d1ca, 0xa 0x1d33e, 0xb 0x1d470, 0xe 0x1d5a9,
 >   wander 0x16de6, the post 0x16a20, the foe finder 0x1c491, the weapon choices 0x1c377 and 0x1ca68, the
->   area target 0x1c661, the distance 0x1be13 (table DS:0xde6), the combat-mode cycle in 0x6fb1 and its names
+>   area target 0x1c661, the distance 0x1be13 (table DS:0xde6; for creatures not of normal size the box round the head, se_big.md §8), the combat-mode cycle in 0x6fb1 and its names
 >   (DS:0x8a5) drawn by 0xe29e.
 > - References   : none.
 > - Tools        : objdump (i8086); our senames/objname dumpers.
@@ -117,8 +117,6 @@ SEUSE self-test: `SE ai close strikes`, `SE ai close walks`, `SE ai range steps 
 `SE ai flee runs`, `SE ai dance`, `SE ai modes`.
 
 ## 10. Not built / open
-- A big creature's reach (0x1be13 for the several-tile creatures: only beside its pieces): the engine measures
-  from its tile.
 - The black staff (21) set to quality 1 against the myrmidex in each weapon choice (se_combat.md has its blow).
 - Where SE's objlist keeps the combat modes (item 10).
 

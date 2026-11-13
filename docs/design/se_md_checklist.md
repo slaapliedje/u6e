@@ -180,3 +180,9 @@ list once SE's seams exist.
   fires, the myrmidex's dust, the orchid's stalks, with the things on a tile before the ground (gl_se hazard,
   hazard_obj_first); creature flags 0x08 fire-proof and 0x10 fire doubled. Next in item 6: fallen creatures as bodies in
   their actor slots (status 0x10), the big creatures' reach and pieces, a readied flintlock's frame.
+- 2026-11-13: item 6, the big creatures (rules/se_big.md): the dinosaurs' pieces (quality = the creature) move with
+  each step and turn with it, a quarter turn needing room and swinging the pieces round; frames by facing and walk
+  phase (three phases for the allosaurus and tyrannosaurus); the enter test looks at the new leading edge and refuses
+  diagonals for every creature not of normal size; hatched ones get their pieces; the reach is the box round the head
+  (gl_se big_step, actor_tile; se_dist). The two-cell creatures (jaguars, bears ...) take SE's frames and turns too.
+  Slip 23 (the pteranodon's open box) built as the intent. Open: the pteranodon's and gorilla's own turns.
