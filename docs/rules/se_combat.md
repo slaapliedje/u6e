@@ -13,7 +13,7 @@ Tracked in: /docs/INDEX.md · Checklist: design/se_md_checklist.md items 4 and 6
 > - Tools        : objdump -m i8086; LOOK.LZC for the names
 > - Validated by : `make combattest` (the tables and the rolls), `make check-se-use` (readying)
 > - Confidence   : probable (read, not yet seen running)
-> - Last updated : 2026-11-12
+> - Last updated : 2026-11-13
 
 ## 1. Readying (0xf404)
 
@@ -307,6 +307,36 @@ By the tile:
 
 So in the creature table, flag 0x08 is "fire does not harm" and 0x10 "fire harms double". The engine checks the
 party's actors at each step and all actors near the party each turn, as for U6 (combat.md §5).
+
+### 3i. Lying as remains: the dead and the sleeping (0x18764, 0x1a6ad, 0x15a8d, 0x4746)
+
+SE keeps a fallen creature in its own actor slot. The remains routine (0x18764) first saves the actor's
+object (number and frame) in a table by actor (DS:-0x4ac2; not for the tyrannosaurus), then gives the actor
+the remains of §3d as its own object: a body (249) or a dead creature (280) in its frame. No remains (actors 11, 31,
+47, 55, flag 0x800 or 0x1000, a kind not in the table) leaves the actor as it was. An actor already showing a
+body or a dead creature while its status has bit 0x10 is left alone. For the big creatures (se_big.md §1) the
+pieces around it go and the second piece of §3d's table is made (status bit 0x20, temporary, for actors 192
+and up); the blood and the flash of §3d come only with a death (status bit 0x10).
+
+- **A death** (0x1a6ad) sets status bit 0x10 (dead) and calls the routine. With remains the actor stays where it
+  fell, showing them, and takes no turns (0x18767); its things stay with it (0xa5d:0x19bf). Without remains it
+  is moved to the party's place on level 6, and a slot of 192 and up is freed.
+- **Sleep** sets status bit 0x04 and calls the routine, so a sleeper is shown as its remains: the sleep
+  worktype (0x91, 0x15a8d) for an actor within the loaded 40 x 40 window (else its worktype becomes 0x80); a blow
+  that sends to sleep (0x1b79a); two other callers (0x1150f, 0x15ab3). A thing 246 on the sleeper's tile shows
+  frame 1 while it sleeps and frame 0 when it wakes. Asleep, an actor is named by its saved object (0xe0c4).
+- **Waking**: each turn (0x4746) a sleeper on a loaded block whose worktype is not 0x91 wakes 1 time in 21 (a roll
+  0-20 of 0); the schedule leaving 0x91 wakes it too (0x15b81). Status bit 0x04 goes and the saved object comes
+  back. The tyrannosaurus's second remains (280 at (x, y+2)) goes, it takes frame 1 (facing north) and its pieces
+  are made: 293 in frame 3 at (x, y-1) and 295 in frame 3 at (x, y+1). The other big creatures get no pieces back and
+  their second remains stay (slip 26).
+- **The leader falls** (§3e): each dead party member stands up at its body (249 with quality = the member).
+
+The engine: a death leaves the remains as a map object with quality = the victim holding its things (as U6),
+and the actor leaves the map with its dead flag; a sleeper keeps its object and is drawn as its remains (gl_se sleep_body), a big
+creature's pieces giving way to the second remains while it sleeps (se_lie) and coming back as it wakes, facing
+north, for every big creature (slip 26 as the intent; the tyrannosaurus's tail in hatch's frame 1, not DOS's
+3). The second remains of a sleeper is temporary in the engine, made again whenever it lies down.
 
 ## 4. The creature table (segment 0x2f43)
 

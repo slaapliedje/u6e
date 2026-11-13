@@ -50,9 +50,19 @@ phase 1 goes to 0 with the flag set, else to 2). The current facing and phase ar
 creature's frame: `(frame >> shift)` divided by, and modulo, the phases.
 
 The two-cell creatures of one object (283, 300, 327, 330-335: double-high facing north or south, double-wide
-facing east or west) have frames `(2 * facing + phase + 1) * 2 - 1`, the phase alternating (frame bit 2 set: phase 0,
+facing east or west) have frames `(2 * facing + phase + 1) * 2 - 1`, the phase alternating (frame & 2 set: phase 0,
 else 1), the facing `frame >> 2`. A quarter turn from north or south needs room (§5) on (x-1, y), one from east or
 west on (x, y-1). A hatched one starts in frame 1.
+
+The pteranodon (288, one object, wide facing north or south and tall facing east or west) has three phases:
+frames `(3 * facing + phase + 1) * 2 - 1`, the facing `(frame >> 1) / 3`, the phase `(frame >> 1) mod 3`, moving on
+as the big creatures' three phases do (after the room test). A quarter turn needs room (§5) on (x-1, y) from north or
+south and (x, y-1) from east or west, as above (slip 24). A hatched one starts in frame 1.
+
+The gorilla (296) and the raft carrying the party (237) are 2x2 single objects: frames
+`(2 * facing + phase + 1) * 4 - 1`, the phase alternating (frame & 4 set: phase 0, else 1). No room is needed to
+turn. A hatched gorilla starts in frame 3; the raft is boarded in frame 3 (se_use.md §5w) and turns and paddles as
+it moves. DOS reads the old facing as `frame >> 4` (slip 25).
 
 ## 3. A step (0x1693c)
 
@@ -94,6 +104,8 @@ Then, when the turn is a quarter turn, room is needed (0x1415d) on these tiles a
 
 A tile has no room when its map tile is impassable (tileflags1 0x02) or a wall (0x04), when another actor is
 on it, or when an object on it is impassable (tileflags1 0x02 of its tile) and is not the creature's own.
+For the pteranodon (288), only a wall (0x04) takes the room, of the map tile or of any object's tile; for the
+plesiosaur (300), a map tile or any object's tile that is not water (tileflags1 0x01).
 No room: the step is refused (the phase flag has already moved on). Otherwise the creature takes its new frame,
 and each piece (found from the creature's old frame, §1) takes its new frame; on a quarter turn each piece
 also moves from (x+dx, y+dy) to (x+dy, y+dx) (north to west, south to east and back). A half turn moves
@@ -107,9 +119,9 @@ with that frame, quality the creature, on the creature's level.
 
 ## 7. Death and removal
 
-A dying actor is moved off the map (to the party's place on level 6, 0x1a6ad) through the ordinary move, and
-its pieces go with it (§3 step 4). Engine choice: the pieces are removed instead, as when a temporary creature is
-unloaded far from the party (se_eggs.md §2).
+A dying big creature lies as its remains in its own slot (se_combat.md §3i): its pieces are deleted and the second
+remains made beside it. A sleeping one lies the same way and stands up again on waking (se_combat.md §3i). The
+engine removes the pieces at death, as when a temporary creature is unloaded far from the party (se_eggs.md §2).
 
 ## 8. The reach (0x1be13)
 
@@ -132,13 +144,13 @@ missing side by mirroring the bound it has (north: y-1..y; east: x..x+1; south: 
 
 ## 9. Test hook
 
-SEUSE self-test: `SE big hatch`, `SE big step`, `SE big turn`, `SE big blocked`, `SE big reach`, `SE big drop`.
+SEUSE self-test: `SE big hatch`, `SE big step`, `SE big turn`, `SE big blocked`, `SE big reach`, `SE big drop`,
+`SE big ptera`, `SE big gorilla`, `SE big raft frame`, `SE big plesio room`.
 
 ## 10. Not built / open
-- The pteranodon's (288) own turn (0x142e4 at 0x14807, three phases and its own room tests) and its first frame;
-  the gorilla (296) and the other wide single-object creatures keep U6's frames.
-- The plesiosaur's (300) and pteranodon's own room rules in 0x1415d (water needed; walls only).
+- Other turns DOS makes through 0x142e4 (an actor turned to face a direction from elsewhere, perhaps on talk or
+  a push) are not traced; the engine turns these creatures only on their steps.
 - The picture of a creature in a panel (0xa638) uses the last phase of the facing for every big kind.
 
 ## Status
-IN PROGRESS: §1-§8 built (slip 23 as the intent); §10 open.
+DONE: §1-§8 built (slips 23-25 as the intent); §10 open.

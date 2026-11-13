@@ -39,8 +39,11 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 19 | A dancer shows the new dance frame | se_ai.md §7 | Adds the new frame to the one it shows, running past the dancer's eight frames |
 | 20 | Motazz's frenzy gives +3 strength to every wild fighter | se_invoke.md §4 | Gives it only to one also cursed (the bonus sits inside the curse test) |
 | 21 | An invocation's resist roll weighs the foe against Triolo | se_invoke.md §4 | Weighs it against the actor numbered by the shown member's party slot |
-| 22 | The bell takes a lying tyrannosaurus by either of its tiles | se_use.md §5i | Reads the second tile's actor and then tests the tile's own object, so that tile gives `No effect.` (the engine shows no second tile, so this is moot until it does) |
+| 22 | The bell takes a lying tyrannosaurus by either of its tiles | se_use.md §5i | Reads the second tile's actor and then tests the tile's own object, so that tile gives `No effect.`; the engine takes the actor the second tile names, in reach of that tile |
 | 23 | The pteranodon's reach is the box round its head | se_big.md §8 | Each of its four boxes lacks one bound, so a foe any distance off on that side counts as in reach; the engine closes the box at the creature's own row or column (the user to confirm the closing) |
+| 24 | A pteranodon's quarter turn needs room on the cells it will cover | se_big.md §5 | Tests (x-1, y) from north or south and (x, y-1) from east or west, as for the two-cell animals; but the pteranodon is wide facing north or south, so DOS tests cells it already covers. The engine tests (x, y-1) and (x-1, y) |
+| 26 | A big creature that wakes stands up whole | se_combat.md §3i | Only the tyrannosaurus gets its pieces back; the others wake with none, their second remains left lying. The engine rebuilds every big creature facing north, as hatching does (the tyrannosaurus's tail in frame 1 where DOS gives 3) |
+| 25 | The gorilla's and the raft's old facing is read as frame / 8 | se_big.md §5 | DOS reads frame / 16, so south reads as east and west as south; it matters only for a diagonal turn, which no step makes (the engine makes none) |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |
@@ -52,7 +55,8 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | A step of the raft costs 5, as a vessel's in the engine | se_use.md §5w | Not read yet |
 | Eggs are looked at when the party enters a new 8 x 8 block, within 20 tiles of the party, as U6's are | se_eggs.md §2 | Its 40 x 40 window, moved in steps of 8, with the 20 measured from the window's centre |
 | A hatchling takes the lowest free slot of 192-254 | se_eggs.md §4 | The last slot freed first |
-| A dead or unloaded big creature's pieces are removed | se_big.md §7 | Moves the dead actor to the party's place on level 6, and its pieces with it |
+| A dead or unloaded big creature's pieces are removed | se_big.md §7 | Deletes the pieces and leaves the second remains (§3i); only a creature with no remains is moved to level 6 |
+| A death leaves the remains as a map object holding the victim's things, and the actor leaves the map | se_combat.md §3i | The actor stays in its slot as its remains (status bit 0x10); the same on screen, it matters to the save (item 10) and to who stands up at Intanya's hut |
 
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the

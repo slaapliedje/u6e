@@ -73,7 +73,7 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 43 bell | `On ` a fallen tyrannosaurus: the bell on its neck, §5i | 0x21293 | item 6 |
 | 47 turtle bait | a turtle (302) comes up beside the holder, near water, in a part of the sea, §5w | 0x24783 | yes |
 | 49 notebook | Jimmy's shorthand, §5j | 0x24d88 | yes |
-| 50 bamboo flintlock | load with gunpowder, §5k | 0x21e67 | yes, but readied (item 6) |
+| 50 bamboo flintlock | load with gunpowder, §5k | 0x21e67 | yes |
 | 51 camera | a picture (its quality is the film left), and the ribbon's flash, §5e | 0x24edf | yes |
 | 59 60 mortar, grinding stone | grind what is in it: corn flour, or gunpowder, §5l | 0x210ad | yes |
 | 61 62 corn and bean stalks | a corn or a bean to the acting member, §5m | 0x23ea5, 0x23e52 | yes |
@@ -372,8 +372,8 @@ Anything else: `No effect.` (DOS also notes a frame-17 target's quality, then ne
 The engine (2026-11-12): the bell's `On ` takes the actor on the chosen tile; a sleeping tyrannosaurus (294
 with its sleep, which DOS shows as the lying beast 280 at frame 13) is what DOS's frame-13 test finds. DOS's
 frame 17 is the lying beast's second tile, whose quality names the actor; DOS reads the quality and then tests
-the piece itself, so that tile always gives `No effect.` The engine has no second tile for a sleeping actor,
-so only the actor's own tile is offered (slip 22 is the intent: either tile would do).
+the piece itself, so that tile always gives `No effect.` The engine lays a sleeping tyrannosaurus's second tile
+(se_combat.md §3i) and takes the actor it names, in reach of that tile (slip 22 as the intent: either tile would do).
 
 ### 5j. Jimmy's notebook (0x24d88)
 
@@ -392,7 +392,8 @@ The acting member loads it (whoever holds it). Frame 1 is loaded:
 
 The engine keeps a readied thing's object number but not its frame, so a readied flintlock's load is kept
 per actor (built with the blows, se_combat.md §3a-3c: readying a loaded one keeps the load, firing unloads it,
-unreadying puts the frame back on the object).
+unreadying puts the frame back on the object). U)se on a readied flintlock loads it the same way, and the
+figure on the inventory screen shows it in its frame (gl_se ready_fr).
 
 ### 5l. The mortar and the grinding stone (0x210ad)
 

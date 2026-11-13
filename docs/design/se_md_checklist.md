@@ -186,3 +186,10 @@ list once SE's seams exist.
   diagonals for every creature not of normal size; hatched ones get their pieces; the reach is the box round the head
   (gl_se big_step, actor_tile; se_dist). The two-cell creatures (jaguars, bears ...) take SE's frames and turns too.
   Slip 23 (the pteranodon's open box) built as the intent. Open: the pteranodon's and gorilla's own turns.
+- 2026-11-13: item 6 finished. The pteranodon's own turn (three phases; slip 24: DOS tests the cells it already
+  covers), the gorilla's and the raft's 2x2 frames (the raft now turns and paddles; slip 25), the pteranodon's and
+  plesiosaur's room rules (walls only; water). Lying as remains (rules/se_combat.md §3i): a sleeper is drawn as its
+  remains (gl_se sleep_body), a sleeping big creature's pieces give way to its second remains and come back as it
+  wakes (slip 26), a thing 246 under a sleeper shows it, sleepers wake 1 in 21; the bell takes the tyrannosaurus by
+  its second tile (slip 22 built). A readied flintlock loads by U)se and shows its load on the figure. Engine choice
+  for the user: the dead leave a map object, not a body in their actor slot (matters to item 10's saves).
