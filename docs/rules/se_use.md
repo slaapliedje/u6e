@@ -428,7 +428,7 @@ pack (and they can carry it), else onto their tile; then the jug goes. Nothing i
 The three totems (86-88) are Triolo's (actor 9). The acting member has the totem and is Triolo: his
 invocation (0x11ff:0xf07). The acting member doesn't have it: the invocation if the leader is Triolo,
 else `<member> can't use that!`. Someone else has it in their pack: `<member> can't use that!`. The
-invocations are item 6.
+invocations are se_invoke.md.
 
 ### 5o. The folded skin, the fire extinguisher and the bottle of liquor
 

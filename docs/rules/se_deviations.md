@@ -37,6 +37,8 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 17 | A fighter whose line of fire is blocked sidesteps one tile | se_ai.md §2 | Walks to the sidestep tile twice (falls into the walk meant for a target out of range) |
 | 18 | A creature in worktype 0xe strikes only an actor standing on the tile it picks | se_ai.md §6 | Looks its target up before picking the tile, with coordinates not yet set, then swings at the picked tile, mostly empty ground |
 | 19 | A dancer shows the new dance frame | se_ai.md §7 | Adds the new frame to the one it shows, running past the dancer's eight frames |
+| 20 | Motazz's frenzy gives +3 strength to every wild fighter | se_invoke.md §4 | Gives it only to one also cursed (the bonus sits inside the curse test) |
+| 21 | An invocation's resist roll weighs the foe against Triolo | se_invoke.md §4 | Weighs it against the actor numbered by the shown member's party slot |
 
 ## Engine choices, for the user to confirm
 | Difference | Where | What DOS does |

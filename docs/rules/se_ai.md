@@ -18,7 +18,7 @@ Implemented by: /render gamedemo.c (gl_se `wt_act` = `se_wt_act`; the combat mod
 
 ## 1. The switch (0x17211)
 
-An actor whose object status has 0x80 (charmed) always fights WILD (§4). Otherwise its worktype picks:
+An actor whose object status has 0x80 (wild: Motazz's frenzy, se_invoke.md §4) always fights WILD (§4). Otherwise its worktype picks:
 
 | worktype | SE does |
 |---|---|
@@ -39,7 +39,7 @@ When the routine spent no points it pays 10, as in U6.
 
 **Combat modes.** A companion's combat mode is its worktype: CMND (2), RANGE (4), WILD (6), FLEE (7), CLOSE (8).
 The inventory's mode button steps CMND, RANGE, FLEE, CLOSE and round (3 becomes 4, 5 becomes 7, 9 becomes 2); WILD
-is never chosen, it is shown for a charmed companion.
+is never chosen, it is shown for a wild companion.
 
 **The foe** of an actor is SE's nearest foe (se_eggs.md §6: within 11, by alignment, a tie to the bigger blow).
 **The distance** is U6's table (combat.md §6c), the same numbers.
@@ -68,7 +68,7 @@ again); the engine walks once, as RANGE's sidestep does.
 5. Otherwise as CLOSE from step 2 with that weapon (the area targets, wander with no target, strike, sidestep once,
    walk at it).
 
-## 4. WILD (6, and every charmed actor; 0x1ce85)
+## 4. WILD (6, and every wild actor; 0x1ce85)
 
 U6's BERSERK: the living, seen actor within 8 with the highest strength + dexterity + intelligence (the first
 found on a tie), by alignment (good: only the evil; evil: only the good; chaotic: neither chaotic nor neutral;

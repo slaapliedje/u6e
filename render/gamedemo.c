@@ -167,6 +167,7 @@ typedef struct GameLayer {
     int  (*wt_act)(const world_t*w,int i,int wt);               /* a worktype the game does its own way (SE's orchid heads); 1 = done */
     const char*const*cmode_name;                                 /* the combat modes' names by worktype-2 (NULL: U6's) */
     int  (*cmode_next)(int m);                                  /* the mode button's next mode (NULL: U6's 2..8) */
+    void (*status_tick)(void);                                  /* the game's own wear-offs (SE's invocations); U6's protect/curse/charm rolls then stay out */
     uint8_t no_scatter;                                         /* a missed shot flies at its target still (SE); 0 = it lands beside (U6) */
     void (*death_words)(int def);                               /* the words for any death (SE, se_combat.md §3d); NULL = U6's "killed!" for a blow */
     int  (*dying)(int id,int temp);                             /* what a death does before its remains (the story, a rider, blood); 1 = it leaves nothing and keeps its things */
@@ -631,6 +632,7 @@ static char           g_atk_prompt[40];    /* "Attack with sword-" */
 static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined below)  */
 static const char* rest_prompt_text(void);  /* fwd: the R)est prompt line (rest.md §2) */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
+#define SEON_OFFER 16                                       /* the totems' offering (0x12ef7, se_invoke.md) */
 static int g_se_on, g_on_pack;                             /* SE's "On " prompt (se_use.md §5): which handler asks, and whether the pack is being picked from */
 static char g_on_prompt[48];
 static int se_on_map(world_t*w,int dx,int dy); static int se_on_pack(world_t*w,int row);
@@ -3649,7 +3651,10 @@ static int member_fwd(int i){ return i==1||is_party_member(i); }
 static int sleep_shape(int on)
 {   for(unsigned k=0;k<g_on.nsleep;k++) if(g_on.sleep[k][0]==on) return g_on.sleep[k][1];
     return 0; }
+static int     g_dos_slips;                                          /* 1 = the DOS games' own slips kept (se_deviations.md); 0 = as meant */
 static uint8_t g_se_dance[U6_MAX_ACTORS];                  /* SE: dancing, the dancer's frame + 1 (se_ai.md §7) */
+static uint8_t g_se_prot[U6_MAX_ACTORS], g_se_wild[U6_MAX_ACTORS];   /* SE: Aphazz's protection (+3 armour), Motazz's frenzy (+3 str/dex; se_invoke.md) */
+static int     g_se_helper;                                 /* SE: the beast Motazz sent, while combat lasts (se_invoke.md §4) */
 static int npc_tile(int i)
 {
     int tpd=g_atpd[i];
@@ -5438,7 +5443,7 @@ static void draw_conversation(uint8_t col)
             const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-":
                            g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
                            g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
-                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-";
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-";
             ui_text_wrap(PANX, MSGY+(g_msg[0]?7*9:0), PANW, p, 2, col);
         }
     }
@@ -6796,8 +6801,10 @@ static int se_crystal_on(int id,int idx,int row,int n)
         if(g_wobj[idx].obj_n==249||g_wobj[idx].obj_n==248){ msgcat(n,"a body.\nThat person is beyond help."); return 0; } }
     msgcat(n,"nothing"); return 0; }
 /* "On " answered: a tile (its top thing, in reach of the leader) or a pack row */
+static int se_offer_on(int idx,int row);
 static int se_on_target(int idx,int row)
 {
+    if(g_se_on==SEON_OFFER) return se_offer_on(idx,row);
     int n=msgcat(msg_end(),"\nOn ");
     if(idx<0 && row<0){ if(g_se_on==SEON_EXTING && g_se_on_tx>=0){ g_se_on=0; g_verb_pts=5; return se_exting_tile(g_se_on_tx,g_se_on_ty,n); }
         if(g_se_on==SEON_TAR){ g_se_on=0; g_verb_pts=5; return se_tar_on(-1,-1,n); }
@@ -7009,9 +7016,11 @@ static int se_statue(int idx){
     se_join(11); g_cg.talk_flags[11]|=0x40;
     msgcat(0,"\nYou replace the statue's missing head."); return 1; }
 static int se_bait(world_t*w,int idx,int row);   /* the turtle bait (defined with the vehicles) */
+static int se_totem(int on,int has_acting);
 static int se_use_object(int idx)
 {
     int o=g_wobj[idx].obj_n; char nm[40]; obj_name(g_wobj[idx].tile,nm,sizeof nm);
+    if(o>=86&&o<=88) return se_totem(o,0);                         /* a totem on the ground: only a leading Triolo (se_use.md §5n) */
     if(o==234||o==161||o==275) return se_use_door(idx);
     if(o==173||o==242||o==254||o==257){ g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }   /* the oven and the fires ask "On " */
     if(o==188){                                      /* the crate: a shut one (frame 1) opens, else "Not possible."; then the search (0x1ec8a) */
@@ -7075,6 +7084,118 @@ static int se_use_object(int idx)
 
 /* U)se a thing in the pack or readied (the same switch, 0x25e46): the row is the one chosen */
 static int g_use_slot=-1;                                   /* the readied slot being used (panel_select_slot), or -1 */
+/* ---- the totems' invocations (0x12ef7; docs/rules/se_invoke.md) ---- */
+static int align_of(int i); static int wt_now(int i); static int iabs_(int v); static int member(int i); static void charm_end(int id);
+static int se_hatch_creature(const world_t*w,int x,int y,int on);
+static int g_se_offer;                                        /* the invocation asked: totem << 4 (Heluzz 0, Aphazz 0x10, Motazz 0x20) */
+/* the actors in the 11 x 9 around the leader (0x126e4) */
+static int se_invoke_near(int*out,int cap)
+{   int n=0, M=((g_wp&&g_wp->level==0)?U6_SURFACE_TILES:256)-1;
+    for(int dx=0;dx<11;dx++) for(int dy=0;dy<9;dy++){ int x=((int)g_wp->px+dx-5)&M, y=((int)g_wp->py+dy-4)&M;
+        for(int a=1;a<U6_MAX_ACTORS&&n<cap;a++){ int ax,ay; if(g_atile[a]==0xffff||!actor_where(a,&ax,&ay)||ax!=x||ay!=y) continue; out[n++]=a; } }
+    return n; }
+/* an invocation's power against one (0x1862a): intelligence, 3 less cursed or wild (but the leader), at least 1 */
+static int se_power(int a){ int v=g_aint[a]; if(g_curse[a]||(g_se_wild[a]&&a!=1)) v-=3; return v<1?1:v; }
+/* 1 = it shrugs the invocation off (0x18662): a drone 1 in 10, the queen never, else its power over Triolo's beyond -12..12 (slip 21) */
+static int se_resists(int t)
+{   int on=actor_objn(t);
+    if(on==323) return se_rand(1,10)==1;
+    if(on==328) return 0;
+    { int c=9; if(g_dos_slips){ c=member_index(g_status_actor>=1?g_status_actor:1); if(c<0) c=0; }   /* DOS reads the shown member's party slot as an actor */
+      return se_power(t)-se_power(c)>se_rand(-12,12); } }
+/* "A, B and C are healed." / "X is healed." (0x129f8) */
+static void se_invoke_list(const int*l,int n,const char*state)
+{   char nm[32]; int m=msg_tail();
+    if(!n){ msgcat(m,"No effect.\n"); return; }
+    m=msgcat(m,"\n");
+    for(int k=0;k<n-2;k++){ actor_name(l[k],nm,sizeof nm); m=msgcat(m,nm); m=msgcat(m,", "); }
+    if(n>1){ actor_name(l[n-2],nm,sizeof nm); m=msgcat(m,nm); m=msgcat(m," and "); actor_name(l[n-1],nm,sizeof nm); m=msgcat(m,nm); m=msgcat(m," are "); }
+    else { actor_name(l[0],nm,sizeof nm); m=msgcat(m,nm); m=msgcat(m," is "); }
+    m=msgcat(m,state); msgcat(m,"\n"); }
+/* Heluzz and yopo: Triolo senses danger (0x127ab) */
+static void se_sense(void)
+{   static const char*const D[8]={"north","northeast","east","southeast","south","southwest","west","northwest"};
+    int cnt[8]={0}, k, nd=0, m;
+    for(int a=16;a<U6_MAX_ACTORS;a++){ int ax,ay,dx,dy; if(g_atile[a]==0xffff||!g_ahp[a]||(int)g_actz[a]!=g_wp->level||!actor_where(a,&ax,&ay)) continue;
+        if(!(align_of(a)&0x20) && wt_now(a)!=0x9b) continue;
+        dx=ax-(int)g_wp->px; dy=ay-(int)g_wp->py; if(iabs_(dx)>25||iabs_(dy)>25) continue;
+        if(!dy) dy=-1; if(!dx) dx=-1;
+        if(iabs_(dx)<iabs_(dy)/2) cnt[dy>0?4:0]++;
+        else if(iabs_(dy)<iabs_(dx)/2) cnt[dx>0?2:6]++;
+        else cnt[dx>0?(dy>0?3:1):(dy>0?5:7)]++; }
+    for(k=0;k<8;k++) if(cnt[k]) nd++;
+    m=msgcat(msg_tail(),"\nTriolo senses ");
+    if(!nd){ msgcat(m,"no danger.\n"); return; }
+    if(nd==8){ msgcat(m,"danger all around!\n"); return; }
+    m=msgcat(m,"danger to the ");
+    for(int left=nd;left>0;left--){ for(k=0;k<8&&!cnt[k];k++); m=msgcat(m,D[k]); cnt[k]=0;
+        if(left>2) m=msgcat(m,", "); else if(left==2) m=msgcat(m," and "); }
+    msgcat(m,".\n"); }
+/* Motazz and chocolatl: a beast comes to fight beside the party, on the surface, one at a time (0x1259e) */
+static void se_helper(world_t*w)
+{   int on=(g_veh_kind?300:331), s, M=U6_SURFACE_TILES-1;          /* a plesiosaur for one on the water, else a sabretooth tiger */
+    if(!g_se_helper && (s=se_hatch_creature(w,(int)w->px,(int)w->py,on))>=0){
+        for(int t=0;t<8;t++){ int x=((int)w->px+se_rand(0,10)-5)&M, y=((int)w->py+se_rand(0,10)-5)&M, ok;
+            g_mover=s; ok=mover_can_enter(w,x,y)&&!npc_occupied(s,x,y)&&!(x==(int)w->px&&y==(int)w->py); g_mover=-1;
+            if(!ok) continue;
+            g_actx[s]=(uint16_t)x; g_acty[s]=(uint16_t)y; g_temp[s]=0;
+            g_agood[s]=1; g_achaos[s]=0; g_align_hostile[s]=0; g_alert[s]=0; g_ally[s]=1; hatched_worktype(s,8);
+            g_se_helper=s; build_blocked(); msgcat(msg_tail(),"Success!\n"); return; }
+        g_atile[s]=0xffff; g_temp[s]=0; }
+    msgcat(msg_tail(),"Failed.\n"); }
+/* the invocation, its offering made (0x12d86 and 0x129f8) */
+static void se_invoke_do(world_t*w,int k)
+{   int l[64], near[128], nn=se_invoke_near(near,128), n=0;
+    switch(k){
+    case 0x00: g_peer_on=1; msgcat(msg_tail(),"\nTriolo leaves his body and looks down at the party!\n"); return;
+    case 0x01: g_spell_light_turns=200; g_spell_light_rad=4; msgcat(msg_tail(),"\nTriolo creates light.\n"); return;
+    case 0x02: se_sense(); return;
+    case 0x21: if(w->level){ msgcat(msg_tail(),"\nNo help available.\n"); return; } se_helper(w); return; }
+    for(int j=0;j<nn&&n<64;j++){ int a=near[j], in=member(a);
+        switch(k){
+        case 0x10: if(in && g_ahp[a] && (g_ahp[a]<se_max_hp(a)||g_poison[a])){ int h=g_ahp[a]+se_rand(1,10), mx=se_max_hp(a); g_ahp[a]=(uint8_t)(h>mx?mx:h); g_poison[a]=0; l[n++]=a; } break;
+        case 0x11: if((align_of(a)&0x20) && !g_charm[a] && !se_resists(a)){ g_charm_sv[a]=(uint8_t)((g_hostile[a]?1:0)|(g_align_hostile[a]?2:0)|(g_alert[a]?4:0));
+                g_wt_keep[a]=g_wt_force[a]; g_wt_force[a]=8; g_charm[a]=255; g_ally[a]=1; g_hostile[a]=0; g_alert[a]=0; l[n++]=a; } break;
+        case 0x12: if(in && !g_se_prot[a]){ g_se_prot[a]=1; l[n++]=a; } break;
+        case 0x20: if((align_of(a)&0x20) && !g_curse[a] && !se_resists(a)){ g_curse[a]=255; l[n++]=a; } break;
+        case 0x22: if(in && !g_se_wild[a]){ g_se_wild[a]=1; if(a!=1) l[n++]=a; } break; } }
+    if(k==0x12){ msgcat(msg_tail(),"\nAphazz protects the party.\n"); return; }
+    se_invoke_list(l,n,k==0x10?"healed.":k==0x11?"charmed.":k==0x20?"cursed!":"wild!");
+    sync_party_hp(); }
+/* the offering answered (0x12ef7): chocolatl, pinde or yopo, within a tile of the leader */
+static int se_offer_on(int idx,int row)
+{   int k=g_se_offer, n=msgcat(msg_end(),"offering-- "), on;
+    g_se_on=0; g_verb_pts=5;
+    if(idx<0&&row<0){ msgcat(n,"nothing!\n"); return 0; }
+    on=idx>=0?g_wobj[idx].obj_n:g_ow.inv[row].obj_n;
+    n=look_thing(n,on,idx>=0?g_wobj[idx].tile:g_ow.inv[row].tile,1,0); n=msgcat(n,"\n");
+    if(idx>=0){ int ax,ay; se_leader_pos(&ax,&ay); if(iabs_((int)g_wobj[idx].x-ax)>1||iabs_((int)g_wobj[idx].y-ay)>1){ msgcat(n,"Out of range!\n"); return 0; } }
+    if(on==54) k|=1; else if(on==56) k|=2; else if(on!=55){ msgcat(n,"\nOffering refused.\n"); return 0; }
+    se_invoke_do((world_t*)g_wp,k);
+    if(row>=0) pack_row_take(row,1);
+    else if(g_wobj[idx].qty>1){ g_wobj[idx].qty--; if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; }
+    else { obj_destroy(idx); build_blocked(); }
+    return 1; }
+/* a totem used (the use switch, se_use.md §5n): Triolo's, or the leader's when Triolo leads */
+static int se_totem(int on,int has_acting)
+{   int acting=use_actor(), leader=g_nparty?g_party[0].actor:1, n;
+    if(g_show_inv&&g_status_actor>=1) acting=g_status_actor;
+    if(!((has_acting&&acting==9)||(!has_acting&&leader==9))){ char nm[32]; actor_name(acting,nm,sizeof nm); n=msgcat(msg_tail(),"\n"); n=msgcat(n,nm); msgcat(n," can't use that!\n"); return 0; }
+    n=msgcat(msg_tail(),"\nInvoke: ");
+    if(on==86){ msgcat(n,"Heluzz!\n"); g_se_offer=0; }
+    else if(on==88){ msgcat(n,"Aphazz!\n"); g_se_offer=0x10; }
+    else if(!g_combat_mode){ msgcat(n,"Motazz aids only those who are in mortal combat.\n"); return 0; }
+    else { msgcat(n,"Motazz!\n"); g_se_offer=0x20; }
+    g_se_on=SEON_OFFER; g_next_verb='X'; return 0; }
+/* SE's wear-offs as time passes (0x359:0x11b6): protection, curses and charms 1 in 25, the frenzy and Motazz's beast with combat */
+static void se_status_tick(void)
+{   for(int a=1;a<U6_MAX_ACTORS;a++){ if(a!=1&&g_atile[a]==0xffff) continue;
+        if(a==g_se_helper && !g_combat_mode){ g_wt_force[a]=0x13; g_agood[a]=0; g_achaos[a]=1; g_align_hostile[a]=1; g_ally[a]=0; g_temp[a]=1; g_se_helper=0; }
+        if(g_se_prot[a] && !se_rand(0,24)) g_se_prot[a]=0;
+        if(g_se_wild[a] && !g_combat_mode) g_se_wild[a]=0;
+        if(g_curse[a] && !se_rand(0,24)) g_curse[a]=0;
+        if(g_charm[a] && !se_rand(0,24)) charm_end(a); }
+    if(g_se_helper && (g_se_helper>=U6_MAX_ACTORS||g_atile[g_se_helper]==0xffff)) g_se_helper=0; }
 static int se_use_pack(world_t*w,int on)
 {
     int row=-1, a=g_status_actor>=1?g_status_actor:1; (void)w;
@@ -7085,6 +7206,7 @@ static int se_use_pack(world_t*w,int on)
     if(!se_usable(on)){ msgcat(0,"\nNot possible."); return 0; }
     g_verb_pts=5;
     if(on==137||on==240) return se_light(-1,row,a,g_use_slot);
+    if(on>=86&&on<=88){ int ac=(g_show_inv&&g_status_actor>=1)?g_status_actor:use_actor(), own=row>=0?(g_ow.inv[row].owner?g_ow.inv[row].owner:1):a; return se_totem(on,own==ac); }
     if(on==6 && row>=0) return se_gem(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==10 && row>=0) return se_ribbon(-1,row,g_ow.inv[row].owner?g_ow.inv[row].owner:1);
     if(on==49) return se_notebook();
@@ -8442,7 +8564,7 @@ static void draw_panel_buttons(int inv)
     if(inv && i>0){ static const char*const cm_u6[7]={"COMMAND","FRONT","REAR","FLANK","BERSERK","RETREAT","ASSAULT"};   /* a companion's combat mode */
         const char*const*cm=g_gl->cmode_name?g_gl->cmode_name:cm_u6;
         int m=g_cmode[g_status_actor]; if(m<2||m>8) m=8;
-        if(g_gl->cmode_name && g_charm[g_status_actor]) m=6;                /* SE: a charmed companion is WILD (se_ai.md §1) */
+        if(g_gl->cmode_name && g_se_wild[g_status_actor]) m=6;              /* SE: one in Motazz's frenzy is WILD (se_ai.md §1) */
         blit_tile(0xf0,IVB_Y,0x187,1);
         ui_text(0x100+(56-ui_textw(cm[m-2]))/2,PTXT_Y(11),cm[m-2],C_BLACK); } }
 static void iv_weight(int x,int y,int w10,int cap)
@@ -8848,11 +8970,13 @@ static int actor_objn(int i){
 /* the to-hit stats (combat.md §2): dexterity, 3 less when cursed, 1 asleep or in Time Stop; the attack
  * role is strength for the club, mace, spiked helm and two-handed hammer, or an unarmed blow of a
  * strength-based type (wobj 0), else dexterity; a glass sword (48) never misses (see the callers) */
-static int dex_adj(int a){ int v=g_adex[a]?g_adex[a]:15; if(g_curse[a]) v=(v<=3)?1:v-3; if((g_time_stop&&!is_party_member(a)&&a!=1)||g_asleep[a]) v=1; return v; }
+static int dex_adj(int a){ int v=g_adex[a]?g_adex[a]:15; if(g_curse[a]) v=(v<=3)?1:v-3; if(g_se_wild[a]&&(v+=3)>30) v=30; if((g_time_stop&&!is_party_member(a)&&a!=1)||g_asleep[a]) v=1; return v; }
 static int hit_role(int att,int wobj){
     int str=on_in(g_on.str_weapons,8,wobj) || (wobj==0 && monster_str_based(actor_objn(att)));
     if(!str) return dex_adj(att);
-    int v=g_astr[att]?g_astr[att]:15; if(g_curse[att]) v=(v<=3)?1:v-3; return v; }
+    int v=g_astr[att]?g_astr[att]:15; if(g_curse[att]) v=(v<=3)?1:v-3;
+    if(g_se_wild[att] && (g_curse[att]||!g_dos_slips) && (v+=3)>30) v=30;     /* slip 20: DOS adds it only to the cursed */
+    return v; }
 /* a blow's hit roll, or the game's own rule for it (§2) */
 static int hit_roll(int att,int wobj,int def,int role){
     if(g_gl->hit_rule){ int r=g_gl->hit_rule(att,wobj,def,role); if(r>=0) return r; }
@@ -8963,7 +9087,8 @@ static void actor_wound(int att,int def,int dmg,int blow)
 /* a blow that landed, weapon's max against armour: asleep it wakes, grazed or wounded */
 static void actor_hit(int att,int def,int wm,int wobj)
 {   if(g_gl->blow && g_gl->blow(att,def,-1,wobj,&wm)) return;
-    int dmg=status_dmg(def,combat_damage(wm,g_aac[def],&g_crng));
+    int ac=g_aac[def]+(g_se_prot[def]?3:0)-((g_gl->status_tick&&g_curse[def])?3:0); if(ac<0) ac=0;   /* SE: protection +3, a curse -3 (0x18f74) */
+    int dmg=status_dmg(def,combat_damage(wm,ac,&g_crng));
     wake_struck(def); hit_flash(def);
     note_striker(att,def);
     if(dmg<=0){ int n=msg_tail(); n=msg_name(n,def); msgcat(n," grazed."); glass_shatters(att,wobj); return; }
@@ -10095,15 +10220,17 @@ static void charm_end(int id)                                   /* the charm lif
 static void status_tick(void){
     for(int a=1;a<U6_MAX_ACTORS;a++){
         if(a!=1 && g_atile[a]==0xffff) continue;
+        if(!g_gl->status_tick){
         if(g_protect[a]  && rng_range(&g_crng,64)==0 && int_adj(a)<=d30()) g_protect[a]=0;    /* the clever keep their protection */
         if(g_curse[a]    && rng_range(&g_crng,16)==0 && int_adj(a)>=d30()) g_curse[a]=0;
-        if(g_charm[a]    && rng_range(&g_crng,8)==0  && int_adj(a)>=d30()) charm_end(a);
+        if(g_charm[a]    && rng_range(&g_crng,8)==0  && int_adj(a)>=d30()) charm_end(a); }
         if(g_paralyze[a] && rng_range(&g_crng,4)==0  && str_adj(a)>=d30()) g_paralyze[a]=0;
         if(g_asleep[a]   && rng_range(&g_crng,16)==0 && (a==1||npc_worktype(a)!=0x91)) g_asleep[a]=0;
         if(g_ainvis[a]   && !(g_on.invis_ring&&has_readied(a,g_on.invis_ring)) && rng_range(&g_crng,64)==0 && int_adj(a)<=d30()) g_ainvis[a]=0;
         if(g_poison[a] && !g_protect[a] && rng_range(&g_crng,8)==0){ int hp=g_ahp[a];   /* poison: 1 HP now and then, never lifts by itself */
             if(hp>0){ g_ahp[a]=(uint8_t)(hp-1); if(g_ahp[a]==0 && !member(a)) actor_die(a); } }   /* the Avatar and the party die their own way (combat.md §3d) */
     }
+    if(g_gl->status_tick) g_gl->status_tick();
     sync_party_hp();                                  /* poison may have changed party HP */
 }
 /* first actor along (dx,dy) within range, for a targeted status spell (msg on miss). */
@@ -10364,7 +10491,6 @@ static void u6_eggs_update(const world_t *w, int teleport)
         if(added) build_blocked(); }
 }
 /* ---- Savage Empire's eggs (docs/rules/se_eggs.md) ---- */
-static int     g_dos_slips;                                          /* 1 = the DOS games' own slips kept (se_deviations.md); 0 = as meant */
 static uint8_t g_se_orc[U6_MAX_ACTORS], g_se_odir[U6_MAX_ACTORS];   /* an orchid root's heads; a head's root and direction (se_eggs.md §4) */
 static int     g_se_egg_made;                                        /* last check: pieces made (test hooks) */
 static void obj_destroy(int idx);
@@ -14493,7 +14619,7 @@ static const char*const SE_CMODE[7]={"CMND","","RANGE","","WILD","FLEE","CLOSE"}
 static int se_wt_act(const world_t*w,int i,int wt)
 {   int dance=(wt==0xf||wt==0x10||(wt>=0x8b&&wt<=0x8e));
     if(!dance) g_se_dance[i]=0;
-    if(g_charm[i]) wt=6;
+    if(g_se_wild[i] && i!=1) wt=6;                                       /* Motazz's frenzy: WILD (obj status 0x80) */
     switch(wt){
     case 4: se_range(w,i); return 1;
     case 6: se_wild(w,i); return 1;
@@ -14640,7 +14766,7 @@ static int se_ready_ok(int a,int on,int n)
         n=msgcat(n,"\n"); n=msgcat(n,nm); msgcat(n," can't use modern weapons!"); return 0; }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18287,6 +18413,41 @@ int main(int argc, char **argv)
                       if(jg>=0){ g_atile[jg]=0xffff; g_temp[jg]=0; } if(mm>=0){ g_atile[mm]=0xffff; g_temp[mm]=0; g_se_dance[mm]=0; } }
                     for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && (j>=n0 || !al0[j])) obj_destroy(j);
                     w.px=(uint16_t)lpx; w.py=(uint16_t)lpy; g_msg[0]=0; build_blocked(); }
+                  /* the totems' invocations (se_invoke.md): who may, the offerings, the effects, the wear-offs */
+                  { int sa=g_status_actor, si_=g_show_inv, cm=g_combat_mode, l0=g_spell_light_turns, h9=g_ahp[9], hp1=g_ahp[1], jg=-1, row, k, ok;
+                    #define SE_ROW(ON) ({ int r_=-1; for(int q_=0;q_<g_ow.ninv&&r_<0;q_++) if(g_ow.inv[q_].obj_n==(ON)) r_=q_; r_; })
+                    static uint8_t pp9[sizeof g_party]; int pn9=g_nparty, x9=g_actx[9], y9=g_acty[9], z9=g_actz[9]; memcpy(pp9,g_party,sizeof pp9);
+                    g_nparty=2; g_party[0].actor=1; g_party[1].actor=9; g_actx[9]=(uint16_t)((w.px+1)&M); g_acty[9]=w.py; g_actz[9]=(uint8_t)w.level;
+                    inv_add_objn(54,3); inv_add_objn(55,3); inv_add_objn(56,4); inv_add_objn(24,1);
+                    g_show_inv=1; g_status_actor=1; g_msg[0]=0; g_se_on=0;
+                    (void)se_totem(86,1); dbg_num("SE invoke only Triolo=", strstr(g_msg,"can't use that!")!=0 && g_se_on!=SEON_OFFER);
+                    g_status_actor=9; g_msg[0]=0; g_spell_light_turns=0;
+                    (void)se_totem(86,1); ok=g_se_on==SEON_OFFER && strstr(g_msg,"Invoke: Heluzz!")!=0; row=SE_ROW(54); k=row>=0?g_ow.inv[row].qty:0;
+                    if(row>=0) (void)se_offer_on(-1,row);
+                    dbg_num("SE invoke light=", ok && g_spell_light_turns==200 && strstr(g_msg,"Triolo creates light.")!=0 && (SE_ROW(54)<0?0:g_ow.inv[SE_ROW(54)].qty)==k-1);
+                    g_ahp[9]=1; g_msg[0]=0; (void)se_totem(88,1); row=SE_ROW(55); if(row>=0) (void)se_offer_on(-1,row);
+                    dbg_num("SE invoke heals=", g_ahp[9]>1 && strstr(g_msg,"healed.")!=0);
+                    g_msg[0]=0; (void)se_totem(88,1); row=SE_ROW(56); if(row>=0) (void)se_offer_on(-1,row);
+                    dbg_num("SE invoke protects=", g_se_prot[9] && g_se_prot[1] && strstr(g_msg,"Aphazz protects the party.")!=0);
+                    g_msg[0]=0; (void)se_totem(88,1); row=SE_ROW(24); if(row>=0) (void)se_offer_on(-1,row);
+                    dbg_num("SE invoke refused=", strstr(g_msg,"Offering refused.")!=0);
+                    g_combat_mode=0; g_msg[0]=0; g_se_on=0; (void)se_totem(87,1);
+                    dbg_num("SE invoke Motazz needs combat=", strstr(g_msg,"mortal combat.")!=0 && g_se_on!=SEON_OFFER);
+                    g_combat_mode=1; g_msg[0]=0; (void)se_totem(87,1); row=SE_ROW(56); if(row>=0) (void)se_offer_on(-1,row);
+                    ok=g_se_wild[9] && strstr(g_msg,"wild!")!=0; g_combat_mode=0; se_status_tick();
+                    dbg_num("SE invoke wild=", ok && !g_se_wild[9]);
+                    jg=se_hatch_creature(&w,((int)w.px+5)&M,w.py,333);
+                    if(jg>=0){ g_msg[0]=0; (void)se_totem(86,1); row=SE_ROW(56); if(row>=0) (void)se_offer_on(-1,row);
+                      dbg_num("SE invoke senses=", strstr(g_msg,"danger to the east.")!=0);
+                      g_combat_mode=1; g_aint[jg]=1; g_msg[0]=0; (void)se_totem(87,1); row=SE_ROW(55); if(row>=0) (void)se_offer_on(-1,row);
+                      dbg_num("SE invoke curses=", g_curse[jg] && strstr(g_msg,"cursed!")!=0); g_combat_mode=0;
+                      g_atile[jg]=0xffff; g_temp[jg]=0; g_curse[jg]=0; }
+                    for(k=0;k<4;k++){ static const uint16_t O[4]={54,55,56,24}; row=SE_ROW(O[k]); if(row>=0) pack_row_take(row,g_ow.inv[row].qty); }
+                    memcpy(g_party,pp9,sizeof pp9); g_nparty=pn9; g_actx[9]=(uint16_t)x9; g_acty[9]=(uint16_t)y9; g_actz[9]=(uint8_t)z9;
+                    g_se_prot[1]=g_se_prot[9]=0; g_se_wild[1]=g_se_wild[9]=0; g_ahp[9]=(uint8_t)h9; g_ahp[1]=(uint8_t)hp1; sync_party_hp();
+                    g_spell_light_turns=(uint8_t)l0; g_combat_mode=cm; g_status_actor=sa; g_show_inv=si_; g_se_on=0; g_peer_on=0; g_msg[0]=0; build_blocked();
+                    #undef SE_ROW
+                  }
                   /* the leader falls: Intanya's hut, a week on, three quarters of the experience */
                   { uint32_t ck=w.clock; uint16_t ex=g_aexp[1]; uint8_t hp=g_ahp[1]; g_aexp[1]=1000; g_ahp[1]=0; g_msg[0]=0;
                     se_avatar_death(&w);

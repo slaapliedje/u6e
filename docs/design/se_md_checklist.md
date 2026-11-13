@@ -169,3 +169,9 @@ list once SE's seams exist.
   (WILD for the charmed) on the inventory button. Slip 16 (orchid reach) switched by the user; slips 17-19 built as the
   intent; g_dos_slips is the one setting a future "as DOS" option would flip. Next in item 6: invocations, totems, bell,
   hazards.
+- 2026-11-12: item 6, Triolo's invocations (rules/se_invoke.md): the totems (only Triolo, or anyone while he leads),
+  `offering-- ` with chocolatl, pinde or yopo, and the nine effects: the view from above, light, sensing danger;
+  healing, charming foes, protecting the party; cursing foes, Motazz's beast (surface, in combat), the party's
+  frenzy. Charm, curse, protection and frenzy change the hit rolls and armour and wear off as time passes (SE's
+  own rolls, gl_se status_tick). Slips 20-21 built as the intent. Next in item 6: the bell, hazards (fire), the
+  big creatures' reach.
