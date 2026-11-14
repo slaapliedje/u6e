@@ -47,6 +47,16 @@ static uint8_t  *g_back;              /* chunky 8-bit backbuffer               *
 static uint8_t  *g_screen2;           /* planar screen B (double-buffer flip)  */
 static uint8_t  *g_vis;               /* currently DISPLAYED buffer            */
 static int       g_flip;              /* double-buffer (tear-free) mode active */
+/* The DIFF present (performance.md, 2026-11-13): a chunky copy of what the last presents put on screen;
+ * rdr_present_diff c2p's only the 16-pixel groups of g_back that differ from it. A full 320x200 c2p costs
+ * ~950 ms on an 8 MHz ST, and every combat key used to pay it for a line of text. Every present below keeps
+ * the copy in step; anything else that changes the screen or the LUT makes it invalid (the next diff is full). */
+static uint8_t  *g_shadow;            /* 64000 bytes, or NULL (then every diff is a full present) */
+static int       g_shadow_ok;         /* the copy matches the screen */
+static void shadow_rect(int x0, int g0, int gn, int y0, int h) {   /* the copy takes g_back's groups [g0,g0+gn) on rows y0..y0+h-1 */
+    (void)x0; if (!g_shadow_ok) return;
+    for (int y = y0; y < y0 + h; y++) memcpy(g_shadow + (int32_t)y*STW + g0*16, g_back + (int32_t)y*STW + g0*16, (size_t)gn*16);
+}
 static int       g_has_blitter;       /* Phase 3: BLiTTER present (from caps) -> masked-blit path */
 static int       g_blit_compose;      /* use the Blitter in the live compose? default OFF (measured a wash:
                                        * the masked blit is a few ms of the ~400ms compose, dim dominates) */
@@ -132,6 +142,9 @@ bool rdr_init(const platform_caps_t *caps)
      * into a scoped chip region after rdr_init and frees it LIFO, so a lazy mid-intro allocation would
      * be freed under us. Optional: without it we stay single-buffered. (memory_streaming.md) */
     g_screen2 = (uint8_t *)plat_alloc_chip(ST_SCREEN_BYTES);
+    g_shadow = (uint8_t *)plat_alloc_fast(ST_BACK_BYTES);           /* optional: without it every present is full */
+    if (!g_shadow) g_shadow = (uint8_t *)plat_alloc_chip(ST_BACK_BYTES);
+    g_shadow_ok = 0;
     if (g_screen2) for (int32_t i=0;i<ST_SCREEN_BYTES;i++) g_screen2[i]=0;
 
     /* identity-ish default remap + a grey ramp, until rdr_set_lowcolor supplies the real
@@ -196,6 +209,7 @@ void rdr_set_lowcolor(const uint8_t *pal16, const uint8_t *lut256)
             g_stpal[i] = st_reg(pal16[i*3+0], pal16[i*3+1], pal16[i*3+2]);
         Setpalette(g_stpal);
     }
+    if (g_nb) g_shadow_ok = 0;                       /* the rows' LUTs change */
     g_nb = 0;                                        /* single band: every row uses g_lut */
     for (int i = 0; i < STH; i++) g_row_lut[i] = g_lut;
 }
@@ -347,7 +361,32 @@ void rdr_present(void)
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
         c2p4_lut_asm(px, g_row_lut[y], dst, ST_GROUPS);
     }
+    if (g_shadow) { memcpy(g_shadow, g_back, ST_BACK_BYTES); g_shadow_ok = !g_flip; }
     Vsync();
+}
+
+void rdr_present_rect(int x, int y, int w, int h);   /* (defined below) */
+/* c2p only what changed since the last present (see g_shadow). No Vsync. Falls back to a full present
+ * when there is no valid copy or the screens are flipping. */
+void rdr_present_diff(void)
+{
+    if (!g_shadow || !g_shadow_ok || g_flip) { rdr_present_rect(0, 0, STW, STH);
+        if (g_shadow && !g_flip) { memcpy(g_shadow, g_back, ST_BACK_BYTES); g_shadow_ok = 1; } return; }
+    for (int y = 0; y < STH; y++) {
+        const uint32_t *a = (const uint32_t *)(g_back + (int32_t)y * STW);
+        uint32_t       *b = (uint32_t *)(g_shadow + (int32_t)y * STW);
+        int g = 0;
+        while (g < ST_GROUPS) {
+            const uint32_t *pa = a + g*4; const uint32_t *pb = b + g*4;
+            if (pa[0] == pb[0] && pa[1] == pb[1] && pa[2] == pb[2] && pa[3] == pb[3]) { g++; continue; }
+            int g1 = g + 1;                                       /* the run of changed groups */
+            while (g1 < ST_GROUPS) { const uint32_t *qa = a + g1*4, *qb = b + g1*4;
+                if (qa[0] == qb[0] && qa[1] == qb[1] && qa[2] == qb[2] && qa[3] == qb[3]) break; g1++; }
+            c2p4_lut_asm((const uint8_t *)(a + g*4), g_row_lut[y], (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES) + g*4, g1 - g);
+            memcpy(b + g*4, a + g*4, (size_t)(g1 - g) * 16);
+            g = g1;
+        }
+    }
 }
 
 /* c2p only the sub-rectangle [x,y,w,h). x,w must be multiples of 16. */
@@ -363,6 +402,7 @@ void rdr_present_rect(int x, int y, int w, int h)
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
         c2p4_lut_asm(px, g_row_lut[yy], dst, gn);
     }
+    if (gn > 0 && h > 0) shadow_rect(x, g0, gn, y, h);
     /* no Vsync: caller may present several rects per frame */
 }
 
@@ -372,6 +412,8 @@ void rdr_present_doubled(int lh)
 {
     if (lh < 1) lh = 1;
     if (lh > STH) lh = STH;
+    if (!g_flip && lh == STH && g_shadow) { rdr_present_diff(); Vsync(); return; }   /* single screen: only what changed */
+    g_shadow_ok = 0;
     /* In flip mode, c2p into the HIDDEN buffer, then swap the video base at the frame boundary. */
     uint8_t *dst = (g_flip && g_vis == g_screen) ? g_screen2 : g_screen;
     if (g_flip && g_vis == g_screen2) dst = g_screen;
@@ -400,6 +442,7 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
         uint16_t     *dst = (uint16_t *)(scr + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
         c2p4_lut_asm(px, g_lut, dst, gn);
     }
+    if (scr == g_screen && !g_flip) shadow_rect(x, g0, gn, y, h); else g_shadow_ok = 0;
     /* no Vsync: caller batches */
 }
 
@@ -621,7 +664,7 @@ static const planar_tile_t *rdr_planar_get(int32_t key, const uint8_t *chunky, c
  * (it drives the rebuild through g_pd_valid). Colour CYCLING (rdr_lowcolor_cycle) rotates only the
  * hardware registers, not g_lut, so the index-based planar bits stay valid — no invalidation there. */
 static int g_planar_dirty = 0;
-static void planar_mark_dirty(void){ g_pcache_ready = 0; g_planar_dirty = 1; }
+static void planar_mark_dirty(void){ g_pcache_ready = 0; g_planar_dirty = 1; g_shadow_ok = 0; }   /* a new LUT: the same chunky gives other planes */
 int  rdr_planar_take_dirty(void){ int d = g_planar_dirty; g_planar_dirty = 0; return d; }
 
 /* The map content is presented at screen rows PMAP_TOP..PMAP_TOP+159 (== gamedemo MAP_INSET). Native
@@ -817,6 +860,7 @@ void rdr_ppresent(void)
 int rdr_pdissolve_begin(void)
 {
     if (!g_screen2) return 0;
+    g_shadow_ok = 0;
     memcpy(g_screen2, g_screen, 32000);
     Setscreen(g_screen2, g_screen2, -1); Vsync();
     return 1;
@@ -1191,6 +1235,7 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
     int lastw = (ST_GROUPS - 1) * 4;             /* word offset of the rightmost group (76) */
     int lastp = (ST_GROUPS - 1) * 16;            /* chunky px offset of that group (304)    */
     if (pan_x < 0) pan_x = 0;
+    g_shadow_ok = 0;                             /* the screen no longer matches g_back */
     for (int y = 0; y < lh; y++) {
         uint16_t *r = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
         memmove(r, r + 4, (size_t)(ST_ROWBYTES - 8));       /* planar shift left one 4-word group */
@@ -1203,13 +1248,13 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
  * second ST-RAM buffer can't be allocated (stays single-buffered). */
 void rdr_flip_begin(void)
 {
-    if (g_screen2) g_flip = 1;      /* allocated in rdr_init (never lazily — see there) */
+    if (g_screen2) { g_flip = 1; g_shadow_ok = 0; }   /* allocated in rdr_init (never lazily — see there) */
 }
 
 void rdr_flip_end(void)
 {
     if (!g_flip) return;
-    g_flip = 0;
+    g_flip = 0; g_shadow_ok = 0;
     if (g_vis != g_screen) memcpy(g_screen, g_vis, ST_SCREEN_BYTES);
     Setscreen(g_screen, g_screen, -1); Vsync();
     g_vis = g_screen;

@@ -863,6 +863,14 @@ $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch)"
 game-st: $(BUILD)/gamest.prg
+# KEYPROF: the same ST game with a per-loop timer on the console (--conout 2): every loop pass over
+# 50 ms prints its total and the world turn / compose / present / build_blocked split (performance.md).
+$(BUILD)/gamestp.prg: $(GAME_SRC_ST)
+	@mkdir -p $(BUILD)/obj_stp
+	@for s in $^; do o=$(BUILD)/obj_stp/`echo $$s | tr / _`.o; \
+	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_ST -DKEYPROF $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_stp/*.o
+game-st-prof: $(BUILD)/gamestp.prg
 
 # CONVERT.TOS (the first start on the Atari, docs/design/first_boot_convert.md): mksave + nuviesave +
 # mkworld linked into one plain-68000 program, their main()s renamed, behind a progress display. The

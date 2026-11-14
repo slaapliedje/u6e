@@ -882,3 +882,41 @@ identical on TT and the 4 MB Falcon with the cached routes; completion-checklist
   and two passes, 1.3 s — this is also the stall when a door opens or a torch is lit); the indoor
   bitmap was unpacked a byte at a time (1 s; now `memset` per run). FG-INDEX / LS-INDEX full-vs-sparse
   self-tests in the ST bench: 0.
+
+## 2026-11-13 — ST combat: from seconds a key to under one (KEYPROF)
+
+A Mega STe owner (TOS 2.06, 4 MB) reported "literally some few seconds between Attack - direction - target"
+and full top-to-bottom redraws between rounds. `make game-st-prof` builds `gamestp.prg` with `-DKEYPROF`:
+every main-loop pass over 50 ms prints its time split by phase (world turn parts, compose, light, static,
+full and map present, panels) on the console (`--conout 2`). Measured in Hatari on an 8 MHz Mega STe, 4 MB,
+in the throne room at 08:00 with combat on (B), the crosshair (A, two steps), Enter at nothing, Space, steps:
+
+| key | before | after |
+|---|--:|--:|
+| B (combat on) | 1165 ms | 335 ms |
+| A (crosshair up) | 1695 | 980 |
+| crosshair step | 1685 | 450 |
+| Enter (attack) | 8895 | 1785 |
+| Space (pass) | — | 1035 |
+| step in combat | 5245–6180 | 850–2415 |
+
+What it was, in order of size:
+1. **`pick_foe`, 5.7 s of Enter's 8.9.** The three companions on assault looked for a foe every turn, testing
+   `can_target` (and so `npc_tile`) on all 255 actors before the cheap 8-tile reach, and `npc_tile` reached
+   `actor_objn`, which scanned all 1024 BASETILE entries per call. `actor_objn` is now a table (base tile ->
+   smallest obj_n, built once per BASETILE) and the reach is tested first. Same results (no side effects, the
+   same candidates and tie rolls).
+2. **The full present, 950 ms on every key.** `present_frame` c2p'd the whole 320x200 for a line of text.
+   rdr_st now keeps a chunky copy of what is on screen (`g_shadow`, 64000 bytes) and `rdr_present_diff`
+   converts only the 16-pixel groups that differ (runs per row); every present keeps the copy in step and a
+   LUT change, flipping, the intro scroll or the dissolve make it full again. 950 -> 180-210 ms.
+3. **The compose for a crosshair step, 345 ms**: light (85) and the static layer (200) recomputed though only
+   the crosshair moved. `compose_cursor` takes the idle path; the planar idle patch now restores the
+   crosshair's old and new cells (`xhair_cell`, `g_xh_cell`). 345 -> 40 ms.
+4. **The panels.** `ui_text` and `blit_tile` went through `ui_px` (bounds and row multiply per pixel): row
+   pointers when wholly on screen. The map border's 40 masked tiles were drawn on every compose: each strip is
+   kept and not drawn while it is still on screen (the date line overwrites the bottom one). The library
+   `memcmp` compares a byte at a time on the 68000 (its `memcpy` uses movem): compare by longs.
+
+Still to do: the rest of an action's compose (light + full static rebuild, ~285 ms), `sched_pick` (~150-280 ms
+a key), the step that took a full present (a LUT change), and the panel draws (status twice per key).

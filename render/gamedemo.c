@@ -794,6 +794,12 @@ static void ui_px(int x,int y,uint8_t c){ if((unsigned)x<LW&&(unsigned)y<LH) ROW
 /* authentic font (U6.CH): 8 bytes/glyph, MSB-left, glyph index == ASCII */
 static void ui_text(int x,int y,const char*s,uint8_t col)
 { for(;*s;s++,x+=8){const uint8_t*g=g_font+(int)(unsigned char)*s*8;
+    if(x>=0 && x+8<=LW && y>=0 && y+8<=LH){        /* the glyph is on screen: row pointers, empty rows skipped (8 MHz: each pixel's checks added up) */
+        uint8_t*d=ROW(y)+x;
+        for(int gy=0;gy<8;gy++,d+=g_W){ uint8_t b=g[gy]; if(!b) continue;
+            if(b&0x80) d[0]=col; if(b&0x40) d[1]=col; if(b&0x20) d[2]=col; if(b&0x10) d[3]=col;
+            if(b&0x08) d[4]=col; if(b&0x04) d[5]=col; if(b&0x02) d[6]=col; if(b&0x01) d[7]=col; }
+        continue; }
     for(int gy=0;gy<8;gy++){uint8_t b=g[gy];for(int gx=0;gx<8;gx++) if(b&(0x80>>gx)) ui_px(x+gx,y+gy,col);}} }
 static int ui_textw(const char*s){int n=0;while(*s++)n++;return n*8;}
 
@@ -3582,6 +3588,15 @@ static void sfx_play(int id,int arg)
 /* Solo and COMMAND (combat.md §8): whoever is played takes slot 1, which the whole engine reads as "the one at (px,py)"; the two swap back after */
 static int g_solo_m, g_solo_on;                 /* who is in slot 1 instead of the Avatar (its slot holds the Avatar now); 1 = Solo, 0 = a COMMAND turn */
 static void build_blocked(void);
+#ifdef KEYPROF   /* the per-loop timer (Makefile game-st-prof; performance.md): 200 Hz ticks by phase */
+static uint32_t g_kp[18];   /* 0 step_npcs, 1 compose, 2 full present, 3 map present, 4 build_blocked, 5 wt_act, 6 minute_end, 7 sched_pass, 8 sched_pick, 9 followers */
+#define KP_FN(i) static __attribute__((unused)) void kp_end##i(uint32_t*t0){ g_kp[i]+=plat_ticks_200hz()-*t0; }
+KP_FN(0) KP_FN(1) KP_FN(2) KP_FN(3) KP_FN(4) KP_FN(5) KP_FN(6) KP_FN(7) KP_FN(8) KP_FN(9) KP_FN(10) KP_FN(11) KP_FN(12) KP_FN(13) KP_FN(14) KP_FN(15) KP_FN(16) KP_FN(17)
+static int g_kpn; static uint16_t g_kpa[48], g_kpw[48], g_kpd[48];   /* the slow actor turns of this pass: actor, worktype, ticks */
+#define KP(i) uint32_t kp_t0_ __attribute__((cleanup(kp_end##i)))=plat_ticks_200hz()
+#else
+#define KP(i) do{}while(0)
+#endif
 static void slot_swap(world_t*w,int m)
 {
 #define ACTOR_SWAP(x) do{ char t_[sizeof x[0]]; memcpy(t_,&x[1],sizeof t_); memcpy(&x[1],&x[m],sizeof t_); memcpy(&x[m],t_,sizeof t_); }while(0)
@@ -3809,6 +3824,7 @@ static bool force_pass_at(int32_t x, int32_t y)
 
 static void build_blocked(void)
 {
+    KP(4);
     /* the per-object work lists are 52 KB at the full object count and live only for this call, so
      * they come from the pool (a mark/reset costs nothing). Margin on a 4 MB machine: memory_streaming.md */
     plat_mark wm=plat_chip_mark();
@@ -4530,6 +4546,7 @@ static int in_lead_band(int vx,int vy,int dx,int dy){
  * in as 0 (hidden cell -> darklut[0] = black). Shared by compose_map and the mode==26 self-test so
  * they can't drift. Fills plight[VT*VT] (and pvis[VT*VT] scratch). */
 static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
+    KP(10);
     int32_t left=w->px-VT/2, top=w->py-VT/2;
     int pin = tile_is_indoor((int)(w->px&(U6_SURFACE_TILES-1)),(int)(w->py&(U6_SURFACE_TILES-1)));
 #ifdef BENCH
@@ -4577,6 +4594,7 @@ uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw
 #define SUB_ADD(acc) ((void)0)
 #endif
 static void predim_compose_static(const world_t*w,const uint8_t*light,int dither){
+    KP(11);
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;         /* wrap to shortest signed delta */
     if(dx>512)dx-=1024; else if(dx<-512)dx+=1024;
     if(dy>512)dy-=1024; else if(dy<-512)dy+=1024;
@@ -4824,8 +4842,14 @@ static void draw_cell_dither(uint8_t*tmp,int T,int cvx,int cvy,int tile,int lvl)
     uint8_t keep[256]; for(int r=0;r<16;r++) for(int c=0;c<16;c++) keep[r*16+c]=tmp[(cvy*16+r)*T+cvx*16+c];
     draw_cell(tmp,T,cvx,cvy,tile,-1);
     for(int r=0;r<16;r++) for(int c=0;c<16;c++) if(BAYER4[(r&3)*4+(c&3)]>=lvl) tmp[(cvy*16+r)*T+cvx*16+c]=keep[r*16+c]; }
+/* the view cell the crosshair is drawn on, or -1; and where the last compose drew it */
+static int g_xh_cell=-1;
+static int xhair_cell(void)
+{   if(!VERB_CURSOR(g_pending_verb) || VERB_PACK()) return -1;
+    { int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy; return (cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) ? cvy*VT+cvx : -1; } }
 static void compose_map(const world_t*w)
 {
+    KP(1);
     static uint8_t tmp[TMP_T*TMP_T];               /* 176x176 working buffer (static layer + dynamic) */
     const int T=TMP_T;
 #ifdef BENCH
@@ -4903,6 +4927,7 @@ static void compose_map(const world_t*w)
             if(g_pd_idle_patch){
                 /* g_dyn_anim (animated actor/avatar/field cells) is cached per idle-entry in predim_compose_static */
                 for(int i=0;i<VT*VT;i++) g_pd_dyn[i] = (uint8_t)(g_pd_dirty[i] | g_dyn_anim[i]);
+                { int c=xhair_cell(); if(c>=0) g_pd_dyn[c]=1; if(g_xh_cell>=0) g_pd_dyn[g_xh_cell]=1; }   /* the crosshair's new and old cells */
                 rdr_ptmp_restore(g_pd_dyn);          /* restore D cells g_pdimmed -> g_ptmp (partial) */
                 g_pd_dyngate = g_pd_dyn;              /* gate the ph1 planar redraw to D */
 #ifdef BENCH
@@ -4970,6 +4995,7 @@ static void compose_map(const world_t*w)
         for(int e=0;e<g_fx_extra;e++){ fvx=((int32_t)g_fx_ex[e]-left)&(U6_SURFACE_TILES-1); fvy=((int32_t)g_fx_ey[e]-top)&(U6_SURFACE_TILES-1); if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); } }
     if(VERB_CURSOR(g_pending_verb) && !VERB_PACK()){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;   /* the A)ttack / T)alk / orb crosshair (combat.md §6b) */
         if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); }
+    g_xh_cell=xhair_cell();                         /* where it is now: an idle recompose restores that cell when it moves */
     if(g_gw_ghost_lvl>0){ int32_t gvx=((int32_t)g_gw_ghost_x-left)&(U6_SURFACE_TILES-1), gvy=((int32_t)g_gw_ghost_y-top)&(U6_SURFACE_TILES-1);   /* a member vanishing into a moongate */
         if(gvx<VT&&gvy<VT) draw_cell_dither(tmp,T,(int)gvx,(int)gvy,g_gw_ghost_tile,g_gw_ghost_lvl); }
     PH_END(1);
@@ -5170,6 +5196,12 @@ static int planar_static_inv(const world_t*w){
 static void blit_tile(int sx,int sy,int tile,int transp)
 {
     const uint8_t*src=g_tileset+(int32_t)tile*256;
+    if(sx>=0 && sx+16<=LW && sy>=0 && sy+16<=LH){      /* wholly on screen: row pointers */
+        uint8_t*d=ROW(sy)+sx;
+        for(int y=0;y<16;y++,d+=g_W,src+=16){
+            if(!transp){ memcpy(d,src,16); continue; }
+            for(int x=0;x<16;x++){ uint8_t v=src[x]; if(v!=TILE_TRANSPARENT) d[x]=v; } }
+        return; }
     for(int y=0;y<16;y++)for(int x=0;x<16;x++){
         uint8_t v=src[y*16+x];
         if(!(transp&&v==TILE_TRANSPARENT)) ui_px(sx+x,sy+y,v);
@@ -5188,15 +5220,27 @@ static void spell_page_blit(int w)              /* its first w columns: a map re
 {
     if(g_spell_page) for(int y=0;y<SPELL_H;y++) memcpy(ROW(SPELL_Y+y)+SPELL_X, g_spell_page+(int32_t)y*SPELL_W, (size_t)w);
 }
+/* The border's four strips (0 top, 1 bottom: VT*16 x 16; 2 left, 3 right: 16 x (VT-2)*16), each kept as it was
+ * after it was last drawn: a strip still on screen is not drawn again (40 masked tiles cost the ST ~115 ms a
+ * key). The date line is written over the bottom strip, so that one is drawn each time, as before. */
+static uint8_t g_brd_saved[2*VT*16*16+2*16*(VT-2)*16]; static uint8_t g_brd_have[4];
+static void border_strip(int r_,int save,int*same)
+{   int x1=MAPX+(VT-1)*16, y1=MAPY+(VT-1)*16;
+    const int R[4][5]={{MAPX,MAPY,VT*16,16,0},{MAPX,y1,VT*16,16,VT*16*16},{MAPX,MAPY+16,16,(VT-2)*16,2*VT*16*16},{x1,MAPY+16,16,(VT-2)*16,2*VT*16*16+16*(VT-2)*16}};
+    int k=R[r_][4]; if(same) *same=1;
+    for(int y=R[r_][1];y<R[r_][1]+R[r_][3];y++,k+=R[r_][2]){ uint8_t*row=ROW(y)+R[r_][0];
+        if(save) memcpy(g_brd_saved+k,row,(size_t)R[r_][2]);
+        else { const uint32_t *a=(const uint32_t*)(g_brd_saved+k), *b=(const uint32_t*)row;   /* longs (even addresses): the library memcmp went a byte at a time */
+               for(int n=R[r_][2]>>2;n>0;n--) if(*a++!=*b++){ *same=0; return; } } } }
 static void draw_border_tiles(void)
 {
+    KP(15);
     int x1=MAPX+(VT-1)*16, y1=MAPY+(VT-1)*16;       /* 160: last ring column/row */
-    blit_tile(MAPX,MAPY,432,1); blit_tile(x1,MAPY,434,1);
-    blit_tile(MAPX,y1,435,1);   blit_tile(x1,y1,437,1);
-    for(int c=1;c<VT-1;c++){ int px=MAPX+c*16, py=MAPY+c*16;
-        blit_tile(px,MAPY,433,1); blit_tile(px,y1,436,1);   /* top / bottom rows */
-        blit_tile(MAPX,py,438,1); blit_tile(x1,py,439,1);   /* left / right cols */
-    }
+    for(int r_=0;r_<4;r_++){ int same=0; if(g_brd_have[r_]) border_strip(r_,0,&same); if(same) continue;
+        if(r_<2){ int y=r_?y1:MAPY; blit_tile(MAPX,y,r_?435:432,1); blit_tile(x1,y,r_?437:434,1);   /* corners, then the row */
+                  for(int c=1;c<VT-1;c++) blit_tile(MAPX+c*16,y,r_?436:433,1); }
+        else    { int x=r_==2?MAPX:x1; for(int c=1;c<VT-1;c++) blit_tile(x,MAPY+c*16,r_==2?438:439,1); }   /* left / right cols */
+        border_strip(r_,1,0); g_brd_have[r_]=1; }
     if(g_casting||g_save_menu) spell_page_blit(PANX-SPELL_X);
 }
 
@@ -5424,6 +5468,7 @@ static void draw_save_page(uint8_t col)
 }
 static void draw_conversation(uint8_t col)
 {
+    KP(13);
     int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
     restore_panel();                               /* clean papyrus before text */
     g_tcur_x=-1;                                   /* a wait's cursor is drawn again below if one is up */
@@ -5514,6 +5559,7 @@ static void status_text(const world_t*w,char*s)
 }
 static void draw_status(const world_t*w,uint8_t col)
 {
+    KP(12);
     char s[40]; status_text(w,s);
     /* the bottom border row is papyrus under transparent border tiles; the clock changes without a
      * scroll (a pass, a camp), so the old text must go first: papyrus, the row's tiles, then the text */
@@ -8788,6 +8834,7 @@ static void restore_cmdbar(void)
 /* the 10 command icons (tiles 400..409) + a box around the armed verb */
 static void draw_command_bar(uint8_t hi)
 {
+    KP(14);
     restore_cmdbar();
     for(int i=0;i<NCMD;i++) blit_tile(CMDX+i*16,CMDY,400+i,0);
     if(g_default_verb){ int c=verb_cmd(g_default_verb); if(c>=0) for(int k=0;k<16;k++) ui_px(CMDX+c*16+k,CMDY+16,9); }   /* the default's blue line */
@@ -8831,10 +8878,11 @@ static void cursor_pos(int lx,int ly,int*ox,int*oy)
 
 static void present_frame(void)
 {
+    KP(2);
 #ifdef HAVE_RDR_ST
   if(g_native_planar && !g_peer_on){                      /* panel from g_back, inner map from planar (the gem's view is drawn into g_back) */
-      rdr_pcursor_invalidate();                           /* the full c2p erases any planar cursor */
-      rdr_present_rect(0,0,LW,LH);                         /* full 1:1 c2p of g_back (inner map stale), no Vsync */
+      rdr_pcursor_hide();                                 /* the pixels under the planar cursor back first */
+      rdr_present_diff();                                  /* c2p of what changed in g_back since the last present (inner map stale), no Vsync */
       rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
       rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
@@ -8844,11 +8892,15 @@ static void present_frame(void)
   if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_doubled(LH); cursor_erase(); }
   else rdr_present_doubled(LH); }
 
+/* a recompose for the crosshair alone (it moved, or a verb brought it up): nothing in the world changed, so
+ * the cached light and static layer stand, as on an animation tick (an ST combat key paid ~285 ms for them) */
+static void compose_cursor(const world_t*w){ g_idle_allow=1; compose_map(w); g_idle_allow=0; }
 /* present ONLY the map window (movement / tile animation) — ~half the c2p of a full
  * doubled present, since the panel/command-bar are static. The cursor is composited
  * if it overlaps the map. The main loop Vsyncs. */
 static void present_map(void)
 {
+    KP(3);
 #ifdef HAVE_RDR_ST
   if(g_native_planar){                                    /* shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
       rdr_pcursor_hide(); rdr_ppresent();                 /* restore under old cursor, then redraw the map */
@@ -9033,7 +9085,15 @@ static int sees_party(const world_t*w,int i){
 /* the object number behind an actor's base tile (the creature table is keyed by obj_n) */
 static int actor_objn(int i){
     if(!g_basetile) return 0;
-    for(int o=1;o<1024;o++){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8); if(b && b==(int)g_abase[i]) return o; }
+    /* base tile -> the smallest obj_n with that base, built once per BASETILE: the scan of all 1024 entries
+     * per call cost the ST seconds a combat turn (pick_foe -> can_target -> npc_tile; performance.md) */
+    static int16_t of[2048]; static const uint8_t *made_for;
+    if(made_for!=g_basetile){ memset(of,0,sizeof of);
+        for(int o=1023;o>=1;o--){ int b=g_basetile[o*2]|(g_basetile[o*2+1]<<8); if(b>0 && b<2048) of[b]=(int16_t)o; }
+        made_for=g_basetile; }
+    int b=(int)g_abase[i];
+    if(b>0 && b<2048) return of[b];
+    for(int o=1;o<1024;o++){ int t=g_basetile[o*2]|(g_basetile[o*2+1]<<8); if(t && t==b) return o; }
     return 0; }
 /* the to-hit stats (combat.md §2): dexterity, 3 less when cursed, 1 asleep or in Time Stop; the attack
  * role is strength for the club, mace, spiked helm and two-handed hammer, or an unarmed blow of a
@@ -9768,10 +9828,12 @@ static int can_target(int i,int j)
     return vis; }
 /* the enemy i goes for: the nearest within 8, a coin on a tie */
 static int pick_foe(int i)
-{   int wt=wt_now(i), a=align_of(i), best=-1, x,y; long bd=0x7fff;
+{
+    KP(0);   int wt=wt_now(i), a=align_of(i), best=-1, x,y; long bd=0x7fff;
     int any=wt==9||wt==0x9a||wt==0x13||wt==7||wt==0x99;
     if(!actor_where(i,&x,&y)) return -1;
     for(int j=1;j<U6_MAX_ACTORS;j++){ int ax,ay; if(j==i||g_atile[j]==0xffff||g_ahp[j]==0||!actor_where(j,&ax,&ay)) continue;
+        { int dx=iabs_(ax-x), dy=iabs_(ay-y); if(dx>8||dy>8) continue;    /* the reach first: the tests below cost (an ST combat turn took seconds) */
         if(!can_target(i,j)) continue;
         if(!any){ int b=align_of(j);
             if(a==0 && !(wt==0x9b && b==0x40)) continue;
@@ -9779,7 +9841,6 @@ static int pick_foe(int i)
             if(!b) continue;
             if(a==0x40 && !(b&0x20)) continue;
             if(a==0x20 && !(b&0x40)) continue; }
-        { int dx=iabs_(ax-x), dy=iabs_(ay-y); if(dx>8||dy>8) continue;
           if(wt_now(j)==7 && g_wp && (iabs_(ax-(int)g_wp->px)>5||iabs_(ay-(int)g_wp->py)>5)) continue;
           { long d=(long)dx*dx+(long)dy*dy;
             if(d<bd || (d==bd && ROLL(1))){ bd=d; best=j; } } } }
@@ -9830,7 +9891,8 @@ static int try_diag(const world_t*w,int i,int a,int b)
     if(!step_ok(w,i,nx,ny)) return 0;
     step_to(i,nx,ny,d); return 1; }
 static int walk_to(const world_t*w,int i,int tx,int ty)
-{   int x=g_actx[i], y=g_acty[i], dx=tx-x, dy=ty-y, ax=iabs_(dx), ay=iabs_(dy), xd, yd, yfirst;
+{
+    KP(9);   int x=g_actx[i], y=g_acty[i], dx=tx-x, dy=ty-y, ax=iabs_(dx), ay=iabs_(dy), xd, yd, yfirst;
     if((!dx&&!dy)||wt_now(i)==0xe){ pay(i,5); return 0; }
     xd=!dx?(ROLL(1)?2:6):dx<0?6:2; yd=!dy?(ROLL(1)?0:4):dy<0?0:4;
     if(ax<4&&ay<4) yfirst=ax<ay||(ax==ay&&ROLL(1));
@@ -10029,7 +10091,8 @@ static void sched_walk(const world_t*w,int i)
     g_pts[i]=0; }
 /* one actor's action when its points come up */
 static void wt_act(const world_t*w,int i)
-{   int wt=wt_now(i), p0=g_pts[i];
+{
+    KP(5);   int wt=wt_now(i), p0=g_pts[i];
     g_amoved[i]=0; g_geo_ok=0; g_mover=i;
     if(g_time_stop&&i!=1){ g_pts[i]=0; return; }
     if(g_gl->wt_act && g_gl->wt_act(w,i,wt)) wt=-1;
@@ -10056,6 +10119,9 @@ static void wt_act(const world_t*w,int i)
           if(iabs_(tx-g_actx[i])<2&&iabs_(ty-g_acty[i])<2){ hit_flash(t); g_asleep[t]=0; (void)walk_to(w,i,px,py); } else (void)walk_to(w,i,tx,ty); } break;
     default: pay(i,5); break; }
     if(g_pts[i]==p0) pay(i,10);
+#ifdef KEYPROF
+    { uint32_t d=plat_ticks_200hz()-kp_t0_; if(d>=2 && g_kpn<48){ g_kpa[g_kpn]=(uint16_t)i; g_kpw[g_kpn]=(uint16_t)wt_now(i); g_kpd[g_kpn]=(uint16_t)d; g_kpn++; } }
+#endif
     g_mover=-1; }
 /* the party's places behind the leader: across, back (movement_turns.md §3c) */
 static const int8_t FORM_A[11]={0,-1,1,0,-2,2,-1,1,-3,3,0}, FORM_B[11]={0,1,1,2,2,2,3,3,3,3,1};
@@ -10069,7 +10135,8 @@ static int form_near(int di,int x,int y)
     return near; }
 /* the followers take their places: two passes, 5 points each, whether they moved or not */
 static void followers_walk(const world_t*w)
-{   int lx=(int)w->px, ly=(int)w->py, f=(g_facing[1]&3)*2, ux=D8X[f], uy=D8Y[f], M=U6_SURFACE_TILES-1;
+{
+    int lx=(int)w->px, ly=(int)w->py, f=(g_facing[1]&3)*2, ux=D8X[f], uy=D8Y[f], M=U6_SURFACE_TILES-1;
     g_form[0]=1;
     for(int pass=0;pass<2;pass++){ int di=1;
         for(int p=0;p<g_nparty;p++){ int i=g_party[p].actor, x,y; if(i==1||di>10) continue;
@@ -10096,7 +10163,8 @@ static void hour_tick(void)
           if(si!=(int)g_sched_si[i]){ g_sched_si[i]=(int8_t)si; g_wt_force[i]=0; g_sched_st[i]=1; g_sched_pending=1; g_asleep[i]=0; sched_left(i); } } } }
 /* those about to set out far from the leader are there already; three a pass */
 static void sched_pass(const world_t*w)
-{   int warped=0, left=0, px=(int)w->px, py=(int)w->py;
+{
+    KP(7);   int warped=0, left=0, px=(int)w->px, py=(int)w->py;
     if(!g_sched_pending) return;
     for(int i=2;i<0xe0;i++){ if(g_sched_st[i]!=1) continue; if(warped>=3){ left=1; break; }
         int x=g_actx[i],y=g_acty[i],z=g_actz[i],dx,dy,dz;
@@ -10147,7 +10215,8 @@ static void sched_settle(void)
 static int able(int i){ return g_ahp[i]>0&&!g_asleep[i]&&!g_paralyze[i]&&!g_dragged[i]&&!g_charm[i]; }
 /* the next to act; -1 = nobody has points */
 static int sched_pick(const world_t*w)
-{   int best=-1, bp=0, bd=1, mask=g_cur_level?0xff:0x3ff, bx=((int)w->px-16)&0x3f8, by=((int)w->py-16)&0x3f8;
+{
+    KP(8);   int best=-1, bp=0, bd=1, mask=g_cur_level?0xff:0x3ff, bx=((int)w->px-16)&0x3f8, by=((int)w->py-16)&0x3f8;
     for(int i=1;i<U6_MAX_ACTORS;i++){ int wt,dx,dy,p,d; if(g_atile[i]==0xffff||(i!=1&&(int)g_actz[i]!=g_cur_level)) continue;
         if(g_ahp[i]==0||g_paralyze[i]||g_asleep[i]||g_pts[i]<=0) continue;
         if(i!=1&&g_resting&&member(i)&&wt_now(i)!=0xc) continue;
@@ -10160,7 +10229,8 @@ static int sched_pick(const world_t*w)
         { long c=(long)p*bd-(long)d*bp; if(c>0||(c==0&&d>bd)){ best=i; bp=p; bd=d; } } }
     return best; }
 static void minute_end(world_t*w)
-{   for(int i=0;i<U6_MAX_ACTORS;i++){ int d=g_adex[i]?g_adex[i]:1; g_pts[i]=(int8_t)(g_pts[i]<0?g_pts[i]+d:d); }
+{
+    KP(6);   for(int i=0;i<U6_MAX_ACTORS;i++){ int d=g_adex[i]?g_adex[i]:1; g_pts[i]=(int8_t)(g_pts[i]<0?g_pts[i]+d:d); }
     if(g_time_stop>1){ g_time_stop--; return; }
     g_time_stop=0;
     w->clock+=1; w->turns++; g_hour=clock_hour(w); g_minutes=clock_minutes(w);
@@ -10188,7 +10258,8 @@ static void sched_run(world_t*w)
         if(g_game_over) return; } }
 /* the old unit of the test hooks and of R)est: a minute's worth for everyone but the one at the keys */
 static void step_npcs(const world_t*w)
-{   for(int i=0;i<U6_MAX_ACTORS;i++){ int d=g_adex[i]?g_adex[i]:1; g_pts[i]=(int8_t)(g_pts[i]<0?g_pts[i]+d:d); }
+{
+    for(int i=0;i<U6_MAX_ACTORS;i++){ int d=g_adex[i]?g_adex[i]:1; g_pts[i]=(int8_t)(g_pts[i]<0?g_pts[i]+d:d); }
     if(g_time_stop>1){ g_time_stop--; return; }
     g_time_stop=0;
     minute_effects(w);
@@ -20136,6 +20207,9 @@ int main(int argc, char **argv)
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim, last_tcur=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */
     g_verb_pts=0;                                    /* a test hook's leftovers */
     for (;;) {                                       /* interactive; holds frame for capture */
+#ifdef KEYPROF
+        uint32_t kp_it=plat_ticks_200hz(); for(int k_=0;k_<18;k_++) g_kp[k_]=0; int kp_key=0;
+#endif
         int mlx,mly,mbtn; read_mouse_logical(&mlx,&mly,&mbtn);
         int mouse_moved=(mlx!=g_mx||mly!=g_my);
         int click=(mbtn&1)&&!(prev_btn&1);           /* left-button press edge */
@@ -20162,6 +20236,9 @@ int main(int argc, char **argv)
         if (key && ((g_resting && !g_mantra) || g_gw)) key=0;       /* the camp and the moongate walk take no input (but SE's dream, se_rest.md §6) */
         if (key) {
             int a = key & 0xFF;
+#ifdef KEYPROF
+            kp_key=key;
+#endif
             g_travel_active=0;                       /* any key press cancels click-to-travel */
             if (g_talking && talk_waiting()) {       /* a page wait takes the key (converse.md §6d) */
                 (void)talk_page_key(a); redraw=1;
@@ -20253,7 +20330,7 @@ int main(int argc, char **argv)
                             g_arrest_guard=-1; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
                     else if (g_pending_verb=='Q'){ g_pending_verb=0; g_msg[0]=0; redraw=1; if(a=='y'||a=='Y') break; }   /* Esc's question: any other key stays */
                     else if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                        compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if ((g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M') && (dx||dy)){ int pv=g_pending_verb;   /* Get, Use, Move: a direction acts on the next tile at once (DOS: cursor range 0xFF, usecode_use.md) */
                         if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
                         g_pending_verb=0; (void)resolve_target(&w,pv,dx,dy); g_pending_verb=g_next_verb; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; if(!g_casting) g_show_inv=0;
@@ -20261,7 +20338,7 @@ int main(int argc, char **argv)
                     else if ((g_pending_verb=='T'||g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||g_pending_verb=='X'||(g_pending_verb=='C'&&!(g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change")))) && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the verbs' crosshair walks the map window (usecode_use.md) */
                         if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
                         if(nx>=-VT/2 && nx<=VT/2 && ny>=-VT/2 && ny<=VT/2){ g_tcur_dx=nx; g_tcur_dy=ny; }
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                        compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='O' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the orb's Where: crosshair walks its 6x5 box (moongates.md §3) */
                         if(nx>=-3 && nx<=2 && ny>=-2 && ny<=2){ g_tcur_dx=nx; g_tcur_dy=ny; }
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
@@ -20352,17 +20429,17 @@ int main(int argc, char **argv)
                 else if (a==0x11||a==0x05){ g_show_inv=0; msgcat(0,"Exit to the desktop?"); g_pending_verb='Q'; redraw=1; }   /* Ctrl-Q, Ctrl-E */
                 else if (a==0x13){ g_show_inv=0; g_pending_verb=0; save_index_load(); g_save_menu=1; g_save_copy=0; save_detail(); redraw=1; }   /* Ctrl-S */
                 else if (g_bot && ((key>>8)&0xFF)==0x3B) { music_cycle_pref(); msgcat(0, music_pref_label()); redraw=1; }  /* F1 under the bot: the music source (the game's is F9) */
-                else if (a=='a'||a=='A') { arm_attack(); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }  /* A)ttack: the crosshair (combat.md §6b) */
+                else if (a=='a'||a=='A') { arm_attack(); compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }  /* A)ttack: the crosshair (combat.md §6b) */
                 else if (a=='c'||a=='C') { open_cast_menu(); redraw=1; }                              /* C)ast: open the spell menu */
                 else if ((a=='b'||a=='B') && g_veh_kind && g_veh_kind!=431) { msgcat(0,"Not while aboard ship!"); redraw=1; }
                 else if ((a=='b'||a=='B') && g_solo_on) { msgcat(0,"Not in solo mode!"); redraw=1; }
                 else if (a=='b'||a=='B') { g_combat_mode=!g_combat_mode; g_show_inv=0;                /* B)attle: combat-mode toggle (moved off 'c') */
                     msgcat(0, g_combat_mode?"Begin combat!":"Break off combat!"); redraw=1; }
-                else if (a=='l'||a=='L') { g_pending_verb='L'; g_look_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }                         /* D)rop */
+                else if (a=='l'||a=='L') { g_pending_verb='L'; g_look_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }                         /* D)rop */
                 else if (a=='e'||a=='E') { g_msg[0]=0; arm_equip(); redraw=1; }                        /* E)quip (equipment.md §5) */
-                else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a==' ') { msgcat(0,"Pass!"); if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* pass a turn (a raft/balloon drifts) */
                 else if (a=='i'||a=='I') { g_show_status=0; g_inv_open=!g_inv_open; g_show_inv=g_inv_open; g_pan_focus=0; if(g_inv_open&&(g_status_actor<1||!is_party_member(g_status_actor))) g_status_actor=g_nparty?g_party[0].actor:1; redraw=1; }
                 else if (a=='s'||a=='S'||a==0x12) { g_show_inv=0; g_pending_verb=0;   /* S)ave, Ctrl-R: the slot page (save_load.md §2b) */
@@ -20533,6 +20610,14 @@ int main(int argc, char **argv)
         else { if (moved||anim_redraw) present_map();           /* map window (walk / tile anim) */
                else if (mouse_moved) present_cursor();         /* bare mouse move: cheap cursor-only */
                Vsync(); }
+#ifdef KEYPROF
+        { uint32_t d=plat_ticks_200hz()-kp_it; if(d>=10){ char b[400]; int n=0;
+            const char*lab[18]={"KP ms=", " key=", " foe=", " comp=", " full=", " map=", " bb=", " act=", " minute=", " pass=", " pick=", " walk=", " light=", " static=", " status=", " conv=", " bar=", " border="};
+            long v[18]; v[0]=(long)d*5; v[1]=(long)kp_key; for(int q=0;q<16;q++) v[2+q]=(long)g_kp[q]*5;
+            for(int k_=0;k_<18;k_++){ for(const char*c=lab[k_];*c;c++) b[n++]=*c; char t[12]; int m=0; long x=v[k_]; if(k_==1){ static const char H[]="0123456789abcdef"; for(int q=12;q>=0;q-=4) t[m++]=H[(x>>q)&15]; } else { if(!x) t[m++]='0'; while(x){ t[m++]=(char)('0'+x%10); x/=10; } for(int a_=0;a_<m/2;a_++){ char c_=t[a_]; t[a_]=t[m-1-a_]; t[m-1-a_]=c_; } } for(int q=0;q<m;q++) b[n++]=t[q]; }
+            b[n++]=' '; b[n++]='c'; b[n++]='m'; b[n++]='='; b[n++]=(char)('0'+g_combat_mode); b[n++]=' '; b[n++]='r'; b[n++]='='; b[n++]=(char)('0'+(redraw!=0)); b[n++]='\r'; b[n++]='\n'; b[n]=0; Cconws(b);
+            for(int k_=0;k_<g_kpn;k_++){ dbg_num("  KPA actor=",g_kpa[k_]); dbg_num("      wt=",g_kpw[k_]); dbg_num("      ms=",g_kpd[k_]*5); } } g_kpn=0; }
+#endif
     }
     music_stop_all();   /* uninstall the Timer-A ISR + silence MIDI/DMA before returning to TOS */
     rdr_shutdown();

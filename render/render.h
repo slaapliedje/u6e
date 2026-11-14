@@ -142,6 +142,7 @@ void     rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int v
 int      rdr_pdissolve_begin(void);                                     /* the view changes pixel by pixel (moongates.md §6) */
 void     rdr_pdissolve_end(int to_black);
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
+void     rdr_present_diff(void);                                        /* c2p only the groups changed since the last present (ST) */
 int      rdr_native_planar_ok(void);   /* 1 = ST map uses a single LUT (no band raster) -> planar OK */
 int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller must rebuild the planar static */
 /* planar mouse cursor: drawn straight into the planar screen (save-under), for the native-planar path
