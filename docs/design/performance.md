@@ -950,7 +950,22 @@ live objects (place, tile, kind, index; `bb_term`, built from 16-bit halves sinc
 finds the changed buckets, and only they are redone: their cells and the one-cell strips left of and above them
 (a big object spills one cell left/up) are cleared and refilled from the objects in and around them, their force
 entries swapped, their index runs replaced. A level change, more than 48 changed buckets, or bitmaps near their page
-limit fall back to the full rebuild. Cost on the ST: about 0.46 s (the one pass over the objects), from 1.8 s.
+limit fall back to the full rebuild. Cost on the ST: about 0.5 s when nothing changed (the one pass over the
+objects), about 1.07 s for a real change (8 buckets in the gargoyle fight), from 1.8 s. (The first version of this
+note said 0.46 s for a change: that was a call where nothing had changed. A real one then cost 1.76 s, and its
+scratch, 110 KB, did not fit a 4 MB ST's pool, so it fell back to the full rebuild.) The rewrite keeps its scratch
+under the full build's 52 KB: each object's bucket is noted in the first pass, the sums are given back once the
+changed buckets are listed, the changed buckets' objects are grouped once, and the three indexes are rebuilt one
+after another through one buffer, kept runs copied a run at a time. Its parts, in the fight: the pass over the
+objects 520 ms, collecting the touched buckets' objects 200, the indexes 215, the bits 95, the force list 35.
 Proof: `-DBBVERIFY` compares every incremental build with a full one (indexes, force list and blocks, both bitmaps
 page by page); the bot's castle, bridge, Britain and cave segments ran it (well over a hundred builds, dungeon and
 deaths included) with no mismatch.
+
+### 2026-11-14: light and sight reused when nothing they read has changed
+A combat turn recomposed the light and sight after every actor's step (~100 ms each on the ST). `light_key`
+fingerprints what `compute_predim_light` reads beyond the fixed map: the view and level, the level of light (clock,
+eclipse, party torches, the Light spell, a flash), the light/sight objects in and one cell round the view (their
+own tile, as the idle path already holds), the torch bearers in view, infravision's creatures and X-ray. A match
+reuses the last result. The bench's in-place frames prove it: 21 reuses, 0 cells off a fresh calculation (464 with
+the light level left out of the fingerprint). In the gargoyle fight light now costs 0: attack 3.9 s, pass 2.8-4.5 s.

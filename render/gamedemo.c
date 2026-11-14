@@ -3844,11 +3844,11 @@ static uint16_t g_bb_fx[MAXFIELDS], g_bb_fy[MAXFIELDS]; static int g_bb_nf;   /*
 /* built from 16-bit halves (a 32-bit shift by a variable or a large count is slow on the 68000): place and
  * tile in one half, kind and the tile's top bit in the other, both stirred by the index (one 16 x 16 mulu)
  * and turned by its low three bits, so two objects trading places rarely leave the sum as it was */
-static uint32_t bb_term(int32_t i, const wobj_t*o){
+static inline uint32_t bb_term(int32_t i, const wobj_t*o){
     uint16_t hi=(uint16_t)(o->x ^ (uint16_t)(o->tile<<5)), lo=(uint16_t)(o->y ^ (uint16_t)((uint16_t)o->obj_n<<6) ^ (uint16_t)((o->tile&0x800)<<4));
     uint32_t m=(((uint32_t)hi<<16)|lo) ^ ((uint32_t)(uint16_t)i*40503u);
     unsigned r=(unsigned)i&7u; return (m<<r)|(m>>((32u-r)&31u)); }
-static int bb_bucket(int x,int y){ return ((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1)); }
+static inline int bb_bucket(int x,int y){ return ((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1)); }
 static void build_blocked_full(void);
 static int  build_blocked_incr(void);
 #ifdef BBVERIFY
@@ -3972,44 +3972,88 @@ static int bb_in_region(int cx,int cy){
     return 0; }
 static void sb_clr(sparsebits_t*s,int x,int y){ unsigned p=s->page[SB_PAGE_OF(x,y)]; if(p) s->store[(int32_t)(p-1)*SB_PAGE_BYTES+SB_BYTE_OF(x,y)]&=(uint8_t)~(1u<<(x&7)); }
 static void bb_set_if(sparsebits_t*s,int x,int y){ if(bb_in_region(x,y)) sb_set(s,x,y); }
-/* returns 1 when done incrementally, 0 when the caller must rebuild in full */
+/* returns 1 when done incrementally, 0 when the caller must rebuild in full. Its scratch stays below the full
+ * build's 52 KB (a 4 MB ST's pool): the sums go once the changed buckets are listed, the object list is sized
+ * to the touched buckets, and the three indexes are rebuilt one after another through one buffer. */
+#define BB_MAXD 48
+/* rebuild one bucket index: kept runs copied a run at a time, each changed bucket's objects (grouped by bucket,
+ * in index order: ord[ost[q]..ost[q+1]) for the q-th changed bucket, ascending) written in its place */
+static void bb_reindex(uint16_t*start,uint16_t*idx,int which,const uint8_t*dirty,const int16_t*dl,int nd,
+                       const uint16_t*ord,const uint16_t*ost,const uint8_t*ocl,uint16_t*tmp)
+{   int32_t po=0, ro=0, rn=0; int q=0;
+    for(int b=0;b<OBKT*OBKT;b++){
+        int32_t s0=start[b], s1=start[b+1];               /* start[b+1] is still the old one: read before it is overwritten */
+        if(!dirty[b]){ start[b]=(uint16_t)(rn+(s0-ro)); continue; }
+        memcpy(tmp+rn,idx+ro,(size_t)(s0-ro)*2); po=rn+(s0-ro);
+        start[b]=(uint16_t)po;
+        while(q<nd && dl[q]<b) q++;                       /* dl ascending */
+        for(int k=ost[q];k<ost[q+1];k++) if(which==0 || (ocl[k]&which)) tmp[po++]=ord[k];
+        ro=s1; rn=po; }
+    { int32_t s1=start[OBKT*OBKT]; memcpy(tmp+rn,idx+ro,(size_t)(s1-ro)*2); po=rn+(s1-ro); }
+    start[OBKT*OBKT]=(uint16_t)po; memcpy(idx,tmp,(size_t)po*2); }
+/* clear the 16 cells of an aligned run (x0 % 16 == 0): two bytes of one page row */
+static void sb_clr16(sparsebits_t*s,int x0,int y){ unsigned p=s->page[SB_PAGE_OF(x0,y)];
+    if(p){ uint8_t*b=s->store+(int32_t)(p-1)*SB_PAGE_BYTES+SB_BYTE_OF(x0,y); b[0]=0; b[1]=0; } }
 static int build_blocked_incr(void)
 {
     if(!g_bb_ok || g_bb_level!=g_cur_level || !g_cls_ready) return 0;
     if(g_blocked.npages+24>g_blocked.cap || g_sightblk.npages+24>g_sightblk.cap) return 0;   /* pages only grow here: tidy up in full */
     int32_t n=g_ow.nobjs; int span=(g_cur_level==0)?U6_SURFACE_TILES:256, nb=span>>4;
+    int16_t dl[BB_MAXD+1]; uint32_t ds[BB_MAXD]; int nd=0, over=0;
     plat_mark wm=plat_chip_mark();
-    uint32_t *sum=(uint32_t*)plat_alloc_chip(OBKT*OBKT*4u);
-    uint8_t  *dirty=(uint8_t*)plat_alloc_chip(OBKT*OBKT), *touch=(uint8_t*)plat_alloc_chip(OBKT*OBKT);
-    if(!sum||!dirty||!touch){ plat_chip_reset(wm); return 0; }
-    memset(sum,0,OBKT*OBKT*4u); memset(dirty,0,OBKT*OBKT);
-    for(int32_t i=0;i<n;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive) sum[bb_bucket(o->x,o->y)]+=bb_term(i,o); }
-    int nd=0;
-    for(int b=0;b<OBKT*OBKT;b++) if(sum[b]!=g_bb_sum[b]){ dirty[b]=1; nd++; }
-    { int nf=0, same=1; uint16_t fx[MAXFIELDS], fy[MAXFIELDS];                 /* the energy fields: their buckets, old and new, if the set moved */
-      for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){ fx[nf]=g_fields[i].x; fy[nf]=g_fields[i].y; nf++; }
-      if(nf!=g_bb_nf) same=0; else for(int i=0;i<nf;i++) if(fx[i]!=g_bb_fx[i]||fy[i]!=g_bb_fy[i]){ same=0; break; }
-      if(!same){ for(int i=0;i<g_bb_nf;i++){ int b=bb_bucket(g_bb_fx[i],g_bb_fy[i]); if(!dirty[b]){ dirty[b]=1; nd++; } }
-                 for(int i=0;i<nf;i++){ int b=bb_bucket(fx[i],fy[i]); if(!dirty[b]){ dirty[b]=1; nd++; } }
-                 g_bb_nf=nf; memcpy(g_bb_fx,fx,(size_t)nf*2); memcpy(g_bb_fy,fy,(size_t)nf*2); } }
-    if(nd==0){ plat_chip_reset(wm); return 1; }                       /* nothing on the map changed */
-    if(nd>48){ plat_chip_reset(wm); return 0; }                        /* a level's worth: the full rebuild is as cheap */
-    memset(touch,0,OBKT*OBKT);                                         /* the changed buckets and their eight neighbours */
-    for(int by=0;by<nb;by++) for(int bx=0;bx<nb;bx++) if(dirty[by*OBKT+bx])
-        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++) touch[((by+dy+nb)%nb)*OBKT+((bx+dx+nb)%nb)]=1;
-    uint16_t *col=(uint16_t*)plat_alloc_chip((uint32_t)n*2u+2u);      /* the objects in touched buckets, in index order */
-    int32_t tot=g_obkt_start[OBKT*OBKT];
-    uint16_t *nob=(uint16_t*)plat_alloc_chip((uint32_t)(tot+n+8)*2u), *nfg=(uint16_t*)plat_alloc_chip((uint32_t)(g_fgbkt_start[OBKT*OBKT]+n+8)*2u),
-             *nls=(uint16_t*)plat_alloc_chip((uint32_t)(g_lsbkt_start[OBKT*OBKT]+n+8)*2u);
-    if(!col||!nob||!nfg||!nls){ plat_chip_reset(wm); return 0; }
-    int32_t nc=0;
-    for(int32_t i=0;i<n;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive && touch[bb_bucket(o->x,o->y)]) col[nc++]=(uint16_t)i; }
+    uint16_t *bkt=(uint16_t*)plat_alloc_chip((uint32_t)n*2u+2u);      /* per object: its bucket, 0xffff = not on the map */
+    if(!bkt){ plat_chip_reset(wm); return 0; }
+    plat_mark wm2=plat_chip_mark();
+    {   uint32_t *sum=(uint32_t*)plat_alloc_chip(OBKT*OBKT*4u);
+        if(!sum){ plat_chip_reset(wm); return 0; }
+        memset(sum,0,OBKT*OBKT*4u);
+        const wobj_t*o=g_wobj;
+        for(int32_t i=0;i<n;i++,o++){ if(!o->alive){ bkt[i]=0xffff; continue; } int b=bb_bucket(o->x,o->y); bkt[i]=(uint16_t)b; sum[b]+=bb_term(i,o); }
+        for(int b=0;b<OBKT*OBKT;b++) if(sum[b]!=g_bb_sum[b]){ if(nd<BB_MAXD){ dl[nd]=(int16_t)b; ds[nd]=sum[b]; nd++; } else over=1; }
+        plat_chip_reset(wm2); }                                        /* the sums are listed: give their 16 KB back */
+    if(over){ plat_chip_reset(wm); return 0; }                         /* a level's worth: the full rebuild is as cheap */
+    {   int nf=0, same=1; uint16_t fx[MAXFIELDS], fy[MAXFIELDS];       /* the energy fields: their buckets, old and new, if the set moved */
+        for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){ fx[nf]=g_fields[i].x; fy[nf]=g_fields[i].y; nf++; }
+        if(nf!=g_bb_nf) same=0; else for(int i=0;i<nf;i++) if(fx[i]!=g_bb_fx[i]||fy[i]!=g_bb_fy[i]){ same=0; break; }
+        if(!same){
+            for(int pass=0;pass<2;pass++){ int cnt=pass?nf:g_bb_nf;
+                for(int i=0;i<cnt;i++){ int b=pass?bb_bucket(fx[i],fy[i]):bb_bucket(g_bb_fx[i],g_bb_fy[i]), seen=0;
+                    for(int q=0;q<nd;q++) if(dl[q]==b){ seen=1; break; }
+                    if(!seen){ if(nd>=BB_MAXD){ plat_chip_reset(wm); return 0; } dl[nd]=(int16_t)b; ds[nd]=g_bb_sum[b]; nd++; } } }
+            g_bb_nf=nf; memcpy(g_bb_fx,fx,(size_t)nf*2); memcpy(g_bb_fy,fy,(size_t)nf*2); } }
+    if(nd==0){ plat_chip_reset(wm); return 1; }                        /* nothing on the map changed */
+    for(int i=1;i<nd;i++){ int16_t b=dl[i]; uint32_t v=ds[i]; int j=i;  /* the changed buckets in ascending order */
+        while(j>0 && dl[j-1]>b){ dl[j]=dl[j-1]; ds[j]=ds[j-1]; j--; } dl[j]=b; ds[j]=v; }
+    dl[nd]=0x7fff;
+    uint8_t *dirty=(uint8_t*)plat_alloc_chip(OBKT*OBKT), *touch=(uint8_t*)plat_alloc_chip(OBKT*OBKT);
+    if(!dirty||!touch){ plat_chip_reset(wm); return 0; }
+    memset(dirty,0,OBKT*OBKT); memset(touch,0,OBKT*OBKT);
+    for(int q=0;q<nd;q++) dirty[dl[q]]=(uint8_t)(q+1);                /* 1 + its place in dl */
+    for(int q=0;q<nd;q++){ int bx=dl[q]%OBKT, by=dl[q]/OBKT;           /* the changed buckets and their eight neighbours */
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++) touch[((by+dy+nb)%nb)*OBKT+((bx+dx+nb)%nb)]=1; }
+    int32_t nc=0, ndo=0;
+    for(int32_t i=0;i<n;i++){ unsigned b=bkt[i]; if(b!=0xffff && touch[b]){ nc++; if(dirty[b]) ndo++; } }
+    uint16_t *col=(uint16_t*)plat_alloc_chip((uint32_t)nc*2u+2u);      /* the objects in touched buckets, in index order */
+    uint16_t *ord=(uint16_t*)plat_alloc_chip((uint32_t)ndo*2u+2u);     /* the changed buckets' objects, grouped by bucket */
+    uint8_t  *ocl=(uint8_t*)plat_alloc_chip((uint32_t)ndo+2u);
+    int32_t tmax=g_obkt_start[OBKT*OBKT];
+    uint16_t *tmp=(uint16_t*)plat_alloc_chip((uint32_t)(tmax+ndo+8)*2u);
+    if(!col||!ord||!ocl||!tmp){ plat_chip_reset(wm); return 0; }
+    uint16_t ost[BB_MAXD+1];
+    {   uint16_t cnt[BB_MAXD]; memset(cnt,0,sizeof cnt);
+        nc=0; for(int32_t i=0;i<n;i++){ unsigned b=bkt[i]; if(b==0xffff || !touch[b]) continue; col[nc++]=(uint16_t)i; if(dirty[b]) cnt[dirty[b]-1]++; }
+        ost[0]=0; for(int q=0;q<nd;q++) ost[q+1]=(uint16_t)(ost[q]+cnt[q]);
+        uint16_t at[BB_MAXD]; memcpy(at,ost,(size_t)nd*2);
+        for(int32_t k=0;k<nc;k++){ int i=col[k]; unsigned b=bkt[i]; if(!dirty[b]) continue; int q=dirty[b]-1, j=at[q]++;
+            ord[j]=(uint16_t)i; ocl[j]=(uint8_t)obj_class(&g_wobj[i]); } }
     g_blocked_epoch++;                                                 /* the map changed: walkers search their routes again */
     g_bb_dirty=dirty; g_bb_span=span;
-    /* 1. blocking bits: clear the region, then put back what every object that can reach it marks there */
-    for(int by=0;by<nb;by++) for(int bx=0;bx<nb;bx++) if(dirty[by*OBKT+bx]){
-        int x0=bx*16, y0=by*16, m=span-1;
-        for(int y=y0-1;y<y0+16;y++) for(int x=x0-1;x<x0+16;x++){ int cx=x&m, cy=y&m; sb_clr(&g_blocked,cx,cy); sb_clr(&g_sightblk,cx,cy); } }
+    /* 1. blocking bits: clear the region (the buckets 16 cells a row, their left and top strips a cell each),
+     *    then put back what every object that can reach it marks there */
+    for(int q=0;q<nd;q++){ int x0=(dl[q]%OBKT)*16, y0=(dl[q]/OBKT)*16, m=span-1;
+        for(int y=y0;y<y0+16;y++){ sb_clr16(&g_blocked,x0,y); sb_clr16(&g_sightblk,x0,y);
+            sb_clr(&g_blocked,(x0-1)&m,y); sb_clr(&g_sightblk,(x0-1)&m,y); }
+        for(int x=x0-1;x<x0+16;x++){ int cx=x&m, cy=(y0-1)&m; sb_clr(&g_blocked,cx,cy); sb_clr(&g_sightblk,cx,cy); } }
     for(int32_t k=0;k<nc;k++){ const wobj_t*o=&g_wobj[col[k]]; int t=o->tile; if(t>=2048) continue;
         if(g_tflags1[t]&0x02) bb_set_if(&g_blocked,o->x,o->y);
         if(blocks_sight(t))   bb_set_if(&g_sightblk,o->x,o->y);
@@ -4026,31 +4070,19 @@ static int build_blocked_incr(void)
     if(g_tflags3){ int w_=0;
         for(int r=0;r<g_force_n;r++){ int32_t v=g_force_idx[r]; if(!dirty[bb_bucket((int)(v&1023),(int)(v>>10))]) g_force_idx[w_++]=v; }
         g_force_n=w_;
-        for(int by=0;by<nb;by++) for(int bx=0;bx<nb;bx++) if(dirty[by*OBKT+bx])
-            for(int q=0;q<4;q++){ int32_t fb=(int32_t)(by*2+(q>>1))*(1024/8)+(bx*2+(q&1)); g_force_blk[fb>>3]&=(uint8_t)~(1u<<(fb&7)); }
-        for(int32_t k=0;k<nc;k++){ const wobj_t*o=&g_wobj[col[k]]; int t=o->tile;
-            if(t>=2048 || !(g_tflags3[t]&0x04) || !dirty[bb_bucket(o->x,o->y)] || g_force_n>=FORCE_MAX) continue;
+        for(int q=0;q<nd;q++){ int bx=dl[q]%OBKT, by=dl[q]/OBKT;
+            for(int r=0;r<4;r++){ int32_t fb=(int32_t)(by*2+(r>>1))*(1024/8)+(bx*2+(r&1)); g_force_blk[fb>>3]&=(uint8_t)~(1u<<(fb&7)); } }
+        for(int k=0;k<ndo;k++){ const wobj_t*o=&g_wobj[ord[k]]; int t=o->tile;
+            if(t>=2048 || !(g_tflags3[t]&0x04) || g_force_n>=FORCE_MAX) continue;
             int32_t v=(int32_t)o->y*1024+o->x, lo=0, hi=g_force_n;           /* insert in order */
             while(lo<hi){ int32_t md=(lo+hi)>>1; if(g_force_idx[md]<=v) lo=md+1; else hi=md; }
             memmove(&g_force_idx[lo+1],&g_force_idx[lo],(size_t)(g_force_n-lo)*4); g_force_idx[lo]=v; g_force_n++;
-            { int32_t fb=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[fb>>3]|=(uint8_t)(1u<<(fb&7)); } }
-    }
-    /* 3. the three bucket indexes: kept buckets copy their old runs, changed ones list their objects afresh */
-    {   int32_t po=0, pf=0, pl=0;
-        for(int b=0;b<OBKT*OBKT;b++){
-            int32_t s0=g_obkt_start[b], s1=g_obkt_start[b+1], f0=g_fgbkt_start[b], f1=g_fgbkt_start[b+1], l0=g_lsbkt_start[b], l1=g_lsbkt_start[b+1];
-            g_obkt_start[b]=(uint16_t)po; g_fgbkt_start[b]=(uint16_t)pf; g_lsbkt_start[b]=(uint16_t)pl;
-            if(!dirty[b]){
-                memcpy(nob+po,g_obkt_idx+s0,(size_t)(s1-s0)*2); po+=s1-s0;
-                memcpy(nfg+pf,g_fgbkt_idx+f0,(size_t)(f1-f0)*2); pf+=f1-f0;
-                memcpy(nls+pl,g_lsbkt_idx+l0,(size_t)(l1-l0)*2); pl+=l1-l0;
-            } else for(int32_t k=0;k<nc;k++){ int i=col[k]; const wobj_t*o=&g_wobj[i]; if(bb_bucket(o->x,o->y)!=b) continue;
-                int c=obj_class(o); nob[po++]=(uint16_t)i; if(c&1) nfg[pf++]=(uint16_t)i; if(c&2) nls[pl++]=(uint16_t)i; }
-            /* start[b+1] is still the old one here: it is read (as s0) before it is overwritten */
-        }
-        g_obkt_start[OBKT*OBKT]=(uint16_t)po; g_fgbkt_start[OBKT*OBKT]=(uint16_t)pf; g_lsbkt_start[OBKT*OBKT]=(uint16_t)pl;
-        memcpy(g_obkt_idx,nob,(size_t)po*2); memcpy(g_fgbkt_idx,nfg,(size_t)pf*2); memcpy(g_lsbkt_idx,nls,(size_t)pl*2); }
-    for(int b=0;b<OBKT*OBKT;b++) if(dirty[b]) g_bb_sum[b]=sum[b];
+            { int32_t fb=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[fb>>3]|=(uint8_t)(1u<<(fb&7)); } } }
+    /* 3. the three bucket indexes, one after another through the one buffer */
+    bb_reindex(g_obkt_start, g_obkt_idx, 0,dirty,dl,nd,ord,ost,ocl,tmp);
+    bb_reindex(g_fgbkt_start,g_fgbkt_idx,1,dirty,dl,nd,ord,ost,ocl,tmp);
+    bb_reindex(g_lsbkt_start,g_lsbkt_idx,2,dirty,dl,nd,ord,ost,ocl,tmp);
+    for(int q=0;q<nd;q++) g_bb_sum[dl[q]]=ds[q];
     plat_chip_reset(wm);
     return 1;
 }
@@ -4736,6 +4768,36 @@ static int in_lead_band(int vx,int vy,int dx,int dy){
 /* per-cell PREDIM light field: ambient+globes, roofs forced visible from outside, then vis folded
  * in as 0 (hidden cell -> darklut[0] = black). Shared by compose_map and the mode==26 self-test so
  * they can't drift. Fills plight[VT*VT] (and pvis[VT*VT] scratch). */
+/* everything compute_predim_light reads but the fixed map: the view and level, the level of light (clock,
+ * eclipse, party torches, the Light spell), the light/sight objects in and one cell round the view (by their
+ * own tile: an animation step leaves light alone, as the idle path already holds), the torch bearers in view,
+ * infravision's creatures, X-ray, a flash */
+static uint32_t g_lkey; static int g_lkey_ok;
+#ifdef BENCH
+uint32_t g_lkey_reuse;
+#endif
+static uint32_t light_key(const world_t*w){
+    int32_t left=w->px-VT/2-1, top=w->py-VT/2-1; const int R=VT+2;
+    uint32_t h=2166136261u;
+#define LKMIX(v) (h=(h^(uint32_t)(v))*16777619u)
+    LKMIX(w->px); LKMIX(w->py); LKMIX(w->level); LKMIX(ambient_level(w)); LKMIX(g_xray_turns>0); LKMIX(g_light_force); LKMIX(g_infravision!=0);
+    int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+R)>>4)&(OBKT-1);
+    int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +R)>>4)&(OBKT-1);
+    for(int by=by0;;by=(by+1)&(OBKT-1)){ for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){ int bb=by*OBKT+bx;
+        for(int k=g_lsbkt_start[bb];k<g_lsbkt_start[bb+1];k++){ int i=g_lsbkt_idx[k]; const wobj_t*o=&g_wobj[i];
+            int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1), vy=((int32_t)o->y-top)&(U6_SURFACE_TILES-1);
+            if(vx>R||vy>R) continue;
+            LKMIX(i); LKMIX(o->alive); LKMIX(((uint32_t)o->x<<16)|o->y); LKMIX(((uint32_t)o->tile<<16)|(uint16_t)o->obj_n); }
+        if(bx==bx1) break; } if(by==by1) break; }
+    for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay;
+        if(!(g_torch_fuel[i]>0 || g_infravision)) continue;
+        if(!actor_pos(i,&ax,&ay)) continue;
+        int32_t vx=((int32_t)ax-left)&(U6_SURFACE_TILES-1), vy=((int32_t)ay-top)&(U6_SURFACE_TILES-1);
+        if(vx>R||vy>R) continue;
+        LKMIX(i); LKMIX(((uint32_t)ax<<16)|(uint16_t)ay); LKMIX(g_torch_fuel[i]>0); }
+#undef LKMIX
+    return h;
+}
 static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
     KP(10);
     int32_t left=w->px-VT/2, top=w->py-VT/2;
@@ -5116,11 +5178,23 @@ static void compose_map(const world_t*w)
          * obj_tile (anim-aware), so a flickering-emission emitter *could* drift — the bench IDLE-LIGHT drift
          * check (fresh vs cached, verify pass only) guards that it does not. */
         if(!g_idle_allow){
+            /* an action (a combat turn recomposes after each actor's step): reuse the last light+sight when
+             * nothing it reads has changed (light_key; 2026-11-14) — ~100 ms a recompose on an 8 MHz ST */
+            uint32_t lk=light_key(w); int same=(g_tmp_valid && g_lkey_ok && lk==g_lkey);
+            g_lkey=lk; g_lkey_ok=1;
+            if(!same){
 #ifdef BENCH
             { extern uint32_t g_ph_light; uint32_t lt=plat_ticks_200hz();
               compute_predim_light(w,plight,pvis); g_ph_light+=plat_ticks_200hz()-lt; }
 #else
             compute_predim_light(w,plight,pvis);
+#endif
+            }
+#ifdef BENCH
+            else if(g_planar_verify){                   /* prove the reused light == freshly computed */
+                extern uint32_t g_idle_light_drift, g_lkey_reuse; static uint8_t fl[VT*VT],fv[VT*VT];
+                compute_predim_light(w,fl,fv); g_lkey_reuse++;
+                for(int i=0;i<VT*VT;i++) if(fl[i]!=plight[i]||fv[i]!=pvis[i]) g_idle_light_drift++; }
 #endif
         }
 #ifdef BENCH
@@ -20263,9 +20337,10 @@ int main(int argc, char **argv)
               for(int i=0;i<N;i++){
                   if(a2>0) g_actx[a2]=(uint16_t)(ax0+(i&1));
                   if(oi>=0) g_wobj[oi].tile=(uint16_t)((i&3)==3?(ot0==17?18:17):ot0);   /* 17: an opaque terrain tile, plainly different */
+                  g_light_force=(i%5==2)?1:-1;                                    /* now and then a dark flash: the light must follow */
                   compose_map(&w); }
-              if(a2>0) g_actx[a2]=ax0; if(oi>=0) g_wobj[oi].tile=ot0;
-              { extern int g_still_hits,g_still_tries; dbg_num("STILL hits=",g_still_hits); dbg_num("STILL tries=",g_still_tries); }
+              if(a2>0) g_actx[a2]=ax0; if(oi>=0) g_wobj[oi].tile=ot0; g_light_force=-1;
+              { extern int g_still_hits,g_still_tries; dbg_num("STILL hits=",g_still_hits); dbg_num("STILL tries=",g_still_tries); dbg_num("STILL light reused=",(int)g_lkey_reuse); dbg_num("STILL light drift=",(int)g_idle_light_drift); }
               memset(g_obkt_start,0,sizeof g_obkt_start); memset(g_fgbkt_start,0,sizeof g_fgbkt_start); memset(g_lsbkt_start,0,sizeof g_lsbkt_start);   /* back to the bench's object-free views */
               dbg_num("STILL verify actor=", a2); dbg_num("STILL verify object+1=", oi+1);  }
             w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
