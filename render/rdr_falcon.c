@@ -21,6 +21,8 @@
  *   VsetScreen(log,phys,3,mode)   : XBIOS 5  — set screen base + Falcon videl
  *                                   mode atomically (rez==3 => `mode` is a
  *                                   Falcon mode word).
+ *   VgetRGB(0,256,argb)           : XBIOS 94 — read it (saved at start with the 16 ST colours, Setcolor
+ *                                   XBIOS 7 with -1; both put back on exit with VsetRGB / Setpalette XBIOS 6)
  *   VsetRGB(0,256,argb)           : XBIOS 93 — load the 256-entry VIDEL palette
  *                                   (8-bit-per-channel 0x00RRGGBB entries).
  *   Vsync() (XBIOS 0x25), Logbase()/Physbase() (XBIOS 3/2).
@@ -60,6 +62,8 @@ static int       g_yoff;                /* vertical letterbox offset = (FH - UI_
 
 static short     g_old_mode;
 static void     *g_old_phys, *g_old_log;
+static long      g_old_rgb[256];         /* the desktop's VIDEL colours (VgetRGB) */
+static short     g_old_stpal[16];        /* and its ST-compatible ones (Setcolor -1) */
 
 void rdr_prefer_truecolor(int on) { g_want_tc = on; }   /* honoured at rdr_init */
 
@@ -151,6 +155,8 @@ bool rdr_init(const platform_caps_t *caps)
 
     /* Save current video state, then switch VIDEL to our mode + buffer. */
     g_old_mode = VsetMode(VM_INQUIRE);
+    VgetRGB(0, 256, g_old_rgb);
+    for (int i = 0; i < 16; i++) g_old_stpal[i] = (short)Setcolor(i, -1);
     g_old_phys = Physbase();
     g_old_log  = Logbase();
 
@@ -203,6 +209,8 @@ void rdr_shutdown(void)
     plat_mouse_hook_shutdown();
     linea9();                                              /* show mouse for desktop */
     videl_set(g_old_log, g_old_phys, g_old_mode);          /* restore mode + base */
+    VsetRGB(0, 256, g_old_rgb);                            /* the desktop's colours back */
+    Setpalette(g_old_stpal);
     Vsync();
 }
 
@@ -305,7 +313,8 @@ void rdr_present_rect(int x, int y, int w, int h)
                     (uint16_t *)g_screen + (int32_t)(yy + g_yoff) * FW + x, w);
         return;
     }
-    int g0 = x / 16, gn = w / 16;
+    int g0 = x / 16, gn = (x + w + 15) / 16 - g0;   /* every 16-pixel group the rect touches (a 7-pixel pointer is one or two) */
+    if (w <= 0) return;
     for (int yy = y; yy < y + h; yy++)
         c2p_span_asm(g_back + (int32_t)yy * FW + g0 * 16,
                      (uint16_t *)(g_screen + (int32_t)(yy + g_yoff) * FW) + g0 * 8, gn);

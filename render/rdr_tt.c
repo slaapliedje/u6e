@@ -8,7 +8,8 @@
  * TOS calls used (named for verification):
  *   EgetShift() / EsetShift(mode)   : XBIOS 0x51/0x50 — read/set TT video mode.
  *   Setscreen(log,phys,-1)          : XBIOS 5 — point video at our ST-RAM buffer.
- *   EsetPalette(0,256,ptr)          : XBIOS 0x52 — load the 256-entry TT palette.
+ *   EsetPalette(0,256,ptr)          : XBIOS 84 (0x54) — load the 256-entry TT palette.
+ *   EgetPalette(0,256,ptr)          : XBIOS 85 (0x55) — read it (saved at start, put back on exit).
  *   Physbase()/Logbase() (XBIOS 2/3), Vsync() (XBIOS 0x25).
  * Screen buffer is ST-RAM (plat_alloc_chip) — the shifter requires chip RAM.
  */
@@ -52,6 +53,7 @@ void rdr_bench_present(uint32_t *c2p, uint32_t *out){ *c2p=g_bench_c2p; *out=g_b
 
 static short     g_old_shift;
 static void     *g_old_phys, *g_old_log;
+static short     g_old_ttpal[256];       /* the desktop's colours (EgetPalette), put back on exit */
 
 bool rdr_init(const platform_caps_t *caps)
 {
@@ -78,6 +80,7 @@ bool rdr_init(const platform_caps_t *caps)
 
     /* save current video state, then switch to TT-low + our screen */
     g_old_shift = EgetShift();
+    EgetPalette(0, 256, g_old_ttpal);
     g_old_phys  = Physbase();
     g_old_log   = Logbase();
 
@@ -113,6 +116,7 @@ void rdr_shutdown(void)
     linea9();                             /* line-A $A009: show mouse for the desktop */
     Setscreen(g_old_log, g_old_phys, -1);
     EsetShift(g_old_shift);
+    EsetPalette(0, 256, g_old_ttpal);     /* the desktop's colours back */
     Vsync();
 }
 
@@ -206,18 +210,20 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
     if (lh < 1) lh = 1;
     if (lh*2 > TTH) lh = TTH/2;
     int top = (TTH - lh*2) / 2;
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
     if (x + w > TTW) w = TTW - x;
     if (y + h > lh) h = lh - y;
-    int g0 = x / 16, gn = w / 16;
+    if (w <= 0 || h <= 0) return;
+    int g0 = x / 16, gn = (x + w + 15) / 16 - g0;   /* every 16-pixel group the rect touches (a 7-pixel pointer is one or two) */
+    uint8_t *scr = g_vis;                            /* the buffer on show (flip mode alternates them) */
 #ifdef BENCH
     uint32_t tb = plat_ticks_200hz();
 #endif
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px = g_back + (int32_t)yy * TTW + g0 * 16;
-        uint8_t *r0 = g_screen + (int32_t)(top + yy*2)   * TTW + g0 * 16;
-        uint8_t *r1 = g_screen + (int32_t)(top + yy*2+1) * TTW + g0 * 16;
+        uint8_t *r0 = scr + (int32_t)(top + yy*2)   * TTW + g0 * 16;
+        uint8_t *r1 = scr + (int32_t)(top + yy*2+1) * TTW + g0 * 16;
         c2p_span_asm(px, (uint16_t *)r0, gn);   /* c2p the even row ... */
         memcpy(r1, r0, (size_t)gn * 16);        /* ... then duplicate it (2x vertical) */
     }

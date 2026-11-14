@@ -2114,11 +2114,14 @@ static void fe_cursor_blit(void)
     blit_indexed(g_curpix,g_cw,g_ch,ux-g_chx,uy-g_chy);   /* 255 = transparent, like every FE sprite */
     g_fe_cur_x=ux; g_fe_cur_y=uy;
 }
-static void fe_cursor_track(void)
+static void fe_cursor_draw(int force);
+static void fe_cursor_track(void){ fe_cursor_draw(0); }
+/* force = 1: present the pointer even where it hasn't moved (the screen under it was redrawn) */
+static void fe_cursor_draw(int force)
 {
     if(!g_fe_cursor || !g_cw) return;
     int ux,uy; fe_mouse_xy(&ux,&uy);
-    if(ux==g_fe_cur_x && uy==g_fe_cur_y) return;      /* not moved: nothing to do */
+    if(!force && ux==g_fe_cur_x && uy==g_fe_cur_y) return;      /* not moved: nothing to do */
     /* the backbuffer still holds the presented screen (minus the pointer, which the redraw-
      * per-frame screens blit last): save-under, draw, present the union rect, restore. */
     static uint8_t save[CURMAX*CURMAX];
@@ -3128,21 +3131,31 @@ static int run_menu(void)
     int mw=g_menu_w, mx=(LW-mw)/2, my=ty+g_title_h+20;
     int rowh=g_menu_h/nopt;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
+    int full=1, shown_sel=-1, shown_note=-1;                /* what is on screen: redraw only what changed */
     for(;;){
         /* ST: the title screen has its OWN 16 (U6WU per-scene) — tuned to the logo's metallic gradient
-         * + the gold menu ramp instead of the terrain-16. Re-assert each frame so returning from the
-         * Introduction / Create-a-Character sub-screens (which set their own palettes) restores it.
+         * + the gold menu ramp instead of the terrain-16. Re-asserted on every full redraw, which follows
+         * the Introduction / Create-a-Character sub-screens (they set their own palettes).
          * Same idiom for the menu song: re-cue ultima.m (no-op while it already plays) so returning
          * from a sub-flow that switched tracks (intro=bootup, chargen=create/intro) restores it. */
-        if(g_menu_lc) rdr_set_lowcolor(g_menu_lc, g_menu_lc+48);
         fe_music("ULTIMA");                                 /* nuvie main_menu_load(): ultima.m */
-        clear_bb(0);
-        if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
-        blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
-        menu_highlight(mx,my,mw,g_menu_h,sel,rowh);         /* yellow->orange distance tint */
-        if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
-        fe_cursor_show(1); fe_cursor_blit();                /* nuvie: pointer visible on the main menu */
-        rdr_present_doubled(LH);
+        if(full || note!=shown_note){                       /* the whole screen: the first time, after a sub-screen, the F1 note */
+            if(g_menu_lc) rdr_set_lowcolor(g_menu_lc, g_menu_lc+48);
+            clear_bb(0);
+            if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
+            blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
+            menu_highlight(mx,my,mw,g_menu_h,sel,rowh);     /* yellow->orange distance tint */
+            if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
+            fe_cursor_show(1);                              /* nuvie: pointer visible on the main menu */
+            rdr_present_doubled(LH); fe_cursor_draw(1);     /* (the pointer stays out of the backbuffer: fe_cursor_draw presents it alone) */
+            full=0; shown_sel=sel; shown_note=note;
+        } else if(sel!=shown_sel){                          /* a new highlight: the menu's box alone (a full present per hover is slow on an ST) */
+            for(int y=my;y<my+g_menu_h&&y<LH;y++){ uint8_t*d=ROW(y); for(int x=mx;x<mx+mw&&x<LW;x++) d[x]=0; }
+            blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
+            menu_highlight(mx,my,mw,g_menu_h,sel,rowh);
+            rdr_present_rect_doubled(mx,my,mw,g_menu_h,LH); fe_cursor_draw(1);
+            shown_sel=sel;
+        } else fe_cursor_track();                           /* the pointer alone */
 
         /* MOUSE: hovering an option highlights it; a click activates it (authentic — the U6 menu is
          * both keyboard and mouse). A poll loop (not fe_getkey) keeps the hover highlight live. */
@@ -3169,7 +3182,7 @@ static int run_menu(void)
         }
         if(act<0){ vsync_pump(); continue; }
 
-        sel=act; note=0; fe_cursor_show(0);                /* sub-flows hide it (nuvie: selected_*()) */
+        sel=act; note=0; fe_cursor_show(0); full=1;        /* sub-flows hide it (nuvie: selected_*()); a full redraw after */
         if(act==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48);
                     g_menu_journey=1; return 4; }    /* Journey Onward -> play (load SAVED.000 if present) */
         else if(act==0) run_intro();                     /* Introduction -> cutscene, then back */

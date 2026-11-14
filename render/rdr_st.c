@@ -90,6 +90,7 @@ static long raster_remove(void);                     /* defined below; used by r
 
 static short     g_old_rez;
 static void     *g_old_phys, *g_old_log;
+static short     g_old_pal[16];          /* the desktop's colours, put back on exit (Setcolor -1 / Setpalette) */
 
 /* chunky 8-bit -> 4 interleaved ST bitplanes for `ngroups` 16-pixel groups, remapping each
  * index through the 256->16 LUT on the way. Branchless: 4 plane accumulators shifted a bit
@@ -142,6 +143,7 @@ bool rdr_init(const platform_caps_t *caps)
     g_old_rez  = Getrez();
     g_old_phys = Physbase();
     g_old_log  = Logbase();
+    for (int i = 0; i < 16; i++) g_old_pal[i] = (short)Setcolor(i, -1);   /* XBIOS 7, -1 = read */
 
     Setscreen(g_screen, g_screen, 0);     /* log+phys = our buffer, rez 0 = ST-low 320x200x16 */
     Setpalette(g_stpal);
@@ -166,6 +168,7 @@ void rdr_shutdown(void)
     plat_mouse_hook_shutdown();
     linea9();                             /* line-A $A009: show mouse for the desktop */
     Setscreen(g_old_log, g_old_phys, g_old_rez);
+    Setpalette(g_old_pal);                /* XBIOS 6: the desktop's colours back (loaded at the next VBL; static buffer) */
     Vsync();
 }
 
@@ -385,14 +388,16 @@ void rdr_present_doubled(int lh)
 void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
 {
     (void)lh;
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
     if (x + w > STW) w = STW - x;
     if (y + h > STH) h = STH - y;
-    int g0 = x / 16, gn = w / 16;
+    if (w <= 0 || h <= 0) return;
+    int g0 = x / 16, gn = (x + w + 15) / 16 - g0;   /* every 16-pixel group the rect touches (a 7-pixel pointer is one or two) */
+    uint8_t *scr = g_vis;                            /* the buffer on show (flip mode alternates them) */
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px = g_back + (int32_t)yy * STW + g0 * 16;
-        uint16_t     *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
+        uint16_t     *dst = (uint16_t *)(scr + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
         c2p4_lut_asm(px, g_lut, dst, gn);
     }
     /* no Vsync: caller batches */
