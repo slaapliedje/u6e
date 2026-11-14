@@ -926,3 +926,19 @@ The new flood covers 13 x 13 cells, 8 neighbours each, with windows and object m
 put about 30 ms on a scroll compose on the 8 MHz ST (191 -> 220 ms). Instead it runs on a grid padded with a
 border marked as already queued (no bounds tests), a byte ring and an offset table (no divisions), and a
 row memcpy out. Result: `make bench-st` scroll compose 180.8 ms, full 231.0 ms, against 191.0 / 241.2 before.
+
+### 2026-11-14: a combat turn no longer rebuilds the ST's static map after every move
+Measured on the like-for-like fight (a new game's throne-room gargoyles, emulated 8 MHz Mega STe, `make
+game-st-prof`): an attack took 6.0 s and a pass 4.5-7.8 s (the original ST: 6.4-7.1 and 6.1). A turn recomposes
+after each actor's step, and every such recompose counted as a possible change to the world, so the planar
+static layer was rebuilt in full (about 300 ms) six or seven times a turn. Now `static_sig` fingerprints what the
+static layer is drawn from (the view's objects in draw order with place, tile, kind and count, the animation step,
+the view and the level); when it matches, only the cells whose light changed are redrawn. Result: attack 4.5 s,
+pass 3.3-5.3 s. Proof: the bench's INV2 walk gained 20 in-place frames (a companion stepping, and every fourth
+frame an object changing its tile); INV2 = 0, and with the fingerprint check removed it reports 270.
+INV2 had read 33560 since deb0de1: the ST's ring border went into g_ptmp but not into the chunky reference; the
+reference now gets the same fray.
+
+Still to do: `build_blocked` costs 1.8 s on the ST (8,350 objects; 1.3 s in the first loop) and runs on every
+door, pickup, death and moongate hour; it should update only the objects that changed. Light per recompose
+(~100 ms) and the full g_pdimmed -> g_ptmp copy per action remain.

@@ -3598,6 +3598,7 @@ static void build_blocked(void);
 static uint32_t g_kp[18];   /* 0 step_npcs, 1 compose, 2 full present, 3 map present, 4 build_blocked, 5 wt_act, 6 minute_end, 7 sched_pass, 8 sched_pick, 9 followers */
 #define KP_FN(i) static __attribute__((unused)) void kp_end##i(uint32_t*t0){ g_kp[i]+=plat_ticks_200hz()-*t0; }
 KP_FN(0) KP_FN(1) KP_FN(2) KP_FN(3) KP_FN(4) KP_FN(5) KP_FN(6) KP_FN(7) KP_FN(8) KP_FN(9) KP_FN(10) KP_FN(11) KP_FN(12) KP_FN(13) KP_FN(14) KP_FN(15) KP_FN(16) KP_FN(17)
+static int g_kp_bbn;   /* build_blocked calls this pass */
 static int g_kpn; static uint16_t g_kpa[48], g_kpw[48], g_kpd[48];   /* the slow actor turns of this pass: actor, worktype, ticks */
 #define KP(i) uint32_t kp_t0_ __attribute__((cleanup(kp_end##i)))=plat_ticks_200hz()
 #else
@@ -3832,6 +3833,9 @@ static bool force_pass_at(int32_t x, int32_t y)
 static void build_blocked(void)
 {
     KP(4);
+#ifdef KEYPROF
+    g_kp_bbn++;
+#endif
     /* the per-object work lists are 52 KB at the full object count and live only for this call, so
      * they come from the pool (a mark/reset costs nothing). Margin on a 4 MB machine: memory_streaming.md */
     plat_mark wm=plat_chip_mark();
@@ -4620,6 +4624,33 @@ uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw
 #define SUB_T() ((void)0)
 #define SUB_ADD(acc) ((void)0)
 #endif
+#ifdef HAVE_RDR_ST
+/* The static layer's fingerprint: everything build_static draws from in the view, bar the light (which the
+ * incremental path compares per cell). Objects in the view's buckets in draw order (index, place, tile,
+ * kind, count), the animation step, the view and the level. A combat turn recomposes after every actor's
+ * move; a walking creature changes none of this, so the ST redraws only the cells whose light changed
+ * instead of rebuilding the whole static map (docs/design/performance.md, 2026-11-14). */
+static uint32_t static_sig(const world_t*w){
+    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    uint32_t h=2166136261u;
+#define SIGMIX(v) (h=(h^(uint32_t)(v))*16777619u)
+    SIGMIX(w->px); SIGMIX(w->py); SIGMIX(w->level); SIGMIX(g_anim_ctr); SIGMIX(g_xray_turns>0);
+    int bx0=((int)left>>4)&(OBKT-1), bx1=(((int)left+VT)>>4)&(OBKT-1);
+    int by0=((int)top >>4)&(OBKT-1), by1=(((int)top +VT)>>4)&(OBKT-1);
+    for(int by=by0;;by=(by+1)&(OBKT-1)){ for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){ int b=by*OBKT+bx;
+        for(int k=g_obkt_start[b];k<g_obkt_start[b+1];k++){ int i=g_obkt_idx[k]; const wobj_t*o=&g_wobj[i];
+            int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1), vy=((int32_t)o->y-top)&(U6_SURFACE_TILES-1);
+            if(vx>VT||vy>VT) continue;
+            SIGMIX(i); SIGMIX(o->alive); SIGMIX(((uint32_t)o->x<<16)|o->y); SIGMIX(((uint32_t)o->tile<<16)|(uint16_t)o->obj_n); SIGMIX(o->qty); }
+        if(bx==bx1) break; } if(by==by1) break; }
+#undef SIGMIX
+    return h;
+}
+static uint32_t g_pd_sig; static int g_pd_sig_ok;
+#ifdef BENCH
+int g_still_hits, g_still_tries;
+#endif
+#endif
 static void predim_compose_static(const world_t*w,const uint8_t*light,int dither){
     KP(11);
     int dx=(int)w->px-g_tmp_px, dy=(int)w->py-g_tmp_py;         /* wrap to shortest signed delta */
@@ -4640,7 +4671,15 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
         g_planar_static=1; g_predim=1; g_predim_light=light; g_dim_dither=dither;
         g_pd_idle_patch = (can_idle && g_pd_valid);        /* idle-incremental -> compose_map patches g_ptmp instead of a full copy */
         if(!can_idle) g_pd_anim_valid=0;                  /* view changed -> the cached anim-cell set is stale */
-        if((can_scroll||can_idle) && g_pd_valid){
+        int can_still=0;                                  /* an action that left the static layer as it was */
+        if(!can_idle){ uint32_t sg=static_sig(w);
+            can_still=(!can_scroll && g_tmp_valid && dx==0 && dy==0 && g_pd_valid && g_pd_sig_ok && sg==g_pd_sig);
+            g_pd_sig=sg; g_pd_sig_ok=1;
+#ifdef BENCH
+            g_still_tries++; g_still_hits+=can_still;
+#endif
+            }
+        if((can_scroll||can_idle||can_still) && g_pd_valid){
             int32_t left0=w->px-VT/2, top0=w->py-VT/2;
             SUB_T();
             if(can_idle){
@@ -5068,7 +5107,9 @@ static void compose_map(const world_t*w)
         int top_=vy==0, bot=vy==VT-1, lft=vx==0, rgt=vx==VT-1, t;
         if(!(top_||bot||lft||rgt)) continue;
         t = top_ ? (lft?432:rgt?434:433) : bot ? (lft?435:rgt?437:436) : lft?438:439;
-        if(!g_pd_dyngate || g_pd_dyngate[vy*VT+vx]) rdr_pdyn_cell(0x70000000|t, g_tileset+(int32_t)t*256, vx, vy); }
+        if(!g_pd_dyngate || g_pd_dyngate[vy*VT+vx]) rdr_pdyn_cell(0x70000000|t, g_tileset+(int32_t)t*256, vx, vy);
+        if(g_chunky_dyn){ const uint8_t*s=g_tileset+(int32_t)t*256;   /* the INV2 reference (tmp) gets the same fray */
+            for(int r=0;r<16;r++,s+=16){ uint8_t*d=tmp+(vy*16+r)*T+vx*16; for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c]; } } }
 #endif
     g_pd_dyngate = 0;                                /* dynamic passes done — never let the gate leak past ph1/roofs */
     /* lighting overlay: SMOOTH/DITHER/BINARY compute the per-cell field HERE then apply it per pixel;
@@ -20037,6 +20078,27 @@ int main(int argc, char **argv)
             g_idle_light_drift=0;
             g_idle_allow=1; for(int i=0;i<N;i++){ g_anim_ctr++; compose_map(&w); } g_idle_allow=0;
             dbg_num("IDLE-LIGHT cache drift=", (int)g_idle_light_drift);   /* 0 = cached light == fresh */
+            /* STILL verify: actions in place (view fixed, not an idle tick), as a combat turn recomposes after
+             * each actor's step. A companion steps back and forth (the static fingerprint holds: only the
+             * light-changed cells are redrawn); every fourth frame a view object changes its tile (the
+             * fingerprint differs: a full rebuild). INV2 proves both against the chunky full rebuild. */
+            { int a2=(g_nparty>1)?g_party[1].actor:-1, oi=-1; uint16_t ax0=a2>0?g_actx[a2]:0, ot0=0;
+              int32_t l0=w.px-VT/2, t0=w.py-VT/2;
+              for(int j=0;j<g_ow.nobjs&&oi<0;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive||o->obj_n==g_on.egg) continue;
+                  int32_t vx=((int32_t)o->x-l0)&(U6_SURFACE_TILES-1), vy=((int32_t)o->y-t0)&(U6_SURFACE_TILES-1);
+                  if(vx>0&&vy>0&&vx<VT-1&&vy<VT-1&&o->tile<2048&&!(obj_class(o)&1)&&!(g_tflags[o->tile]&0xC0)&&o->obj_n<1024&&!g_objanim[o->obj_n]&&g_anim_idx[o->tile]<0) oi=j; }
+              if(oi>=0){ ot0=g_wobj[oi].tile;                                /* the bench views draw no objects: index this one alone */
+                  int bk=((g_wobj[oi].y>>4)&(OBKT-1))*OBKT+((g_wobj[oi].x>>4)&(OBKT-1));
+                  for(int q=0;q<=OBKT*OBKT;q++) g_obkt_start[q]=(uint16_t)(q>bk); g_obkt_idx[0]=(uint16_t)oi;
+                  g_tmp_valid=0; compose_map(&w); }
+              for(int i=0;i<N;i++){
+                  if(a2>0) g_actx[a2]=(uint16_t)(ax0+(i&1));
+                  if(oi>=0) g_wobj[oi].tile=(uint16_t)((i&3)==3?(ot0==17?18:17):ot0);   /* 17: an opaque terrain tile, plainly different */
+                  compose_map(&w); }
+              if(a2>0) g_actx[a2]=ax0; if(oi>=0) g_wobj[oi].tile=ot0;
+              { extern int g_still_hits,g_still_tries; dbg_num("STILL hits=",g_still_hits); dbg_num("STILL tries=",g_still_tries); }
+              memset(g_obkt_start,0,sizeof g_obkt_start); memset(g_fgbkt_start,0,sizeof g_fgbkt_start); memset(g_lsbkt_start,0,sizeof g_lsbkt_start);   /* back to the bench's object-free views */
+              dbg_num("STILL verify actor=", a2); dbg_num("STILL verify object+1=", oi+1);  }
             w.px=(uint16_t)bpx0; g_planar_verify=0; g_tmp_valid=0; }        /* verify off for timing */
         /* FG-INDEX proof: sparse g_fgbkt pass-1 == full g_obkt pass-1, across the scroll walk (0 = complete). */
         { uint32_t fgd=0; int bpx0=(int)w.px;
@@ -20657,6 +20719,7 @@ int main(int argc, char **argv)
             long v[18]; v[0]=(long)d*5; v[1]=(long)kp_key; for(int q=0;q<16;q++) v[2+q]=(long)g_kp[q]*5;
             for(int k_=0;k_<18;k_++){ for(const char*c=lab[k_];*c;c++) b[n++]=*c; char t[12]; int m=0; long x=v[k_]; if(k_==1){ static const char H[]="0123456789abcdef"; for(int q=12;q>=0;q-=4) t[m++]=H[(x>>q)&15]; } else { if(!x) t[m++]='0'; while(x){ t[m++]=(char)('0'+x%10); x/=10; } for(int a_=0;a_<m/2;a_++){ char c_=t[a_]; t[a_]=t[m-1-a_]; t[m-1-a_]=c_; } } for(int q=0;q<m;q++) b[n++]=t[q]; }
             b[n++]=' '; b[n++]='c'; b[n++]='m'; b[n++]='='; b[n++]=(char)('0'+g_combat_mode); b[n++]=' '; b[n++]='r'; b[n++]='='; b[n++]=(char)('0'+(redraw!=0)); b[n++]='\r'; b[n++]='\n'; b[n]=0; Cconws(b);
+            if(g_kp_bbn){ dbg_num("  KPBB calls=",g_kp_bbn); g_kp_bbn=0; }
             for(int k_=0;k_<g_kpn;k_++){ dbg_num("  KPA actor=",g_kpa[k_]); dbg_num("      wt=",g_kpw[k_]); dbg_num("      ms=",g_kpd[k_]*5); } } g_kpn=0; }
 #endif
     }
