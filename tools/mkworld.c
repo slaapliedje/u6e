@@ -42,6 +42,7 @@
 #include "mul16.h"
 #include "u6lzw.h"
 #include "u6lzc.h"
+#include "../render/portdither.h"   /* the ST portrait dither: previewed here (MKWORLD_DITHERPREVIEW) */
 #include "u6lib.h"
 #include "u6pal.h"
 #include "u6tile.h"
@@ -1245,6 +1246,37 @@ static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, 
  * + the TERRAIN histogram (~35%, so the frozen map stays recognisable) + PARCHMENT (~15%, the text
  * panel). Indexed EXACTLY as the engine loads portraits: idx<98 -> PORTRAIT.A[idx], else B[idx-98].
  * [4 "U6WY"][u16 nport][nport x (48 pal 3-bit levels + 256 lut)]. */
+/* MKWORLD_DITHERPREVIEW=file.ppm: one row per portrait (the first 40), five 56x64 panels at x3:
+ * VGA | ST nearest | ST dithered | STE nearest | STE dithered (render/portdither.h, the engine's own
+ * code). The ST shows 3-bit levels as L*255/7, the STE 4-bit as L*17. Host-only, nothing shipped. */
+#define DP_N 40
+#define DP_S 3
+static void dither_preview(int idx, const uint8_t *port, const uint8_t *pal6, const uint8_t *lv3,
+                           const uint8_t *lv4, const uint8_t *lut)
+{
+    static uint8_t *img; static int rows;
+    const char *fn = getenv("MKWORLD_DITHERPREVIEW"); if (!fn) return;
+    const int W = 5*56*DP_S, RH = 64*DP_S;
+    if (idx < 0) {                                              /* flush */
+        if (!img) return;
+        FILE *o = fopen(fn, "wb"); if (o) { fprintf(o, "P6 %d %d 255\n", W, rows*RH); fwrite(img, 1, (size_t)W*rows*RH*3, o); fclose(o); }
+        free(img); img = NULL; return; }
+    if (rows >= DP_N) return;
+    if (!img) img = calloc((size_t)W*DP_N*RH, 3);
+    uint8_t used[256] = {0}; for (int i = 0; i < 56*64; i++) used[port[i]] = 1;
+    static pdith_t d3, d4; pdith_build(&d3, pal6, lv3, 7, lut, used); pdith_build(&d4, pal6, lv4, 15, lut, used);
+    for (int y = 0; y < 64; y++) for (int x = 0; x < 56; x++) {
+        int c = port[y*56+x]; uint8_t px[5][3];
+        for (int k = 0; k < 3; k++) px[0][k] = (uint8_t)(pal6[c*3+k]*255/63);
+        int s3n = lut[c]&15, s3d = lut[pdith_px(&d3,(uint8_t)c,x,y)]&15, s4d = lut[pdith_px(&d4,(uint8_t)c,x,y)]&15;
+        for (int k = 0; k < 3; k++) { px[1][k] = (uint8_t)(lv3[s3n*3+k]*255/7); px[2][k] = (uint8_t)(lv3[s3d*3+k]*255/7);
+                                      px[3][k] = (uint8_t)(lv4[s3n*3+k]*17);    px[4][k] = (uint8_t)(lv4[s4d*3+k]*17); }
+        for (int p = 0; p < 5; p++) for (int sy = 0; sy < DP_S; sy++) for (int sx = 0; sx < DP_S; sx++) {
+            uint8_t *q = img + (((size_t)(rows*RH + y*DP_S + sy))*W + (size_t)(p*56*DP_S + x*DP_S + sx))*3;
+            q[0] = px[p][0]; q[1] = px[p][1]; q[2] = px[p][2]; } }
+    rows++; (void)idx;
+}
+
 static void build_conv_palettes(FILE *f, const uint8_t *paper, const uint8_t *palb,
                                 const uint8_t *portA, long portAlen, const uint8_t *portB, long portBlen,
                                 uint8_t *conv4, int *nport_out)   /* conv4 (nport*48) = STE 4-bit companions for U6WS */
@@ -1319,7 +1351,9 @@ static void build_conv_palettes(FILE *f, const uint8_t *paper, const uint8_t *pa
         quantize_colors(col,nc,palb,pal_lvl,pal4,lut,snap,16);   /* portrait palette: no cycling ramp */
         fwrite(pal_lvl,1,48,f); fwrite(lut,1,256,f);
         if (conv4) memcpy(conv4+(size_t)idx*48, pal4, 48);        /* STE 4-bit companion for U6WS */
+        if (have) dither_preview(idx, port, palb, pal_lvl, pal4, lut);
     }
+    dither_preview(-1, NULL, NULL, NULL, NULL, NULL);
     if (nport_out) *nport_out = nport;
     printf("conv palettes (U6WY): %d slots, %d with portraits (PORTRAIT.A=%d, PORTRAIT.B=%d)\n",
            nport, made, cA, cB);

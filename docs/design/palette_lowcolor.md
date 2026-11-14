@@ -178,6 +178,36 @@ swaps its whole 16 to a palette tuned for the conversation screen (no raster, fu
   portraits gain more (the split-check's 101%). Baseline toggle: CONVPAL.BIN byte1 bit0 disables the
   swap.
 
+## Portrait dithering (ST/STE, 2026-11-14)
+Even under its own conversation palette (U6WY above), a portrait snapped pixel by pixel to the
+nearest of 16 colours shows flat bands across skin, beards and shading. So the ST draws a portrait
+with an **ordered dither**: each source colour is shown as a fixed pattern of two of the 16 slots.
+
+- **Choosing the pair.** Source colours are compared in RGB6 (0..63) with weights red 3, green 4,
+  blue 2. A slot's colour is its hardware level scaled to that range (L·63/7 on the ST, L·63/15 on
+  the STE). For a colour C, the candidates for slot A are its two nearest slots; B can be any other
+  slot. The share t of B is the projection of C onto A→B, rounded to sixteenths (1..15). The
+  error of the mix is |A + t(B−A) − C|². A **penalty** of (6/32)·|B−A|² is added whatever t is, so
+  two distant colours are not mixed: a sparse sprinkle of a far colour costs as much as an even mix. The pair with the smallest total wins. Showing solid
+  nearest A instead (no penalty) is the other candidate. Colour 255 is never dithered.
+- **The pattern.** A 4×4 Bayer matrix (thresholds 0..15) at the pixel's screen position: B where
+  the threshold < 16·t, A elsewhere. The pattern is fixed to the screen, not to the portrait.
+- **Into the backbuffer.** The backbuffer stays 8-bit and the backend still maps it through the
+  256→16 LUT. The dither writes, for a slot, the lowest source colour that the LUT maps to it.
+  A slot that no colour maps to is not used.
+- **Which palette.** While a conversation palette is up, its 16 and LUT. Otherwise (the status
+  and look views) the game band that holds the portrait's top row. Only the colours the portrait
+  contains are worked out (some 30–60), and only when the face or palette changes.
+- **Where.** `render/portdither.h` (shared by the engine and `tools/mkworld.c`).
+  `MKWORLD_DITHERPREVIEW=file.ppm` writes 40 portraits side by side: VGA | ST nearest |
+  ST dithered | STE nearest | STE dithered. The penalty was picked from that preview.
+  A first form, |B−A|²·t(1−t), shrinks when B is rare, and the engine capture (Shamino) showed
+  dark-red specks in the eye sockets. With the flat form, 2/32 speckled even the parchment backdrop
+  and 4/32 kept the specks. 8/32 barely differed from nearest. 6/32 softens the shading with
+  neither. The gain is modest, because each conversation palette is already fitted to its portrait.
+  The 16 themselves (e.g. tan where the VGA skin is pink) are the larger limit. Off on 256-colour backends.
+  `CONVPAL.BIN` byte 1 bit 1 turns it off, for a nearest-colour baseline.
+
 ## Footprint — booting on a real 4 MB ST
 Measured on a real 4 MB ST (`MEMINFO.BIN` diagnostic → the `MEM ...` console lines): the ST-RAM
 pool is **2579 KB** (after the TPA — text 194 KB + BSS ~1019 KB — and GEMDOS headroom). The FULL

@@ -36,6 +36,7 @@
 #include "sttune.h"            /* the ST release's own YM music, from the player's U.PRG */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
+#include "portdither.h"         /* ST/STE: ordered dithering of portraits (palette_lowcolor.md "Portrait dithering") */
 #include "firstrun.h"          /* first start: DOS files -> CONVERT.TOS (docs/design/first_boot_convert.md) */
 #include <osbind.h>
 #include <string.h>
@@ -5709,9 +5710,36 @@ static void talk_draw(int x,int y,uint8_t col)
 }
 
 /* blit a portrait already decoded into a flat 56x64 buffer (from talk()) */
+/* Portrait dithering on 16-colour hardware (docs/design/palette_lowcolor.md "Portrait dithering").
+ * The table follows the palette the portrait's rows present through: the conversation palette while
+ * one is up (g_pd_cpal/g_pd_clut, set by conv_palette_enter), else the game band holding row ly. It is
+ * rebuilt only when the face or that palette changes (a checksum catches a reused face buffer). */
+static pdith_t        g_pd;
+static const uint8_t *g_pd_src, *g_pd_bpal, *g_pd_blut;
+static uint32_t       g_pd_sum;
+static const uint8_t *g_pd_cpal, *g_pd_clut;     /* the conversation palette in use (NULL = the game's) */
+static int            g_pd_off = -1;             /* -1 not decided, 1 off (256-colour backend, no low-colour pack, CONVPAL bit1) */
+static const pdith_t *pdith_for(const uint8_t *src, int ly)
+{
+    if(g_pd_off<0){ rdr_caps c; rdr_get_caps(&c); g_pd_off = (c.colors!=16 || !g_have_lowcolor || !g_basepal); }
+    if(g_pd_off) return 0;
+    const uint8_t *pal, *lut;
+    if(g_pd_clut){ pal=g_pd_cpal; lut=g_pd_clut; }
+    else if(g_lcx_nb>=2){ int b=0; while(b+1<g_lcx_nb && g_lcx_y0[b+1]<=ly) b++;
+        pal=LCPAL(g_lcx_pal, g_lcx_pal4)+b*48; lut=g_lcx_lut+(int32_t)b*256; }
+    else { pal=LCPAL(g_lc_pal, g_lc_pal4); lut=g_lc_lut; }
+    uint32_t sum=0; for(int i=0;i<PW*PH;i++) sum=(sum<<1 | sum>>31) + src[i];
+    if(!g_pd.ok || src!=g_pd_src || sum!=g_pd_sum || pal!=g_pd_bpal || lut!=g_pd_blut){
+        uint8_t used[256]; memset(used,0,sizeof used); for(int i=0;i<PW*PH;i++) used[src[i]]=1;
+        pdith_build(&g_pd, g_basepal, pal, g_is_ste?15:7, lut, used);
+        g_pd_src=src; g_pd_sum=sum; g_pd_bpal=pal; g_pd_blut=lut; }
+    return &g_pd;
+}
 static void draw_portrait_buf(const uint8_t*src,int lx,int ly)
 {
     ui_frame(lx-1,ly-1,PW+2,PH+2,C_BLACK);
+    const pdith_t *d=pdith_for(src,ly);
+    if(d){ for(int y=0;y<PH;y++)for(int x=0;x<PW;x++) ui_px(lx+x,ly+y,pdith_px(d,src[y*PW+x],lx+x,ly+y)); return; }
     for(int y=0;y<PH;y++)for(int x=0;x<PW;x++) ui_px(lx+x,ly+y,src[y*PW+x]);
 }
 
@@ -6168,10 +6196,12 @@ static void conv_palette_enter(int pidx)
         const uint8_t *base=g_convpal+(int32_t)pidx*(48+256);   /* 3-bit pal + shared 256->16 LUT */
         const uint8_t *pal = (g_is_ste && g_convpal4) ? g_convpal4+(int32_t)pidx*48 : base;   /* STE 4-bit */
         rdr_set_lowcolor(pal, base+48);
+        g_pd_cpal=pal; g_pd_clut=base+48;            /* the portrait dithers against this 16 */
     }
 }
 static void conv_palette_leave(void)
 {
+    g_pd_cpal=g_pd_clut=0;
     if(!g_have_lowcolor) return;
     rdr_set_lowcolor(LCPAL(g_lc_pal, g_lc_pal4), g_lc_lut);
     if(g_lcx_nb>=2) rdr_set_lowcolor_bands(g_lcx_nb, g_lcx_y0, LCPAL(g_lcx_pal, g_lcx_pal4), g_lcx_lut);
@@ -20086,6 +20116,7 @@ int main(int argc, char **argv)
     {   int32_t cpl=0; uint8_t *cpb=(uint8_t*)plat_load_file("CONVPAL.BIN",1,&cpl);
         if(cpb){ int id=cpb[0];
             if(cpl>=2 && (cpb[1]&1)) g_nconvpal=0;   /* baseline: disable the swap (portrait via terrain-16) */
+            if(cpl>=2 && (cpb[1]&2)) g_pd_off=1;     /* baseline: no portrait dithering (nearest colour) */
             if(id<=0){ for(int dy=-1;dy<=1&&id<=0;dy++) for(int dx=-1;dx<=1&&id<=0;dx++){ if(!dx&&!dy)continue;
                 int t=npc_at(&w,(int)w.px+dx,(int)w.py+dy); if(t>0) id=t; } }
             if(id>0){ talk(id); dbg_num("CONVPAL talk id=", id); dbg_num("CONVPAL portrait=", g_have_pc); } }
