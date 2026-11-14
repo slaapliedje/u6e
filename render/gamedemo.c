@@ -1327,6 +1327,7 @@ static void forest_reveal(void)
     g_sw_cap=7;                                               /* "...to the stones" over the clear forest */
     (void)storm_hold();
 }
+static const uint8_t g_black16[48];   /* ST: an all-black 16, shown while a new scene is drawn so the last one never shows in its colours */
 static void storm_scene(void)
 {
     if(!g_swl[SWL_SKY] || !g_swl[SWL_GROUND] || !g_swl[SWL_TREES]) return;
@@ -1335,11 +1336,13 @@ static void storm_scene(void)
     /* nuvie: 20 silent animation steps before the first caption, under the fade-in */
     g_sw_tlast=plat_ticks_200hz();
     for(int i=0;i<20;i++) sw_step();
-    storm_compose_full();                                     /* fade in on the animating storm */
+    storm_compose_full();                                     /* fade in on the animating storm, */
+    if(g_storm_lc) rdr_set_lowcolor(g_black16,g_storm_lc+48); /* (ST: in the dark until lit below) */
+    rdr_present_doubled(LH);                                  /* presented while the palette is still black */
     for(int k=0;k<=8;k++){ fe_fade(g_storm_pal,k); }
     rdr_flip_end();                                           /* single buffer: the pane-rect presents hit the visible screen */
     g_sw_fullnext=1;
-    rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,g_storm_lc+48);
+    rdr_set_palette((uint8_t*)g_storm_pal,256), rdr_set_lowcolor(g_storm_lc,NULL);
     g_sw.pal_bright=-1;                                       /* re-assert the highlight state next step */
     g_sw_tlast=plat_ticks_200hz();
     int esc=0;
@@ -1559,11 +1562,12 @@ static void run_intro_body(void)
         if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc, g_fe_base_lc+48); return; }
     for(int s=(g_intro_start<g_nintro?g_intro_start:0);s<g_nintro;s++){
         const uint8_t *pal=g_intro[s].pal;
-        if(g_intro[s].lc) rdr_set_lowcolor(g_intro[s].lc, g_intro[s].lc+48);  /* ST: this scene's own 16 (no-op on TT) */
+        if(g_intro[s].lc) rdr_set_lowcolor(g_black16, g_intro[s].lc+48);   /* ST: black while the scene is drawn (g_black16) */
         int panlen = (g_intro[s].type==1) ? (g_intro[s].w - LW) : 0;   /* 640-320 = 320 px (pan only) */
         if(g_intro[s].type==2) g_gate_y=0x64;                     /* gate starts hidden in the earth */
         g_intro_page=0;
         draw_intro_frame(s,0,1); rdr_present_doubled(LH);
+        if(g_intro[s].lc) rdr_set_lowcolor(g_intro[s].lc, NULL);   /* ST: this scene's own 16 (no-op on TT), now that it is on screen */
         for(int k=0;k<=8;k++){ fe_fade(pal,k); }      /* fade in */
         if(g_intro[s].type==2 && g_gate){                         /* the moongate ASCENDS (nuvie 0x64->0x5) */
             for(int gy=0x64; gy>0x5; gy-=2){ g_gate_y=gy;
