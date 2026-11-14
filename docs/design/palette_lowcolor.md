@@ -343,3 +343,14 @@ We ship a PARALLEL 4-bit palette set rather than touching the validated 3-bit ST
   `conv_palette_enter/leave` swap on `talk()`/`end_talk()`. Check: `make shot-st-conv`.
 - Split-check (why mid-line was ruled out, where the headroom is): `tools/splitcheck.c`,
   `make splitcheck`.
+
+## Cutscene palettes: what else shows over a scene (2026-11-14)
+An outside tester saw the intro's wall picture pale on a Mega STe, and every caption was grey: each scene's 16 was
+quantised from the scene picture alone, so the narration parchment (drawn over every captioned scene with the scene's
+palette), the living room's foreground and TV pictures, the storm's bolts and the stones' hand, gate and obsidian had
+no say, and large grey areas outvoted small colourful ones. `build_scene_lc_x` (tools/mkworld.c) now counts those
+layers too, at a weight each (the parchment as its screen share, the bolts x4, the stones' sprites x3, the TV pictures
+at half), and weighs each colour up by saturation (x1 grey .. x2 pure). Result: yellow parchment everywhere, the wall
+picture's oranges and yellows back, a coloured TV, blue lightning ("searing blue fire"), a skin-toned hand, the gate's
+inner frame kept. Tried and backed off: a saturation weight up to x3 with the TV pictures at full weight turned the
+TV cabinet's tan edges magenta.

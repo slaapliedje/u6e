@@ -1201,16 +1201,30 @@ static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint
  * palette (its PALETTES.INT palette, RGB6) weighted by the scene's pixel usage to its own optimised
  * ST 16 + 256->16 LUT, so the ST renders each cutscene scene in colour instead of the game tileset
  * 16. Fills lc[48+256] = [16 x {r,g,b} 3-bit levels][256 lut]. (docs/design/palette_lowcolor.md) */
+/* What else shows over a scene with its palette (2026-11-14; the intro's wall picture and parchment went grey on
+ * the ST): up to 4 extra layers, each counted at a weight (per 16: 16 = as many pixels as it has), transparent 255
+ * left out. Each scene's colours are also weighted up by saturation (x1 grey .. x2 pure), so a small vivid area
+ * keeps a slot against a large grey one. */
+typedef struct { const uint8_t *pix; long n; int w16; } scene_extra_t;
+static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, uint8_t lc[48+256]);
 static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, uint8_t lc[48+256])
+{ build_scene_lc_x(pal6,pix,npix,NULL,0,lc); }
+static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, uint8_t lc[48+256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     cv_hist(pix,npix,freq);
     freq[0]+=freq[U6SHAPE_TRANSPARENT];          /* uncovered pixels reach the screen as the cleared colour 0 */
     freq[U6SHAPE_TRANSPARENT]=0;
+    for (int k=0;k<nx;k++){ static long xf[256]; for (int i=0;i<256;i++) xf[i]=0;
+        if(xs[k].pix) cv_hist(xs[k].pix,(int)xs[k].n,xf); xf[U6SHAPE_TRANSPARENT]=0;
+        for (int i=0;i<256;i++) freq[i]+=xf[i]*xs[k].w16/16; }
     static CCol col[256]; int ncol=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
         col[ncol].r=RGB6TO8(pal6[i*3]); col[ncol].g=RGB6TO8(pal6[i*3+1]); col[ncol].b=RGB6TO8(pal6[i*3+2]);
-        col[ncol].w=freq[i]; ncol++; }
+        { int mx=col[ncol].r, mn=col[ncol].r;      /* saturation weight: x1 + (max-min)/max */
+          if(col[ncol].g>mx) mx=col[ncol].g; if(col[ncol].b>mx) mx=col[ncol].b; if(col[ncol].g<mn) mn=col[ncol].g; if(col[ncol].b<mn) mn=col[ncol].b;
+          col[ncol].w = freq[i] + (mx ? freq[i]*(mx-mn)/mx : 0); }
+        ncol++; }
     CCol pal[16]; int np = ncol ? q_median_cut(col,ncol,16,pal) : 0;
     q_snap_pal(pal,np,3);
     if (np && freq[0]) {                         /* colour 0 is the background: keep it exact, or black drifts grey */
@@ -2203,6 +2217,7 @@ int main(int argc, char **argv)
      * Each scene ships its own PALETTES.INT palette (living room=1, stones/moongate=3).
      * The living room PANS (nuvie scroll_lounge): the room panorama scrolls 1x, the
      * avatar/remote foreground 2x (parallax). Others are static. (shapes.md; intro.lua.) */
+    int g_scw=0,g_sch=0; uint8_t *g_scrollpix=load_shape(dir,"BLOCKS.SHP",2,&g_scw,&g_sch);   /* the narration parchment, over every captioned scene */
     { static const struct { const char *file; ishape_t bg[6]; int nbg;
                             ishape_t fg[4]; int nfg; int pal; int type; } SC[] = {  /* type 0=static 1=pan 2=gate-rise */
         /* living room: panorama = room bg(0) + bg1(1@320, has a transparent window) with
@@ -2227,7 +2242,14 @@ int main(int argc, char **argv)
         if(SC[i].type != 1){                                  /* type 0 (static) or 2 (gate-rise): bg only */
           uint8_t *canvas=scratch(320*200,0);
           compose_shapes(dir, SC[i].file, SC[i].bg, SC[i].nbg, canvas, 320, 200);
-          build_scene_lc(pal, canvas, 320*200, lc); fwrite(lc,1,sizeof lc,fe);
+          { scene_extra_t xs[2]={{g_scrollpix,(long)g_scw*g_sch,16},{NULL,0,0}}; int nx=1; uint8_t *spr=NULL; long sn=0;
+            if(!strcmp(SC[i].file,"INTRO_3.SHP")){                    /* the stones' sprites: hand 1, gate 2, obsidian 3, clutching hand 6 */
+                static const int SP[]={1,2,3,6}; long cap=0;
+                for(int k=0;k<4;k++){ int w=0,h=0; uint8_t*sp=load_shape(dir,SC[i].file,SP[k],&w,&h); if(sp) cap+=(long)w*h; free(sp); }
+                spr=scratch((size_t)(cap>0?cap:1),U6SHAPE_TRANSPARENT);
+                for(int k=0;k<4;k++){ int w=0,h=0; uint8_t*sp=load_shape(dir,SC[i].file,SP[k],&w,&h); if(sp&&w>0){ memcpy(spr+sn,sp,(size_t)w*h); sn+=(long)w*h; } free(sp); }
+                xs[1].pix=spr; xs[1].n=sn; xs[1].w16=48; nx=2; }   /* x3: the gate's few shades each keep a colour */
+            build_scene_lc_x(pal, canvas, 320*200, xs, nx, lc); free(spr); } fwrite(lc,1,sizeof lc,fe);
           be16(fe,320); be16(fe,200); fwrite(canvas,1,320*200,fe); free(canvas);
           printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
         } else {
@@ -2239,7 +2261,14 @@ int main(int argc, char **argv)
           { static const int CX[]={0xdd,0xdd+4,0xdd+0xa,0xdd+0xe};
             for(int c=0;c<4;c++) for(int yy=0x14;yy<0x14+5;yy++)
               for(int xx=CX[c];xx<CX[c]+3;xx++) pano[yy*640+xx]=0; }
-          build_scene_lc(pal, pano, 640*200, lc); fwrite(lc,1,sizeof lc,fe);   /* quantise the panorama */
+          { scene_extra_t xs[3]={{g_scrollpix,(long)g_scw*g_sch,32},{fg,320*200,32},{NULL,0,0}};   /* the panorama is 2 screens wide: parchment and fg at x2 */
+            int nx=2; uint8_t *tvall=NULL; long tvn=0;                  /* the TV's pictures (their pixels at x4: the screen is small but always in view) */
+            { long cap=0; for(int k=0;k<53;k++){ int w=0,h=0; uint8_t*tp=load_shape(dir,"INTRO_1.SHP",16+k,&w,&h); if(tp) cap+=(long)w*h; free(tp); }
+              tvall=scratch((int)(cap>0?cap:1),U6SHAPE_TRANSPARENT);
+              for(int k=0;k<53;k++){ int w=0,h=0; uint8_t*tp=load_shape(dir,"INTRO_1.SHP",16+k,&w,&h); if(tp&&w>0){ memcpy(tvall+tvn,tp,(size_t)w*h); tvn+=(long)w*h; } free(tp); } }
+            if(tvn){ xs[2].pix=tvall; xs[2].n=tvn; xs[2].w16=8; nx=3; }   /* half: the pictures are many, the screen small */
+            build_scene_lc_x(pal, pano, 640*200, xs, nx, lc); free(tvall); }
+          fwrite(lc,1,sizeof lc,fe);   /* quantise the panorama */
           be16(fe,640); be16(fe,200); fwrite(pano,1,640*200,fe);
           be16(fe,320);              fwrite(fg,1,320*200,fe);
           free(pano); free(fg);
@@ -2370,7 +2399,7 @@ int main(int argc, char **argv)
         uint8_t *wpano=scratch(511*200,0);
         static const ishape_t WD[]={{0,0,0},{1,320,0}};
         compose_shapes(dir,"WOODS.SHP",WD,2,wpano,511,200);
-        { uint8_t lc[48+256]; build_scene_lc(p4,wpano,511*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* woods ST 16 */
+        { uint8_t lc[48+256]; { scene_extra_t xs[1]={{g_scrollpix,(long)g_scw*g_sch,26}}; build_scene_lc_x(p4,wpano,511*200,xs,1,lc); } fwrite(lc,1,sizeof lc,fe); }  /* woods ST 16 */
         be16(fe,511); be16(fe,200); fwrite(wpano,1,511*200,fe); free(wpano);
         printf("gypsy woods: WOODS.SHP panorama 511x200 pal4\n"); }
       FE_SEC(FES_STORM);
@@ -2390,7 +2419,12 @@ int main(int argc, char **argv)
         uint8_t *sbase=scratch(320*200,0);
         static const ishape_t WIN[]={{1,0,0},{10,0,76},{8,0,0},{28,0,0},{26,57,0}};   /* for the ST 16 only */
         compose_shapes(dir,"INTRO_2.SHP",WIN,(int)(sizeof WIN/sizeof WIN[0]),sbase,320,200);
-        { uint8_t lc[48+256]; build_scene_lc(p2,sbase,320*200,lc); fwrite(lc,1,sizeof lc,fe); }  /* storm ST 16 */
+        { uint8_t lc[48+256]; uint8_t *bolts=NULL; long bn=0, cap=0;   /* the bolts and strikes (11-23), small but the scene's point: x4 */
+          for(int k=11;k<=23;k++){ int w=0,h=0; uint8_t*bp=load_shape(dir,"INTRO_2.SHP",k,&w,&h); if(bp) cap+=(long)w*h; free(bp); }
+          bolts=scratch((size_t)(cap>0?cap:1),U6SHAPE_TRANSPARENT);
+          for(int k=11;k<=23;k++){ int w=0,h=0; uint8_t*bp=load_shape(dir,"INTRO_2.SHP",k,&w,&h); if(bp&&w>0){ memcpy(bolts+bn,bp,(size_t)w*h); bn+=(long)w*h; } free(bp); }
+          { scene_extra_t xs[2]={{g_scrollpix,(long)g_scw*g_sch,16},{bolts,bn,64}}; build_scene_lc_x(p2,sbase,320*200,xs,2,lc); }
+          free(bolts); fwrite(lc,1,sizeof lc,fe); }  /* storm ST 16 */
         free(sbase);
         /* bolts + strikes carry their HOTSPOT: nuvie draws a sprite at (x - hot_x, y - hot_y) — the
          * strikes' hotspot is the ground-splash point (e.g. 57,130), so (158,114) is where the bolt HITS;
