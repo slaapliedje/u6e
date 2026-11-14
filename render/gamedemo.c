@@ -15809,6 +15809,10 @@ int main(int argc, char **argv)
             chip_free >= (long)sz_libs + RESERVE){ fe_resident=1; fe_prefer_fast=1; }      /* FE + core both in Fast RAM */
         else if (chip_free >= (long)sz_fe + (core_in_fast ? 0 : sz_core) + sz_libs + RESERVE) fe_resident=1;   /* FE in ST-RAM */
         Cconws(fe_resident ? "  front-end: resident\r\n" : "  front-end: streamed (tight RAM)\r\n");
+        /* no Fast RAM and no room for the core, the save template (eggs, saving, the levels' objects) and a margin
+         * for play: the renderer leaves out what it can do without (a 4 MB TT's second screen, 150 KB). Found
+         * 2026-11-14: the TT had 44 KB after the core and the template (158 KB) silently didn't load. */
+        if (!mi.have_altram && chip_free < (long)sz_core + sz_save + SAVETMPL_HEADROOM + 320L*1024L) rdr_low_mem = 1;
         /* Resident tier: allocate the DMA SONG ARENA now — BEFORE the front-end — so the front-end's
          * own songs (BOOTUP/ULTIMA/CREATE/INTRO) cache on their first play too, not only the in-game
          * areas. Sized from what this plan already knows is still to load per pool, so the later
@@ -16295,6 +16299,7 @@ int main(int argc, char **argv)
             if(g_savetmpl){ g_savetmpl_len=plat_load_into("SAVE.000", g_savetmpl, g_savetmpl_cap);
                 if(g_savetmpl_len<=0){ g_savetmpl=NULL; g_savetmpl_len=0; }
                 else { int32_t ol_=sav_objlist_off(g_savetmpl,g_savetmpl_len); if(ol_>=0) actor_bytes_load(g_savetmpl+ol_); } } } }
+    if(_meminfo){ plat_mem_info_t mi; plat_mem_get_info(&mi); dbg_num("MEM save template ok=", g_savetmpl!=0); dbg_num("MEM template size=", (int)plat_fsize_path("SAVE.000")); dbg_num("MEM free at template KB=", (int)((mi.chip_size-mi.chip_used)/1024)); }
     if(g_savetmpl){ g_objlist_off=sav_objlist_off(g_savetmpl,g_savetmpl_len);
         if(g_objlist_off<0) Cconws("SAVE.000: cannot locate objlist\r\n");
         else { if(!g_load_book_present) memset(g_known,0,sizeof g_known);
@@ -18204,6 +18209,8 @@ int main(int argc, char **argv)
     save_index_load(); g_save_slot=g_save_idx[0]; g_save_copy=0;   /* the slot last used (save_load.md §2b) */
     if(g_menu_journey && !g_cc_done && save_exists(g_save_slot,0)) (void)load_game(&w);
     eggs_update(&w,2);                                             /* the eggs around the start (like the original's load; 2 = a load, SE hatches nothing) */
+    if(!g_savetmpl && plat_fsize_path("SAVE.000")>0)                 /* the template did not fit: no eggs, no saving (memory_streaming.md) */
+        msgcat(0,"Not enough memory to save: free some RAM (no resident programs) and restart.");
     {   int32_t ll=0; uint8_t*lq=(uint8_t*)plat_load_file("LOAD.REQ",1,&ll);
         if(lq && ll>0 && (lq[0]=='2'||lq[0]=='3')){
             /* PERSISTENCE round-trip (save_load.md §5): a ready change, a dropped item and a sailed

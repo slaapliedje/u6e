@@ -281,3 +281,22 @@ the menu's pointer blit found no sprite and drew nothing (in Hatari too; nobody 
 screen with a mouse). The front-end pack now carries `FES_CURSOR` (the same 4 + w×h bytes as U6W9) in
 the COMMON group; `fe_bind` sets the cursor globals from it, and the core's U6W9 later sets the same
 bytes again. Old packs without the section still load (a missing directory entry binds nothing).
+
+## The save template on a 4 MB TT (2026-11-14)
+The bot found it: on a 4 MB TT (`--memsize 4 --ttram 0`) a new game had no opening gargoyles and the party no gold.
+After the core loaded, 44 KB of the pool was left, and the save template (`SAVE.000`, 142 KB + 16 KB headroom: the
+eggs, S)ave, the other levels' objects, what NPCs have said) silently did not load. The code had grown from 556 KB
+(2026-11-03) to 951 KB, and the TT spends 460 KB on video: a chunky backbuffer, the screen and a second screen.
+- The TT's chunky backbuffer holds 240 rows, not 480: every doubled present clamps to TTH/2 rows and the game
+  composes 200 (77 KB, every TT).
+- `rdr_low_mem` (render.h): set at boot when there is no Fast RAM and the free pool is short of the core, the
+  template and 320 KB for play. The TT then leaves out its second screen (150 KB): single-buffered, as it already is
+  in play; a cutscene can tear.
+- If the template still does not fit, play starts with "Not enough memory to save: ..." instead of silently.
+
+| 4 MB, no Fast RAM | free after the core | template | free after it |
+|---|---|---|---|
+| TT, GAME.PRG, before | 44 KB | did not load | — |
+| TT, GAME.PRG, now | 268 KB | loads | 113 KB |
+| Falcon, GAME.PRG | 368 KB | loads | 213 KB |
+| ST, GAMEST.PRG | 301 KB | loads | 145 KB |

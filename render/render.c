@@ -31,6 +31,7 @@ static const rdr_vtable *g_be;      /* the selected backend (NULL until rdr_sele
  *   ui_y = (phys_y - rdr_ui_yoff) / rdr_ui_yscale ,  ui_x = phys_x .
  * Defaults are identity (plain ST 320x200); each backend overrides in its init. */
 int rdr_ui_yoff = 0, rdr_ui_yscale = 1;
+int rdr_low_mem = 0;   /* set before rdr_init when the RAM is tight: a backend skips optional buffers (TT: the flip screen) */
 
 /* Pick the backend from the hardware. Idempotent + lazy: rdr_prefer_truecolor may run before
  * rdr_init, and both call this; platform_detect is deterministic so a second call is harmless. */

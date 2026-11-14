@@ -34,6 +34,10 @@ extern void c2p_span_asm(const uint8_t *src, uint16_t *dst, long ngroups);
 #define TTW 320
 #define TTH 480
 #define TT_SCREEN_BYTES (TTW * TTH)     /* 8bpp planar == width*height bytes */
+/* the chunky backbuffer holds only what is shown doubled: every doubled present clamps lh to TTH/2 rows, and the
+ * game composes 200 (2026-11-14: was a full 320x480, 77 KB a 4 MB TT could not spare) */
+#define TT_BACK_ROWS (TTH / 2)
+#define TT_BACK_BYTES (TTW * TT_BACK_ROWS)
 
 static uint8_t  *g_screen;              /* planar screen A (ST-RAM)        */
 static uint8_t  *g_back;                /* chunky 8-bit backbuffer         */
@@ -64,8 +68,8 @@ bool rdr_init(const platform_caps_t *caps)
      * once the asset pack (~2.4 MB) + scratch are in, a full-screen backbuffer can just miss. Fall
      * back to the ST-RAM (chip) pool in that case — slower CPU access, but we boot instead of dying
      * with "no renderer". g_screen MUST stay chip (the shifter DMA-fetches it). */
-    g_back = (uint8_t *)plat_alloc_fast(TT_SCREEN_BYTES);
-    if (!g_back) g_back = (uint8_t *)plat_alloc_chip(TT_SCREEN_BYTES);
+    g_back = (uint8_t *)plat_alloc_fast(TT_BACK_BYTES);
+    if (!g_back) g_back = (uint8_t *)plat_alloc_chip(TT_BACK_BYTES);
     g_screen = (uint8_t *)plat_alloc_chip(TT_SCREEN_BYTES);   /* chip RAM (shifter reads this) */
     if (!g_back || !g_screen) return false;
     g_vis = g_screen;                                          /* displayed buffer (single-buf) */
@@ -73,7 +77,7 @@ bool rdr_init(const platform_caps_t *caps)
      * streams its art into a scoped chip region after rdr_init and frees it wholesale (LIFO), so a
      * lazy allocation made mid-intro would land inside that region and be freed under us. Optional:
      * without it we stay single-buffered. (docs/design/memory_streaming.md) */
-    g_screen2 = (uint8_t *)plat_alloc_chip(TT_SCREEN_BYTES);
+    g_screen2 = rdr_low_mem ? NULL : (uint8_t *)plat_alloc_chip(TT_SCREEN_BYTES);   /* a 4 MB TT: the room goes to the game */
     if (g_screen2) for (int32_t i=0;i<TT_SCREEN_BYTES;i++) g_screen2[i]=0;
 
     rdr_ui_yoff = (TTH - 200*2) / 2; rdr_ui_yscale = 2;        /* UI is 2x-doubled + centred: map the mouse back */
@@ -106,7 +110,7 @@ bool rdr_init(const platform_caps_t *caps)
     plat_mouse_hook_init(TTW, TTH);   /* the IKBD mouse hook ranges the physical screen (platinput.h) */
 
     for (int32_t i = 0; i < TT_SCREEN_BYTES; i++) g_screen[i] = 0;
-    for (int32_t i = 0; i < TT_SCREEN_BYTES; i++) g_back[i] = 0;
+    for (int32_t i = 0; i < TT_BACK_BYTES; i++) g_back[i] = 0;
     return true;
 }
 
@@ -122,7 +126,7 @@ void rdr_shutdown(void)
 
 void rdr_get_caps(rdr_caps *o) { o->width = TTW; o->height = TTH; o->colors = 256; o->indexed = true; }
 int  rdr_width(void)  { return TTW; }
-int  rdr_height(void) { return TTH; }
+int  rdr_height(void) { return TT_BACK_ROWS; }   /* the backbuffer's rows (the screen is TTH) */
 uint8_t *rdr_backbuffer(void) { return g_back; }
 
 /* 6-bit channel (0..63) -> TT CLUT nibble. The TT 256-colour palette uses
@@ -196,7 +200,7 @@ static void c2p_group(const uint8_t *px, uint16_t out[8])
 void rdr_present(void)
 {
     const int groups = TTW / 16;
-    for (int y = 0; y < TTH; y++) {
+    for (int y = 0; y < TT_BACK_ROWS; y++) {
         const uint8_t *px  = g_back + (int32_t)y * TTW;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)y * TTW);
         c2p_span_asm(px, dst, groups);
@@ -238,7 +242,7 @@ void rdr_present_rect(int x, int y, int w, int h)
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x + w > TTW) w = TTW - x;
-    if (y + h > TTH) h = TTH - y;
+    if (y + h > TT_BACK_ROWS) h = TT_BACK_ROWS - y;
     int g0 = x / 16, gn = w / 16;
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px  = g_back + (int32_t)yy * TTW + g0 * 16;

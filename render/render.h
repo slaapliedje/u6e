@@ -84,6 +84,9 @@ void     rdr_prefer_truecolor(int on);
 extern int rdr_ui_yoff, rdr_ui_yscale;
 
 /* Convert the backbuffer to the screen's native layout and display it. */
+/* 1 = the RAM is tight (set by the caller before rdr_init): a backend skips its optional buffers (TT: the second
+ * screen for tear-free flips), leaving the room to the game data and the save template. */
+extern int rdr_low_mem;
 void     rdr_present(void);
 
 /* Present only a sub-rectangle (x and w MUST be multiples of 16). This is the
