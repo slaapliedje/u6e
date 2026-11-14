@@ -263,6 +263,13 @@ three: convert, title menu, play, S)ave, reboot, Journey Onward, "Game restored.
 
 **2026-11-05:** the view dissolve's two copies (62 KB of BSS) and a dead fade buffer (31 KB) had taken the 4 MB TT to 63 KB free in play, below the 72 KB a level change needs: "Not enough memory to change level." at the first cave. The dissolve's copies are now pool transients (the ST uses its second screen), the fade buffer is gone, and BSS is 1,032,796 bytes.
 
+**2026-11-14:** a 4 MB TT (`--memsize 4 --ttram 0`) stopped at "not enough free memory to load U6.PAK" with 23 KB
+more code and BSS (the incremental build_blocked's 16 KB of bucket sums, the DOS line of sight): the margin at boot
+had fallen below that, BSS having grown to 1,111,812 bytes since 2026-11-05. Taken back: the headless checks' four
+12 KB per-object arrays are one shared pair (24 KB), and the intro's two save-under buffers (41.6 KB) borrow the
+tile-dimming cache, idle before play (it is marked empty after). BSS 1,062,868; the 4 MB TT's pool at boot 1,664 KB
+(was 1,623) and the bot's castle and bridge play through on it.
+
 Rule of thumb kept: the margin is what the binary's growth leaves, so **a release test runs the 4 MB TT**,
 the tightest machine, not only the Falcon. Still in BSS if more is needed: `g_wobj` 216 KB, `g_dimcache`
 128 KB, four 31 KB map layers, the intro's `pbg` and `holdbg` (41 KB), the LZW dictionary 32 KB.

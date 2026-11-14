@@ -942,3 +942,15 @@ reference now gets the same fray.
 Still to do: `build_blocked` costs 1.8 s on the ST (8,350 objects; 1.3 s in the first loop) and runs on every
 door, pickup, death and moongate hour; it should update only the objects that changed. Light per recompose
 (~100 ms) and the full g_pdimmed -> g_ptmp copy per action remain.
+
+### 2026-11-14: build_blocked updates only what changed
+A full rebuild of the blocking map, the force list and the three bucket indexes costs 1.8 s on an 8 MHz ST
+(8,350 objects) and ran on every door, pickup, death and moongate hour. Now a 32-bit sum per 16 x 16 bucket of its
+live objects (place, tile, kind, index; `bb_term`, built from 16-bit halves since long shifts are slow on the 68000)
+finds the changed buckets, and only they are redone: their cells and the one-cell strips left of and above them
+(a big object spills one cell left/up) are cleared and refilled from the objects in and around them, their force
+entries swapped, their index runs replaced. A level change, more than 48 changed buckets, or bitmaps near their page
+limit fall back to the full rebuild. Cost on the ST: about 0.46 s (the one pass over the objects), from 1.8 s.
+Proof: `-DBBVERIFY` compares every incremental build with a full one (indexes, force list and blocks, both bitmaps
+page by page); the bot's castle, bridge, Britain and cave segments ran it (well over a hundred builds, dungeon and
+deaths included) with no mismatch.

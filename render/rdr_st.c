@@ -664,7 +664,8 @@ static const planar_tile_t *rdr_planar_get(int32_t key, const uint8_t *chunky, c
  * (it drives the rebuild through g_pd_valid). Colour CYCLING (rdr_lowcolor_cycle) rotates only the
  * hardware registers, not g_lut, so the index-based planar bits stay valid — no invalidation there. */
 static int g_planar_dirty = 0;
-static void planar_mark_dirty(void){ g_pcache_ready = 0; g_planar_dirty = 1; g_shadow_ok = 0; }   /* a new LUT: the same chunky gives other planes */
+static int g_fray_gen = 1;                           /* bumped with every new LUT: the pre-shifted fray tiles go stale */
+static void planar_mark_dirty(void){ g_pcache_ready = 0; g_planar_dirty = 1; g_shadow_ok = 0; g_fray_gen++; }   /* a new LUT: the same chunky gives other planes */
 int  rdr_planar_take_dirty(void){ int d = g_planar_dirty; g_planar_dirty = 0; return d; }
 
 /* The map content is presented at screen rows PMAP_TOP..PMAP_TOP+159 (== gamedemo MAP_INSET). Native
@@ -760,6 +761,42 @@ void rdr_ptmp_restore(const uint8_t *dmask)
 /* end the frame's planar composite: drain the queued DYNAMIC blits (rdr_pdyn_cell -> g_ptmp) so g_ptmp is
  * complete before the caller reads it (present / INV2 verify). No-op on the CPU (non-Blitter) path. */
 void rdr_pframe_end(void) { blitter_flush(); }
+/* The window's frayed border over the map (gamedemo draw_border_tiles: tiles at screen 16c, which is map px 16c-8,
+ * since the map's px 0..159 show at screen 8..167). A masked blit at any x, y that are multiples of 8, clipped to
+ * the shown 160 x 160; CPU, after the queued dynamic blits are drained so it lands on top of them. */
+/* the fray tiles shifted by 8 px once (per LUT): each row is a left and a right half-group, planes and mask */
+typedef struct { int32_t key; int gen; uint16_t hi[16][4], lo[16][4], mhi[16], mlo[16]; } fray_shift_t;
+static fray_shift_t g_fray[8];
+void rdr_pfray_tile(int32_t key, const uint8_t *tile, int x, int y)
+{
+    blitter_flush();
+    int gx = x >> 4, r0 = y < 0 ? -y : 0, r1 = y + 16 > 160 ? 160 - y : 16;       /* x is 16c-8: gx >= -1 */
+    if (x & 15) {                                       /* the 8-px shifted ones: from the pre-shifted copy */
+        fray_shift_t *f = &g_fray[key & 7];
+        if (f->key != key || f->gen != g_fray_gen) {
+            const planar_tile_t *pt = rdr_planar_get(key, tile, PLANAR_LUT);
+            for (int r = 0; r < 16; r++) {
+                f->mhi[r] = (uint16_t)(pt->mask[r] >> 8); f->mlo[r] = (uint16_t)(pt->mask[r] << 8);
+                for (int p = 0; p < 4; p++) { f->hi[r][p] = (uint16_t)(pt->planar[r*4+p] >> 8); f->lo[r][p] = (uint16_t)(pt->planar[r*4+p] << 8); } }
+            f->key = key; f->gen = g_fray_gen; }
+        int dohi = gx >= 0 && gx < 10, dolo = gx+1 >= 0 && gx+1 < 10;
+        for (int r = r0; r < r1; r++) {
+            uint16_t *d = g_ptmp + (int32_t)(y+r)*PMAP_STRIDE_W + gx*4;
+            uint16_t m = f->mhi[r];
+            if (dohi && m) { const uint16_t *s = f->hi[r]; uint16_t n = (uint16_t)~m;
+                d[0]=(uint16_t)((d[0]&n)|(s[0]&m)); d[1]=(uint16_t)((d[1]&n)|(s[1]&m)); d[2]=(uint16_t)((d[2]&n)|(s[2]&m)); d[3]=(uint16_t)((d[3]&n)|(s[3]&m)); }
+            m = f->mlo[r];
+            if (dolo && m) { const uint16_t *s = f->lo[r]; uint16_t n = (uint16_t)~m;
+                d[4]=(uint16_t)((d[4]&n)|(s[0]&m)); d[5]=(uint16_t)((d[5]&n)|(s[1]&m)); d[6]=(uint16_t)((d[6]&n)|(s[2]&m)); d[7]=(uint16_t)((d[7]&n)|(s[3]&m)); }
+        }
+        return;
+    }
+    if (gx < 0 || gx >= 10) return;                     /* a whole group (not used by the ring: kept for any x%16==0) */
+    const planar_tile_t *pt = rdr_planar_get(key, tile, PLANAR_LUT);
+    for (int r = r0; r < r1; r++) { uint16_t m = pt->mask[r]; if (!m) continue;
+        uint16_t *d = g_ptmp + (int32_t)(y+r)*PMAP_STRIDE_W + gx*4; const uint16_t *s = pt->planar + r*4;
+        for (int p = 0; p < 4; p++) d[p] = (uint16_t)((d[p]&~m)|(s[p]&m)); }
+}
 /* blit a dynamic cell (dimmed chunky tile, 255=transparent) into g_ptmp at view cell (vx,vy),
  * group-aligned, via the (tile,level) planar cache — mirrors draw_cell's masked chunky copy. With a
  * Blitter it enqueues the tile (drained by rdr_pframe_end via one Supexec); else it blits on the CPU. */

@@ -137,6 +137,7 @@ void     rdr_pstatic_shift(int dx, int dy);                             /* plana
 void     rdr_pframe_begin(void);                                        /* g_ptmp = g_pdimmed (static), full copy */
 void     rdr_ptmp_restore(const uint8_t *dmask);                        /* idle: g_ptmp[cell]=g_pdimmed[cell] for masked cells only */
 void     rdr_pframe_end(void);                                          /* drain queued dynamic blits -> g_ptmp (Blitter) */
+void     rdr_pfray_tile(int32_t key, const uint8_t *tile, int x, int y);       /* the frayed border over g_ptmp at map px (x,y), clipped */
 void     rdr_pdyn_cell(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar dynamic blit -> g_ptmp */
 void     rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int vy); /* planar static blit -> g_pdimmed (4c) */
 int      rdr_pdissolve_begin(void);                                     /* the view changes pixel by pixel (moongates.md §6) */

@@ -1374,13 +1374,16 @@ static void intro_draw_caption(int s,int pg)
  * 150,100) on the stones bg; page 1 "Wondering, you pick it up...." — the hand (img 1) rises from
  * y=0xc7 to 0x54 to grab it (dirty-rect the hand column), then the stone is gone (bg img 5).
  * Replaces the generic hold for the stones scene. Input/auto-advanced like every page. */
+/* the intro's two save-under buffers (41.6 KB) borrow the tile-dimming cache, idle before play: the cache is
+ * marked empty so it refills when the map is first drawn (a 4 MB TT has only tens of KB to spare) */
+static uint8_t *intro_scratch(int32_t off);
 static void stones_pickup(int s)
 {
     const uint8_t *bg=g_intro[s].pix;
-    static uint8_t pbg[160*160];                     /* clean bg+obsidian of the hand column */
+    uint8_t *pbg=intro_scratch(0);                   /* clean bg+obsidian of the hand column (160*160) */
     int hx=0xbd, hy0=0xc7, hy1=0x54, ox=0x96, oy=0x64;
     int rx=hx&~15, rw=((hx+g_stn_hw+15)&~15)-rx; if(rx+rw>LW) rw=LW-rx;
-    int ry=hy1, rh=LH-ry; if((int32_t)rw*rh>(int32_t)sizeof pbg) rh=(int)(sizeof pbg/(rw?rw:1));
+    int ry=hy1, rh=LH-ry; if((int32_t)rw*rh>(int32_t)160*160) rh=(int)(160*160/(rw?rw:1));
     int key=0;
     /* --- page 0: glimpse the obsidian --- */
     g_intro_page=0;
@@ -1601,8 +1604,8 @@ static void run_intro_body(void)
             int rx=bx0&~15, rw=((bx1+15)&~15)-rx;                 /* align x/w to 16px (c2p groups) */
             if(rx+rw>LW) rw=LW-rx;
             int ry=by0, rh=by1-by0; if(ry+rh>LH) rh=LH-ry;
-            static uint8_t holdbg[160*100];                       /* clean bg of the box (typ ~144x84 with the finger) */
-            if((int32_t)rw*rh > (int32_t)sizeof holdbg) rh=(int)(sizeof holdbg/(rw?rw:1));
+            uint8_t *holdbg=intro_scratch(160*160);               /* clean bg of the box, 160*100 (typ ~144x84 with the finger) */
+            if((int32_t)rw*rh > (int32_t)160*100) rh=(int)(160*100/(rw?rw:1));
             rdr_flip_end();                                       /* single-buffer: rect present -> visible */
             for(int page=0; page<npages && (key&0xFF)!=0x1b; page++){
                 g_intro_page=page;
@@ -3830,12 +3833,68 @@ static bool force_pass_at(int32_t x, int32_t y)
     while(lo<=hi){ int m=(lo+hi)>>1; if(g_force_idx[m]==idx) return true; if(g_force_idx[m]<idx) lo=m+1; else hi=m-1; }
     return false; }
 
+/* The incremental rebuild (2026-11-14; performance.md): one 32-bit sum per bucket of its live objects (place,
+ * tile, kind, index) tells which 16 x 16 buckets changed since the last build; only those are redone. A full
+ * rebuild costs 1.8 s on an 8 MHz ST (8,350 objects), and runs on every door, pickup, death and moongate hour. */
+/* the headless checks' per-object scratch (one pair, shared by the sequential SE test blocks: 4 MB TT margin) */
+static uint8_t  g_tst_al0[MAXWOBJ], g_tst_pl0[MAXWOBJ];
+static uint32_t g_bb_sum[OBKT*OBKT];                   /* per bucket: the sum of bb_term over its live objects */
+static int      g_bb_ok, g_bb_level=-1;               /* the sums hold for this level */
+static uint16_t g_bb_fx[MAXFIELDS], g_bb_fy[MAXFIELDS]; static int g_bb_nf;   /* the energy fields last applied */
+/* built from 16-bit halves (a 32-bit shift by a variable or a large count is slow on the 68000): place and
+ * tile in one half, kind and the tile's top bit in the other, both stirred by the index (one 16 x 16 mulu)
+ * and turned by its low three bits, so two objects trading places rarely leave the sum as it was */
+static uint32_t bb_term(int32_t i, const wobj_t*o){
+    uint16_t hi=(uint16_t)(o->x ^ (uint16_t)(o->tile<<5)), lo=(uint16_t)(o->y ^ (uint16_t)((uint16_t)o->obj_n<<6) ^ (uint16_t)((o->tile&0x800)<<4));
+    uint32_t m=(((uint32_t)hi<<16)|lo) ^ ((uint32_t)(uint16_t)i*40503u);
+    unsigned r=(unsigned)i&7u; return (m<<r)|(m>>((32u-r)&31u)); }
+static int bb_bucket(int x,int y){ return ((y>>4)&(OBKT-1))*OBKT+((x>>4)&(OBKT-1)); }
+static void build_blocked_full(void);
+static int  build_blocked_incr(void);
+#ifdef BBVERIFY
+/* -DBBVERIFY: after each incremental build, snapshot what it made, rebuild in full and compare; the full
+ * result stays, so play goes on right either way. Mismatches are counted, printed and kept in BBVERIFY.LOG. */
+uint32_t g_bbv_calls, g_bbv_bad;
+static void bb_verify(void){
+    static uint16_t so[OBKT*OBKT+1], sf[OBKT*OBKT+1], sl[OBKT*OBKT+1], io[MAXWOBJ], ifg[MAXWOBJ], ils[MAXWOBJ];
+    static int32_t fi[FORCE_MAX]; static uint8_t fbk[sizeof g_force_blk]; static uint8_t bl[1024*128], sg[1024*128];
+    int fn=g_force_n; uint32_t bad=0;
+    memcpy(so,g_obkt_start,sizeof so); memcpy(sf,g_fgbkt_start,sizeof sf); memcpy(sl,g_lsbkt_start,sizeof sl);
+    memcpy(io,g_obkt_idx,(size_t)so[OBKT*OBKT]*2); memcpy(ifg,g_fgbkt_idx,(size_t)sf[OBKT*OBKT]*2); memcpy(ils,g_lsbkt_idx,(size_t)sl[OBKT*OBKT]*2);
+    memcpy(fi,g_force_idx,(size_t)fn*4); memcpy(fbk,g_force_blk,sizeof fbk);
+    for(int pg=0;pg<1024;pg++){ unsigned a=g_blocked.page[pg], b=g_sightblk.page[pg];
+        if(a) memcpy(bl+pg*128,g_blocked.store+(int32_t)(a-1)*128,128); else memset(bl+pg*128,0,128);
+        if(b) memcpy(sg+pg*128,g_sightblk.store+(int32_t)(b-1)*128,128); else memset(sg+pg*128,0,128); }
+    build_blocked_full();
+    if(memcmp(so,g_obkt_start,sizeof so)||memcmp(sf,g_fgbkt_start,sizeof sf)||memcmp(sl,g_lsbkt_start,sizeof sl)) bad|=1;
+    if(!(bad&1) && (memcmp(io,g_obkt_idx,(size_t)so[OBKT*OBKT]*2)||memcmp(ifg,g_fgbkt_idx,(size_t)sf[OBKT*OBKT]*2)||memcmp(ils,g_lsbkt_idx,(size_t)sl[OBKT*OBKT]*2))) bad|=2;
+    if(fn!=g_force_n || memcmp(fi,g_force_idx,(size_t)fn*4) || memcmp(fbk,g_force_blk,sizeof fbk)) bad|=4;
+    for(int pg=0;pg<1024 && !(bad&24);pg++){ unsigned a=g_blocked.page[pg], b=g_sightblk.page[pg];
+        static const uint8_t z[128];
+        if(memcmp(bl+pg*128, a?g_blocked.store+(int32_t)(a-1)*128:z, 128)) bad|=8;
+        if(memcmp(sg+pg*128, b?g_sightblk.store+(int32_t)(b-1)*128:z, 128)) bad|=16; }
+    g_bbv_calls++;
+    if(bad){ g_bbv_bad++; char m[64]; int k=0; const char*h="BBVERIFY MISMATCH bits="; while(*h) m[k++]=*h++;
+        m[k++]=(char)('0'+(bad/10)); m[k++]=(char)('0'+bad%10); m[k++]='\r'; m[k++]='\n'; m[k]=0; Cconws(m);
+        { int32_t fh=Fopen("BBVERIFY.LOG",1); if(fh<0) fh=Fcreate("BBVERIFY.LOG",0); if(fh>=0){ Fseek(0,(int16_t)fh,2); Fwrite((int16_t)fh,k,m); Fclose((int16_t)fh); } } }
+}
+#endif
 static void build_blocked(void)
 {
     KP(4);
 #ifdef KEYPROF
     g_kp_bbn++;
 #endif
+#ifdef BBVERIFY
+    if(build_blocked_incr()) bb_verify();
+    else build_blocked_full();
+#else
+    if(build_blocked_incr()) return;
+    build_blocked_full();
+#endif
+}
+static void build_blocked_full(void)
+{
     /* the per-object work lists are 52 KB at the full object count and live only for this call, so
      * they come from the pool (a mark/reset costs nothing). Margin on a 4 MB machine: memory_streaming.md */
     plat_mark wm=plat_chip_mark();
@@ -3854,6 +3913,7 @@ static void build_blocked(void)
      * and sets its blocking bits; a second fills the indexes in object order. */
     memset(g_obkt_start,0,sizeof g_obkt_start); memset(g_fgbkt_start,0,sizeof g_fgbkt_start);
     memset(g_lsbkt_start,0,sizeof g_lsbkt_start);
+    memset(g_bb_sum,0,sizeof g_bb_sum);
     for(int32_t i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
         if(!o->alive){ cls[i]=0; continue; }
         int t=o->tile;
@@ -3875,14 +3935,17 @@ static void build_blocked(void)
         }
         uint8_t c=(uint8_t)(obj_class(o)|0x80); cls[i]=c;
         int b=((o->y>>4)&(OBKT-1))*OBKT+((o->x>>4)&(OBKT-1)); bkt[i]=(uint16_t)b;
+        g_bb_sum[b]+=bb_term(i,o);
         g_obkt_start[b+1]++;
         if(c&1) g_fgbkt_start[b+1]++;
         if(c&2) g_lsbkt_start[b+1]++;
     }
     for(int gap=g_force_n/2;gap>0;gap/=2) for(int i=gap;i<g_force_n;i++){ int32_t v=g_force_idx[i]; int j=i;   /* shell sort */
         while(j>=gap && g_force_idx[j-gap]>v){ g_force_idx[j]=g_force_idx[j-gap]; j-=gap; } g_force_idx[j]=v; }
+    g_bb_nf=0;
     for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){    /* energy/force field blocks passage (§5a) */
-        sb_set(&g_blocked,g_fields[i].x,g_fields[i].y); }
+        sb_set(&g_blocked,g_fields[i].x,g_fields[i].y); g_bb_fx[g_bb_nf]=g_fields[i].x; g_bb_fy[g_bb_nf]=g_fields[i].y; g_bb_nf++; }
+    g_bb_ok=1; g_bb_level=g_cur_level;
     for(int b=0;b<OBKT*OBKT;b++){
         g_obkt_start[b+1]=(uint16_t)(g_obkt_start[b+1]+g_obkt_start[b]);
         g_fgbkt_start[b+1]=(uint16_t)(g_fgbkt_start[b+1]+g_fgbkt_start[b]);
@@ -3894,6 +3957,102 @@ static void build_blocked(void)
             if(c&1) g_fgbkt_idx[curfg[b]++]=(uint16_t)i;
             if(c&2) g_lsbkt_idx[curls[b]++]=(uint16_t)i; } }
     plat_chip_reset(wm);
+}
+
+/* the cells whose blocking bits an incremental build redoes: the changed buckets, and the one-cell strips left
+ * of and above them (a big object spills one cell left/up, so a bucket's objects can mark its neighbours' edge) */
+static const uint8_t *g_bb_dirty; static int g_bb_span;
+static int bb_in_region(int cx,int cy){
+    int m=g_bb_span-1; cx&=m; cy&=m;
+    if(g_bb_dirty[bb_bucket(cx,cy)]) return 1;
+    int ex=(cx&15)==15, ey=(cy&15)==15;
+    if(ex && g_bb_dirty[bb_bucket((cx+1)&m,cy)]) return 1;
+    if(ey && g_bb_dirty[bb_bucket(cx,(cy+1)&m)]) return 1;
+    if(ex && ey && g_bb_dirty[bb_bucket((cx+1)&m,(cy+1)&m)]) return 1;
+    return 0; }
+static void sb_clr(sparsebits_t*s,int x,int y){ unsigned p=s->page[SB_PAGE_OF(x,y)]; if(p) s->store[(int32_t)(p-1)*SB_PAGE_BYTES+SB_BYTE_OF(x,y)]&=(uint8_t)~(1u<<(x&7)); }
+static void bb_set_if(sparsebits_t*s,int x,int y){ if(bb_in_region(x,y)) sb_set(s,x,y); }
+/* returns 1 when done incrementally, 0 when the caller must rebuild in full */
+static int build_blocked_incr(void)
+{
+    if(!g_bb_ok || g_bb_level!=g_cur_level || !g_cls_ready) return 0;
+    if(g_blocked.npages+24>g_blocked.cap || g_sightblk.npages+24>g_sightblk.cap) return 0;   /* pages only grow here: tidy up in full */
+    int32_t n=g_ow.nobjs; int span=(g_cur_level==0)?U6_SURFACE_TILES:256, nb=span>>4;
+    plat_mark wm=plat_chip_mark();
+    uint32_t *sum=(uint32_t*)plat_alloc_chip(OBKT*OBKT*4u);
+    uint8_t  *dirty=(uint8_t*)plat_alloc_chip(OBKT*OBKT), *touch=(uint8_t*)plat_alloc_chip(OBKT*OBKT);
+    if(!sum||!dirty||!touch){ plat_chip_reset(wm); return 0; }
+    memset(sum,0,OBKT*OBKT*4u); memset(dirty,0,OBKT*OBKT);
+    for(int32_t i=0;i<n;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive) sum[bb_bucket(o->x,o->y)]+=bb_term(i,o); }
+    int nd=0;
+    for(int b=0;b<OBKT*OBKT;b++) if(sum[b]!=g_bb_sum[b]){ dirty[b]=1; nd++; }
+    { int nf=0, same=1; uint16_t fx[MAXFIELDS], fy[MAXFIELDS];                 /* the energy fields: their buckets, old and new, if the set moved */
+      for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3){ fx[nf]=g_fields[i].x; fy[nf]=g_fields[i].y; nf++; }
+      if(nf!=g_bb_nf) same=0; else for(int i=0;i<nf;i++) if(fx[i]!=g_bb_fx[i]||fy[i]!=g_bb_fy[i]){ same=0; break; }
+      if(!same){ for(int i=0;i<g_bb_nf;i++){ int b=bb_bucket(g_bb_fx[i],g_bb_fy[i]); if(!dirty[b]){ dirty[b]=1; nd++; } }
+                 for(int i=0;i<nf;i++){ int b=bb_bucket(fx[i],fy[i]); if(!dirty[b]){ dirty[b]=1; nd++; } }
+                 g_bb_nf=nf; memcpy(g_bb_fx,fx,(size_t)nf*2); memcpy(g_bb_fy,fy,(size_t)nf*2); } }
+    if(nd==0){ plat_chip_reset(wm); return 1; }                       /* nothing on the map changed */
+    if(nd>48){ plat_chip_reset(wm); return 0; }                        /* a level's worth: the full rebuild is as cheap */
+    memset(touch,0,OBKT*OBKT);                                         /* the changed buckets and their eight neighbours */
+    for(int by=0;by<nb;by++) for(int bx=0;bx<nb;bx++) if(dirty[by*OBKT+bx])
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++) touch[((by+dy+nb)%nb)*OBKT+((bx+dx+nb)%nb)]=1;
+    uint16_t *col=(uint16_t*)plat_alloc_chip((uint32_t)n*2u+2u);      /* the objects in touched buckets, in index order */
+    int32_t tot=g_obkt_start[OBKT*OBKT];
+    uint16_t *nob=(uint16_t*)plat_alloc_chip((uint32_t)(tot+n+8)*2u), *nfg=(uint16_t*)plat_alloc_chip((uint32_t)(g_fgbkt_start[OBKT*OBKT]+n+8)*2u),
+             *nls=(uint16_t*)plat_alloc_chip((uint32_t)(g_lsbkt_start[OBKT*OBKT]+n+8)*2u);
+    if(!col||!nob||!nfg||!nls){ plat_chip_reset(wm); return 0; }
+    int32_t nc=0;
+    for(int32_t i=0;i<n;i++){ const wobj_t*o=&g_wobj[i]; if(o->alive && touch[bb_bucket(o->x,o->y)]) col[nc++]=(uint16_t)i; }
+    g_blocked_epoch++;                                                 /* the map changed: walkers search their routes again */
+    g_bb_dirty=dirty; g_bb_span=span;
+    /* 1. blocking bits: clear the region, then put back what every object that can reach it marks there */
+    for(int by=0;by<nb;by++) for(int bx=0;bx<nb;bx++) if(dirty[by*OBKT+bx]){
+        int x0=bx*16, y0=by*16, m=span-1;
+        for(int y=y0-1;y<y0+16;y++) for(int x=x0-1;x<x0+16;x++){ int cx=x&m, cy=y&m; sb_clr(&g_blocked,cx,cy); sb_clr(&g_sightblk,cx,cy); } }
+    for(int32_t k=0;k<nc;k++){ const wobj_t*o=&g_wobj[col[k]]; int t=o->tile; if(t>=2048) continue;
+        if(g_tflags1[t]&0x02) bb_set_if(&g_blocked,o->x,o->y);
+        if(blocks_sight(t))   bb_set_if(&g_sightblk,o->x,o->y);
+        { int f2=g_tflags[t]&0xC0;                                     /* as the full build: T-1 left, T-1/T-2 above, T-3 the corner */
+          if(f2){ int tn=t, px[3], py[3], q=0;
+              if(f2&0x80){ px[q]=o->x-1; py[q]=o->y;   q++; }
+              if(f2&0x40){ px[q]=o->x;   py[q]=o->y-1; q++; }
+              if((f2&0xC0)==0xC0){ px[q]=o->x-1; py[q]=o->y-1; q++; }
+              for(int j=0;j<q;j++){ tn--; if(tn<0) break; int cx=px[j]&(span-1), cy=py[j]&(span-1);
+                  if(g_tflags1[tn]&0x02) bb_set_if(&g_blocked,cx,cy);
+                  if(blocks_sight(tn))   bb_set_if(&g_sightblk,cx,cy); } } } }
+    for(int i=0;i<g_nfields;i++) if(g_fields[i].kind==3) bb_set_if(&g_blocked,g_fields[i].x,g_fields[i].y);
+    /* 2. the force list (sorted cell numbers) and its 8 x 8 block bits: drop the changed buckets' entries, add theirs */
+    if(g_tflags3){ int w_=0;
+        for(int r=0;r<g_force_n;r++){ int32_t v=g_force_idx[r]; if(!dirty[bb_bucket((int)(v&1023),(int)(v>>10))]) g_force_idx[w_++]=v; }
+        g_force_n=w_;
+        for(int by=0;by<nb;by++) for(int bx=0;bx<nb;bx++) if(dirty[by*OBKT+bx])
+            for(int q=0;q<4;q++){ int32_t fb=(int32_t)(by*2+(q>>1))*(1024/8)+(bx*2+(q&1)); g_force_blk[fb>>3]&=(uint8_t)~(1u<<(fb&7)); }
+        for(int32_t k=0;k<nc;k++){ const wobj_t*o=&g_wobj[col[k]]; int t=o->tile;
+            if(t>=2048 || !(g_tflags3[t]&0x04) || !dirty[bb_bucket(o->x,o->y)] || g_force_n>=FORCE_MAX) continue;
+            int32_t v=(int32_t)o->y*1024+o->x, lo=0, hi=g_force_n;           /* insert in order */
+            while(lo<hi){ int32_t md=(lo+hi)>>1; if(g_force_idx[md]<=v) lo=md+1; else hi=md; }
+            memmove(&g_force_idx[lo+1],&g_force_idx[lo],(size_t)(g_force_n-lo)*4); g_force_idx[lo]=v; g_force_n++;
+            { int32_t fb=(int32_t)(o->y>>3)*(1024/8)+(o->x>>3); g_force_blk[fb>>3]|=(uint8_t)(1u<<(fb&7)); } }
+    }
+    /* 3. the three bucket indexes: kept buckets copy their old runs, changed ones list their objects afresh */
+    {   int32_t po=0, pf=0, pl=0;
+        for(int b=0;b<OBKT*OBKT;b++){
+            int32_t s0=g_obkt_start[b], s1=g_obkt_start[b+1], f0=g_fgbkt_start[b], f1=g_fgbkt_start[b+1], l0=g_lsbkt_start[b], l1=g_lsbkt_start[b+1];
+            g_obkt_start[b]=(uint16_t)po; g_fgbkt_start[b]=(uint16_t)pf; g_lsbkt_start[b]=(uint16_t)pl;
+            if(!dirty[b]){
+                memcpy(nob+po,g_obkt_idx+s0,(size_t)(s1-s0)*2); po+=s1-s0;
+                memcpy(nfg+pf,g_fgbkt_idx+f0,(size_t)(f1-f0)*2); pf+=f1-f0;
+                memcpy(nls+pl,g_lsbkt_idx+l0,(size_t)(l1-l0)*2); pl+=l1-l0;
+            } else for(int32_t k=0;k<nc;k++){ int i=col[k]; const wobj_t*o=&g_wobj[i]; if(bb_bucket(o->x,o->y)!=b) continue;
+                int c=obj_class(o); nob[po++]=(uint16_t)i; if(c&1) nfg[pf++]=(uint16_t)i; if(c&2) nls[pl++]=(uint16_t)i; }
+            /* start[b+1] is still the old one here: it is read (as s0) before it is overwritten */
+        }
+        g_obkt_start[OBKT*OBKT]=(uint16_t)po; g_fgbkt_start[OBKT*OBKT]=(uint16_t)pf; g_lsbkt_start[OBKT*OBKT]=(uint16_t)pl;
+        memcpy(g_obkt_idx,nob,(size_t)po*2); memcpy(g_fgbkt_idx,nfg,(size_t)pf*2); memcpy(g_lsbkt_idx,nls,(size_t)pl*2); }
+    for(int b=0;b<OBKT*OBKT;b++) if(dirty[b]) g_bb_sum[b]=sum[b];
+    plat_chip_reset(wm);
+    return 1;
 }
 
 /* substitute an animated tile slot for its current frame (animdata.md). The slot
@@ -4081,6 +4240,7 @@ static const uint8_t g_bayer4[4][4] = {   /* ordered-dither thresholds 0..15 (re
 static uint8_t  g_dimcache[DIMSLOTS][256];
 static int32_t  g_dimkey[DIMSLOTS];       /* (tile<<4)|level per slot; -1 = empty */
 static int      g_dim_ready = 0;
+static uint8_t *intro_scratch(int32_t off){ g_dim_ready=0; return &g_dimcache[0][0]+off; }
 uint32_t        g_dim_calls=0, g_dim_miss=0;   /* BENCH instrumentation */
 static const uint8_t *dim_tile(int tile, int lev){
     if(!g_dim_ready){ for(int i=0;i<DIMSLOTS;i++) g_dimkey[i]=-1; g_dim_ready=1; }
@@ -5101,15 +5261,24 @@ static void compose_map(const world_t*w)
         }
     }
 #ifdef HAVE_RDR_ST
-    /* the frayed border over the outer ring (draw_border_tiles' tiles 432-439), undimmed and last: the planar
-     * map covers the ring's inner half, so on the ST the fray over the map's edge went with it (3207605, July) */
-    if(g_native_planar) for(int vy=0;vy<VT;vy++) for(int vx=0;vx<VT;vx++){
-        int top_=vy==0, bot=vy==VT-1, lft=vx==0, rgt=vx==VT-1, t;
+    /* the frayed border (draw_border_tiles' tiles 432-439), undimmed and last. draw_border_tiles puts its ring at
+     * screen 16c, and the map's px 0..159 show at screen 8..167 (MAP_INSET), so each border tile covers map px
+     * 16c-8..16c+7: half of a ring tile shows, over the map's edge. The planar map covers that half each frame
+     * (3207605, July), so on the ST the fray goes into it; deb0de1 put it at 16c, 8 px in, which hid the right and
+     * bottom ones (px 160+) and shifted the top and left. Gated by the cells its shown part covers. */
+    if(g_native_planar){ rdr_pframe_end();
+      for(int sy=0;sy<VT;sy++) for(int sx=0;sx<VT;sx++){
+        int top_=sy==0, bot=sy==VT-1, lft=sx==0, rgt=sx==VT-1, t;
         if(!(top_||bot||lft||rgt)) continue;
         t = top_ ? (lft?432:rgt?434:433) : bot ? (lft?435:rgt?437:436) : lft?438:439;
-        if(!g_pd_dyngate || g_pd_dyngate[vy*VT+vx]) rdr_pdyn_cell(0x70000000|t, g_tileset+(int32_t)t*256, vx, vy);
+        int X=sx*16-MAP_INSET, Y=sy*16-MAP_INSET;
+        int cx0=X<0?0:X>>4, cy0=Y<0?0:Y>>4, cx1=(X+15)>>4, cy1=(Y+15)>>4; if(cx1>VT-2) cx1=VT-2; if(cy1>VT-2) cy1=VT-2;
+        int go=!g_pd_dyngate;
+        for(int cy=cy0;cy<=cy1&&!go;cy++) for(int cx=cx0;cx<=cx1;cx++) if(g_pd_dyngate[cy*VT+cx]){ go=1; break; }
+        if(go) rdr_pfray_tile(0x70000000|t, g_tileset+(int32_t)t*256, X, Y);
         if(g_chunky_dyn){ const uint8_t*s=g_tileset+(int32_t)t*256;   /* the INV2 reference (tmp) gets the same fray */
-            for(int r=0;r<16;r++,s+=16){ uint8_t*d=tmp+(vy*16+r)*T+vx*16; for(int c=0;c<16;c++) if(s[c]!=TILE_TRANSPARENT) d[c]=s[c]; } } }
+            for(int r=0;r<16;r++){ int yy=Y+r; if(yy<0||yy>=160) continue; uint8_t*d=tmp+yy*T;
+                for(int c=0;c<16;c++){ int xx=X+c; uint8_t v=s[r*16+c]; if(xx>=0&&xx<160&&v!=TILE_TRANSPARENT) d[xx]=v; } } } } }
 #endif
     g_pd_dyngate = 0;                                /* dynamic passes done — never let the gate leak past ph1/roofs */
     /* lighting overlay: SMOOTH/DITHER/BINARY compute the per-cell field HERE then apply it per pixel;
@@ -19004,9 +19173,9 @@ int main(int argc, char **argv)
                   { int bp=persist_obj_new(127,0,x3,y3,0); if(bp>=0){ int pole; g_wobj[bp].qty=1; se_obj_wound(bp,5); pole=obj_idx_at(x3,y3,128);
                       dbg_num("SE break bamboo pole=", !g_wobj[bp].alive && pole>=0); if(pole>=0) obj_destroy(pole); build_blocked(); } }
                   /* the control panel: a burst, the crystals dark, the scene once; the dark moonstone ends the game */
-                  { static uint8_t al0[MAXWOBJ], hp0[U6_MAX_ACTORS], ad0[U6_MAX_ACTORS], ls0[U6_MAX_ACTORS], az0[U6_MAX_ACTORS], tf0[256];
+                  { uint8_t *al0=g_tst_al0; static uint8_t hp0[U6_MAX_ACTORS], ad0[U6_MAX_ACTORS], ls0[U6_MAX_ACTORS], az0[U6_MAX_ACTORS], tf0[256];
                     static uint16_t at0[U6_MAX_ACTORS], ab0[U6_MAX_ACTORS], ax0[U6_MAX_ACTORS], ay0[U6_MAX_ACTORS];
-                    int n0=g_ow.nobjs, yx=x3, yy=(y3+2)&M, son=actor_objn(11), pi, cr, pl, rb; uint32_t ck=w.clock; static uint8_t pp[sizeof g_party], pl0[MAXWOBJ]; int pn=g_nparty;
+                    int n0=g_ow.nobjs, yx=x3, yy=(y3+2)&M, son=actor_objn(11), pi, cr, pl, rb; uint32_t ck=w.clock; static uint8_t pp[sizeof g_party]; uint8_t *pl0=g_tst_pl0; int pn=g_nparty;
                     for(int j=0;j<n0;j++){ al0[j]=g_wobj[j].alive; pl0[j]=g_wobj[j].alive && g_wobj[j].obj_n==68; }
                     memcpy(hp0,g_ahp,sizeof hp0); memcpy(ad0,g_adead,sizeof ad0); memcpy(ls0,g_lost,sizeof ls0); memcpy(az0,g_actz,sizeof az0);
                     memcpy(at0,g_atile,sizeof at0); memcpy(ab0,g_abase,sizeof ab0); memcpy(ax0,g_actx,sizeof ax0); memcpy(ay0,g_acty,sizeof ay0);
@@ -19035,7 +19204,7 @@ int main(int argc, char **argv)
                     w.clock=ck; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); g_msg[0]=0; sync_party_hp(); build_blocked(); }
                   /* SE's eggs (se_eggs.md): the chance, the counts, the worktypes, the orchid's heads and wounds, re-arming, the bulb's egg */
                   { static uint8_t mk0[EGG_MAX], tf0[256]; int ne0=g_neggs, nm0=g_nemb, n0=g_ow.nobjs, px0=w.px, py0=w.py; uint16_t ex0=g_aexp[1];
-                    static uint8_t al0[MAXWOBJ]; for(int j=0;j<n0;j++) al0[j]=g_wobj[j].alive;
+                    uint8_t *al0=g_tst_al0; for(int j=0;j<n0;j++) al0[j]=g_wobj[j].alive;
                     memcpy(tf0,g_cg.talk_flags,sizeof tf0);
                     dbg_num("SE egg map loaded=", ne0>100 && nm0>ne0); dbg_num("SE eggs on the surface ", ne0);
                     for(int e=0;e<ne0;e++){ mk0[e]=g_eggs[e].made; g_eggs[e].made=3; }                  /* the map's own eggs sit out */
@@ -19096,7 +19265,7 @@ int main(int argc, char **argv)
                     #undef SE_EMB
                   }
                   /* SE's turns (se_ai.md): CLOSE strikes and walks, RANGE steps away or has nothing, FLEE runs, the dance, the modes */
-                  { int ax0=-1, ay0=-1, n0=g_ow.nobjs; static uint8_t al0[MAXWOBJ]; for(int j=0;j<n0;j++) al0[j]=g_wobj[j].alive;
+                  { int ax0=-1, ay0=-1, n0=g_ow.nobjs; uint8_t *al0=g_tst_al0; for(int j=0;j<n0;j++) al0[j]=g_wobj[j].alive;
                     for(int r=2;r<16 && ax0<0;r++) for(int v=-r;v<=r && ax0<0;v++) for(int t=-r;t<=r && ax0<0;t++){ if(iabs_(t)!=r&&iabs_(v)!=r) continue;
                         int cx=((int)w.px+t)&M, cy=((int)w.py+v)&M, open=1;
                         for(int yy=-2;yy<=2&&open;yy++) for(int xx=-2;xx<=2&&open;xx++){ int qx=(cx+xx)&M, qy=(cy+yy)&M; if(!world_is_passable(&w,qx,qy)||obj_blocks_at(qx,qy)||(qx==(int)w.px&&qy==(int)w.py)||npc_at(&w,qx,qy)>=0) open=0; }
