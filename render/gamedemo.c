@@ -6259,8 +6259,13 @@ static void sync_inv_out(void)
  * renders true instead of muddy — docs/design/palette_lowcolor.md. The main loop's full present_frame
  * re-c2p's the whole backbuffer through the new LUT. No-op on TT/Falcon (rdr_set_lowcolor is a no-op
  * there — they show all 256). enter by portrait index pidx (=id-1); leave restores the banded game. */
+/* set when the conversation palette goes up or comes down: the map on screen was converted through the
+ * old LUT, so the main loop recomposes it before its next present (else the first frame after a
+ * conversation showed the map in the conversation's colours until the next turn) */
+static int g_pal_recompose;
 static void conv_palette_enter(int pidx)
 {
+    g_pal_recompose=1;
     if(pl_enter(pidx)) return;                     /* line colours: the record carries its own 12 + LUT */
     if(g_nconvpal>0 && pidx>=0 && pidx<g_nconvpal){
         const uint8_t *base=g_convpal+(int32_t)pidx*(48+256);   /* 3-bit pal + shared 256->16 LUT */
@@ -6271,6 +6276,7 @@ static void conv_palette_enter(int pidx)
 }
 static void conv_palette_leave(void)
 {
+    g_pal_recompose=1;
     pl_leave();
     g_pd_cpal=g_pd_clut=0;
     if(!g_have_lowcolor) return;
@@ -21074,6 +21080,7 @@ int main(int argc, char **argv)
         if (g_verb_pts && !g_pending_verb && !g_talking){ verb_spend(&w); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* the command's time (movement_turns.md §3b) */
         if (g_inv_open && !g_show_inv && !g_show_status && !g_talking && !g_casting && !g_save_menu){ g_show_inv=1; redraw=1; }   /* the display stays up through a verb */
         if ((g_solo_m && (g_ahp[1]==0 || g_ahp[g_solo_m]==0)) || (g_solo_on && !g_solo_m && g_ahp[1]==0)){ solo_end(&w); compose_map(&w); draw_border_tiles(); redraw=1; }   /* one of them fell */
+        if (g_pal_recompose){ g_pal_recompose=0; if(g_have_lowcolor){ compose_map(&w); draw_border_tiles(); redraw=1; } }   /* the LUT changed (conversation) */
         if (redraw){ draw_conversation(ink); draw_status(&w,ink); draw_command_bar(15); }
         /* Exactly ONE Vsync per loop iteration paces the frame. present_frame() (full
          * doubled present) Vsyncs internally, so don't Vsync again after it — the old code
