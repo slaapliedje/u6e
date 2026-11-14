@@ -208,6 +208,57 @@ with an **ordered dither**: each source colour is shown as a fixed pattern of tw
   The 16 themselves (e.g. tan where the VGA skin is pink) are the larger limit. Off on 256-colour backends.
   `CONVPAL.BIN` byte 1 bit 1 turns it off, for a nearest-colour baseline.
 
+## Portrait line colours (ST/STE conversation, 2026-11-14)
+A Timer-B interrupt on every portrait row reloads four colour registers, so each row of the face sees
+12 fixed colours plus 4 of its own. The mid-line split ruled out above failed because the colours
+changed on rows the map shares. Here the map and parchment simply never use the four reloaded slots,
+so it does not matter where along the row the reload lands.
+
+- **Data** (`tools/mkworld.c`, U6FE.PAK section `FES_PLINE`; layout in `render/portlines.h`). Per portrait:
+  - a 12-colour palette, quantised from the same portrait 50% / terrain 35% / parchment 15% weights as
+    U6WY, as ST 3-bit and STE 4-bit levels;
+  - a 256→12 LUT;
+  - for each of the 64 rows, 4 colours as STE 4-bit levels (a plain ST shows each level >> 1).
+
+  The 4 colours are a k-means over that row's distinct colours (weighted by count). A pixel already
+  near a fixed colour stays with it. The row above seeds the row below, so neighbouring rows agree.
+  The arithmetic is integer only, because CONVERT.TOS runs it on the Atari. 194 records of 864 bytes
+  (164 KB) sit in the front-end pack. That pack is loaded whole only on machines with plenty of RAM;
+  otherwise the engine reads one record when a conversation opens.
+- **Reserved colours.** The backbuffer stays 8-bit. In the portrait's 16-pixel columns, on its rows,
+  the present uses a second LUT that sends four source colours to slots 12..15. Those four are
+  chosen when the face is drawn: the highest indices not found in those columns outside the
+  portrait (frame and parchment). Elsewhere on screen the same indices go through the ordinary
+  LUT, so the map can use them freely.
+- **Each pixel** becomes the nearest of its row's 16 colours (the same weighted RGB distance as the
+  dither). A fixed slot is written as a source colour the LUT sends there. A line slot is written
+  as its reserved colour. Dithering is not used in this mode.
+- **The interrupt.** The VBL routine points the Timer-B vector at the row handler. With the timer
+  stopped it writes TBDR = y0 (loading the counter), starts it in event-count mode, then writes
+  TBDR = 1 (the reload value from the first timeout on). So it fires at row y0−1 and after that on
+  every row. The handler is hand-written (`pl_tb_line`). The first version, in C, spent longer than
+  a scanline saving registers: interrupts landed only every 2–3 rows, and the face showed stripes.
+  The handler reads the video address counter ($FF8207/09, low 16 bits) and subtracts the screen
+  base. ceil(offset/160) is then the row about to show, whichever edge the MFP uses:
+  - **At the end of a row** (what Hatari shows, under TOS 1.04 and 2.06), the counter waits at the
+    next row's start.
+  - **At the start of a row**, the counter is already inside the row. The load lands after the
+    portrait has been drawn, ready for the next row.
+
+  The handler copies that row's 4 colours into $FF8258..$FF825E. After the last row it masks
+  Timer-B (IMRA bit 0), and it clears ISRA bit 0 itself (software end-of-interrupt). Because the
+  row comes from the counter rather than from counting interrupts, a held-up interrupt (music,
+  keyboard, a Blitter burst) costs at most that one row. The handler takes about 400 of a row's 512
+  cycles, 64 times a frame: roughly a fifth of an 8 MHz 68000, but only while a conversation is open.
+- **Costs and limits.** The map and parchment share 12 colours instead of 16 during a conversation.
+  The darkest is kept in slot 0, which the screen border shows. The mouse pointer's white has no
+  colour of its own, so it shows faintly over the parchment.
+- **Where.** `render/portlines.h` (shared), `render/rdr_st.c` (`rdr_portrait_lines`, `c2p_seg`,
+  `tb_handler`), `render/gamedemo.c` (`pl_enter`/`pl_draw`/`pl_leave`). Off on 256-colour backends
+  and with old packs without the section, where U6WY with dithering applies.
+  `CONVPAL.BIN` byte 1 bit 2 turns it off. `MKWORLD_LINEPREVIEW=file.ppm` writes VGA | the 16 as
+  U6WY | line colours on ST | on STE for 40 portraits.
+
 ## Footprint — booting on a real 4 MB ST
 Measured on a real 4 MB ST (`MEMINFO.BIN` diagnostic → the `MEM ...` console lines): the ST-RAM
 pool is **2579 KB** (after the TPA — text 194 KB + BSS ~1019 KB — and GEMDOS headroom). The FULL

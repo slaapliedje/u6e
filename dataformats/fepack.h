@@ -48,6 +48,8 @@ enum {
     FES_END,        /* the ending cutscene: ENDPAL + END.SHP shapes + END.EXE text (docs/design/ending.md) */
     FES_CURSOR,     /* the mouse pointer (U6MCGA.PTR arrow): [u8 w][u8 h][u8 hotx][u8 hoty][w*h] — the same bytes as
                        the core pack's U6W9, shipped here too so the MAIN MENU can show it before the core loads */
+    FES_PLINE,      /* ST conversation portrait line colours (render/portlines.h): not in any group — the engine
+                       reads one portrait's record from the file when a conversation opens */
     FES_N
 };
 

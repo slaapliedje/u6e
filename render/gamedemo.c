@@ -36,7 +36,8 @@
 #include "sttune.h"            /* the ST release's own YM music, from the player's U.PRG */
 #include "music.h"             /* M10: OPL2 command-stream sequencer */
 #include "oplsynth.h"          /* M10: OPL2 software FM synth (for the -DBENCH throughput probe) */
-#include "portdither.h"         /* ST/STE: ordered dithering of portraits (palette_lowcolor.md "Portrait dithering") */
+#include "portdither.h"
+#include "portlines.h"          /* ST/STE: 4 colours of its own on every portrait row (palette_lowcolor.md "Portrait line colours") */         /* ST/STE: ordered dithering of portraits (palette_lowcolor.md "Portrait dithering") */
 #include "firstrun.h"          /* first start: DOS files -> CONVERT.TOS (docs/design/first_boot_convert.md) */
 #include <osbind.h>
 #include <string.h>
@@ -5735,9 +5736,77 @@ static const pdith_t *pdith_for(const uint8_t *src, int ly)
         g_pd_src=src; g_pd_sum=sum; g_pd_bpal=pal; g_pd_blut=lut; }
     return &g_pd;
 }
+/* Portrait LINE COLOURS (ST/STE conversation; docs/design/palette_lowcolor.md "Portrait line colours").
+ * conv_palette_enter reads the portrait's record from U6FE.PAK (section FES_PLINE); the screen then shows
+ * its 12 fixed colours, and the backend reloads slots 12..15 on every portrait row. Each portrait pixel
+ * becomes the nearest of its row's 16: a fixed slot is written as a source colour the LUT sends there,
+ * a line slot as one of four source colours not otherwise used in the portrait's 16-pixel columns,
+ * which the portrait groups' own LUT sends to 12..15. */
+static uint8_t  g_pl_rec[PL_REC];
+static int      g_pl_ok;                          /* 1 = the record is loaded and its palette is up */
+static int      g_pl_off;                         /* CONVPAL.BIN byte 1 bit 2: off (U6WY + dithering instead) */
+static uint8_t  g_pl_img[PL_W*PL_ROWS];           /* the portrait as written to the backbuffer */
+static int      g_pl_x=-1, g_pl_y;  static uint32_t g_pl_sum;
+static int fe_section(int id, int32_t *off, int32_t *len);   /* fwd: U6FE.PAK directory */
+static int pl_enter(int pidx)
+{
+    g_pl_ok=0; g_pl_x=-1;
+    if(g_pl_off || pidx<0) return 0;
+    { rdr_caps c; rdr_get_caps(&c); if(c.colors!=16) return 0; }
+    int32_t off, len; if(!fe_section(FES_PLINE,&off,&len) || len<4) return 0;
+    plat_file f=plat_fopen("U6FE.PAK",PLAT_RDONLY); if(f==PLAT_BADFILE) return 0;
+    uint8_t h[4]; int ok=0;
+    if(plat_read_at(f,off,h,4)==4){ int np=(h[0]<<8)|h[1], rs=(h[2]<<8)|h[3];
+        if(rs==PL_REC && pidx<np && 4+(int32_t)(pidx+1)*PL_REC<=len
+           && plat_read_at(f,off+4+(int32_t)pidx*PL_REC,g_pl_rec,PL_REC)==PL_REC) ok=1; }
+    plat_fclose(f);
+    if(!ok) return 0;
+    const uint8_t *pal = g_is_ste ? g_pl_rec+48 : g_pl_rec;
+    rdr_set_lowcolor(pal, g_pl_rec+96);
+    g_pl_ok=1; return 1;
+}
+static void pl_leave(void)
+{
+#ifdef HAVE_RDR_ST
+    if(g_pl_ok) rdr_portrait_lines(0,0,0,0,0,0);
+#endif
+    g_pl_ok=0; g_pl_x=-1;
+}
+static void pl_draw(const uint8_t *src, int lx, int ly)
+{
+    uint32_t sum=0; for(int i=0;i<PL_W*PL_ROWS;i++) sum=(sum<<1 | sum>>31) + src[i];
+    if(lx!=g_pl_x || ly!=g_pl_y || sum!=g_pl_sum){
+        const uint8_t *lut=g_pl_rec+96, *pal=g_is_ste ? g_pl_rec+48 : g_pl_rec; int maxlvl=g_is_ste?15:7;
+        /* four source colours not used in the portrait's columns around it (frame, parchment) */
+        int g0=lx/16, g1=(lx+PL_W-1)/16+1; uint8_t used[256], code[4]; memset(used,0,sizeof used);
+        for(int y=0;y<PL_ROWS;y++){ const uint8_t *r=ROW(ly+y);
+            for(int x=g0*16;x<g1*16;x++) if(x<lx || x>=lx+PL_W) used[r[x]]=1; }
+        int nc=0; for(int c=254;c>=0 && nc<4;c--) if(!used[c]) code[nc++]=(uint8_t)c;
+        if(nc<4){ pl_leave(); return; }
+        uint8_t lutp[256]; memcpy(lutp,lut,256); for(int k=0;k<4;k++) lutp[code[k]]=(uint8_t)(PL_FIXED+k);
+        uint8_t inv[PL_FIXED]; unsigned avail=0;
+        for(int c=0;c<255;c++){ int sl=lut[c]; if(sl<PL_FIXED && !(avail&(1u<<sl)) && c!=code[0]&&c!=code[1]&&c!=code[2]&&c!=code[3]){ inv[sl]=(uint8_t)c; avail|=1u<<sl; } }
+        static uint8_t lv[PL_ROWS*4*3];
+        for(int y=0;y<PL_ROWS;y++){
+            const uint8_t *wd=g_pl_rec+96+256+y*8; int16_t cc[16][3]; uint8_t sl[PL_W];
+            pl_row_colours(pal,maxlvl,wd,cc);
+            pl_map_row(src+y*PL_W,PL_W,g_basepal,cc,avail,sl);
+            for(int x=0;x<PL_W;x++){ int v=sl[x]; g_pl_img[y*PL_W+x] = v==255 ? 255 : v<PL_FIXED ? inv[v] : code[v-PL_FIXED]; }
+            for(int k=0;k<4;k++){ unsigned w=((unsigned)wd[k*2]<<8)|wd[k*2+1];
+                for(int c=0;c<3;c++){ int L=(int)((w>>(8-4*c))&15u); lv[(y*4+k)*3+c]=(uint8_t)(g_is_ste?L:L>>1); } } }
+#ifdef HAVE_RDR_ST
+        rdr_portrait_lines(lx, UIY0+ly, PL_W, PL_ROWS, lutp, lv);
+#else
+        (void)lutp; (void)lv;                         /* (no 16-colour backend in this build: never on) */
+#endif
+        g_pl_x=lx; g_pl_y=ly; g_pl_sum=sum;
+    }
+    for(int y=0;y<PL_ROWS;y++) for(int x=0;x<PL_W;x++) ui_px(lx+x,ly+y,g_pl_img[y*PL_W+x]);
+}
 static void draw_portrait_buf(const uint8_t*src,int lx,int ly)
 {
     ui_frame(lx-1,ly-1,PW+2,PH+2,C_BLACK);
+    if(g_pl_ok && src==g_cur_portrait){ pl_draw(src,lx,ly); if(g_pl_ok) return; }
     const pdith_t *d=pdith_for(src,ly);
     if(d){ for(int y=0;y<PH;y++)for(int x=0;x<PW;x++) ui_px(lx+x,ly+y,pdith_px(d,src[y*PW+x],lx+x,ly+y)); return; }
     for(int y=0;y<PH;y++)for(int x=0;x<PW;x++) ui_px(lx+x,ly+y,src[y*PW+x]);
@@ -6192,6 +6261,7 @@ static void sync_inv_out(void)
  * there — they show all 256). enter by portrait index pidx (=id-1); leave restores the banded game. */
 static void conv_palette_enter(int pidx)
 {
+    if(pl_enter(pidx)) return;                     /* line colours: the record carries its own 12 + LUT */
     if(g_nconvpal>0 && pidx>=0 && pidx<g_nconvpal){
         const uint8_t *base=g_convpal+(int32_t)pidx*(48+256);   /* 3-bit pal + shared 256->16 LUT */
         const uint8_t *pal = (g_is_ste && g_convpal4) ? g_convpal4+(int32_t)pidx*48 : base;   /* STE 4-bit */
@@ -6201,6 +6271,7 @@ static void conv_palette_enter(int pidx)
 }
 static void conv_palette_leave(void)
 {
+    pl_leave();
     g_pd_cpal=g_pd_clut=0;
     if(!g_have_lowcolor) return;
     rdr_set_lowcolor(LCPAL(g_lc_pal, g_lc_pal4), g_lc_lut);
@@ -14090,6 +14161,8 @@ static int fe_open(void)
         if(g_fe_off[id]+g_fe_len[id] > (uint32_t)g_fe_size){ g_fe_off[id]=g_fe_len[id]=0; } }
     g_fe_have=1; return 1;
 }
+static int fe_section(int id, int32_t *off, int32_t *len)
+{   if(id<0 || id>=FEPACK_MAX_SEC || !g_fe_len[id]) return 0; *off=(int32_t)g_fe_off[id]; *len=(int32_t)g_fe_len[id]; return 1; }
 static const uint8_t *fe_hdr_basepal(void){ return g_fe_hdr+FEPACK_HDR_BASEPAL; }
 static const uint8_t *fe_hdr_lc(void)     { return g_fe_hdr+FEPACK_HDR_LCPAL; }     /* [48 pal][256 lut] */
 static const uint8_t *fe_hdr_font(void)   { return g_fe_hdr+FEPACK_HDR_FONT; }
@@ -20117,6 +20190,7 @@ int main(int argc, char **argv)
         if(cpb){ int id=cpb[0];
             if(cpl>=2 && (cpb[1]&1)) g_nconvpal=0;   /* baseline: disable the swap (portrait via terrain-16) */
             if(cpl>=2 && (cpb[1]&2)) g_pd_off=1;     /* baseline: no portrait dithering (nearest colour) */
+            if(cpl>=2 && (cpb[1]&4)) g_pl_off=1;     /* baseline: no portrait line colours (U6WY instead) */
             if(id<=0){ for(int dy=-1;dy<=1&&id<=0;dy++) for(int dx=-1;dx<=1&&id<=0;dx++){ if(!dx&&!dy)continue;
                 int t=npc_at(&w,(int)w.px+dx,(int)w.py+dy); if(t>0) id=t; } }
             if(id>0){ talk(id); dbg_num("CONVPAL talk id=", id); dbg_num("CONVPAL portrait=", g_have_pc); } }

@@ -98,6 +98,16 @@ static volatile int     g_bidx;                      /* next band to load (Timer
 static int              g_raster_on;                 /* raster interrupts installed          */
 static long raster_remove(void);                     /* defined below; used by rdr_shutdown  */
 
+/* --- portrait LINE COLOURS (docs/design/palette_lowcolor.md "Portrait line colours"). While on, rows
+ * g_pl_y0 .. +g_pl_n of the 16-pixel groups g_pl_g0 .. g_pl_g1-1 present through g_pl_lut instead of the
+ * row's LUT (it sends four reserved source colours to slots 12..15), and the Timer-B handler reloads
+ * slots 12..15 on every one of those rows from g_pl_reg. Nothing else uses slots 12..15 then. */
+#define PL_MAXROWS 64
+static volatile int     g_pl_n;                      /* rows (0 = off)                       */
+static int              g_pl_y0, g_pl_g0, g_pl_g1;
+static uint8_t          g_pl_lut[256];
+extern uint16_t         g_pl_reg[PL_MAXROWS][4];    /* (defined with the Timer-B handler) */
+
 static short     g_old_rez;
 static void     *g_old_phys, *g_old_log;
 static short     g_old_pal[16];          /* the desktop's colours, put back on exit (Setcolor -1 / Setpalette) */
@@ -243,10 +253,60 @@ static inline void load_regs(const uint16_t *p)
     s[8]=p[8];   s[9]=p[9];   s[10]=p[10]; s[11]=p[11]; s[12]=p[12]; s[13]=p[13]; s[14]=p[14]; s[15]=p[15];
 }
 
+/* Portrait line colours, the per-row handler (hand-written: a C handler's register saving outlasted a
+ * scanline, so rows were skipped). Timer-B fires once per row. The handler takes the row from the
+ * video address counter ($FF8207/09, low 16 bits) less the screen base: ceil(offset / 160) is the row
+ * about to show whether the interrupt comes as a row ends (the counter waits at the next row's start)
+ * or as one begins (the counter is inside it; the load then lands past the portrait, ready for the
+ * next row). A held-up interrupt therefore costs at most one row. It copies that row's four colour
+ * words to slots 12..15 ($FF8258..$FF825E), masks Timer-B (IMRA bit 0) after the last row and clears
+ * its in-service bit (ISRA bit 0; software end-of-interrupt). About 400 cycles of the row's 512. */
+uint16_t          g_pl_reg[PL_MAXROWS][4];           /* each row's 4 colour words (read by the handler) */
+volatile uint16_t g_pl_base16, g_pl_y0w, g_pl_nw;    /* screen base (low 16 bits), first row, rows       */
+extern void pl_tb_line(void);
+__asm__(
+"	.text\n"
+"	.globl	_pl_tb_line\n"
+"_pl_tb_line:\n"
+"	movem.l	%d0-%d1/%a0,-(%sp)\n"
+"0:	move.b	0xffff8207,%d1\n"
+"	moveq	#0,%d0\n"
+"	move.b	%d1,%d0\n"
+"	lsl.w	#8,%d0\n"
+"	move.b	0xffff8209,%d0\n"
+"	cmp.b	0xffff8207,%d1\n"
+"	bne.s	0b\n"
+"	sub.w	_g_pl_base16,%d0\n"
+"	add.w	#159,%d0\n"
+"	divu	#160,%d0\n"
+"	sub.w	_g_pl_y0w,%d0\n"
+"	bmi.s	9f\n"
+"	move.w	_g_pl_nw,%d1\n"
+"	cmp.w	%d1,%d0\n"
+"	bge.s	8f\n"
+"	subq.w	#1,%d1\n"
+"	cmp.w	%d1,%d0\n"
+"	blt.s	1f\n"
+"	bclr	#0,0xfffffa13\n"
+"1:	lsl.w	#3,%d0\n"
+"	lea	_g_pl_reg,%a0\n"
+"	move.l	0(%a0,%d0.w),0xffff8258\n"
+"	move.l	4(%a0,%d0.w),0xffff825c\n"
+"	bra.s	9f\n"
+"8:	bclr	#0,0xfffffa13\n"
+"9:	movem.l	(%sp)+,%d0-%d1/%a0\n"
+"	move.b	#0xfe,0xfffffa0f\n"
+"	rte\n");
+
 /* Timer-B interrupt: load band g_bidx's palette, re-arm for the next boundary (or mask if last). */
 static void tb_handler(void) __attribute__((interrupt_handler));
 static void tb_handler(void)
 {
+    if (g_nb <= 1) {                                               /* nothing to raster: stop it */
+        MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);
+        MFP_ISRA = (uint8_t)~TB_BIT;
+        return;
+    }
     int i = g_bidx;
     if (i < g_nb) {
         load_regs(g_band_reg[i]);
@@ -265,7 +325,22 @@ static void tb_handler(void)
 /* VBL queue routine (runs each frame during vblank): reload band 0 + arm the Timer-B chain. */
 static void vbl_routine(void)
 {
-    if (g_nb <= 1) return;
+    if (g_nb <= 1) {
+        if (g_pl_n && g_pl_y0 > 0) {                /* portrait line colours: first interrupt at row y0-1, then every row */
+            g_pl_base16 = (uint16_t)(*(volatile uint8_t *)0xFFFF8203UL << 8);   /* $FF8203 base mid (256-aligned) */
+            g_pl_y0w = (uint16_t)g_pl_y0; g_pl_nw = (uint16_t)g_pl_n;
+            *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&pl_tb_line;
+            MFP_TBCR = 0;
+            MFP_TBDR = (uint8_t)g_pl_y0;            /* stopped: loads the counter */
+            MFP_TBCR = 0x08;
+            MFP_TBDR = 1;                           /* running: the reload value from the first timeout on */
+            MFP_IPRA = (uint8_t)~TB_BIT;
+            MFP_IERA = (uint8_t)(MFP_IERA | TB_BIT);
+            MFP_IMRA = (uint8_t)(MFP_IMRA | TB_BIT);
+        }
+        return;
+    }
+    *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&tb_handler;   /* (the portrait mode swaps it) */
     load_regs(g_band_reg[0]);
     g_bidx = 1;
     MFP_TBCR = 0;
@@ -325,6 +400,26 @@ void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const
     }
 }
 
+/* Portrait line colours on (n > 0) or off: the portrait's w x n rectangle at (x, y0); lutp = the LUT
+ * for its 16-pixel groups on those rows; lv = n x 4 colours {r,g,b} for slots 12..15, row by row, as
+ * levels for this hardware (0..7 ST, 0..15 STE). Takes effect from the next frame. */
+static long pl_mask_tb(void){ MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT); return 0; }
+void rdr_portrait_lines(int x, int y0, int w, int n, const uint8_t *lutp, const uint8_t *lv)
+{
+    g_pl_n = 0;                                      /* the handler leaves the registers alone meanwhile */
+    if (n > PL_MAXROWS) n = PL_MAXROWS;
+    if (n > 0 && y0 > 0 && y0 + n <= STH && lutp && lv && w > 0) {
+        g_pl_y0 = y0; g_pl_g0 = x / 16; g_pl_g1 = (x + w - 1) / 16 + 1;
+        memcpy(g_pl_lut, lutp, 256);
+        for (int r = 0; r < n; r++) for (int k = 0; k < 4; k++) {
+            const uint8_t *c = lv + (r*4 + k)*3;
+            g_pl_reg[r][k] = st_reg(c[0], c[1], c[2]); }
+        if (!g_raster_on) { (void)Supexec(raster_install); g_raster_on = 1; }
+        if (g_vblslot >= 0) g_pl_n = n;
+    } else if (g_raster_on) (void)Supexec(pl_mask_tb);
+    g_shadow_ok = 0;                                 /* the portrait groups present differently now */
+}
+
 /* Colour cycling (M7): re-push the 16 shifter registers from pal16 — NO LUT change, NO c2p. The
  * engine rotates a few reserved slots (U6WZ) each tick; the shifter re-reads the CLUT so fire/water
  * animates for free (docs/design/palette_lowcolor.md). When a band raster is active the cycled ramp
@@ -353,13 +448,28 @@ void rdr_debug_info(uint32_t out[12])
     out[6] = out[7] = out[8] = out[9] = out[10] = out[11] = 0;
 }
 
+/* c2p groups [g0, g0+gn) of row y; the portrait line-colour groups of the portrait's rows go through
+ * g_pl_lut. src and dst point at group g0 of the row. */
+static void c2p_seg(int y, const uint8_t *src, const uint8_t *lut, uint16_t *dst, int g0, int gn)
+{
+    int n = g_pl_n;
+    if (n && y >= g_pl_y0 && y < g_pl_y0 + n && g0 < g_pl_g1 && g0 + gn > g_pl_g0) {
+        int a = g0 > g_pl_g0 ? g0 : g_pl_g0, b = (g0 + gn < g_pl_g1) ? g0 + gn : g_pl_g1;
+        if (a > g0) c2p4_lut_asm(src, lut, dst, a - g0);
+        c2p4_lut_asm(src + (a - g0)*16, g_pl_lut, dst + (a - g0)*4, b - a);
+        if (g0 + gn > b) c2p4_lut_asm(src + (b - g0)*16, lut, dst + (b - g0)*4, g0 + gn - b);
+        return;
+    }
+    c2p4_lut_asm(src, lut, dst, gn);
+}
+
 /* Full-screen present: LUT-remap + c2p the whole 320x200 backbuffer to the 4-plane screen. */
 void rdr_present(void)
 {
     for (int y = 0; y < STH; y++) {
         const uint8_t *px  = g_back + (int32_t)y * STW;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
-        c2p4_lut_asm(px, g_row_lut[y], dst, ST_GROUPS);
+        c2p_seg(y, px, g_row_lut[y], dst, 0, ST_GROUPS);
     }
     if (g_shadow) { memcpy(g_shadow, g_back, ST_BACK_BYTES); g_shadow_ok = !g_flip; }
     Vsync();
@@ -382,7 +492,7 @@ void rdr_present_diff(void)
             int g1 = g + 1;                                       /* the run of changed groups */
             while (g1 < ST_GROUPS) { const uint32_t *qa = a + g1*4, *qb = b + g1*4;
                 if (qa[0] == qb[0] && qa[1] == qb[1] && qa[2] == qb[2] && qa[3] == qb[3]) break; g1++; }
-            c2p4_lut_asm((const uint8_t *)(a + g*4), g_row_lut[y], (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES) + g*4, g1 - g);
+            c2p_seg(y, (const uint8_t *)(a + g*4), g_row_lut[y], (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES) + g*4, g, g1 - g);
             memcpy(b + g*4, a + g*4, (size_t)(g1 - g) * 16);
             g = g1;
         }
@@ -400,7 +510,7 @@ void rdr_present_rect(int x, int y, int w, int h)
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px  = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
-        c2p4_lut_asm(px, g_row_lut[yy], dst, gn);
+        c2p_seg(yy, px, g_row_lut[yy], dst, g0, gn);
     }
     if (gn > 0 && h > 0) shadow_rect(x, g0, gn, y, h);
     /* no Vsync: caller may present several rects per frame */
@@ -420,7 +530,7 @@ void rdr_present_doubled(int lh)
     for (int y = 0; y < lh; y++) {
         const uint8_t *px = g_back + (int32_t)y * STW;
         uint16_t     *d   = (uint16_t *)(dst + (int32_t)y * ST_ROWBYTES);
-        c2p4_lut_asm(px, g_row_lut[y], d, ST_GROUPS);
+        c2p_seg(y, px, g_row_lut[y], d, 0, ST_GROUPS);
     }
     if (g_flip) { Setscreen(dst, dst, -1); Vsync(); g_vis = dst; return; }
     Vsync();
@@ -440,7 +550,7 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t     *dst = (uint16_t *)(scr + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
-        c2p4_lut_asm(px, g_lut, dst, gn);
+        c2p_seg(yy, px, g_lut, dst, g0, gn);
     }
     if (scr == g_screen && !g_flip) shadow_rect(x, g0, gn, y, h); else g_shadow_ok = 0;
     /* no Vsync: caller batches */

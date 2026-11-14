@@ -42,7 +42,8 @@
 #include "mul16.h"
 #include "u6lzw.h"
 #include "u6lzc.h"
-#include "../render/portdither.h"   /* the ST portrait dither: previewed here (MKWORLD_DITHERPREVIEW) */
+#include "../render/portdither.h"
+#include "../render/portlines.h"    /* the ST conversation line colours (FES_PLINE) */   /* the ST portrait dither: previewed here (MKWORLD_DITHERPREVIEW) */
 #include "u6lib.h"
 #include "u6pal.h"
 #include "u6tile.h"
@@ -1277,6 +1278,118 @@ static void dither_preview(int idx, const uint8_t *port, const uint8_t *pal6, co
     rows++; (void)idx;
 }
 
+/* FES_PLINE helpers: seed 4 colours far from the fixed 12 and from each other, then refine (k-means);
+ * colours are RGB6 x4, dF[v] = distance from colour v to its nearest fixed colour. Returns the error. */
+static void pl_seed(const int *uc, const int *un, int nu, const uint8_t *palb, const int32_t *dF, int cen[4][3])
+{
+    for (int k=0;k<4;k++){ int bj=-1; int64_t bw=-1;
+        for (int j=0;j<nu;j++){ int v=uc[j]; int32_t e=dF[v];
+            for (int q=0;q<k;q++){ int32_t f=pdith_d2(cen[q][0]-palb[v*3]*4,cen[q][1]-palb[v*3+1]*4,cen[q][2]-palb[v*3+2]*4); if(f<e) e=f; }
+            if ((int64_t)e*un[j] > bw){ bw=(int64_t)e*un[j]; bj=j; } }
+        for (int c=0;c<3;c++) cen[k][c] = bj>=0 ? palb[uc[bj]*3+c]*4 : 0; }
+}
+static long pl_kmeans(const int *uc, const int *un, int nu, const uint8_t *palb, const int32_t *dF, int cen[4][3])
+{
+    long err=0;
+    for (int it=0; it<5; it++){
+        long sum[4][3]={{0}}, cnt[4]={0}; int wj=-1; int32_t we=-1; err=0;
+        for (int j=0;j<nu;j++){ int v=uc[j], r=palb[v*3]*4, g=palb[v*3+1]*4, b=palb[v*3+2]*4;
+            int32_t be=dF[v]; int bk=-1;
+            for (int k=0;k<4;k++){ int32_t e=pdith_d2(cen[k][0]-r,cen[k][1]-g,cen[k][2]-b); if(e<be){ be=e; bk=k; } }
+            err += (long)(be>>4)*un[j];
+            if (bk>=0){ sum[bk][0]+=(long)r*un[j]; sum[bk][1]+=(long)g*un[j]; sum[bk][2]+=(long)b*un[j]; cnt[bk]+=un[j]; }
+            else if (be>we){ we=be; wj=j; } }
+        if (it==4) break;                                          /* the last pass only measures */
+        for (int k=0;k<4;k++){
+            if (cnt[k]) for (int c=0;c<3;c++) cen[k][c]=(int)((sum[k][c]+cnt[k]/2)/cnt[k]);
+            else if (wj>=0){ for (int c=0;c<3;c++) cen[k][c]=palb[uc[wj]*3+c]*4; wj=-1; } } }
+    return err;
+}
+
+/* FES_PLINE: per-portrait LINE COLOURS for the ST conversation (render/portlines.h, palette_lowcolor.md
+ * "Portrait line colours"). Each portrait gets 12 fixed colours (portrait 30% / terrain 50% / parchment
+ * 20%; the darkest in slot 0, which the border shows) and, for each of its 64 rows, the 4 colours that best cover that
+ * row's pixels given those 12: a small k-means over the row's distinct colours, seeded from the row
+ * above so neighbouring rows agree. Integer only (CONVERT.TOS runs this on a 68000).
+ * MKWORLD_LINEPREVIEW=file.ppm: the first 40 portraits as VGA | U6WY nearest (ST) | lines ST | lines STE. */
+static void build_portrait_lines(FILE *fe, const char *dir, const uint8_t *paper, const uint8_t *palb)
+{
+    char pa[1024], pb[1024]; snprintf(pa,sizeof pa,"%s/PORTRAIT.A",dir); snprintf(pb,sizeof pb,"%s/PORTRAIT.B",dir);
+    long an=0, bn=0; uint8_t *A_=slurp_path(pa,NULL,&an), *B_=slurp_path(pb,NULL,&bn);
+    u6lib_t A,B; int okA=A_&&u6lib_open(&A,A_,(int32_t)an,4,false), okB=B_&&bn>0&&u6lib_open(&B,B_,(int32_t)bn,4,false);
+    int cA=okA?u6lib_count(&A):0, cB=okB?u6lib_count(&B):0, nport=98+cB;
+    /* the terrain + parchment share of each colour's weight, the same for every portrait */
+    static long parch[256], tp[256]; long St=0, Sc=0;
+    for (int i=0;i<256;i++) parch[i]=0;
+    for (int i=0;i<320*200;i++){ int c=paper[i]; if(c!=255) parch[c]++; }
+    for (int i=0;i<256;i++){ St+=g_terr[i]; Sc+=parch[i]; } if(!St) St=1; if(!Sc) Sc=1;
+    for (int i=0;i<256;i++) tp[i]=(long)(((uint64_t)g_terr[i]*50000u)/(uint64_t)St + ((uint64_t)parch[i]*20000u)/(uint64_t)Sc);
+    be16(fe,(unsigned)nport); be16(fe,PL_REC);
+    const char *prevfn=getenv("MKWORLD_LINEPREVIEW"); uint8_t *img=NULL; int prow=0; const int PS=3, PW_=4*PL_W*PS, PRH=PL_ROWS*PS;
+    if (prevfn) img=calloc((size_t)PW_*40*PRH,3);
+    for (int idx=0; idx<nport; idx++){
+        cv_tick();
+        uint8_t port[PL_W*PL_ROWS]; int have=0;
+        const u6lib_t *lib=(idx<98)?&A:&B; int li=(idx<98)?idx:idx-98;
+        if (((idx<98)?okA:okB) && li<((idx<98)?cA:cB)){ int32_t sz; const uint8_t *blob=u6lib_entry(lib,li,&sz);
+            if (blob && u6lzw_unpacked_size(blob,sz)==PL_W*PL_ROWS && u6lzw_decompress(blob,sz,port,PL_W*PL_ROWS)==PL_W*PL_ROWS) have=1; }
+        static long pf[256], comb[256]; for (int i=0;i<256;i++) pf[i]=0;
+        if (have) cv_hist(port,PL_W*PL_ROWS,pf);
+        long Sp=have?PL_W*PL_ROWS-pf[255]:0; pf[255]=0; if(Sp<1) Sp=1;
+        /* the portrait weighs less than in U6WY (30% vs 50%): it has its line colours too, and the map
+         * and parchment share only these 12 */
+        for (int i=0;i<256;i++) comb[i]=tp[i] + (have ? pf[i]*30000L/Sp : 0);
+        static CCol col[256]; CCol snap[16]; uint8_t pal3[48], pal4[48], lut[256];
+        int nc=colors_from_freq(comb,palb,col);
+        quantize_colors(col,nc,palb,pal3,pal4,lut,snap,PL_FIXED);
+        { int d=0; for (int i=1;i<PL_FIXED;i++) if (pal4[i*3]+pal4[i*3+1]+pal4[i*3+2] < pal4[d*3]+pal4[d*3+1]+pal4[d*3+2]) d=i;
+          if (d){ for (int k=0;k<3;k++){ uint8_t t=pal3[k]; pal3[k]=pal3[d*3+k]; pal3[d*3+k]=t; t=pal4[k]; pal4[k]=pal4[d*3+k]; pal4[d*3+k]=t; }
+                  for (int i=0;i<256;i++) lut[i] = lut[i]==0 ? (uint8_t)d : lut[i]==d ? 0 : lut[i]; } }   /* darkest in slot 0: the border shows slot 0 */
+        uint8_t words[PL_LINES]; memset(words,0,sizeof words);
+        if (have){
+            /* colours in RGB6 x4 (0..252); the fixed 12 as the STE shows them */
+            int fx[PL_FIXED][3]; for (int i=0;i<PL_FIXED;i++) for (int k=0;k<3;k++) fx[i][k]=pal4[i*3+k]*252/15;
+            static int32_t dF[256]; for (int v=0;v<256;v++){ dF[v]=0x7fffffff; if(!pf[v]) continue;
+                for (int i=0;i<PL_FIXED;i++){ int32_t e=pdith_d2(fx[i][0]-palb[v*3]*4, fx[i][1]-palb[v*3+1]*4, fx[i][2]-palb[v*3+2]*4); if(e<dF[v]) dF[v]=e; } }
+            int prev[4][3]; int have_prev=0;
+            for (int y=0;y<PL_ROWS;y++){
+                int uc[PL_W], un[PL_W], nu=0;                          /* the row's distinct colours + weights */
+                for (int x=0;x<PL_W;x++){ int v=port[y*PL_W+x]; if(v==255) continue; int j=0; while(j<nu&&uc[j]!=v) j++;
+                    if(j==nu){ uc[nu]=v; un[nu]=0; nu++; } un[j]++; }
+                for (int j=0;j<nu;j++) if(un[j]>3) un[j]=3;            /* a few eye pixels count about as much as a patch of skin */
+                int ca[4][3], cb[4][3];
+                if (have_prev) memcpy(ca,prev,sizeof ca);
+                pl_seed(uc,un,nu,palb,dF,cb);
+                long ea = have_prev ? pl_kmeans(uc,un,nu,palb,dF,ca) : 0x7fffffffL;
+                long eb = pl_kmeans(uc,un,nu,palb,dF,cb);
+                int (*cen)[3] = (!have_prev || eb < ea - ea/10) ? cb : ca;   /* fresh seeds only when clearly better: rows agree */
+                memcpy(prev,cen,sizeof prev); have_prev=1;
+                for (int k=0;k<4;k++){ int L[3]; for (int c=0;c<3;c++){ L[c]=(cen[k][c]*15+126)/252; if(L[c]>15) L[c]=15; }
+                    unsigned w=(unsigned)((L[0]<<8)|(L[1]<<4)|L[2]); words[(y*4+k)*2]=(uint8_t)(w>>8); words[(y*4+k)*2+1]=(uint8_t)w; }
+            }
+        }
+        fwrite(pal3,1,48,fe); fwrite(pal4,1,48,fe); fwrite(lut,1,256,fe); fwrite(words,1,PL_LINES,fe);
+        if (img && have && prow<40){
+            static CCol qcol[256]; CCol qs[16]; uint8_t q3[48], q4[48], qlut[256];   /* today's 16 (as U6WY), for comparison */
+            int qn=colors_from_freq(comb,palb,qcol); quantize_colors(qcol,qn,palb,q3,q4,qlut,qs,16);
+            for (int y=0;y<PL_ROWS;y++){
+                int16_t c3[16][3], c4[16][3]; uint8_t s3[PL_W], s4[PL_W];
+                pl_row_colours(pal3,7,words+y*8,c3); pl_row_colours(pal4,15,words+y*8,c4);
+                pl_map_row(port+y*PL_W,PL_W,palb,c3,0xfffu,s3); pl_map_row(port+y*PL_W,PL_W,palb,c4,0xfffu,s4);
+                for (int x=0;x<PL_W;x++){ int v=port[y*PL_W+x]; uint8_t px[4][3];
+                    for (int k=0;k<3;k++){ px[0][k]=(uint8_t)(palb[v*3+k]*255/63);
+                        px[1][k]=(uint8_t)(q3[(qlut[v]&15)*3+k]*255/7);
+                        px[2][k]=(uint8_t)(s3[x]==255?0:c3[s3[x]][k]*255/(63*16));
+                        px[3][k]=(uint8_t)(s4[x]==255?0:c4[s4[x]][k]*255/(63*16)); }
+                    for (int p=0;p<4;p++) for (int sy=0;sy<PS;sy++) for (int sx=0;sx<PS;sx++){
+                        uint8_t *q=img+(((size_t)(prow*PRH+y*PS+sy))*PW_+(size_t)(p*PL_W*PS+x*PS+sx))*3; q[0]=px[p][0]; q[1]=px[p][1]; q[2]=px[p][2]; } } }
+            prow++; }
+    }
+    if (img){ FILE *o=fopen(prevfn,"wb"); if(o){ fprintf(o,"P6 %d %d 255\n",PW_,prow*PRH); fwrite(img,1,(size_t)PW_*prow*PRH*3,o); fclose(o); } free(img); }
+    printf("portrait line colours (FES_PLINE): %d portraits x %d bytes\n", nport, PL_REC);
+    free(A_); free(B_);
+}
+
 static void build_conv_palettes(FILE *f, const uint8_t *paper, const uint8_t *palb,
                                 const uint8_t *portA, long portAlen, const uint8_t *portB, long portBlen,
                                 uint8_t *conv4, int *nport_out)   /* conv4 (nport*48) = STE 4-bit companions for U6WS */
@@ -2204,7 +2317,7 @@ int main(int argc, char **argv)
     for(int i=0;i<FEPACK_MAX_SEC;i++){ fe_sec_off[i]=0; fe_sec_len[i]=0; }
     static const char *const fe_label[FES_N] = { "Main menu", "Intro scenes", "Intro: TV", "Intro: moongate",
         "Portraits", "Intro text", "Gypsy", "Woods", "Storm", "Stones", "Into the gate", "Gargoyles",
-        "Vellum", "Font", "Logos", "Scroll", "Ending", "Pointer" };
+        "Vellum", "Font", "Logos", "Scroll", "Ending", "Pointer", "Portrait lines" };
     #define FE_SEC(id) do { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; \
                             cv_step(fe_label[(id)]); fe_cur=(id); fe_sec_off[fe_cur]=_p; if(fe_cur+1>fe_nsec) fe_nsec=fe_cur+1; } while(0)
     long fepn=0; char fep[1024]; snprintf(fep,sizeof fep,"%s/FEPAL",dir); uint8_t *fepal=slurp_path(fep,NULL,&fepn);          /* the ST release's: the front end's own colours (st_data.md) */
@@ -2630,6 +2743,8 @@ int main(int argc, char **argv)
        * main menu (which runs before the core loads) can draw it */
       FE_SEC(FES_CURSOR);
       fputc(cw,fe); fputc(ch,fe); fputc(chx,fe); fputc(chy,fe); fwrite(cpix,1,(size_t)cw*ch,fe);
+      FE_SEC(FES_PLINE);                       /* the ST conversation's portrait line colours (portlines.h) */
+      build_portrait_lines(fe, dir, paper, palb);
     }   /* end front-end/intro art block */
     if(fe && fe!=f){                              /* close the section directory + the file */
         { long _p=ftell(fe); if(fe_cur>=0) fe_sec_len[fe_cur]=_p-fe_sec_off[fe_cur]; }
