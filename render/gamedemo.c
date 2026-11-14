@@ -5748,6 +5748,25 @@ static int      g_pl_off;                         /* CONVPAL.BIN byte 1 bit 2: o
 static uint8_t  g_pl_img[PL_W*PL_ROWS];           /* the portrait as written to the backbuffer */
 static int      g_pl_x=-1, g_pl_y;  static uint32_t g_pl_sum;
 static int fe_section(int id, int32_t *off, int32_t *len);   /* fwd: U6FE.PAK directory */
+/* The pointer in two colours while the line colours are up: the 12 fixed colours are picked for the
+ * map, parchment and portrait, and its white and greys landed on lavender or blue slots, faint over the
+ * parchment. Its light colours are drawn as the brightest of the 12, its dark ones as slot 0 (the
+ * darkest), so it keeps its shape; the original pixels come back on leave. */
+static uint8_t  g_pl_cursave[CURMAX*CURMAX];  static int g_pl_curswap;
+static void pl_pointer(int on)
+{
+    int n=g_cw*g_ch; if(n<=0 || !g_basepal) return;
+    if(!on){ if(g_pl_curswap) memcpy(g_curpix,g_pl_cursave,(size_t)n); g_pl_curswap=0; return; }
+    if(g_pl_curswap) return;
+    const uint8_t *pal=g_is_ste ? g_pl_rec+48 : g_pl_rec, *lut=g_pl_rec+96;
+    int bs=0, bl=-1; for(int i=0;i<PL_FIXED;i++){ int l=3*pal[i*3]+4*pal[i*3+1]+2*pal[i*3+2]; if(l>bl){ bl=l; bs=i; } }
+    int lite=-1, dark=-1; for(int c=0;c<255;c++){ if(lite<0 && lut[c]==bs) lite=c; if(dark<0 && lut[c]==0) dark=c; }
+    if(lite<0 || dark<0) return;
+    memcpy(g_pl_cursave,g_curpix,(size_t)n);
+    for(int i=0;i<n;i++){ int v=g_curpix[i]; if(v==255) continue;
+        g_curpix[i] = (uint8_t)((g_basepal[v*3]+g_basepal[v*3+1]+g_basepal[v*3+2] >= 96) ? lite : dark); }
+    g_pl_curswap=1;
+}
 static int pl_enter(int pidx)
 {
     g_pl_ok=0; g_pl_x=-1;
@@ -5763,14 +5782,14 @@ static int pl_enter(int pidx)
     if(!ok) return 0;
     const uint8_t *pal = g_is_ste ? g_pl_rec+48 : g_pl_rec;
     rdr_set_lowcolor(pal, g_pl_rec+96);
-    g_pl_ok=1; return 1;
+    g_pl_ok=1; pl_pointer(1); return 1;
 }
 static void pl_leave(void)
 {
 #ifdef HAVE_RDR_ST
     if(g_pl_ok) rdr_portrait_lines(0,0,0,0,0,0);
 #endif
-    g_pl_ok=0; g_pl_x=-1;
+    pl_pointer(0); g_pl_ok=0; g_pl_x=-1;
 }
 static void pl_draw(const uint8_t *src, int lx, int ly)
 {

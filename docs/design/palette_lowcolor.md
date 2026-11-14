@@ -251,8 +251,13 @@ so it does not matter where along the row the reload lands.
   keyboard, a Blitter burst) costs at most that one row. The handler takes about 400 of a row's 512
   cycles, 64 times a frame: roughly a fifth of an 8 MHz 68000, but only while a conversation is open.
 - **Costs and limits.** The map and parchment share 12 colours instead of 16 during a conversation.
-  The darkest is kept in slot 0, which the screen border shows. The mouse pointer's white has no
-  colour of its own, so it shows faintly over the parchment.
+  The darkest is kept in slot 0, which the screen border shows. The mouse pointer gets no colours of
+  its own: with its own (nearest-slot) colours its white and light grey came out lavender or blue and
+  faint over the parchment. So while the line colours are up it is drawn in two colours: its light
+  colours (6-bit R+G+B >= 96) as the brightest of the 12, its dark ones as slot 0. Its pixels are put
+  back when the conversation closes. Giving the pointer's colours weight in the choice of the 12
+  instead was tried: it worked for the pointer, but it flattened the map's brick floor and the
+  carpet's stripes (2026-11-14).
 - **Where.** `render/portlines.h` (shared), `render/rdr_st.c` (`rdr_portrait_lines`, `c2p_seg`,
   `tb_handler`), `render/gamedemo.c` (`pl_enter`/`pl_draw`/`pl_leave`). Off on 256-colour backends
   and with old packs without the section, where U6WY with dithering applies.
