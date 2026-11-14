@@ -969,3 +969,11 @@ eclipse, party torches, the Light spell, a flash), the light/sight objects in an
 own tile, as the idle path already holds), the torch bearers in view, infravision's creatures and X-ray. A match
 reuses the last result. The bench's in-place frames prove it: 21 reuses, 0 cells off a fresh calculation (464 with
 the light level left out of the fingerprint). In the gargoyle fight light now costs 0: attack 3.9 s, pass 2.8-4.5 s.
+
+### 2026-11-14: the in-place static path does nothing when nothing changed; fingerprints without multiplies
+With the light reused, an action in place left the static layer as it was, yet `predim_compose_static` still ran the
+whole-view animation scan and walked every object in view with an empty dirty mask (~100 ms a recompose). Both are
+skipped when no cell changed. The two fingerprints mixed each value with a 32-bit multiply, a library call on the
+68000 (five per object in view); they now xor, add h<<3 and swap the halves. Gargoyle fight on the 8 MHz Mega STe:
+attack 3.55 s, pass 2.45-3.9 s (the original ST: 6.4-7.1 and 6.1). Bench INV2 0 over 63 frames, light drift 0.
+What is left is spread thin: the actors' redraw per step, the map present, the scheduler and the AI.

@@ -4779,7 +4779,7 @@ uint32_t g_lkey_reuse;
 static uint32_t light_key(const world_t*w){
     int32_t left=w->px-VT/2-1, top=w->py-VT/2-1; const int R=VT+2;
     uint32_t h=2166136261u;
-#define LKMIX(v) (h=(h^(uint32_t)(v))*16777619u)
+#define LKMIX(v) (h^=(uint32_t)(v), h+=h<<3, h=(h<<16)|(h>>16))   /* xor, *9, swap: no 32-bit multiply (a library call on the 68000) */
     LKMIX(w->px); LKMIX(w->py); LKMIX(w->level); LKMIX(ambient_level(w)); LKMIX(g_xray_turns>0); LKMIX(g_light_force); LKMIX(g_infravision!=0);
     int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+R)>>4)&(OBKT-1);
     int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +R)>>4)&(OBKT-1);
@@ -4855,7 +4855,7 @@ uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw
 static uint32_t static_sig(const world_t*w){
     int32_t left=w->px-VT/2, top=w->py-VT/2;
     uint32_t h=2166136261u;
-#define SIGMIX(v) (h=(h^(uint32_t)(v))*16777619u)
+#define SIGMIX(v) (h^=(uint32_t)(v), h+=h<<3, h=(h<<16)|(h>>16))   /* xor, *9, swap: no 32-bit multiply (a library call on the 68000) */
     SIGMIX(w->px); SIGMIX(w->py); SIGMIX(w->level); SIGMIX(g_anim_ctr); SIGMIX(g_xray_turns>0);
     int bx0=((int)left>>4)&(OBKT-1), bx1=(((int)left+VT)>>4)&(OBKT-1);
     int by0=((int)top >>4)&(OBKT-1), by1=(((int)top +VT)>>4)&(OBKT-1);
@@ -4915,9 +4915,9 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
                     g_pd_anim_valid=1;
                 }
                 if(g_pd_has_anim) g_view_has_anim=1;
-            } else {
+            } else if(!can_still) {
                 mark_view_anim(w);
-            }
+            }                                              /* still: the view's animated cells are as last time */
             SUB_ADD(g_ph0_scroll);
             SUB_T(); if(can_scroll){ rdr_pstatic_shift(dx,dy); shift_buf(g_pd_light,VT,dx,dy); } SUB_ADD(g_ph0_shift);
             SUB_T();
@@ -4945,9 +4945,11 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
                * object straddling clean/dirty still redraws its dirty cells) but write only dirty cells,
                * preserving z-order there. Clean cells keep their shifted object pixels (INV2 proves it). */
               SUB_T();                        /* time the pass-0 object scan separately (g_ph0_shift is 0 on idle) */
-              g_pd_objgate=g_pd_dirty;
-              draw_view_objects(g_tmp_map,TMP_T,left,top,0);  /* lower objects -> g_pdimmed (dirty cells only) */
-              g_pd_objgate=0;
+              { int any=0; for(int i=0;i<VT*VT;i++) if(g_pd_dirty[i]){ any=1; break; }
+                if(any){                      /* no dirty cell (an action in place, light as it was): nothing to redraw */
+                  g_pd_objgate=g_pd_dirty;
+                  draw_view_objects(g_tmp_map,TMP_T,left,top,0);  /* lower objects -> g_pdimmed (dirty cells only) */
+                  g_pd_objgate=0; } }
               SUB_ADD(g_ph0_shift);
             }
         } else {                                               /* planar full rebuild -> g_pdimmed */
