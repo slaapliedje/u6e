@@ -882,7 +882,10 @@ static void clear_bb(uint8_t col){ for(int y=0;y<LH;y++){ uint8_t*d=ROW(y); for(
 /* blit a W*H indexed image OPAQUELY (all pixels, incl. index 0) at (dx,dy) — for a
  * full-screen intro scene whose own palette defines the background colour. */
 static void blit_opaque(const uint8_t*pix,int iw,int ih,int dx,int dy)
-{ for(int y=0;y<ih;y++){ int py=dy+y; if((unsigned)py>=(unsigned)LH) continue;
+{ if(dx<=0 && dx+iw>=LW){                                   /* spans the screen's width (a scene): a row copy, not a test per pixel */
+    for(int y=0;y<ih;y++){ int py=dy+y; if((unsigned)py>=(unsigned)LH) continue; memcpy(ROW(py),pix+(int32_t)y*iw-dx,LW); }
+    return; }
+  for(int y=0;y<ih;y++){ int py=dy+y; if((unsigned)py>=(unsigned)LH) continue;
     const uint8_t*s=pix+(int32_t)y*iw; uint8_t*d=ROW(py);
     for(int x=0;x<iw;x++){ int px=dx+x; if((unsigned)px>=(unsigned)LW) continue; d[px]=s[x]; } } }
 /* opaque blit clipped to [cx0,cx1)x[cy0,cy1): row memcpy of the visible span (fast path for the
@@ -1576,8 +1579,10 @@ static void run_intro_body(void)
         if(g_intro[s].lc) rdr_set_lowcolor(g_intro[s].lc, NULL);   /* ST: this scene's own 16 (no-op on TT), now that it is on screen */
         for(int k=0;k<=8;k++){ fe_fade(pal,k); }      /* fade in */
         if(g_intro[s].type==2 && g_gate){                         /* the moongate ASCENDS (nuvie 0x64->0x5) */
+            int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* ST: one screen, so each step presents only what moved (a full flip a step took 1.2 s at 8 MHz) */
             for(int gy=0x64; gy>0x5; gy-=2){ g_gate_y=gy;
                 draw_intro_frame(s,0,1); rdr_present_doubled(LH); }
+            if(st1) rdr_flip_begin();
             g_gate_y=0x5; }
         int key=0;
         int animated = (g_intro[s].type==1 && g_tv_nimg>0 && g_ndigit>=11);
@@ -1694,7 +1699,8 @@ static void run_intro_body(void)
             rdr_flip_begin();                                     /* re-enter double-buffer for the next scene */
             plat_chip_reset(wfm);                                 /* the pan buffer goes back to the pool */
         }
-        if(g_intro[s].type==2) avatar_climax(s);                  /* Avatar walks into the moongate + it sinks */
+        if(g_intro[s].type==2){ int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* (as the ascent) */
+            avatar_climax(s); if(st1) rdr_flip_begin(); }         /* Avatar walks into the moongate + it sinks */
         for(int k=8;k>=0;k--){ fe_fade(pal,k); }      /* fade out */
         if(s==0){ int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){(void)gk;} g_intro_mb=0;
             storm_scene(); }                                      /* window/storm scene after the living room */
@@ -4984,7 +4990,9 @@ static void compose_map(const world_t*w)
     { int at;                                             /* avatar at centre — unless a vehicle IS the visual */
       if(g_avatar_hide) at=0;                              /* aboard a boat: the boat objects draw themselves */
       else if(g_avatar_ovr) at=g_avatar_ovr;               /* mounted: horse-with-rider sprite (vehicles.md §4) */
-      else { int aon=g_wko.avatar; at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0; }
+      else { int aon=g_wko.avatar; at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0;
+             if(at>0){ int b, tpd=npc_base_fc(at,&b);       /* his facing and gait, as npc_tile gives the others (it was always frame 0: north) */
+                 if(tpd>=4) at=b+g_facing[1]*tpd+(g_amoved[1]?1+(g_walkf[1]&1):0); else if(tpd>=2) at=b+g_facing[1]*tpd+(g_walkf[1]&1); } }
       if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,at,-1); }
     SUB_ADD(g_ph1_actors);
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
@@ -5032,6 +5040,15 @@ static void compose_map(const world_t*w)
 #endif
         }
     }
+#ifdef HAVE_RDR_ST
+    /* the frayed border over the outer ring (draw_border_tiles' tiles 432-439), undimmed and last: the planar
+     * map covers the ring's inner half, so on the ST the fray over the map's edge went with it (3207605, July) */
+    if(g_native_planar) for(int vy=0;vy<VT;vy++) for(int vx=0;vx<VT;vx++){
+        int top_=vy==0, bot=vy==VT-1, lft=vx==0, rgt=vx==VT-1, t;
+        if(!(top_||bot||lft||rgt)) continue;
+        t = top_ ? (lft?432:rgt?434:433) : bot ? (lft?435:rgt?437:436) : lft?438:439;
+        if(!g_pd_dyngate || g_pd_dyngate[vy*VT+vx]) rdr_pdyn_cell(0x70000000|t, g_tileset+(int32_t)t*256, vx, vy); }
+#endif
     g_pd_dyngate = 0;                                /* dynamic passes done — never let the gate leak past ph1/roofs */
     /* lighting overlay: SMOOTH/DITHER/BINARY compute the per-cell field HERE then apply it per pixel;
      * PREDIM already computed it up-front and baked dimming into tmp (dim-at-draw), so it skips this. */
@@ -7941,6 +7958,8 @@ static int player_step(world_t*w,int dx,int dy)
         if(stepped){
             if(g_veh_kind&&g_veh_kind==g_on.horse){ g_veh_face=veh_face_of(dx,dy); g_veh_phase^=1;   /* mounted: re-face the horse sprite */
                 g_avatar_ovr=(uint16_t)(basetile(g_on.horse)+g_veh_face*2+g_veh_phase); }
+            if(dx||dy){ static const int8_t D8[3][3]={{7,0,1},{6,-1,2},{5,4,3}}; int d=D8[(dy>0)-(dy<0)+1][(dx>0)-(dx<0)+1];   /* the step's way, 0 north clockwise */
+                if(d>=0){ g_facing[1]=(uint8_t)(((d+1)>>1)&3); g_walkf[1]^=1; g_amoved[1]=1; } }   /* he turns the way he goes, as everyone does (step_to) */
             hazard_check(w,1); pay(1,g_walk_cost); followers_walk(w); sched_run(w); } }
     if(stepped) (void)step_triggers(w);
     else if((dx||dy) && !g_veh_kind) sfx_play(1,311);   /* a bump (sound_effects.md) */
@@ -20236,6 +20255,7 @@ int main(int argc, char **argv)
         if (key && ((g_resting && !g_mantra) || g_gw)) key=0;       /* the camp and the moongate walk take no input (but SE's dream, se_rest.md §6) */
         if (key) {
             int a = key & 0xFF;
+            g_amoved[1]=0;                           /* the Avatar stands unless this key walks him (player_step) */
 #ifdef KEYPROF
             kp_key=key;
 #endif
