@@ -1069,6 +1069,23 @@ static void draw_intro_frame(int s,int scroll,int show_cap)
         intro_caption_page(g_intro_base[s]+pg); }                      /* parchment + U.EXE narration */
 }
 
+/* one step of the moongate's rise: only the gate's rectangle (and the ground cover's) is redrawn and presented,
+ * from the scene picture up; the parchment below is left alone. A whole-scene redraw and present a step took
+ * 0.4 s on an 8 MHz ST (2026-11-14). XBIOS Vsync (#37) paces it, as the full present did. */
+static void intro_gate_step(int s)
+{
+    int ox=(LW-g_intro[s].w)/2, oy=(LH-g_intro[s].h)/2, cap=g_scroll_h>0?LH-g_scroll_h:LH-34;
+    int x0=g_gx, x1=g_gx+g_gate_w, y0=g_gate_y, y1=GATE_CLIP_Y;
+    if(g_cover){ if(g_cvx<x0) x0=g_cvx; if(g_cvx+g_cvw>x1) x1=g_cvx+g_cvw; if(g_cvy<y0) y0=g_cvy; if(g_cvy+g_cvh>y1) y1=g_cvy+g_cvh; }
+    if(x0<0) x0=0; if(y0<0) y0=0; if(x1>LW) x1=LW; if(y1>cap) y1=cap;
+    if(x1<=x0||y1<=y0) return;
+    blit_opaque_clip(g_intro[s].pix,g_intro[s].w,g_intro[s].h,ox,oy,x0,y0,x1,y1);
+    blit_indexed_clip(g_gate,g_gate_w,g_gh,g_gx+g_gate_jx,g_gate_y,x0,y0,x1,y1<GATE_CLIP_Y?y1:GATE_CLIP_Y);
+    if(g_cover) blit_indexed_clip(g_cover,g_cvw,g_cvh,g_cvx,g_cvy,x0,y0,x1,y1);
+    rdr_present_rect_doubled(x0,y0,x1-x0,y1-y0,LH);
+    vsync_pump();
+}
+
 /* save/restore a rectangle of the chunky backbuffer (for the dirty-rect hold: snapshot the
  * clean animation box once, restore it before drawing each new mouth/clock frame). */
 static void save_rect(uint8_t*buf,int rx,int ry,int rw,int rh){
@@ -1583,8 +1600,7 @@ static void run_intro_body(void)
         for(int k=0;k<=8;k++){ fe_fade(pal,k); }      /* fade in */
         if(g_intro[s].type==2 && g_gate){                         /* the moongate ASCENDS (nuvie 0x64->0x5) */
             int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* ST: one screen, so each step presents only what moved (a full flip a step took 1.2 s at 8 MHz) */
-            for(int gy=0x64; gy>0x5; gy-=2){ g_gate_y=gy;
-                draw_intro_frame(s,0,1); rdr_present_doubled(LH); }
+            for(int gy=0x64; gy>0x5; gy-=2){ g_gate_y=gy; intro_gate_step(s); }
             if(st1) rdr_flip_begin();
             g_gate_y=0x5; }
         int key=0;
