@@ -2643,7 +2643,12 @@ int main(int argc, char **argv)
                                          {9,49,68},{5,0,112},{12,210,132},{7,120,58} };
           uint8_t *gsc=scratch(320*200,0);
           compose_shapes(dir,"INTRO.SHP",GG,(int)(sizeof GG/sizeof GG[0]),gsc,320,200);
-          { uint8_t lc[48+256]; build_scene_lc(p7,gsc,320*200,lc); fwrite(lc,1,sizeof lc,fe); }
+          /* and the narration parchment drawn over it, which carries every caption (as the intro scenes,
+           * palette_lowcolor.md "Cutscene palettes"): without it the dark plain outvoted the parchment and
+           * the captions went grey. Counting the scene's two smaller scrolls and the rescuers (INTRO.SHP
+           * 0..2) as well was tried: they turned the Avatar's blue shirt and the altar olive or purple. */
+          { scene_extra_t xs[1]={{g_scrollpix,(long)g_scw*g_sch,16}};
+            uint8_t lc[48+256]; build_scene_lc_x(p7,gsc,320*200,xs,1,lc); fwrite(lc,1,sizeof lc,fe); }
           free(gsc); }
         be16(fe, GG_NSH); { int nshipped=0; long gpre=ftell(fe);
         for(int i=0;i<GG_NSH;i++){ int w=0,h=0; uint8_t*sp=load_shape(dir,"INTRO.SHP",i,&w,&h);

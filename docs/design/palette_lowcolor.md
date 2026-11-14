@@ -435,3 +435,10 @@ at half), and weighs each colour up by saturation (x1 grey .. x2 pure). Result: 
 picture's oranges and yellows back, a coloured TV, blue lightning ("searing blue fire"), a skin-toned hand, the gate's
 inner frame kept. Tried and backed off: a saturation weight up to x3 with the TV pictures at full weight turned the
 TV cabinet's tan edges magenta.
+
+The gargoyle-sacrifice opening (§1B) got the same treatment afterwards. Its 16 had been built from the mid-scene
+tableau alone, and its captions showed on grey parchment. It now counts the narration parchment too, at its screen
+share (weight 16), and the captions are yellow as in the 256-colour version. Tried and backed off: counting the
+scene's two smaller scrolls (BLOCKS.SHP 0, 1) and the rescuers (INTRO.SHP 0..2, x2) as well. Against the TT's
+256-colour frames, they turned the Avatar's blue shirt and the grey altar olive or purple. The parchment alone keeps
+both. (The Avatar's brown hair shows grey on the ST with or without it.)
