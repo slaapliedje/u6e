@@ -138,6 +138,8 @@ typedef struct GameLayer {
     const char *see;                                            /* L)ook's opening words (usecode_use.md, the look line) */
     int16_t ol_talk, ol_talk_hi;                                /* objlist offsets of the talk flags (0-7, 8-15); 0 = U6's (converse.md §6c) */
     int  (*rest)(world_t *w);                                   /* R)est: the refusals, the camp, the meal, the sleep (rest.md) */
+    void (*rest_tick)(world_t *w);                              /* a step of the night, when the game has its own (se_rest.md §5) */
+    int  (*rest_key)(world_t *w,int a);                         /* its prompts' keys (se_rest.md §2) */
     void (*cast)(void);                                         /* C)ast: the spellbook page (magic_skills.md §6) */
     /* the pack */
     uint8_t gold_pool;                                          /* the party's gold is one pool (SE/MD), not coins carried in the packs (U6) */
@@ -7650,11 +7652,13 @@ static void ball_submit(world_t*w,int stage)
 static void mantra_submit(world_t*w);
 static int do_verb_count(world_t*w);
 static int ask_count(int verb);
-static void entry_submit(world_t*w){ if(g_mantra==1){ mantra_submit(w); g_mantra=0; } else if(g_mantra==2){ wish_submit(w); g_mantra=0; }
+static void se_dream_submit(world_t*w);
+static void entry_submit(world_t*w){ if(g_mantra==6){ se_dream_submit(w); return; } if(g_mantra==1){ mantra_submit(w); g_mantra=0; } else if(g_mantra==2){ wish_submit(w); g_mantra=0; }
     else if(g_mantra==5){ g_mantra=0; (void)do_verb_count(w); }
     else { int st=g_mantra; g_mantra=0; ball_submit(w,st); } }
-static int entry_cap(void){ return g_mantra==1?CVM_INPUT-1:g_mantra==2?8:3; }
-static const char*entry_prompt(void){ return g_mantra==1?"Mantra: ":g_mantra==2?"Wish for: ":g_mantra==3?"At latitude=":g_mantra==5?"How many? ":"longitude="; }
+static int entry_cap(void){ return g_mantra==6?12:g_mantra==1?CVM_INPUT-1:g_mantra==2?8:3; }
+static char g_se_dream_txt[400];
+static const char*entry_prompt(void){ return g_mantra==6?g_se_dream_txt:g_mantra==1?"Mantra: ":g_mantra==2?"Wish for: ":g_mantra==3?"At latitude=":g_mantra==5?"How many? ":"longitude="; }
 /* what U)se does alike on the map and in the pack (usecode_use.md); -1 = not one of these */
 static int g_tscope_x, g_tscope_y;
 static void spell_damage(int caster,int id,int dmg);
@@ -12171,7 +12175,7 @@ static const char* rest_refusal(const world_t*w)      /* the reason the party ca
     if(g_veh_horse>=0) return "-Dismount first!";
     return 0; }
 static const char* rest_prompt_text(void)
-{   return g_rest_stage==2?"Who will guard? ":"How many hours? "; }
+{   return g_rest_stage>=3?"":g_rest_stage==2?"Who will guard? ":"How many hours? "; }   /* SE's questions sit in the scroll (se_rest.md §2) */
 /* the party lies down (sleepers show their body shape; the guard stands) or stands up again */
 static void rest_pose(int p,int a,int down)
 {   if(a==1){ g_avatar_ovr=down?(uint16_t)basetile(339):0; return; }
@@ -12181,13 +12185,24 @@ static void rest_pose(int p,int a,int down)
     else { g_abase[a]=g_rest_base[p]; g_atpd[a]=g_rest_tpd[p]; g_atile[a]=g_abase[a]; } }
 /* the camp: a lit campfire on the Avatar's tile, the party in the ring around it (rest.md §3) */
 static int walk_to(const world_t*w,int i,int tx,int ty);
+static void rest_gather(world_t*w);
 static void rest_start(world_t*w,int hours,int guard)
 {
-    static const int SX[8]={0,0,1,-1,1,-1,1,-1}, SY[8]={-1,1,0,0,-1,1,1,-1};   /* the ring by member index */
-    static const uint8_t FACE[8]={2,0,3,1,2,0,3,1};              /* each turned to the fire if it can't get there */
     int fx=(int)w->px, fy=(int)w->py;
     g_pending_verb=0; g_rest_stage=0;
     g_rest_fire=temp_obj_new(253,1,fx,fy,0); build_blocked();
+    rest_gather(w);
+    for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
+        g_amoved[a]=0; g_rest_base[p]=g_abase[a]; g_rest_tpd[p]=g_atpd[a]; g_rest_slept[p]=0; }
+    build_blocked();
+    g_resting=1; g_rest_turns=hours*6; g_rest_guard=guard; g_rest_fed=0; g_rest_meal=0; g_rest_tick=plat_ticks_200hz(); g_rest_i=0; g_rest_hrs=hours; g_rest_broken=0;
+}
+/* the party walks to its places round the leader's tile, up to 20 rounds (rest.md §7; se_rest.md §3) */
+static void rest_gather(world_t*w)
+{
+    static const int SX[8]={0,0,1,-1,1,-1,1,-1}, SY[8]={-1,1,0,0,-1,1,1,-1};   /* the ring by member index */
+    static const uint8_t FACE[8]={2,0,3,1,2,0,3,1};              /* each turned to the middle if it can't get there */
+    int fx=(int)w->px, fy=(int)w->py;
     for(int round=0;round<20;round++){ int any=0;                /* up to 20 rounds of walking to their places (rest.md §3) */
         for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor, tx=fx+SX[p], ty=fy+SY[p]; if(a<1||a>=U6_MAX_ACTORS) continue;
             if(a==1){ if(((int)w->px!=tx||(int)w->py!=ty)&&!npc_occupied(1,tx,ty)&&world_is_passable(w,tx,ty)){ w->px=(uint16_t)tx; w->py=(uint16_t)ty; any=1; } g_facing[1]=FACE[p]; continue; }   /* every round, as the others: off the fire once a follower clears the place (DOS walks slot 0 too) */
@@ -12195,10 +12210,6 @@ static void rest_start(world_t*w,int hours,int guard)
             g_mover=a; g_amoved[a]=0; g_pts[a]=127; if(walk_to(w,a,tx,ty)) any=1; else g_facing[a]=FACE[p]; g_mover=-1; }
         if(!any) break;
         if(!g_look_test&&!g_bot){ compose_map(w); present_map(); for(int f=0;f<4;f++) vsync_pump(); } }
-    for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;
-        g_amoved[a]=0; g_rest_base[p]=g_abase[a]; g_rest_tpd[p]=g_atpd[a]; g_rest_slept[p]=0; }
-    build_blocked();
-    g_resting=1; g_rest_turns=hours*6; g_rest_guard=guard; g_rest_fed=0; g_rest_meal=0; g_rest_tick=plat_ticks_200hz(); g_rest_i=0; g_rest_hrs=hours; g_rest_broken=0;
 }
 /* waking (rest.md §4): the fire goes out; the fed sleepers heal if the rest counter allows; everyone stands up */
 static void rest_finish(world_t*w)
@@ -12230,6 +12241,7 @@ static int rest_ambush(world_t*w)
 static void rest_tick(world_t*w)
 {
     if(!g_resting) return;
+    if(g_gl->rest_tick){ g_gl->rest_tick(w); return; }
     if(g_rest_meal==0){ int n=msgcat(0,"Mealtime!");                                       /* a bard plays */
         for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor; if(a>1 && g_ahp[a]>0 && actor_objn(a)==386){ g_abase[a]=(uint16_t)basetile(392); g_atile[a]=g_abase[a];
             n=msgcat(n," "); n=msgcat(n,g_party[p].name); n=msgcat(n," plays a tune."); break; } }
@@ -12259,6 +12271,7 @@ static void rest_tick(world_t*w)
 static int rest_key(world_t*w,int a)
 {
     if(!g_rest_stage) return 0;                                                   /* no prompt armed */
+    if(g_gl->rest_key) return g_gl->rest_key(w,a);
     if(g_rest_stage==1){                                                          /* one key: 1..9, anything else 0 and it's off */
         if(a>='1'&&a<='9'){ char e[2]={(char)a,0}; int n=msgcat(0,"How many hours? "); msgcat(n,e); g_rest_hours=a-'0';
             if(g_nparty>1){ g_rest_stage=2; g_tcur_dx=g_tcur_dy=0; return 1; }
@@ -12289,6 +12302,107 @@ static int u6_rest(world_t *w)
         int n=msgcat(0,"Hull Strength: "); n=msgcat_int(n,h); msgcat(n,"%"); music_resume_area(w->level); return 1; }
     g_pending_verb='R'; g_rest_stage=1; g_rest_len=0; g_rest_buf[0]=0; g_rest_hours=0; g_rest_guard=-1; msgcat(0,"Rest");
     return 1;
+}
+/* ---- SE's R)est (docs/rules/se_rest.md): no fire and no guard; a meal that heals; the dream ------------- */
+static int  g_se_dream_ok, g_se_dream_a=-1;           /* hours x 3 > the party (§5); the dreamer awaiting its answer */
+static int  g_se_blanket[8];                          /* each member's blanket (246), -1 = none */
+static int  se_rest_msg(const char*s){ int n=0; while(g_msg[n]) n++; return msgcat(n,s); }
+/* §1: the reason the party can't rest, or 0 */
+static const char* se_rest_refusal(const world_t*w)
+{   int px=(int)w->px, py=(int)w->py;
+    if(g_combat_mode) return "\nNot in combat mode!";
+    for(int i=16;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay) || !(align_of(i)&0x20)) continue;   /* a foe within 39 each way */
+        if(ax-px<=39 && px-ax<=39 && ay-py<=39 && py-ay<=39) return "\nNot while foes are near!"; }
+    for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(is_party_member(i) || !actor_pos(i,&ax,&ay) || g_asleep[i] || g_ainvis[i]) continue;   /* anyone awake and seen within 5 */
+        if(ax-px<=5 && px-ax<=5 && ay-py<=5 && py-ay<=5) return "\nIt's too noisy to sleep here!"; }
+    if(g_solo_on) return "\nNot in solo mode!";
+    if(g_veh_kind==237) return "\nNot while aboard ship!";
+    for(int p=0;p<g_nparty;p++) if(actor_objn(g_party[p].actor)==307) return "-Not on a turtle!";
+    return 0; }
+static int se_rest(world_t *w)
+{
+    if(g_resting) return 0;
+    { const char*r=se_rest_refusal(w); int n=msgcat(0,"Rest"); if(r){ msgcat(n,r); return 1; }
+      msgcat(n,(g_hour<7||g_hour>17)?"\nRest until sunrise? ":"\nRest until sunset? "); }
+    g_pending_verb='R'; g_rest_stage=3;
+    return 1;
+}
+static int se_meal_food(int on){ return on==61||on==62||se_is_food(on); }   /* the meal's list adds the stalks (§4) */
+static int se_food_row(int a){ for(int i=0;i<g_ow.ninv;i++) if(se_meal_food(g_ow.inv[i].obj_n)&&(g_ow.inv[i].owner?g_ow.inv[i].owner:1)==a) return i; return -1; }
+/* §3-§5: the camp, the meal, lying down */
+static void se_rest_start(world_t*w,int hours)
+{
+    g_pending_verb=0; g_rest_stage=0;
+    rest_gather(w);
+    if(hours>4){ int healed=0;                                                   /* the meal (§4) */
+        for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor, k;
+            se_rest_msg("\n"); se_rest_msg(g_party[p].name);
+            if(a==11){ se_rest_msg(" does not eat."); continue; }
+            k=se_food_row(a); for(int q=0;q<g_nparty&&k<0;q++) k=se_food_row(g_party[q].actor);   /* its own, else each member's in turn */
+            if(k<0){ se_rest_msg(" has no food."); continue; }
+            pack_row_take(k,1); se_rest_msg(" has food.");
+            if(g_rest_counter==0 && se_max_hp(a)>=(int)g_ahp[a]+5){ g_ahp[a]=(uint8_t)(g_ahp[a]+5); healed=1; } }
+        if(healed) g_rest_counter=12;
+        sync_party_hp(); }
+    for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor, b, x, y; g_se_blanket[p]=-1;   /* each lies down under a blanket (§5) */
+        if(a<1||a>=U6_MAX_ACTORS) continue;
+        g_amoved[a]=0; g_rest_base[p]=g_abase[a]; g_rest_tpd[p]=g_atpd[a];
+        if(a==11) continue;
+        if(a==1){ x=(int)w->px; y=(int)w->py; } else { x=g_actx[a]; y=g_acty[a]; }
+        if((b=se_sleep_body(a))!=0){ uint16_t t=(uint16_t)(basetile(b&0x3ff)+(b>>10));
+            if(a==1) g_avatar_ovr=t; else { g_abase[a]=t; g_atile[a]=t; g_atpd[a]=0; } }
+        g_se_blanket[p]=temp_obj_new(246,1,x,y,0); }
+    build_blocked();
+    g_resting=1; g_rest_turns=hours*3; g_rest_i=0; g_rest_hrs=hours; g_rest_broken=0; g_se_dream_ok=(hours*3>g_nparty);
+    g_rest_meal=g_nparty+2; g_rest_tick=plat_ticks_200hz();                    /* (past U6's mealtime: the main loop paces the steps) */
+}
+/* §7 */
+static void se_rest_finish(world_t*w)
+{
+    for(int p=0;p<g_nparty && p<8;p++){ int a=g_party[p].actor, b=g_se_blanket[p]; if(a<1||a>=U6_MAX_ACTORS) continue;
+        if(a==1) g_avatar_ovr=0; else { g_abase[a]=g_rest_base[p]; g_atpd[a]=g_rest_tpd[p]; g_atile[a]=g_abase[a]; }
+        if(b>=0 && b<g_ow.nobjs && g_wobj[b].obj_n==246) g_wobj[b].alive=0;
+        g_se_blanket[p]=-1; g_pts[a]=(int8_t)g_adex[a]; }
+    g_resting=0; g_rest_turns=0; build_blocked(); music_resume_area(w->level);
+}
+/* §6: the level test; a level up asks the dream's question */
+static int se_dream(int a)
+{   static const uint16_t NEED[9]={0,100,200,400,800,1600,3200,6400,32767};
+    int lv=g_alevel[a]; const char*nm=g_party[member_index(a)].name;
+    if(lv<0||lv>8||NEED[lv]>g_aexp[a]) return 0;
+    g_alevel[a]=(int8_t)(lv+1);
+    { int n=0; const char*part[9]={nm," has a dream...\n\n",a==2?"She":"He"," chases three animals through the jungle: a bear, a jaguar and a monkey.\n\n",
+          "The path branches, each animal going a separate way.\n\nDoes ",nm," follow the @bear, the @jaguar or the @monkey?\n","Your choice: ",0};
+      for(int k=0;part[k];k++) for(const char*c=part[k];*c&&n<(int)sizeof g_se_dream_txt-1;c++) g_se_dream_txt[n++]=*c;
+      g_se_dream_txt[n]=0; }
+    g_se_dream_a=a; g_mantra=6; g_inlen=0; g_inbuf[0]=0; msgcat(0,g_se_dream_txt);
+    return 1; }
+static void se_dream_submit(world_t*w)
+{   int a=g_se_dream_a; char c=g_inbuf[0]; uint8_t *st;
+    g_mantra=0; g_se_dream_a=-1; g_inlen=0; g_inbuf[0]=0; g_msg[0]=0;
+    if(a<1||a>=U6_MAX_ACTORS) return;
+    if(c=='B'||c=='b') st=&g_astr[a]; else if(c=='J'||c=='j') st=&g_adex[a]; else if(c=='M'||c=='m') st=&g_aint[a];
+    else st = g_astr[a]>g_adex[a] ? (g_astr[a]>g_aint[a]?&g_astr[a]:&g_aint[a]) : (g_adex[a]>g_aint[a]?&g_adex[a]:&g_aint[a]);   /* the highest */
+    if(*st<30) (*st)++;
+    if(g_resting && g_rest_turns<=0) se_rest_finish(w);
+}
+/* §5: a step of the night */
+static void se_rest_tick(world_t*w)
+{
+    if(!g_resting || g_mantra==6) return;                                       /* (a dream awaits its answer) */
+    w->clock+=20; g_hour=clock_hour(w); g_minutes=clock_minutes(w); step_npcs(w);
+    if(g_se_dream_ok && g_rest_i<g_nparty) (void)se_dream(g_party[g_rest_i].actor);
+    g_rest_i++; g_rest_turns--;
+    if(g_mantra!=6 && g_rest_turns<=0) se_rest_finish(w);
+}
+/* §2: one key for each question */
+static int se_rest_key(world_t*w,int a)
+{
+    if(g_rest_stage==3){
+        if(a=='N'||a=='n'){ se_rest_msg("N\nHow many hours? "); g_rest_stage=4; return 1; }
+        se_rest_msg("Y"); se_rest_start(w, g_hour<7 ? 7-g_hour : g_hour>17 ? 24-g_hour+7 : 18-g_hour); return 1; }
+    if(a>='1'&&a<='9'){ char e[2]={(char)a,0}; se_rest_msg(e); se_rest_start(w,a-'0'); return 1; }
+    se_rest_msg("0"); g_pending_verb=0; g_rest_stage=0; return 1;
 }
 /* Reconcile the CURRENT level's object changes + the party's readied gear into the save template
  * in place (docs/rules/save_load.md §5; map_levels.md §4b). U6's object DB is a flat record set that
@@ -15107,7 +15221,7 @@ static int se_get(world_t*w,int dx,int dy)
         if(eg->made!=3 && eg->x==(uint16_t)x && eg->y==(uint16_t)y && eg->nemb && g_emb[eg->emb].obj_n==292){ eg->nemb=0; eg->active=0; eg->made=3; } }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -18377,6 +18491,57 @@ int main(int argc, char **argv)
               { o_=persist_obj_new(72,0,(int)w.px+2,(int)w.py,0); build_blocked(); g_msg[0]=0; (void)do_verb(&w,'G',2,0);
                 dbg_num("SE get range=", strstr(g_msg,"Out of range!")!=0 && g_wobj[o_].alive); obj_destroy(o_); }
               build_blocked(); g_msg[0]=0; }
+            /* R)EST (se_rest.md): the refusals, sunrise or sunset, the hours, the meal and the counter, the blankets, the dream, waking */
+            { int M=((w.level==0)?U6_SURFACE_TILES:256)-1, h0=g_hour, mi0=g_minutes, rc0=g_rest_counter, hp0=g_ahp[1], k; uint32_t c0=w.clock; uint16_t px0=w.px, py0=w.py, mx0[8], my0[8];
+              for(k=0;k<g_nparty&&k<8;k++){ mx0[k]=g_actx[g_party[k].actor]; my0[k]=g_acty[g_party[k].actor]; }   /* (the camp moves them into its ring) */
+              uint16_t hid[U6_MAX_ACTORS/8*8]; int nh=0; static uint16_t hidt[U6_MAX_ACTORS]; int8_t lv0[8]; uint16_t ex0[8]; uint8_t s0_=g_astr[1], d0_=g_adex[1], i0_=g_aint[1];
+              for(k=2;k<U6_MAX_ACTORS;k++){ int ax,ay; if(is_party_member(k)||!actor_pos(k,&ax,&ay)) continue;   /* clear the ground of others */
+                  if(ax-(int)w.px<=40&&(int)w.px-ax<=40&&ay-(int)w.py<=40&&(int)w.py-ay<=40){ hid[nh++]=(uint16_t)k; hidt[k]=g_atile[k]; g_atile[k]=0xffff; } }
+              for(k=0;k<g_nparty&&k<8;k++){ int a=g_party[k].actor; lv0[k]=g_alevel[a]; ex0[k]=g_aexp[a]; g_alevel[a]=8; }   /* no dreams but those asked for */
+              build_blocked(); dbg_num("SE rest party=", g_nparty);
+              { const char*r=se_rest_refusal(&w); Cconws("SE rest refusal here: "); Cconws(r?r:"none"); Cconws("\r\n"); }
+              int jg=se_hatch_creature(&w,((int)w.px+30)&M,w.py,333);
+              if(jg>=0){ g_hostile[jg]=1; g_achaos[jg]=0; g_agood[jg]=0; g_msg[0]=0; (void)do_rest(&w); dbg_num("SE rest foes=", strcmp(g_msg,"Rest\nNot while foes are near!")==0 && !g_pending_verb);
+                  g_hostile[jg]=0; g_align_hostile[jg]=0; g_achaos[jg]=0; g_actx[jg]=(uint16_t)(((int)w.px+3)&M); build_blocked(); g_msg[0]=0; (void)do_rest(&w);
+                  dbg_num("SE rest noise=", strcmp(g_msg,"Rest\nIt's too noisy to sleep here!")==0); g_atile[jg]=0xffff; g_temp[jg]=0; build_blocked(); }
+              { int vk=g_veh_kind; g_veh_kind=237; g_msg[0]=0; (void)do_rest(&w); dbg_num("SE rest raft=", strcmp(g_msg,"Rest\nNot while aboard ship!")==0); g_veh_kind=vk; }
+              g_hour=20; g_msg[0]=0; (void)do_rest(&w); int ok=strcmp(g_msg,"Rest\nRest until sunrise? ")==0 && g_pending_verb=='R' && g_rest_stage==3;
+              (void)rest_key(&w,'n'); ok=ok && g_rest_stage==4 && strstr(g_msg,"sunrise? N\nHow many hours? ")!=0; (void)rest_key(&w,'x');
+              dbg_num("SE rest sunrise=", ok && !g_pending_verb && !g_resting && strstr(g_msg,"hours? 0")!=0);
+              /* three hours: no meal, the blankets, waking */
+              g_hour=12; w.clock=(uint32_t)(w.clock/1440*1440+12*60); g_minutes=clock_minutes(&w); g_msg[0]=0; (void)do_rest(&w); ok=strstr(g_msg,"Rest until sunset? ")!=0;
+              (void)rest_key(&w,'N'); (void)rest_key(&w,'3');
+              dbg_num("SE rest hours=", ok && g_resting && g_rest_turns==9 && strstr(g_msg,"food")==0);
+              dbg_num("SE rest blanket=", obj_idx_at((int)w.px,(int)w.py,246)>=0 && g_avatar_ovr!=0);
+              { uint32_t t0=w.clock; for(k=0;k<100&&g_resting;k++) se_rest_tick(&w);
+                dbg_num("SE rest wake=", !g_resting && w.clock-t0==180 && obj_idx_at((int)w.px,(int)w.py,246)<0 && g_avatar_ovr==0 && g_pts[1]==(int8_t)g_adex[1]); }
+              /* until sunrise from 20:00 with one meat: the leader eats and heals 5; the counter is 12; a second rest heals no one */
+              g_hour=20; w.clock=(uint32_t)(w.clock/1440*1440+20*60); g_minutes=clock_minutes(&w); g_rest_counter=0;
+              { int m0=objworld_count(&g_ow,103); vm_new(1,103,0,1); g_ahp[1]=(uint8_t)(se_max_hp(1)-10); sync_party_hp(); int hpb=g_ahp[1];
+                g_msg[0]=0; (void)do_rest(&w); (void)rest_key(&w,'y');
+                ok=g_rest_turns==33 && g_ahp[1]==hpb+5 && strstr(g_msg,"Y\nAvatar has food.")!=0;
+                dbg_num("SE rest meal=", ok); Cconws("SE rest meal text: "); { static char q_[600]; int z_=0; for(;g_msg[z_]&&z_<599;z_++) q_[z_]=g_msg[z_]=="\n"[0]?'|':g_msg[z_]; q_[z_]=0; Cconws(q_); } Cconws("\r\n");
+                dbg_num("SE rest sunrise hours=", g_rest_turns==33); dbg_num("SE rest counter set=", g_rest_counter==12);
+                for(k=0;k<200&&g_resting;k++) se_rest_tick(&w);
+                g_rest_counter=3; ok=1;                                                  /* (a counter still running: the test moved the clock about) */
+                vm_new(1,103,0,1); hpb=g_ahp[1]; g_msg[0]=0; g_hour=12; (void)do_rest(&w); (void)rest_key(&w,'n'); (void)rest_key(&w,'5');
+                dbg_num("SE rest counter=", ok && g_ahp[1]==hpb && strstr(g_msg," has food.")!=0);
+                for(k=0;k<200&&g_resting;k++) se_rest_tick(&w); pack_take(1,103,objworld_count(&g_ow,103)-m0); }
+              /* the dream: the jaguar, then an empty answer for the highest; and one in the night */
+              g_alevel[1]=1; g_aexp[1]=150; g_adex[1]=12; g_msg[0]=0; ok=se_dream(1) && g_alevel[1]==2 && g_mantra==6 && strstr(g_msg,"has a dream...")!=0 && strstr(g_msg,"Your choice: ")!=0;
+             
+              strcpy(g_inbuf,"jaguar"); g_inlen=6; entry_submit(&w); dbg_num("SE rest dream=", ok && g_adex[1]==13 && !g_mantra);
+              g_astr[1]=10; g_adex[1]=12; g_aint[1]=12; g_aexp[1]=250; (void)se_dream(1); g_inbuf[0]=0; g_inlen=0; entry_submit(&w);
+              dbg_num("SE rest dream default=", g_alevel[1]==3 && g_aint[1]==13 && g_adex[1]==12 && g_astr[1]==10);
+              g_aexp[1]=500; g_msg[0]=0; g_hour=12; (void)do_rest(&w); (void)rest_key(&w,'n'); (void)rest_key(&w,'2'); se_rest_tick(&w);
+              ok=g_mantra==6 && g_resting && g_alevel[1]==4; k=g_rest_turns; se_rest_tick(&w); ok=ok && g_rest_turns==k;   /* the night waits on the answer */
+              strcpy(g_inbuf,"Bear"); g_inlen=4; entry_submit(&w); for(k=0;k<100&&g_resting;k++) se_rest_tick(&w);
+              dbg_num("SE rest dream night=", ok && g_astr[1]==11 && !g_resting);
+              for(k=0;k<g_nparty&&k<8;k++){ int a=g_party[k].actor; g_alevel[a]=lv0[k]; g_aexp[a]=ex0[k]; }
+              for(k=0;k<nh;k++) g_atile[hid[k]]=hidt[hid[k]];
+              w.px=px0; w.py=py0; for(k=0;k<g_nparty&&k<8;k++){ g_actx[g_party[k].actor]=mx0[k]; g_acty[g_party[k].actor]=my0[k]; }
+              g_astr[1]=s0_; g_adex[1]=d0_; g_aint[1]=i0_; g_ahp[1]=(uint8_t)hp0; sync_party_hp(); g_rest_counter=(uint8_t)rc0; w.clock=c0; g_hour=h0; g_minutes=mi0;
+              g_pending_verb=0; g_rest_stage=0; build_blocked(); g_msg[0]=0; }
             /* CRATE, BURNT LOGS, BRAZIER (§3): a shut crate opens and spills; an open one is "Not possible." then searched; logs
              * at frame 1 light, at 0 refuse; a brazier at frame 2 refuses, at 0 asks "On " */
             { int ex=(int)w.px, ey=(int)w.py; for(int d=0;d<8;d++){ static const int8_t DX[8]={1,-1,0,0,1,-1,1,-1}, DY[8]={0,0,1,-1,1,1,-1,-1};
@@ -19977,7 +20142,7 @@ int main(int argc, char **argv)
             if(sc==0x3C){ bot_dump_actors(&w); key=0; } else if(sc==0x3D){ bot_dump_objects(&w); key=0; }
             else if(sc==0x3E){ bot_dump_pass(&w); key=0; } else if(sc==0x3F) key=0; }
         if (key && g_peer_on){ g_peer_on=0; compose_map(&w); draw_border_tiles(); redraw=1; key=0; }   /* any key closes the gem's view */
-        if (key && (g_resting || g_gw)) key=0;       /* the camp and the moongate walk take no input */
+        if (key && ((g_resting && !g_mantra) || g_gw)) key=0;       /* the camp and the moongate walk take no input (but SE's dream, se_rest.md §6) */
         if (key) {
             int a = key & 0xFF;
             g_travel_active=0;                       /* any key press cancels click-to-travel */
@@ -19998,7 +20163,7 @@ int main(int argc, char **argv)
             } else if (g_mantra) {                   /* typing an answer: a rune's mantra, a wish, the crystal ball (usecode_use.md) */
                 if      (a==0x0d) { entry_submit(&w); compose_map(&w); draw_border_tiles(); redraw=1; }
                 else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } { int n=msgcat(0,entry_prompt()); msgcat(n,g_inbuf); } redraw=1; }
-                else if (a==0x1b) { g_mantra=0; g_msg[0]=0; redraw=1; }
+                else if (a==0x1b) { if(g_mantra==6){ g_inlen=0; g_inbuf[0]=0; entry_submit(&w); } else { g_mantra=0; g_msg[0]=0; } redraw=1; }   /* (SE's dream: an empty answer, se_rest.md §9) */
                 else if (a>=0x20 && a<0x7f && g_inlen<entry_cap()) { g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0;
                     { int n=msgcat(0,entry_prompt()); msgcat(n,g_inbuf); } redraw=1; }
             } else if (g_save_menu) {                /* the slot page (save_load.md §2b) */

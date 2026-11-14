@@ -201,3 +201,11 @@ list once SE's seams exist.
   searched as it is taken (`Searching the body, you find ...`), the lit torch into a hand (slip 28), the egg and skin
   into their carried forms, a handful of diamonds, the bulb taking its egg. Engine choices for the user: the pooled
   gold, and the dead looked at as their remains object.
+- 2026-11-13: slips 22-28 taken as the intent by the user (each keeps its DOS branch behind g_dos_slips).
+- 2026-11-13: item 7 finished (rules/se_rest.md). SE's R)est read from its GAME.EXE and built (gl_se rest/rest_tick/
+  rest_key): its own refusals (combat, foes within 39, noise within 5, solo, the raft, a turtle rider), `Rest until
+  sunrise?`/`sunset?` or N hours, U6's ring with no fire and no guard, the meal only past 4 hours (each fed member
+  5 HP while the rest counter is 0; the counter then 12), everyone lying as their remains under a blanket, hours x 3
+  steps of 20 minutes with nothing coming in the night, and the level test per member with SE's dream (bear,
+  jaguar, monkey: strength, dexterity, intelligence; else the highest). The dream's window and portrait and the
+  border's pictures wait for item 8.

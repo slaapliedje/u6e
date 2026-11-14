@@ -7,9 +7,9 @@ register is deviations.md.
 > Provenance
 > - Derived from: reading SE's GAME.EXE. The rule specs named in each row cite the routines read.
 > - Validated by: `make check-se-use` checks each fix below.
-> - Last updated: 2026-11-12 (the first rows: the user takes the intent over eleven DOS slips; the vehicles' engine choices)
+> - Last updated: 2026-11-13 (slips 22-28 taken as the intent by the user; earlier: the first rows, the vehicles' engine choices)
 
-## Fixed by the user's choice (2026-11-12): DOS's own slips we don't copy
+## Fixed by the user's choice (2026-11-12; slips 22-28 2026-11-13): DOS's own slips we don't copy
 
 The user's rule (row 12 added 2026-11-12 under it, as plain as the first eleven): where DOS's code plainly can't do what it was written to do, the engine does what it
 was meant to do (ScummVM was looked at first: its SE U)se is mostly unwritten, so it decides none of
@@ -40,7 +40,7 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 20 | Motazz's frenzy gives +3 strength to every wild fighter | se_invoke.md §4 | Gives it only to one also cursed (the bonus sits inside the curse test) |
 | 21 | An invocation's resist roll weighs the foe against Triolo | se_invoke.md §4 | Weighs it against the actor numbered by the shown member's party slot |
 | 22 | The bell takes a lying tyrannosaurus by either of its tiles | se_use.md §5i | Reads the second tile's actor and then tests the tile's own object, so that tile gives `No effect.`; the engine takes the actor the second tile names, in reach of that tile |
-| 23 | The pteranodon's reach is the box round its head | se_big.md §8 | Each of its four boxes lacks one bound, so a foe any distance off on that side counts as in reach; the engine closes the box at the creature's own row or column (the user to confirm the closing) |
+| 23 | The pteranodon's reach is the box round its head | se_big.md §8 | Each of its four boxes lacks one bound, so a foe any distance off on that side counts as in reach; the engine closes the box at the creature's own row or column |
 | 24 | A pteranodon's quarter turn needs room on the cells it will cover | se_big.md §5 | Tests (x-1, y) from north or south and (x, y-1) from east or west, as for the two-cell animals; but the pteranodon is wide facing north or south, so DOS tests cells it already covers. The engine tests (x, y-1) and (x-1, y) |
 | 26 | A big creature that wakes stands up whole | se_combat.md §3i | Only the tyrannosaurus gets its pieces back; the others wake with none, their second remains left lying. The engine rebuilds every big creature facing north, as hatching does (the tyrannosaurus's tail in frame 1 where DOS gives 3) |
 | 25 | The gorilla's and the raft's old facing is read as frame / 8 | se_big.md §5 | DOS reads frame / 16, so south reads as east and west as south; it matters only for a diagonal turn, which no step makes (the engine makes none) |
