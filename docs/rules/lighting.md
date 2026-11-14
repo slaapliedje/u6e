@@ -11,7 +11,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M6
 >   confirmed against real TILEFLAG via tools/tflagprobe. Symptom + behaviour verified by
 >   rendering the user's save in ScummVM headless (xvfb + `scummvm -x N`) vs our engine.
 > - Confidence : model confirmed; some numbers (min-brightness, radii) to tune vs ScummVM.
-> - Last updated : 2026-10-27
+> - Last updated : 2026-11-13 (§9: line of sight read in DOS, replaces the reference's flood)
 
 ## 1. The two independent effects (U6 combines both)
 1. **Visibility (line-of-sight)** — you only see tiles reachable from the avatar without
@@ -131,7 +131,7 @@ the run ends with the eclipse on at noon so a capture shows the strip and the da
     lighting block in render/gamedemo.c.
   - Debug toggles: -DLIGHT_DEBUG_BINARY (indoor=black/outdoor=full), -DLIGHT_DEBUG_FIELD
     (black where lev==0) for diagnosing the field.
-- Stage C1 DONE: visibility/LOS flood in compose_map (compute_visibility). 4-connected flood
+- Stage C1 (SUPERSEDED 2026-11-13 by §9, DOS's own rule): visibility/LOS flood in compose_map (compute_visibility). 4-connected flood
   from the avatar (view centre) through non-sight-blocking cells; sight-blocker = boundary
   (tflag2 bit2) AND NOT look-through (bit3) — so walls/closed doors/doorways block, open doors
   + windowed-open frames see through; objects checked via their current tile. reshapeBoundary
@@ -244,3 +244,32 @@ the run ends with the eclipse on at noon so a capture shows the strip and the da
 ## 8. As DOS has it (read 2026-11-05; overrides §2)
 
 A level of light 0-7, worked out each minute: 0 in an eclipse, before hour 5, after hour 19, and on levels 1-4. Hour 5: minute/10 + 1. Hour 19: (59 - minute)/10 + 1. Otherwise 7. Below 4 with a light burning in the party or a Light spell running it is 4. At 7 there is no darkness at all, indoors or out; below it only what lies within that radius of the leader, or of a light, can be seen. **An eclipse** is the spell's, or all day on the first of months 3, 6, 9, 12.
+
+## 9. Line of sight as DOS has it (read 2026-11-13; overrides §1 and the C1 flood of §7)
+
+Read in DOS GAME.EXE 4.5 (the sight test at image 0x8c8b, the flood at 0x8db1, the object marks at
+0x9084-0x91cd, the view builder from 0x92c0). An outside tester saw the castle's floor through its
+south wall from the moat, where the original shows black; §1's flood, taken from the reference, let
+sight through every window from any distance.
+
+**What blocks sight in a cell.** The objects in the cell are looked at first, by their tile (the
+object's base tile plus its frame); each object with tileflags2 bit 3 marks the cell *window*, else
+one with tileflags2 bit 2 marks it *opaque*, else one with tileflags3 bit 5 marks it *clear*. A big
+object whose tile T has tileflags2 bit 2 set on T - 1 also marks its other cell opaque: the cell
+above when T has bit 6, the cell to the left when T has bit 7. Then, in this order:
+1. a cell marked opaque blocks;
+2. a cell whose map tile has tileflags2 bit 3, or marked window, lets sight through only when it is
+   the leader's own cell or one of the four next to it (same row or column, one step); from
+   anywhere else it blocks;
+3. a cell marked clear lets sight through;
+4. a cell whose map tile has tileflags2 bit 2 blocks; any other lets sight through.
+
+So a window shows what lies beyond it only to someone standing at it; from further off it is wall.
+
+**The flood.** From the leader's cell, over the 11 x 11 view and one cell round it (13 x 13). A cell
+taken from the queue is seen; if sight passes through it, its eight neighbours not yet queued join the
+queue. So a wall next to a seen open cell is itself seen (its face is drawn) but nothing behind it,
+and sight slips between two walls that meet only at a corner. If sight does not pass through the
+leader's own cell, the flood starts from the cells east and south of it instead (those that pass).
+
+**On screen.** A cell not seen is drawn black. The light flood (§8) uses the same test.

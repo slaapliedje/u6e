@@ -920,3 +920,9 @@ What it was, in order of size:
 
 Still to do: the rest of an action's compose (light + full static rebuild, ~285 ms), `sched_pick` (~150-280 ms
 a key), the step that took a full present (a LUT change), and the panel draws (status twice per key).
+
+### 2026-11-13: line of sight as DOS has it (lighting.md §9)
+The new flood covers 13 x 13 cells, 8 neighbours each, with windows and object marks. Written straight it
+put about 30 ms on a scroll compose on the 8 MHz ST (191 -> 220 ms). Instead it runs on a grid padded with a
+border marked as already queued (no bounds tests), a byte ring and an offset table (no divisions), and a
+row memcpy out. Result: `make bench-st` scroll compose 180.8 ms, full 231.0 ms, against 191.0 / 241.2 before.

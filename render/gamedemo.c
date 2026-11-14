@@ -3773,7 +3773,8 @@ static int obj_is_fg(const wobj_t*o){
  * the object's anim-resolved ANCHOR tile (obj_tile — single-cell, no multi-tile expansion), so we walk the
  * anchor's whole frame family. Complete: over-including only wastes a per-object flag test; under-including
  * would drop an emitter/sight-blocker. (light_index_selftest proves the sparse scan == the full scan.) */
-static int tile_is_ls(int t){ return (t>=0&&t<2048) && (light_of(t)>0 || blocks_sight(t)); }
+static int obj_sight_mark(int t);
+static int tile_is_ls(int t){ return (t>=0&&t<2048) && (light_of(t)>0 || blocks_sight(t) || obj_sight_mark(t) || (t>0&&(g_tflags[t-1]&0x04)&&(g_tflags[t]&0xC0))); }
 static int tile_family_ls(int t){                         /* t OR any of its ANIMDATA frames emits/blocks */
     if(tile_is_ls(t)) return 1;
     if(t>=0 && t<2048){ int e=g_anim_idx[t];
@@ -4211,54 +4212,74 @@ static void compute_light(const world_t*w, uint8_t*light_out, int inside){
 #endif
 }
 
-/* sight-blocker: boundary tile (tflag2 bit2) that is NOT a look-through window (bit3).
- * Walls/closed doors/doorways block; open doors + windowed-open frames see through. */
+/* sight-blocker: boundary tile (tflag2 bit2) that is NOT a window (bit3). Used by the light index,
+ * the sight-blocked map (missiles) and the windows' "opaque" object mark below. */
 static int blocks_sight(int tile){
     if(tile<0||tile>=2048) return 0;
     int f=g_tflags[tile]; return (f&0x04) && !(f&0x08);
 }
-/* C1 visibility flood (docs/rules/lighting.md §1): 4-connected flood from the avatar
- * (view centre) through non-sight-blocking cells. Unreached cells aren't visible (drawn
- * black). reshapeBoundary: sight-blocker cells touching a visible cell are themselves
- * shown (so wall faces draw at the edge of vision). Fills vis[VT*VT] with 0/1. */
+/* An object's mark on its cell for line of sight (lighting.md §9): 3 window (tflag2 bit3), 2 opaque
+ * (tflag2 bit2), 1 clear (tflag3 bit5), 0 none. */
+static int obj_sight_mark(int t){
+    if(t<0||t>=2048) return 0;
+    int f=g_tflags[t];
+    if(f&0x08) return 3;
+    if(f&0x04) return 2;
+    if(g_tflags3 && (g_tflags3[t]&0x20)) return 1;
+    return 0;
+}
+/* C1 line of sight as DOS has it (docs/rules/lighting.md §9): an 8-connected flood from the leader over
+ * the view and one cell round it; a reached cell is seen, and the flood goes on only through cells
+ * sight passes. A window (tflag2 bit3, on the map or an object) passes only at the leader's cell or
+ * the four next to it. Fills vis[VT*VT] with 0/1. */
+#define VR (VT+2)
+#define VP (VR+2)
 static void compute_visibility(const world_t*w, uint8_t*vis){
     if(g_xray_turns>0){ for(int i=0;i<VT*VT;i++) vis[i]=1; return; }   /* X-ray: see through walls (§5e) */
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
-    uint8_t sb[VT*VT];
-    for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++)
-        sb[vy*VT+vx]=(uint8_t)blocks_sight(world_tile(w,left+vx,top+vy));
-    { const uint16_t *ls_s=g_lsbkt_start,*ls_i=g_lsbkt_idx;   /* sparse light/sight index (sight-blockers only, here) */
+    int32_t left=w->px-VT/2-1, top=w->py-VT/2-1;                      /* region origin: one cell round the view */
+    uint8_t mk[VR*VR];                                                 /* object marks: bit0 clear, bit1 opaque, bit2 window */
+    memset(mk,0,sizeof mk);
+    { const uint16_t *ls_s=g_lsbkt_start,*ls_i=g_lsbkt_idx;   /* sparse light/sight index */
 #ifdef BENCH
       if(g_ls_use_full){ ls_s=g_obkt_start; ls_i=g_obkt_idx; }   /* selftest: force full scan */
 #endif
-      int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VT-1)>>4)&(OBKT-1);   /* sight-blocking objects (bucket-indexed) */
-      int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +VT-1)>>4)&(OBKT-1);
+      int bx0=((int)left>>4)&(OBKT-1),bx1=(((int)left+VR)>>4)&(OBKT-1);   /* anchors up to one past: a big object marks left/up */
+      int by0=((int)top >>4)&(OBKT-1),by1=(((int)top +VR)>>4)&(OBKT-1);
       for(int by=by0;;by=(by+1)&(OBKT-1)){ for(int bx=bx0;;bx=(bx+1)&(OBKT-1)){ int bb=by*OBKT+bx;
         for(int k=ls_s[bb];k<ls_s[bb+1];k++){ const wobj_t*o=&g_wobj[ls_i[k]]; if(!o->alive) continue;
-            int32_t vx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1), vy=((int32_t)o->y-top)&(U6_SURFACE_TILES-1);
-            if(vx<VT&&vy<VT && blocks_sight(obj_tile(o))) sb[vy*VT+vx]=1; }
+            int32_t rx=((int32_t)o->x-left)&(U6_SURFACE_TILES-1), ry=((int32_t)o->y-top)&(U6_SURFACE_TILES-1);
+            if(rx>VR||ry>VR) continue;
+            int t=obj_tile(o), m=obj_sight_mark(t);
+            if(rx<VR&&ry<VR&&m) mk[ry*VR+rx]|=(uint8_t)(m==3?4:m==2?2:1);
+            if(t>0&&t<2048&&(g_tflags[t-1]&0x04)){                       /* a big object's other cell */
+                if((g_tflags[t]&0x40)&&ry>0&&rx<VR&&ry-1<VR) mk[(ry-1)*VR+rx]|=2;
+                if((g_tflags[t]&0x80)&&rx>0&&ry<VR&&rx-1<VR) mk[ry*VR+rx-1]|=2; } }
         if(bx==bx1) break; } if(by==by1) break; } }
-    for(int i=0;i<VT*VT;i++) vis[i]=0;
-    int stack[VT*VT], sp=0, c=(VT/2)*VT+(VT/2);
-    vis[c]=1; stack[sp++]=c;
-    while(sp){ int cc=stack[--sp], cx=cc%VT, cy=cc/VT;
-        static const int dxs[4]={1,-1,0,0}, dys[4]={0,0,1,-1};
-        for(int k=0;k<4;k++){ int nx=cx+dxs[k], ny=cy+dys[k];
-            if(nx<0||ny<0||nx>=VT||ny>=VT) continue; int ni=ny*VT+nx;
-            if(vis[ni]||sb[ni]) continue;
-            vis[ni]=1; stack[sp++]=ni;
-        }
-    }
-    uint8_t vis2[VT*VT]; for(int i=0;i<VT*VT;i++) vis2[i]=vis[i];
-    for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){ int i=vy*VT+vx;
-        if(vis[i]||!sb[i]) continue;                               /* expand walls by 1 (8-way) */
-        int seen=0;
-        for(int dy=-1;dy<=1&&!seen;dy++)for(int dx=-1;dx<=1;dx++){ int nx=vx+dx,ny=vy+dy;
-            if(nx>=0&&ny>=0&&nx<VT&&ny<VT&&vis[ny*VT+nx]){ seen=1; break; } }
-        if(seen) vis2[i]=1;
-    }
-    for(int i=0;i<VT*VT;i++) vis[i]=vis2[i];
+    /* padded VP x VP grid: a border marked queued so the 8 neighbours need no bounds test; no divisions */
+    uint8_t pass[VP*VP], q[VP*VP], seen[VP*VP], ring[VP*VP];
+    memset(q,1,sizeof q); memset(seen,0,sizeof seen);
+    for(int ry=0;ry<VR;ry++){ const uint8_t*mr=&mk[ry*VR]; uint8_t*pr=&pass[(ry+1)*VP+1], *qr=&q[(ry+1)*VP+1];
+        int dy=ry-VR/2, ady=dy<0?-dy:dy;
+        for(int rx=0;rx<VR;rx++){ int m=mr[rx], f=0, p;
+            int t=world_tile(w,left+rx,top+ry); if(t>=0&&t<2048) f=g_tflags[t];
+            if(m&2) p=0;
+            else if((f&0x08)||(m&4)){ int dx=rx-VR/2, adx=dx<0?-dx:dx; p=(dx==0&&ady<=1)||(dy==0&&adx<=1); }
+            else if(m&1) p=1;
+            else p=!(f&0x04);
+            pr[rx]=(uint8_t)p; qr[rx]=0; } }
+    static const int8_t nb[8]={-VP-1,-VP,-VP+1,-1,1,VP-1,VP,VP+1};
+    int head=0, tail=0, ci=(VR/2+1)*VP+(VR/2+1);
+    if(pass[ci]){ q[ci]=1; ring[head++]=(uint8_t)ci; }
+    else { if(pass[ci+1]){ q[ci+1]=1; ring[head++]=(uint8_t)(ci+1); }   /* DOS: east and south of the leader */
+           if(pass[ci+VP]){ q[ci+VP]=1; ring[head++]=(uint8_t)(ci+VP); } }
+    while(tail<head){ int cc=ring[tail++];
+        seen[cc]=1;
+        if(!pass[cc]) continue;
+        for(int k=0;k<8;k++){ int ni=cc+nb[k]; if(q[ni]) continue; q[ni]=1; ring[head++]=(uint8_t)ni; } }
+    for(int vy=0;vy<VT;vy++) memcpy(&vis[vy*VT],&seen[(vy+2)*VP+2],VT);
 }
+#undef VP
+#undef VR
 
 /* compose-phase profiling (BENCH only): accumulate per-phase 200Hz ticks across the bench's
  * compose loop so we can see where the ~240ms/compose goes (tiles / objects / light+vis /
