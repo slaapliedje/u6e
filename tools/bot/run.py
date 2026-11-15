@@ -149,7 +149,10 @@ def seg_death(p, kw):
     p.log('  Shamino struck: %r, hp %d/%d' % (st['msg'], m3['hp'], m3['max']))
     if m3['hp'] == m3['max']: p.issue('death', 'Shamino never hurt in 40 blows (%r)' % st['msg'])
     if a3 and a3['hostile']: p.issue('death', 'Shamino turned hostile when struck')
-    for _ in range(200):
+    armed = any(a == 1 and 33 <= o <= 54 for (a, _s), o in readied(p).items())   # weapons (not ammunition)
+    blows = 200 if armed else 600                                         # Max may have bought the Avatar's readied sword: bare hands
+    if not armed: p.log('  the Avatar has no weapon readied: up to %d blows' % blows)   # do a point or two against Iolo's armour
+    for _ in range(blows):
         a = p.actor(4)
         if not a: break
         spot = (a['x'], a['y'])
@@ -157,7 +160,8 @@ def seg_death(p, kw):
         if st is None: p.issue('death', 'Iolo never came beside the Avatar'); return
         if p.actor(4) and p.actor(4)['hostile']: p.issue('death', 'Iolo turned hostile when struck'); return
         if 'Iolo killed' in st['msg']: break
-    else: p.issue('death', 'Iolo alive after 200 blows (%r)' % st['msg']); return
+        if _ % 20 == 19: p.log('  blow %d on Iolo: %r, hp %s' % (_ + 1, st['msg'], member(p, 4) and member(p, 4)['hp']))
+    else: p.issue('death', 'Iolo alive after %d blows (%r)' % (blows, st['msg'])); return
     if not p.g.state['party'] or 'spot' not in locals(): p.issue('death', 'Iolo was gone before the blows'); return
     p.log('  Iolo: %r at %s, karma %d -> %d' % (st['msg'], spot, k0, p.g.state['karma']))
     if 'Iolo killed' not in st['msg']: p.issue('death', 'no "Iolo killed!" (%r)' % st['msg'])
