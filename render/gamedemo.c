@@ -1582,14 +1582,16 @@ static int clutch_beat(int s,const uint8_t *pal)
     int cs=0, cf=0;
     for(int dir=0; dir<2; dir++){                                               /* 0 = rise, 1 = descend */
         uint32_t t0=plat_ticks_200hz(); int i=0;
+        rdr_flip_begin();                                                       /* the whole scene moves: draw each step off screen, show it at the frame boundary (single-screen presents tore on the ST) */
         while(i<66){
             int ni=(int)((plat_ticks_200hz()-t0)/5); if(ni>66) ni=66;
             if(ni==i){ vsync_pump(); continue; }
             for(int k=i;k<ni;k++) if(++cf>=5){ cf=0; intro_crimson_cycle(pal,++cs); }
             i=ni; int sy=dir?66-i:i, hy=0xc7-2*sy;
             clutch_frame(s,sy,hy,0); rdr_present_doubled(LH);
-            int a=intro_advance(); if(a==2) return 2; if(a) i=66;
+            int a=intro_advance(); if(a==2){ rdr_flip_end(); return 2; } if(a) i=66;
         }
+        rdr_flip_end();                                                          /* single screen again: the caller's gate-rect presents hit the visible one */
         if(dir==0){                                                              /* hold the memory page, scrolled up */
             clutch_frame(s,65,0xc7-130,1); rdr_present_doubled(LH);
             uint32_t th=plat_ticks_200hz(), ts=th;

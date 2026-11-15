@@ -138,7 +138,10 @@ throughout): (0) the door rising from the stones, (1) the **clutch-the-stone mem
 "…as you clutch the stone… last cast down by Lord British to banish Blackthorn!" — during which
 (nuvie @911–955, implemented 2026-08-16) the hand holding the obsidian (INTRO_3 shape 6, 114×134) rises
 from y=0xC7 to 0x44 at x=0x9B while the WHOLE scene (bg, ground cover, gate) scrolls up 65 px (1 px per
-25 ms step, the hand 2 px), the caption holds on the scrolled view, then it all comes back down;
+25 ms step, the hand 2 px), the caption holds on the scrolled view, then it all comes back down
+(both motions double-buffered on every backend since 2026-11-14: each step is drawn off screen and
+shown at the frame boundary; on the ST the single-screen presents tore — 74 torn frames in one run,
+0 after, by a per-band scroll-offset check of every emulated frame);
 (2) apprehension — "The gate to Britannia was ever blue…", (3) "The portal quivers and sinks away…"
 and (4) "Desperation makes the choice an easy one." — on these last two pages the gate SHAKES
 (nuvie stones_shake_moongate: x 0x7C+rand(0,1), y 5+rand(0,3) every 25 ms step; the crimson ramp
