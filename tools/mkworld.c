@@ -1673,6 +1673,27 @@ static int convert_wou_font(const char *dir, const char *name, uint8_t marker, u
     return 1;
 }
 
+/* SE's portrait frame and backdrops (rules/se_screen.md §5): BKGRND.LZC's items, each one 1-shape library,
+ * decoded: [4 "CBKG"][u16 n][n x (u16 w, u16 h)][n x w*h indices]. Item 0 is the stone frame, 1-12 the scenery. */
+static int convert_bkgrnd(const char *dir, uint8_t marker, FILE *out)
+{
+    long fl; uint8_t *b = slurp(dir, "BKGRND.LZC", &fl);
+    u6lzc_t lc;
+    if (!b || !u6lzc_open(&lc, b, (int32_t)fl, marker)){ printf("BKGRND.LZC: not an .LZC\n"); free(b); return 0; }
+    int ni = u6lzc_count(&lc); if (ni > 32) ni = 32;
+    static uint8_t px[32][160*120]; int W[32], H[32]; long tot = 0;
+    for (int it = 0; it < ni; it++){
+        static uint8_t item[65536]; int32_t sz = u6lzc_read(&lc, it, item, (int32_t)sizeof item);   /* stored or packed */
+        W[it] = H[it] = 0;
+        if (sz <= 0 || !u6shape_decode(item, sz, 0, &W[it], &H[it], px[it], (int32_t)sizeof px[it])){ W[it] = H[it] = 0; }
+        tot += (long)W[it] * H[it]; }
+    fwrite("CBKG", 1, 4, out); be16(out, (unsigned)ni);
+    for (int it = 0; it < ni; it++){ be16(out, (unsigned)W[it]); be16(out, (unsigned)H[it]); }
+    for (int it = 0; it < ni; it++) fwrite(px[it], 1, (size_t)W[it] * H[it], out);
+    printf("  +CBKG: BKGRND.LZC -> %d pictures (%ld B)\n", ni, tot);
+    free(b); return ni;
+}
+
 /* Decode the SE/MD portrait library (`FACES.LZC` / `MDFACES.LZC`) and stream a
  * "CFAC" section to `out`: [4 "CFAC"][u16 nface][u16 w][u16 h][nface x w*h indices].
  * Each .LZC item IS a U6 shape file (docs/formats/shapes.md) — byte0 = size, an
@@ -1706,7 +1727,7 @@ static int convert_faces(const char *dir, const char *name, uint8_t marker, FILE
         int32_t sz; uint8_t flg; const uint8_t *p = u6lzc_entry(&lc, it, &sz, &flg);
         int w = 0, h = 0;
         if (p && u6shape_decode(p, sz, 0, &w, &h, px, px_cap) && w <= FW && h <= FH){
-            for (int i = 0; i < w * h; i++) if (px[i] == U6SHAPE_TRANSPARENT) px[i] = 0;   /* opaque cell */
+            if (marker != U6LZC_COMP_SE) for (int i = 0; i < w * h; i++) if (px[i] == U6SHAPE_TRANSPARENT) px[i] = 0;   /* opaque cell; SE keeps 255 so its backdrop shows (rules/se_screen.md §5) */
             for (int y = 0; y < h; y++) memcpy(cell + (size_t)y * FW, px + (size_t)y * w, (size_t)w); }
         fwrite(cell, 1, (size_t)FW * FH, out);
     }
@@ -2878,6 +2899,7 @@ int main(int argc, char **argv)
      * (CTLK), magic-guarded after everything else (portraits.md, converse.md §6b) */
     if(!u6){ long tail=ftell(f);                     /* the library tail: a 4 MB machine reads it on demand (memory_streaming.md) */
              cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
+             if(marker==U6LZC_COMP_SE) convert_bkgrnd(dir, marker, f);
              cv_step("Conversation art"); if(gp->talk){ convert_talk(dir, gp->talk, marker, f); if(marker==U6LZC_COMP_SE) convert_talk_scripts(dir, gp->talk, marker, f); }   /* MD scripts: item 13 */
              be32(f,(unsigned long)tail); fwrite("CLIB",1,4,f); }   /* footer: [u32 tail offset]["CLIB"] */
     fclose(f);

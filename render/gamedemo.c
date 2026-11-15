@@ -223,7 +223,11 @@ static int32_t        g_setsc_len;
  * tail): resident when RAM allows, else read on demand from these file offsets (0 = resident or none) */
 static int32_t        g_clib_off, g_clib_len, g_seface_foff, g_setsc_foff;
 static uint8_t       *g_seface_buf; static int g_seface_cur=-1;
-static const uint8_t *se_face(int fi); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
+/* SE's portrait frame and backdrops (CBKG, rules/se_screen.md §5): resident pointers, or file offsets + one buffer */
+#define SEBK_MAX 16
+static int            g_sebk_n; static uint16_t g_sebk_w[SEBK_MAX], g_sebk_h[SEBK_MAX]; static int32_t g_sebk_at[SEBK_MAX];
+static const uint8_t *g_sebk_data; static int32_t g_sebk_foff; static uint8_t *g_sebk_buf;
+static const uint8_t *se_face(int fi); static void se_bkg_draw(int i,int x,int y); static int se_backdrop(int a); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
 static void *load_prefix(const char *path,int32_t len,bool fast); static void *load_prefix_at(const char *path,int32_t off,int32_t len);
 static void clib_open(int resident);
 /* name/description for SE/MD actor `a`, or NULL if none. */
@@ -5467,6 +5471,7 @@ static void compose_map(const world_t*w)
     }
     PH_END(2);
     PH_BEGIN();
+    if(g_talking && g_gd==&gamedef_se){ g_predim=0; PH_END(3); return; }   /* SE's talk text holds the map window (rules/se_screen.md §5) */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
 #ifdef HAVE_RDR_ST
         if(g_native_planar) rdr_pframe_end();       /* Blitter: drain this frame's queued dynamic tile blits into g_ptmp */
@@ -5714,7 +5719,8 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
  * window since the last key; when the count runs out it waits (Space, Enter, Esc or a click) with the
  * arrow on the next row, then shows a window less one; a `*` in the text waits for any key where it
  * stands, and that key starts the count again. The panel shows the newest TROWS rows of what is out. */
-#define TROWS 8
+#define TROWS (g_gd==&gamedef_se?16:8)   /* SE talks in the map window: 16 rows of 18 (rules/se_screen.md §5) */
+#define TCOLS (g_gd==&gamedef_se?18:(PANW-12)/8)
 #define TMAXR 128
 static char    g_tdisp[1024];                 /* the transcript without its `*`s */
 static int16_t g_trs[TMAXR], g_tre[TMAXR], g_tstar[64];
@@ -5744,7 +5750,7 @@ static void talk_page_sync(void)
     int n=0; g_tns=0;
     for(const char*p=g_transcript;*p;p++){ if(*p=='*'){ if(g_tns<64) g_tstar[g_tns++]=(int16_t)n; } else g_tdisp[n++]=*p; }
     g_tdisp[n]=0;
-    int cols=(PANW-12)/8, i=0; g_tnr=0;                              /* ui_text_wrap's rows */
+    int cols=TCOLS, i=0; g_tnr=0;                              /* ui_text_wrap's rows */
     while(g_tdisp[i] && g_tnr<TMAXR){
         while(g_tdisp[i]==' ') i++;
         if(!g_tdisp[i]) break;
@@ -5768,7 +5774,7 @@ static int talk_page_key(int a)                /* a key during a wait: 1 = it wa
 static void talk_draw(int x,int y,uint8_t col)
 {
     talk_page_sync();
-    int cols=(PANW-12)/8, last=g_trow-1, cx=-1, cy=-1;            /* rows out: 0..last, row g_trow up to g_tpos once counted */
+    int cols=TCOLS, last=g_trow-1, cx=-1, cy=-1;            /* rows out: 0..last, row g_trow up to g_tpos once counted */
     int part=(g_trow<g_tnr && g_tcounted)?g_tpos-g_trs[g_trow]:-1;
     if(part>=0) last=g_trow;
     int inrow=(g_trow==g_tnr && g_await_input && g_tcounted && !g_twait)?g_tnr:-1;
@@ -5778,7 +5784,7 @@ static void talk_draw(int x,int y,uint8_t col)
         if(cy<0){ cy=0; cx=0; } if(cx>=cols){ cx=0; cy++; } }
     int occ=(cy>last?cy:last)+1, first=occ>TROWS?occ-TROWS:0;
     for(int r=first;r<=last;r++){
-        int yy=y+(r-first)*9;
+        int yy=y+(r-first)*TPITCH;
         if(r==inrow){                                              /* the input row: "> typed" and the cursor */
             char line[24]; int t=0; line[t++]='>'; line[t++]=' ';
             for(int k=0;k<g_inlen && t<21;k++) line[t++]=g_inbuf[k];
@@ -5787,7 +5793,7 @@ static void talk_draw(int x,int y,uint8_t col)
         char line[48]; int t=n<47?n:47; for(int k=0;k<t;k++) line[k]=g_tdisp[g_trs[r]+k];
         ui_text_row(x,yy,line,t,col);
     }
-    if(cy>=0) tcur_set(x+cx*8,y+(cy-first)*9,1,col);
+    if(cy>=0) tcur_set(x+cx*8,y+(cy-first)*TPITCH,1,col);
 }
 
 /* blit a portrait already decoded into a flat 56x64 buffer (from talk()) */
@@ -6014,6 +6020,14 @@ static void draw_conversation(uint8_t col)
     } else if(g_casting){                          /* C)ast: the spellbook page (magic_skills.md §6) */
         draw_spell_page(col);
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
+    } else if(g_talking && g_gd==&gamedef_se){     /* SE: the face in its stone frame, the talk in the map window (rules/se_screen.md §5) */
+        se_bkg_draw(0,183,6);
+        se_bkg_draw(se_backdrop(g_talk_face),211,8);
+        { const uint8_t *fc=se_face(g_talk_face-1);
+          if(fc) for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++){ uint8_t c=fc[yy*g_sefw+xx]; if(c!=255) ui_px(210+xx,7+yy,c); } }
+        ui_text(249-ui_textw(g_talk_name)/2, 104, g_talk_name, col);
+        for(int y=SE_MAPY0;y<=SE_MAPY1;y++) memcpy(ROW(y)+SE_MAPX0, g_paper+(int32_t)y*LW+SE_MAPX0, SE_MAPX1+1-SE_MAPX0);
+        talk_draw(16, 24, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
         if(g_gamename){                            /* SE/MD core: draw the actor's own CFAC portrait (slot actor-1) */
             int fi=g_talk_face-1;
@@ -15902,6 +15916,14 @@ static void clib_parse(const uint8_t *ap,const uint8_t *end)
                     if(fp+(long)nf*fw*fh>end) break;
                     g_seface=fp; g_senface=nf; g_sefw=fw; g_sefh=fh;
                     ap=fp+(long)nf*fw*fh;
+                } else if(ap[0]=='C'&&ap[1]=='B'&&ap[2]=='K'&&ap[3]=='G'){ /* [u16 n][n x (u16 w,u16 h)][pixels] */
+                    if(ap+6>end) break;
+                    int n=(ap[4]<<8)|ap[5]; const uint8_t *dp=ap+6+n*4; int32_t at=0;
+                    if(dp>end) break;
+                    for(int i=0;i<n;i++){ uint16_t bw=(uint16_t)((ap[6+i*4]<<8)|ap[7+i*4]), bh=(uint16_t)((ap[8+i*4]<<8)|ap[9+i*4]);
+                        if(i<SEBK_MAX){ g_sebk_w[i]=bw; g_sebk_h[i]=bh; g_sebk_at[i]=at; } at+=(int32_t)bw*bh; }
+                    if(dp+at>end) break;
+                    g_sebk_n=n<SEBK_MAX?n:SEBK_MAX; g_sebk_data=dp; ap=dp+at;
                 } else if(ap[0]=='C'&&ap[1]=='T'&&ap[2]=='L'&&ap[3]=='K'){ /* [u16 nact][u16 blob_len][nact x u16 off][blob "name\0desc\0"] */
                     if(ap+8>end) break;
                     int na=(ap[4]<<8)|ap[5], bl=(ap[6]<<8)|ap[7];
@@ -15944,6 +15966,14 @@ static void clib_open(int resident)
             g_senface=(h[4]<<8)|h[5]; g_sefw=(h[6]<<8)|h[7]; g_sefh=(h[8]<<8)|h[9]; g_seface=NULL; g_seface_foff=p+10;
             g_seface_buf=(uint8_t*)plat_alloc_fast((uint32_t)g_sefw*(uint32_t)g_sefh); g_seface_cur=-1;
             p+=10+(int32_t)g_senface*g_sefw*g_sefh; }
+        else if(h[0]=='C'&&h[1]=='B'&&h[2]=='K'&&h[3]=='G'){               /* the sizes now, a picture when it is drawn */
+            int n=(h[4]<<8)|h[5]; uint8_t sz[SEBK_MAX*4]; int nn=n<SEBK_MAX?n:SEBK_MAX; int32_t at=0, big=0;
+            if(plat_read_at(pf,p+6,sz,nn*4)!=nn*4) break;
+            for(int i=0;i<nn;i++){ g_sebk_w[i]=(uint16_t)((sz[i*4]<<8)|sz[i*4+1]); g_sebk_h[i]=(uint16_t)((sz[i*4+2]<<8)|sz[i*4+3]);
+                g_sebk_at[i]=at; at+=(int32_t)g_sebk_w[i]*g_sebk_h[i]; if((int32_t)g_sebk_w[i]*g_sebk_h[i]>big) big=(int32_t)g_sebk_w[i]*g_sebk_h[i]; }
+            if(n>nn){ uint8_t q[4]; for(int i=nn;i<n;i++) if(plat_read_at(pf,p+6+i*4,q,4)==4) at+=(int32_t)((q[0]<<8)|q[1])*((q[2]<<8)|q[3]); }
+            g_sebk_n=nn; g_sebk_data=NULL; g_sebk_foff=p+6+n*4; g_sebk_buf=(uint8_t*)plat_alloc_fast((uint32_t)big);
+            p+=6+n*4+at; }
         else if(h[0]=='C'&&h[1]=='T'&&h[2]=='L'&&h[3]=='K'){
             int32_t L=8+(int32_t)((h[4]<<8)|h[5])*2+((h[6]<<8)|h[7]); uint8_t *b=(uint8_t*)plat_alloc_fast((uint32_t)L);
             if(b && plat_read_at(pf,p,b,L)==L) clib_parse(b,b+L);
@@ -15957,6 +15987,32 @@ static void clib_open(int resident)
     plat_fclose(pf);
 }
 /* face fi of the portrait bank, or NULL: in RAM, or read into one buffer when the tail is on demand */
+/* SE: BKGRND picture i at (x,y), its 255s left alone (rules/se_screen.md §5) */
+static void se_bkg_draw(int i,int x,int y)
+{   if(i<0||i>=g_sebk_n||!g_sebk_w[i]) return;
+    int32_t L=(int32_t)g_sebk_w[i]*g_sebk_h[i]; const uint8_t *px=g_sebk_data?g_sebk_data+g_sebk_at[i]:NULL;
+    if(!px && g_sebk_buf && g_sebk_foff){ plat_file pf=plat_fopen(PACK_NAME,0);
+        if(pf>=0){ if(plat_read_at(pf,g_sebk_foff+g_sebk_at[i],g_sebk_buf,L)==L) px=g_sebk_buf; plat_fclose(pf); } }
+    if(!px) return;
+    for(int yy=0;yy<g_sebk_h[i];yy++) for(int xx=0;xx<g_sebk_w[i];xx++){ uint8_t c=px[yy*g_sebk_w[i]+xx]; if(c!=255) ui_px(x+xx,y+yy,c); } }
+/* SE's backdrop behind a face (GAME.EXE 0x291ad; rules/se_screen.md §5a): below the surface 9 (10 on level 3);
+ * on the surface the first of these boxes holding the speaker (strictly inside), 1-4 by day, +4 by night */
+static const int16_t SE_BKBOX[27][5]={
+    {488,520,647,607,4},{224,608,263,647,12},{320,192,391,239,12},{360,536,415,575,12},{656,792,711,847,12},
+    {392,264,439,319,12},{976,304,1015,359,12},{544,288,607,351,12},{552,96,607,143,12},{240,168,775,303,1},
+    {504,64,599,143,1},{472,320,519,359,1},{832,232,1023,479,1},{304,304,359,423,1},{360,464,521,551,1},
+    {88,616,144,680,1},{280,64,319,119,1},{640,784,671,807,1},{352,248,543,423,11},{560,352,711,487,11},
+    {256,72,351,167,11},{376,256,456,303,11},{288,176,319,223,11},{424,120,495,183,11},{168,568,256,639,11},
+    {328,552,447,647,11},{0,0,1023,1023,2} };
+static int se_backdrop(int a)
+{   if(g_cur_level==3) return 10;
+    if(g_cur_level>0) return 9;
+    int x=(a==1&&g_wp)?(int)g_wp->px:(a>0&&a<U6_MAX_ACTORS?(int)g_actx[a]:0), y=(a==1&&g_wp)?(int)g_wp->py:(a>0&&a<U6_MAX_ACTORS?(int)g_acty[a]:0);
+    int k=2;                                         /* DOS leaves it unset on the map's very edge (slip): the last box's */
+    for(int i=0;i<27;i++) if(SE_BKBOX[i][0]<x&&SE_BKBOX[i][1]<y&&SE_BKBOX[i][2]>x&&SE_BKBOX[i][3]>y){ k=SE_BKBOX[i][4]; break; }
+    int t=g_minutes;                                 /* minutes of the day */
+    if((t>=1081||t<=359) && k<5) k+=4;
+    return k; }
 static const uint8_t *se_face(int fi)
 {   if(fi<0||fi>=g_senface) return NULL;
     if(g_seface) return g_seface+(long)fi*g_sefw*g_sefh;
@@ -18733,6 +18789,11 @@ int main(int argc, char **argv)
             dbg_num("SETALK flag15 after wait=", (g_cg.talk_flags_hi[6]>>7)&1);               /* expect 1 */
         }
     }
+
+    /* headless view of an SE conversation (SETALKV.BIN, never staged in play): talk to the actor its first byte
+     * names (default Triolo, 9) and leave it on screen, for a screenshot (rules/se_screen.md §5) */
+    {   int32_t sl=0; uint8_t*sb=(uint8_t*)plat_load_file("SETALKV.BIN",1,&sl);
+        if(sb && g_gd==&gamedef_se) se_talk(sl>0&&sb[0]>1&&sb[0]!='x'?sb[0]:9); }
 
     /* headless validation of SAVAGE-EMPIRE USE (only meaningful when booted on SE.PAK; g_gd==savage).
      * FOOD: force a gettable world obj to SE fruit (obj_n 197), USE twice -> qty 2->1 then alive->0 +
