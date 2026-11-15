@@ -1074,10 +1074,13 @@ static void draw_intro_frame(int s,int scroll,int show_cap)
 /* one step of the moongate's rise: only the gate's rectangle (and the ground cover's) is redrawn and presented,
  * from the scene picture up; the parchment below is left alone. A whole-scene redraw and present a step took
  * 0.4 s on an 8 MHz ST (2026-11-14). XBIOS Vsync (#37) paces it, as the full present did. */
+static int g_gate_prev_y=-1;                     /* the gate's top at the last step (-1 = none): a sinking gate's old rows are redrawn too */
 static void intro_gate_step(int s)
 {
     int ox=(LW-g_intro[s].w)/2, oy=(LH-g_intro[s].h)/2, cap=g_scroll_h>0?LH-g_scroll_h:LH-34;
-    int x0=g_gx, x1=g_gx+g_gate_w, y0=g_gate_y, y1=GATE_CLIP_Y;
+    int x0=g_gx, x1=g_gx+g_gate_w+2, y0=g_gate_y, y1=GATE_CLIP_Y;   /* +2: the shake moves it right by up to 1 */
+    if(g_gate_prev_y>=0 && g_gate_prev_y<y0) y0=g_gate_prev_y;
+    g_gate_prev_y=g_gate_y;
     if(g_cover){ if(g_cvx<x0) x0=g_cvx; if(g_cvx+g_cvw>x1) x1=g_cvx+g_cvw; if(g_cvy<y0) y0=g_cvy; if(g_cvy+g_cvh>y1) y1=g_cvy+g_cvh; }
     if(x0<0) x0=0; if(y0<0) y0=0; if(x1>LW) x1=LW; if(y1>cap) y1=cap;
     if(x1<=x0||y1<=y0) return;
@@ -1086,6 +1089,29 @@ static void intro_gate_step(int s)
     if(g_cover) blit_indexed_clip(g_cover,g_cvw,g_cvh,g_cvx,g_cvy,x0,y0,x1,y1);
     rdr_present_rect_doubled(x0,y0,x1-x0,y1-y0,LH);
     vsync_pump();
+}
+
+/* The gate rises or sinks between two heights at nuvie's pace, one pixel per 25 ms update (stones_sequence:
+ * 0x64 -> 5 and back, a canvas_update each), whatever the machine: each step draws where the gate should be
+ * by now, so a slow ST shows fewer, longer steps and a fast one never runs ahead. The original ST took 5.8 s
+ * for the rise; nuvie's pace gives 2.4 s (performance.md 2026-11-14). shake: the sink's jitter (x +0..1,
+ * y +0..2) with the crimson ramp turning every 5th update, as nuvie's stones_rotate_palette does. */
+#define GATE_TICKS 5                             /* 25 ms in 200 Hz ticks */
+static void intro_gate_move(int s,int from,int to,int shake,const uint8_t*cycpal,rng_t*r)
+{
+    uint32_t t0=plat_ticks_200hz(); int dir=to>from?1:-1, last=-999;
+    g_gate_prev_y=-1;
+    for(;;){
+        int k=(int)((plat_ticks_200hz()-t0)/GATE_TICKS), y=from+dir*k;
+        if(dir>0 ? y>to : y<to) y=to;
+        if(y==last){ vsync_pump(); continue; }
+        last=y;
+        if(shake && r){ g_gate_jx=(int)rng_range(r,2); g_gate_y=y+(int)rng_range(r,3); } else { g_gate_jx=0; g_gate_y=y; }
+        if(cycpal) intro_crimson_cycle(cycpal,k/5);
+        intro_gate_step(s);
+        if(y==to) break;
+    }
+    g_gate_jx=0; g_gate_prev_y=-1;
 }
 
 /* save/restore a rectangle of the chunky backbuffer (for the dirty-rect hold: snapshot the
@@ -1481,10 +1507,11 @@ static void avatar_climax(int s)
         intro_crimson_cycle(palb,++cs); rdr_present_doubled(LH); vsync_pump(); vsync_pump();
     }
     if(have_lc) rdr_set_lowcolor(g_intro[s].lc,g_intro[s].lc+48);   /* entry 25 back to grey (nuvie 0x74) */
-    for(gy=0x5; gy<0x64; gy+=3){                       /* the gate sinks back into the earth */
-        STAGE_SCENE(gy);
-        intro_crimson_cycle(pal,++cs); rdr_present_doubled(LH); vsync_pump();
-    }
+    {   /* the gate sinks back into the earth (intro_gate_move: nuvie's pace; the ST presents only what moved) */
+        STAGE_SCENE(gy); rdr_present_doubled(LH);
+        int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();
+        g_gate_y=gy; intro_gate_move(s,0x5,0x64,1,pal,&r);
+        if(st1) rdr_flip_begin(); }
     #undef STAGE_SCENE
     rdr_set_palette((uint8_t*)pal,256);               /* un-rotate before the scene's fade-out */
 }
@@ -1602,7 +1629,7 @@ static void run_intro_body(void)
         for(int k=0;k<=8;k++){ fe_fade(pal,k); }      /* fade in */
         if(g_intro[s].type==2 && g_gate){                         /* the moongate ASCENDS (nuvie 0x64->0x5) */
             int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* ST: one screen, so each step presents only what moved (a full flip a step took 1.2 s at 8 MHz) */
-            for(int gy=0x64; gy>0x5; gy-=2){ g_gate_y=gy; intro_gate_step(s); }
+            intro_gate_move(s,0x64,0x5,0,NULL,NULL);
             if(st1) rdr_flip_begin();
             g_gate_y=0x5; }
         int key=0;
@@ -3177,14 +3204,18 @@ static int run_menu(void)
          * from a sub-flow that switched tracks (intro=bootup, chargen=create/intro) restores it. */
         fe_music("ULTIMA");                                 /* nuvie main_menu_load(): ultima.m */
         if(full || note!=shown_note){                       /* the whole screen: the first time, after a sub-screen, the F1 note */
-            if(g_menu_lc) rdr_set_lowcolor(g_menu_lc, g_menu_lc+48);
+            int blk=full && g_menu_lc;                      /* ST: black while a new screen is presented (0.8 s at 8 MHz), or
+                                                             * the last picture (the intro's ring) shows in the menu's 16 meanwhile */
+            if(g_menu_lc) rdr_set_lowcolor(blk ? g_black16 : g_menu_lc, g_menu_lc+48);
             clear_bb(0);
             if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
             blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
             menu_highlight(mx,my,mw,g_menu_h,sel,rowh);     /* yellow->orange distance tint */
             if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
             fe_cursor_show(1);                              /* nuvie: pointer visible on the main menu */
-            rdr_present_doubled(LH); fe_cursor_draw(1);     /* (the pointer stays out of the backbuffer: fe_cursor_draw presents it alone) */
+            rdr_present_doubled(LH);
+            if(blk) rdr_set_lowcolor(g_menu_lc, NULL);      /* now that it is on screen */
+            fe_cursor_draw(1);                              /* (the pointer stays out of the backbuffer: fe_cursor_draw presents it alone) */
             full=0; shown_sel=sel; shown_note=note;
         } else if(sel!=shown_sel){                          /* a new highlight: the menu's box alone (a full present per hover is slow on an ST) */
             for(int y=my;y<my+g_menu_h&&y<LH;y++){ uint8_t*d=ROW(y); for(int x=mx;x<mx+mw&&x<LW;x++) d[x]=0; }
@@ -5152,6 +5183,13 @@ static void draw_cell_dither(uint8_t*tmp,int T,int cvx,int cvy,int tile,int lvl)
     for(int r=0;r<16;r++) for(int c=0;c<16;c++) if(BAYER4[(r&3)*4+(c&3)]>=lvl) tmp[(cvy*16+r)*T+cvx*16+c]=keep[r*16+c]; }
 /* the view cell the crosshair is drawn on, or -1; and where the last compose drew it */
 static int g_xh_cell=-1;
+/* the hit flash's cell as the last compose had it before the flash went on (ST planar map): fx_clear
+ * puts those 16x16 pixels back instead of recomposing the view. g_fxs_ok: saved and nothing drawn over the
+ * flash afterwards (crosshair, moongate ghost, roof, the border's fray at the view's edge). */
+#ifdef HAVE_RDR_ST
+static uint16_t g_fxs[64];
+#endif
+static int g_fxs_vx=-1, g_fxs_vy=-1, g_fxs_ok;
 static int xhair_cell(void)
 {   if(!VERB_CURSOR(g_pending_verb) || VERB_PACK()) return -1;
     { int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy; return (cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) ? cvy*VT+cvx : -1; } }
@@ -5312,14 +5350,20 @@ static void compose_map(const world_t*w)
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     if(g_veh_kind==431&&!g_avatar_hide){ static const int8_t RX_[4]={0,-1,0,1}, RY_[4]={1,0,-1,0}; int rvx=VT/2+RX_[g_veh_face&3], rvy=VT/2+RY_[g_veh_face&3];   /* the horse's other half */
         draw_cell(tmp,T,rvx,rvy,basetile(431)+g_veh_face*2+g_veh_phase+8,-1); }
+    g_fxs_ok=0; g_fxs_vx=g_fxs_vy=-1;
     if(g_fx_on){ int32_t fvx=((int32_t)g_fx_x-left)&(U6_SURFACE_TILES-1), fvy=((int32_t)g_fx_y-top)&(U6_SURFACE_TILES-1);
-        if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1);   /* a cannonball / burst over everything (cannons.md §1) */
+        if(fvx<VT&&fvy<VT){
+#ifdef HAVE_RDR_ST
+            if(g_native_planar && !g_fx_extra && fvx>0&&fvy>0&&fvx<VT-1&&fvy<VT-1 && (!g_pd_dyngate||g_pd_dyngate[fvy*VT+fvx])){
+                rdr_pcell_save((int)fvx,(int)fvy,g_fxs); g_fxs_vx=(int)fvx; g_fxs_vy=(int)fvy; g_fxs_ok=1; }
+#endif
+            draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); }   /* a cannonball / burst over everything (cannons.md §1) */
         for(int e=0;e<g_fx_extra;e++){ fvx=((int32_t)g_fx_ex[e]-left)&(U6_SURFACE_TILES-1); fvy=((int32_t)g_fx_ey[e]-top)&(U6_SURFACE_TILES-1); if(fvx<VT&&fvy<VT) draw_cell(tmp,T,(int)fvx,(int)fvy,(int)g_fx_tile,-1); } }
     if(VERB_CURSOR(g_pending_verb) && !VERB_PACK()){ int cvx=VT/2+g_tcur_dx, cvy=VT/2+g_tcur_dy;   /* the A)ttack / T)alk / orb crosshair (combat.md §6b) */
-        if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT) draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); }
+        if(cvx>=0&&cvx<VT&&cvy>=0&&cvy<VT){ draw_cell(tmp,T,cvx,cvy,TILE_TARGET_CURSOR,-1); if(cvx==g_fxs_vx&&cvy==g_fxs_vy) g_fxs_ok=0; } }
     g_xh_cell=xhair_cell();                         /* where it is now: an idle recompose restores that cell when it moves */
     if(g_gw_ghost_lvl>0){ int32_t gvx=((int32_t)g_gw_ghost_x-left)&(U6_SURFACE_TILES-1), gvy=((int32_t)g_gw_ghost_y-top)&(U6_SURFACE_TILES-1);   /* a member vanishing into a moongate */
-        if(gvx<VT&&gvy<VT) draw_cell_dither(tmp,T,(int)gvx,(int)gvy,g_gw_ghost_tile,g_gw_ghost_lvl); }
+        if(gvx<VT&&gvy<VT){ draw_cell_dither(tmp,T,(int)gvx,(int)gvy,g_gw_ghost_tile,g_gw_ghost_lvl); if(gvx==g_fxs_vx&&gvy==g_fxs_vy) g_fxs_ok=0; } }
     PH_END(1);
     PH_BEGIN();
     /* Blit terrain shifted in by INSET px so the outer ring stays PAPYRUS (from
@@ -5336,6 +5380,7 @@ static void compose_map(const world_t*w)
         for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){
             int wx=(int)((left+vx)&(U6_SURFACE_TILES-1)), wy=(int)((top+vy)&(U6_SURFACE_TILES-1));
             int di=roof_at(wx,wy); if(di<0||di>=g_nrtiles) continue;
+            if(vx==g_fxs_vx&&vy==g_fxs_vy) g_fxs_ok=0;
             const uint8_t*src=g_rtiles+(int32_t)di*256;
             if(g_chunky_dyn){
                 if(g_dim_smooth){                            /* SMOOTH-PREDIM: dim roof pixels per-pixel too (roof cells are forced visible) */
@@ -9852,12 +9897,30 @@ static int sight_blocked_at(const world_t*w,int x,int y){
 static int g_fx_last_dist;                      /* test hook: how far the last ball flew */
 /* show the one-tile overlay at (x,y) for `vbls` frames (a cannonball in flight, a burst) */
 static void fx_show(const world_t*w,int x,int y,int tile,int vbls){
+    KP(16);
     if(tile==TILE_EXPLOSION) sfx_play(8,0);
     g_fx_on=1; g_fx_tile=(uint16_t)tile; g_fx_x=x&(U6_SURFACE_TILES-1); g_fx_y=y&(U6_SURFACE_TILES-1);
     compose_map(w); present_map();
     for(int i=0;i<vbls;i++) vsync_pump();
 }
-static void fx_clear(const world_t*w){ if(!g_fx_on) return; g_fx_on=0; compose_map(w); present_map(); }
+/* Clearing it: on the ST's planar map the flash's cell gets back the pixels saved just before the flash was
+ * drawn (g_fxs), which is all that changed; a whole recompose there cost 0.3-0.9 s a blow at 8 MHz. Elsewhere,
+ * or when something was drawn over the flash, a full compose. */
+#if defined(KEYPROF) && defined(HAVE_RDR_ST)
+static int g_fxverify, g_fxv_diff, g_fxv_n;   /* prof build, FXVERIFY.REQ: each restore checked against a full recompose */
+#endif
+static void fx_clear(const world_t*w){ KP(17); if(!g_fx_on) return; g_fx_on=0;
+#ifdef HAVE_RDR_ST
+    if(g_native_planar && g_fxs_ok){ rdr_pcell_restore(g_fxs_vx,g_fxs_vy,g_fxs); g_fxs_ok=0;
+#ifdef KEYPROF
+        if(g_fxverify){ extern const uint8_t *rdr_ptmp_peek(int32_t*); int32_t nb; const uint8_t *pp=rdr_ptmp_peek(&nb);
+            static uint8_t snap[32768]; if(nb<=(int32_t)sizeof snap){ memcpy(snap,pp,(size_t)nb);
+                compose_map(w); pp=rdr_ptmp_peek(&nb);           /* the full recompose, to compare */
+                int d=0; for(int32_t i=0;i<nb;i++) d+=(snap[i]!=pp[i]); g_fxv_diff+=d; g_fxv_n++; } }
+#endif
+        present_map(); return; }
+#endif
+    compose_map(w); present_map(); }
 /* the view changes pixel by pixel in a fixed shift-register order, over a few frames (moongates.md §5); to_black: to black */
 #ifdef HAVE_RDR_ST
 static void present_map_cursor(void){ if(g_native_planar&&g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy); g_cur_onx=ox; g_cur_ony=oy; } }
@@ -16482,6 +16545,9 @@ int main(int argc, char **argv)
      * plain headless scene captures still render the game). "Journey Onward" returns
      * here and play begins. INTRO.REQ plays the cutscene directly (headless capture of
      * Phase 2 without navigating the menu). (shapes.md; Phase 1/2.) */
+#if defined(KEYPROF) && defined(HAVE_RDR_ST)
+    { int32_t vl_=0; if(plat_load_file("FXVERIFY.REQ",1,&vl_)) g_fxverify=1; }   /* prof build: each cheap hit-flash clear checked against a full recompose (KPFX verify) */
+#endif
     apply_chargen();   /* if a character was created, it becomes the Avatar (name/stats) for play */
     {   int32_t rl=0;   /* the test stock (§4): MAGIC.REQ, or a headless scene that skipped the title and is no bot */
         { const uint8_t*sq=(const uint8_t*)plat_load_file("PARCH.REQ",1,&rl);   /* test: the mage of byte 0 beside the party, gold to buy from them */
@@ -21120,6 +21186,10 @@ int main(int argc, char **argv)
             for(int k_=0;k_<18;k_++){ for(const char*c=lab[k_];*c;c++) b[n++]=*c; char t[12]; int m=0; long x=v[k_]; if(k_==1){ static const char H[]="0123456789abcdef"; for(int q=12;q>=0;q-=4) t[m++]=H[(x>>q)&15]; } else { if(!x) t[m++]='0'; while(x){ t[m++]=(char)('0'+x%10); x/=10; } for(int a_=0;a_<m/2;a_++){ char c_=t[a_]; t[a_]=t[m-1-a_]; t[m-1-a_]=c_; } } for(int q=0;q<m;q++) b[n++]=t[q]; }
             b[n++]=' '; b[n++]='c'; b[n++]='m'; b[n++]='='; b[n++]=(char)('0'+g_combat_mode); b[n++]=' '; b[n++]='r'; b[n++]='='; b[n++]=(char)('0'+(redraw!=0)); b[n++]='\r'; b[n++]='\n'; b[n]=0; Cconws(b);
             if(g_kp_bbn){ dbg_num("  KPBB calls=",g_kp_bbn); g_kp_bbn=0; }
+            if(g_kp[16]||g_kp[17]){ dbg_num("  KPFX show ms=",(int)g_kp[16]*5); dbg_num("  KPFX clear ms=",(int)g_kp[17]*5); }
+#ifdef HAVE_RDR_ST
+            if(g_fxverify){ dbg_num("  KPFX verify clears=",g_fxv_n); dbg_num("  KPFX verify diff bytes=",g_fxv_diff); }
+#endif
             for(int k_=0;k_<g_kpn;k_++){ dbg_num("  KPA actor=",g_kpa[k_]); dbg_num("      wt=",g_kpw[k_]); dbg_num("      ms=",g_kpd[k_]*5); } } g_kpn=0; }
 #endif
     }

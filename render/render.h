@@ -148,6 +148,8 @@ void     rdr_pdissolve_end(int to_black);
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
 void     rdr_present_diff(void);                                        /* c2p only the groups changed since the last present (ST) */
 void     rdr_portrait_lines(int x, int y0, int w, int n, const uint8_t *lutp, const uint8_t *lv); /* ST: 4 colours per portrait row (palette_lowcolor.md) */
+void     rdr_pcell_save(int vx, int vy, uint16_t *buf);           /* ST: one 16x16 cell of the planar map (64 words) */
+void     rdr_pcell_restore(int vx, int vy, const uint16_t *buf);
 int      rdr_native_planar_ok(void);   /* 1 = ST map uses a single LUT (no band raster) -> planar OK */
 int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller must rebuild the planar static */
 /* planar mouse cursor: drawn straight into the planar screen (save-under), for the native-planar path

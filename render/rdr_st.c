@@ -871,6 +871,18 @@ void rdr_ptmp_restore(const uint8_t *dmask)
 /* end the frame's planar composite: drain the queued DYNAMIC blits (rdr_pdyn_cell -> g_ptmp) so g_ptmp is
  * complete before the caller reads it (present / INV2 verify). No-op on the CPU (non-Blitter) path. */
 void rdr_pframe_end(void) { blitter_flush(); }
+/* the 16x16 view cell (vx,vy) of the planar composite g_ptmp: 16 rows x one group (4 plane words). The
+ * hit flash saves it before it is drawn and puts it back to clear (gamedemo.c fx_clear). */
+void rdr_pcell_save(int vx, int vy, uint16_t *buf)
+{   blitter_flush(); const uint16_t *s = g_ptmp + (int32_t)vy*16*PMAP_STRIDE_W + vx*4;
+    for (int r = 0; r < 16; r++, s += PMAP_STRIDE_W, buf += 4){ buf[0]=s[0]; buf[1]=s[1]; buf[2]=s[2]; buf[3]=s[3]; } }
+void rdr_pcell_restore(int vx, int vy, const uint16_t *buf)
+{   blitter_flush(); uint16_t *d = g_ptmp + (int32_t)vy*16*PMAP_STRIDE_W + vx*4;
+    for (int r = 0; r < 16; r++, d += PMAP_STRIDE_W, buf += 4){ d[0]=buf[0]; d[1]=buf[1]; d[2]=buf[2]; d[3]=buf[3]; } }
+#ifdef KEYPROF
+/* prof build: the persistent planar map, so a cheap recompose can be checked against a full one */
+const uint8_t *rdr_ptmp_peek(int32_t *bytes){ blitter_flush(); *bytes = PMAP_BYTES; return (const uint8_t*)g_ptmp; }
+#endif
 /* The window's frayed border over the map (gamedemo draw_border_tiles: tiles at screen 16c, which is map px 16c-8,
  * since the map's px 0..159 show at screen 8..167). A masked blit at any x, y that are multiples of 8, clipped to
  * the shown 160 x 160; CPU, after the queued dynamic blits are drained so it lands on top of them. */

@@ -977,3 +977,17 @@ skipped when no cell changed. The two fingerprints mixed each value with a 32-bi
 68000 (five per object in view); they now xor, add h<<3 and swap the halves. Gargoyle fight on the 8 MHz Mega STe:
 attack 3.55 s, pass 2.45-3.9 s (the original ST: 6.4-7.1 and 6.1). Bench INV2 0 over 63 frames, light drift 0.
 What is left is spread thin: the actors' redraw per step, the map present, the scheduler and the AI.
+
+### 2026-11-14: a hit flash clears by putting its cell back
+Every blow flashes the struck actor: `fx_show` recomposes the view with the flash tile on it, `fx_clear` recomposed it
+again without. Timed with `make game-st-prof` (new KPFX lines) in the gargoyle fight on the 8 MHz Mega STe, the flashes
+were 0.8-1.9 s of a 2.5-3.9 s pass. The show must stay a whole recompose (in a combat pass every actor acts before any
+redraw, so the view is behind), but the clear changes only the flash's cell. Compose now saves that 16x16 cell of the
+planar map (`rdr_pcell_save`, 64 words) just before it draws the flash, and `fx_clear` puts it back
+(`rdr_pcell_restore`) and presents. It falls back to the full recompose off the ST's planar path, for a cell at the
+view's edge (the fray is drawn over it later), and when the crosshair, a moongate ghost or a roof was drawn over the
+flash. Tried first and dropped: the idle recompose (the crosshair's path), which costs more on entry than it saves
+here (a clear went from 0.4-0.9 s to 0.6-1.3 s). Proof: FXVERIFY.REQ in the prof build compares each restore with a
+full recompose of the planar map; 0 bytes differed over 15 clears. A clear now costs 80-235 ms (the present); passes
+3.65 -> 3.1 s, 3.9 -> 3.2 s, 2.45 -> 2.2 s (the original ST: 6.1-7.1 s).
+

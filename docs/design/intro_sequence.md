@@ -148,7 +148,14 @@ the doorway and dissolves as it enters). 5 moongate pages (global 10..14 in the 
 g_intro_npages[moongate]=5). We have: the rise ✅, the crimson glow cycle ✅ (intro_crimson_cycle
 144..159), all 5 narration pages ✅ (validated on TT), and the
 **Avatar-into-gate climax ✅** (avatar_climax(): the figure = INTRO_3.SHP frames 7..26 walks up at
-(-2, 0x12-3*i), dissolves via a Bayer dither, then the gate sinks 0x5→0x64). The "figure" is the
+(-2, 0x12-3*i), dissolves via a Bayer dither, then the gate sinks 0x5→0x64). **Pace (2026-11-14):** nuvie's stones_sequence moves the gate one pixel per canvas update
+(25 ms) both ways, so the rise and the sink take 2.4 s each. Ours moves it by the clock at that pace
+(`intro_gate_move`): each step draws where the gate should be by now, so a slow machine shows fewer, longer
+steps and a fast one never runs ahead. Measured: plain ST (TOS 1.04) rise 2.7 s, sink 2.4 s; TT rise 2.6 s,
+sink 2.4 s. Before, the rise moved 2 px a frame with no clock (11.5 s on a plain ST, slowing as the gate
+grew, under 1 s on a TT) and the sink 3 px a full redraw (about 12 s on a plain ST). The original ST release
+takes 5.8 s to rise and about 2.5 s to sink. The sink shakes as in nuvie (x +0..1, y +0..2 a step) and
+turns the crimson ramp every 5th update. The "figure" is the
 AVATAR, not a gargoyle. **It is a BLACK silhouette** (real-Falcon feedback 2026-08-15): the frames
 are drawn entirely in palette index 25, which PALETTES.INT 3 holds as a mid grey; nuvie sets that
 entry to black for the walk + the dissolve and restores the grey (0x74) afterwards. We do the same
