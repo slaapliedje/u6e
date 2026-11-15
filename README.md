@@ -105,7 +105,7 @@ installer, `INSTALL.TOS`, for a Gotek or real floppies
 ([docs/design/distribution.md](docs/design/distribution.md)).
 
 Music: with no `.PCM` files the game uses the YM2149. For an MT-32 or General MIDI module, press
-F1 in the game; the choice is saved in `MIDI.CFG`.
+F9 in the game (F1 on the title screens and main menu); the choice is saved in `MIDI.CFG`.
 
 ### 3. Controls
 
@@ -113,7 +113,8 @@ The original's keys: arrow keys walk. The first letter of each command starts it
 
 - A)ttack, C)ast, T)alk, L)ook, G)et, D)rop, U)se, M)ove (push), E)quip, R)est, I)nventory, S)ave;
 - B toggles combat mode.
-- Ctrl-R opens the saved games, Ctrl-X turns the DOS sound effects on and off, F1 changes the music source.
+- Ctrl-R opens the saved games, Ctrl-X turns the DOS sound effects on and off, F9 changes the music source;
+- F1–F8 show each party member's status.
 
 Commands that need a direction or target take the arrow keys (or a crosshair, then Enter). Esc
 cancels; with nothing to cancel, it asks whether to quit. The mouse works on the command bar, the party roster and the map.
