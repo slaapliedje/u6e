@@ -14531,7 +14531,7 @@ static void fe_music(const char *base){
 
 /* set the backend preference at runtime (0 auto / 1 MIDI MT-32 / 2 DMA / 3 PSG / 4 MIDI GM / 5 ST tunes) and
  * re-cue the current song. The MIDI.CFG byte is the boot default (authentic: the original chose the
- * synth in config, not in-game); F1 on the title menu / in game cycles it live and writes it back. */
+ * synth in config, not in-game); F9 (menus and game) cycles it live and writes it back. */
 static void music_set_pref(int pref){
     if(pref<0 || pref>5) pref=0;
     if(pref == g_music_pref) return;
@@ -14571,7 +14571,7 @@ static const char *music_pref_label(void){
 
 /* detect DMA + read the backend preference from MIDI.CFG (byte0 '1'=MIDI MT-32, '2'=DMA, '3'=PSG,
  * '4'=MIDI General MIDI, '5'=ST tunes; absent/other => auto: DMA if present, else ST tunes, else PSG). MIDI stays opt-in since
- * most players have no synth; the owner selects it (F1 cycles + saves). Also silence the PSG so a
+ * most players have no synth; the owner selects it (F9 cycles + saves). Also silence the PSG so a
  * leftover tone doesn't drone at boot. */
 static void music_manager_init(void){
     g_music_dma_ok = plat_dma_available();

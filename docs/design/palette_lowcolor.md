@@ -238,18 +238,24 @@ so it does not matter where along the row the reload lands.
   TBDR = 1 (the reload value from the first timeout on). So it fires at row y0−1 and after that on
   every row. The handler is hand-written (`pl_tb_line`). The first version, in C, spent longer than
   a scanline saving registers: interrupts landed only every 2–3 rows, and the face showed stripes.
-  The handler reads the video address counter ($FF8207/09, low 16 bits) and subtracts the screen
-  base. ceil(offset/160) is then the row about to show, whichever edge the MFP uses:
-  - **At the end of a row** (what Hatari shows, under TOS 1.04 and 2.06), the counter waits at the
-    next row's start.
-  - **At the start of a row**, the counter is already inside the row. The load lands after the
-    portrait has been drawn, ready for the next row.
+  Under TOS (1.04 and 2.06 in Hatari) the timer counts the end of display-enable: each interrupt
+  comes at the end of a row, in the border, and loads the colours of the row after it. The VBL
+  routine points a row pointer at the first row's colours each frame. The handler copies the 4
+  colours under the pointer into $FF8258..$FF825E and advances it. After the last row it masks
+  Timer-B (IMRA bit 0), and it clears ISRA bit 0 itself (software end-of-interrupt). (Were the edge
+  the start of a row, each row would show the colours of the row above it.)
 
-  The handler copies that row's 4 colours into $FF8258..$FF825E. After the last row it masks
-  Timer-B (IMRA bit 0), and it clears ISRA bit 0 itself (software end-of-interrupt). Because the
-  row comes from the counter rather than from counting interrupts, a held-up interrupt (music,
-  keyboard, a Blitter burst) costs at most that one row. The handler takes about 400 of a row's 512
-  cycles, 64 times a frame: roughly a fifth of an 8 MHz 68000, but only while a conversation is open.
+  The handler must leave most of the row free. Timer-B (MFP priority 8) ranks above the keyboard
+  and MIDI ACIAs (priority 6; MFP priorities per Peel ch. 1), so while a Timer-B interrupt is pending again at every return the keyboard is
+  never served. Its one-byte buffer overruns, a key-release byte is lost and TOS repeats the key.
+  The first hand-written version found the row from the video address counter ($FF8207/09 less the screen base,
+  ceil(offset/160) with a DIVU): about 570 cycles, more than the row's 512, and exactly that
+  happened (Hatari's ACIA trace: 263 overruns in one castle run, all at the portrait's last row;
+  the bot's words came out as "nnnnnnnname"). The pointer version takes about 230 cycles, 64 times a
+  frame (roughly a tenth of an 8 MHz 68000 while a conversation is open), and the keyboard is served
+  in the rest of each row. The cost: an interrupt held up by more than a whole row (a long keyboard
+  or mouse handler, a Blitter burst) is lost, and the rest of the portrait shows its colours one row
+  down until the next frame. One held up by less is served late within its row.
 - **Costs and limits.** The map and parchment share 12 colours instead of 16 during a conversation.
   The darkest is kept in slot 0, which the screen border shows. The mouse pointer gets no colours of
   its own: with its own (nearest-slot) colours its white and light grey came out lavender or blue and

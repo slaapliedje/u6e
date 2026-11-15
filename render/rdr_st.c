@@ -254,47 +254,33 @@ static inline void load_regs(const uint16_t *p)
 }
 
 /* Portrait line colours, the per-row handler (hand-written: a C handler's register saving outlasted a
- * scanline, so rows were skipped). Timer-B fires once per row. The handler takes the row from the
- * video address counter ($FF8207/09, low 16 bits) less the screen base: ceil(offset / 160) is the row
- * about to show whether the interrupt comes as a row ends (the counter waits at the next row's start)
- * or as one begins (the counter is inside it; the load then lands past the portrait, ready for the
- * next row). A held-up interrupt therefore costs at most one row. It copies that row's four colour
- * words to slots 12..15 ($FF8258..$FF825E), masks Timer-B (IMRA bit 0) after the last row and clears
- * its in-service bit (ISRA bit 0; software end-of-interrupt). About 400 cycles of the row's 512. */
+ * scanline, so rows were skipped). Timer-B fires once per row, at the end of the row before (the end of
+ * display-enable, as Hatari shows under TOS 1.04 and 2.06). The handler copies the next row's four colour words from
+ * g_pl_ptr to slots 12..15 ($FF8258..$FF825E), advances the pointer, masks Timer-B (IMRA bit 0) after
+ * the last row and clears its in-service bit (ISRA bit 0; software end-of-interrupt). The VBL routine
+ * resets the pointer every frame. About 230 cycles of the row's 512: the rest of the row is left to the
+ * MFP's lower channels, the keyboard/MIDI ACIA above all. (The first version found the row from the video
+ * address counter with a DIVU and took ~570 cycles, more than a row: Timer-B was always pending again
+ * as it returned and the ACIA, below it in the MFP's priorities, was starved for the whole portrait —
+ * lost key releases, so TOS repeated the key.) A held-up interrupt is served late, within its row; one
+ * held up by more than a row shifts the rest of the portrait down a row until the next frame. */
 uint16_t          g_pl_reg[PL_MAXROWS][4];           /* each row's 4 colour words (read by the handler) */
-volatile uint16_t g_pl_base16, g_pl_y0w, g_pl_nw;    /* screen base (low 16 bits), first row, rows       */
+uint16_t * volatile g_pl_ptr;                        /* the next row's colours (the handler advances it) */
+uint16_t *        g_pl_end;                          /* past the last row's                              */
 extern void pl_tb_line(void);
 __asm__(
 "	.text\n"
 "	.globl	_pl_tb_line\n"
 "_pl_tb_line:\n"
-"	movem.l	%d0-%d1/%a0,-(%sp)\n"
-"0:	move.b	0xffff8207,%d1\n"
-"	moveq	#0,%d0\n"
-"	move.b	%d1,%d0\n"
-"	lsl.w	#8,%d0\n"
-"	move.b	0xffff8209,%d0\n"
-"	cmp.b	0xffff8207,%d1\n"
-"	bne.s	0b\n"
-"	sub.w	_g_pl_base16,%d0\n"
-"	add.w	#159,%d0\n"
-"	divu	#160,%d0\n"
-"	sub.w	_g_pl_y0w,%d0\n"
-"	bmi.s	9f\n"
-"	move.w	_g_pl_nw,%d1\n"
-"	cmp.w	%d1,%d0\n"
-"	bge.s	8f\n"
-"	subq.w	#1,%d1\n"
-"	cmp.w	%d1,%d0\n"
-"	blt.s	1f\n"
+"	move.l	%a0,-(%sp)\n"
+"	move.l	_g_pl_ptr,%a0\n"
+"	move.l	(%a0)+,0xffff8258\n"
+"	move.l	(%a0)+,0xffff825c\n"
+"	move.l	%a0,_g_pl_ptr\n"
+"	cmp.l	_g_pl_end,%a0\n"
+"	bcs.s	1f\n"
 "	bclr	#0,0xfffffa13\n"
-"1:	lsl.w	#3,%d0\n"
-"	lea	_g_pl_reg,%a0\n"
-"	move.l	0(%a0,%d0.w),0xffff8258\n"
-"	move.l	4(%a0,%d0.w),0xffff825c\n"
-"	bra.s	9f\n"
-"8:	bclr	#0,0xfffffa13\n"
-"9:	movem.l	(%sp)+,%d0-%d1/%a0\n"
+"1:	move.l	(%sp)+,%a0\n"
 "	move.b	#0xfe,0xfffffa0f\n"
 "	rte\n");
 
@@ -327,8 +313,7 @@ static void vbl_routine(void)
 {
     if (g_nb <= 1) {
         if (g_pl_n && g_pl_y0 > 0) {                /* portrait line colours: first interrupt at row y0-1, then every row */
-            g_pl_base16 = (uint16_t)(*(volatile uint8_t *)0xFFFF8203UL << 8);   /* $FF8203 base mid (256-aligned) */
-            g_pl_y0w = (uint16_t)g_pl_y0; g_pl_nw = (uint16_t)g_pl_n;
+            g_pl_ptr = &g_pl_reg[0][0]; g_pl_end = &g_pl_reg[g_pl_n][0];
             *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&pl_tb_line;
             MFP_TBCR = 0;
             MFP_TBDR = (uint8_t)g_pl_y0;            /* stopped: loads the counter */
