@@ -157,7 +157,11 @@ g_intro_npages[moongate]=5). We have: the rise ✅, the crimson glow cycle ✅ (
 steps and a fast one never runs ahead. Measured: plain ST (TOS 1.04) rise 2.7 s, sink 2.4 s; TT rise 2.6 s,
 sink 2.4 s. Before, the rise moved 2 px a frame with no clock (11.5 s on a plain ST, slowing as the gate
 grew, under 1 s on a TT) and the sink 3 px a full redraw (about 12 s on a plain ST). The original ST release
-takes 5.8 s to rise and about 2.5 s to sink. The sink shakes as in nuvie (x +0..1, y +0..2 a step) and
+takes 5.8 s to rise and about 2.5 s to sink. The walk and the dissolve are on the same clock: nuvie
+holds each of the 20 walk frames for 5 updates (125 ms, 3 px up per frame) and dissolves the figure from
+opacity 255 to 0 in steps of 3 per update (86 updates, 2.15 s); we map the opacity to Bayer cells kept
+(of 16). Measured: plain ST 4.4 s, TT 4.8 s, walk plus dissolve (nuvie 4.65 s); before, both ran one
+step per present, so the time depended on the machine. The sink shakes as in nuvie (x +0..1, y +0..2 a step) and
 turns the crimson ramp every 5th update. The "figure" is the
 AVATAR, not a gargoyle. **It is a BLACK silhouette** (real-Falcon feedback 2026-08-15): the frames
 are drawn entirely in palette index 25, which PALETTES.INT 3 holds as a mid grey; nuvie sets that

@@ -1494,18 +1494,32 @@ static void avatar_climax(int s)
     #define STAGE_SCENE(gyv) do{ blit_opaque(bg,g_intro[s].w,g_intro[s].h,0,0); \
         blit_indexed_clip(g_gate,g_gate_w,g_gh,g_gx+(int)rng_range(&r,2),(gyv)+(int)rng_range(&r,3),0,0,LW,GATE_CLIP_Y); \
         if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy); }while(0)
-    for(int i=0;i<g_av_n;i++){                         /* the Avatar walks up into the gate */
-        STAGE_SCENE(gy);
-        blit_indexed(g_av_frame[i],g_av_w[i],g_av_h[i],g_av_ox[i]-2,g_av_oy[i]+0x12-3*i);
-        intro_crimson_cycle(palb,++cs); rdr_present_doubled(LH); vsync_pump();
-        if(plat_input_raw()){ i=g_av_n; }
-    }
-    for(int keep=14; keep>=0; keep-=2){               /* ...and dissolves as it enters */
-        int L=g_av_n-1;
-        STAGE_SCENE(gy);
-        blit_dither(g_av_frame[L],g_av_w[L],g_av_h[L],g_av_ox[L]-2,g_av_oy[L]+0x12-3*L,keep);
-        intro_crimson_cycle(palb,++cs); rdr_present_doubled(LH); vsync_pump(); vsync_pump();
-    }
+    /* Paced by the 200 Hz clock at nuvie's rate (one canvas update = 25 ms = GATE_TICKS): each walk
+     * frame holds 5 updates (125 ms, 20 frames = 2.5 s), the crimson ramp turns once per 5 updates, and
+     * the dissolve takes opacity 255 -> 0 in steps of 3 per update (86 updates = 2.15 s). A slow machine
+     * shows fewer steps, never a slower walk. Any key ends the walk early (as before). */
+    {   uint32_t t0=plat_ticks_200hz(); int last=-1;
+        for(;;){
+            int k=(int)((plat_ticks_200hz()-t0)/GATE_TICKS), i=k/5;
+            if(i>=g_av_n) break;
+            if(i==last){ vsync_pump(); continue; }
+            last=i;
+            STAGE_SCENE(gy);
+            blit_indexed(g_av_frame[i],g_av_w[i],g_av_h[i],g_av_ox[i]-2,g_av_oy[i]+0x12-3*i);
+            cs=i+1; intro_crimson_cycle(palb,cs); rdr_present_doubled(LH); vsync_pump();
+            if(plat_input_raw()) break;
+        } }
+    {   uint32_t t0=plat_ticks_200hz(); int last=-1, L=g_av_n-1, cbase=cs;   /* ...and dissolves as it enters */
+        for(;;){
+            int k=(int)((plat_ticks_200hz()-t0)/GATE_TICKS); if(k>86) k=86;
+            int op=255-3*k, keep=(op+15)/16;           /* opacity -> Bayer cells kept of 16 */
+            if(keep==last){ vsync_pump(); continue; }
+            last=keep;
+            STAGE_SCENE(gy);
+            if(keep>0) blit_dither(g_av_frame[L],g_av_w[L],g_av_h[L],g_av_ox[L]-2,g_av_oy[L]+0x12-3*L,keep);
+            cs=cbase+k/5; intro_crimson_cycle(palb,cs); rdr_present_doubled(LH); vsync_pump();
+            if(keep==0) break;
+        } }
     if(have_lc) rdr_set_lowcolor(g_intro[s].lc,g_intro[s].lc+48);   /* entry 25 back to grey (nuvie 0x74) */
     {   /* the gate sinks back into the earth (intro_gate_move: nuvie's pace; the ST presents only what moved) */
         STAGE_SCENE(gy); rdr_present_doubled(LH);
