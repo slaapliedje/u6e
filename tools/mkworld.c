@@ -1984,7 +1984,12 @@ int main(int argc, char **argv)
         u6lzw_decompress(paperc,(int32_t)ppn,paperd,pun); free(paperc);
         int pw=paperd[0]|(paperd[1]<<8), ph=paperd[2]|(paperd[3]<<8);
         if (pw!=320||ph!=200){ printf("PAPER.BMP %dx%d unexpected\n",pw,ph); return 2; } }
-    else { paperd = calloc(4+64000,1); if(!paperd){ printf("out of memory (paper)\n"); return 2; } }
+    else { paperd = calloc(4+64000,1); if(!paperd){ printf("out of memory (paper)\n"); return 2; }
+        if (!strcmp(gp->id,"savage")){                 /* SE's game frame: SCREEN.LZC, one 320x200 shape (rules/se_screen.md §1) */
+            long scn; uint8_t *scd = load_core_asset(dir,"SCREEN.LZC",marker,&scn); int sw=0, sh=0;
+            if (!scd || !u6shape_decode(scd,(int32_t)scn,0,&sw,&sh,paperd+4,64000) || sw!=320 || sh!=200){
+                printf("SCREEN.LZC: not a 320x200 shape (%dx%d)\n",sw,sh); return 2; }
+            free(scd); } }
     uint8_t *paper = paperd+4;                      /* 64000 pixels */
 
 

@@ -51,7 +51,15 @@
 #define MAPY 0                 /*   form the edge; panel sits to its right)    */
 #define MAPSZ (VT*16)          /* 176: full 11x11 window, avatar centred       */
 #define MAP_INSET 8            /* terrain inset so the outer ring stays papyrus (no bleed) */
+/* where the 176x176 map composite shows: screen = composite + g_mo, its part [g_mx0,g_mx1) x [g_my0,g_my1).
+ * U6: 8 px in, the 160x160 from the corner (the frayed ring over the rest). SE: no offset, x 8..167, y 16..159
+ * inside SCREEN.LZC's frame (rules/se_screen.md §2). Set by screen_layout() once the game is known. */
+static int g_mo=MAP_INSET, g_mx0=0, g_mx1=160, g_my0=0, g_my1=160;
 #define PANX 176               /* right panel x (just right of the 176 map)    */
+#define SE_MAPX0 8             /* SE: the map's visible part inside SCREEN.LZC's frame */
+#define SE_MAPX1 167
+#define SE_MAPY0 16
+#define SE_MAPY1 159
 #define PANW (LW-BORD-PANX)    /* 136: right panel width                      */
 #define PW   56
 #define PH   64
@@ -708,6 +716,12 @@ static int            g_cc_xfer, g_cc_xexp, g_cc_xlevel, g_cc_xhp;   /* ...and a
 #define CMDX 8
 #define CMDY 182
 #define MSGY 112               /* the scroll box: 9 rows of 17 in its frame */
+/* the scroll's box per game: U6 under the panel's top part; SE in SCREEN.LZC's bottom box (rules/se_screen.md §4) */
+#define MSG_X    (g_gd==&gamedef_se?185:PANX)
+#define MSG_Y    (g_gd==&gamedef_se?128:MSGY)
+#define MSG_W    (g_gd==&gamedef_se?128:PANW)
+#define MSG_ROWS (g_gd==&gamedef_se?8:9)
+#define TPITCH   (g_gd==&gamedef_se?8:9)   /* wrapped text's line pitch: DOS SE puts rows 8 px apart */
 #define NCMD 10
 /* mouse cursor (decoded from U6MCGA.PTR) + save-under */
 #define CURMAX 64
@@ -5453,7 +5467,6 @@ static void compose_map(const world_t*w)
     }
     PH_END(2);
     PH_BEGIN();
-    int span=MAPSZ-2*MAP_INSET;                     /* 160 = 10 whole tiles */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
 #ifdef HAVE_RDR_ST
         if(g_native_planar) rdr_pframe_end();       /* Blitter: drain this frame's queued dynamic tile blits into g_ptmp */
@@ -5464,8 +5477,8 @@ static void compose_map(const world_t*w)
 #endif
         g_predim=0;
         if(g_chunky_dyn)                            /* planar-only present reads g_ptmp, not the chunky backbuffer */
-        for(int y=0;y<span;y++)                     /* plain copy -> memcpy (long-word moves, ~4x the byte loop) */
-            memcpy(ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET, tmp+y*T, (size_t)span);
+        for(int y=g_my0;y<g_my1;y++)                     /* plain copy -> memcpy (long-word moves, ~4x the byte loop) */
+            memcpy(ROW(MAPY+g_mo+y)+MAPX+g_mo+g_mx0, tmp+y*T+g_mx0, (size_t)(g_mx1-g_mx0));
         PH_END(3); return;
     }
 #if !defined(LIGHT_DEBUG_VIS) && !defined(LIGHT_DEBUG_FIELD)
@@ -5473,8 +5486,8 @@ static void compose_map(const world_t*w)
                                                       * walking case): one darklut level, no per-pixel bilinear/vis.
                                                       * Byte-identical to the slow path when uniform. */
         const uint8_t *lut=g_darklut[mnL>>4];
-        for(int y=0;y<span;y++){ uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
-            for(int x=0;x<span;x++) drow[x]=lut[trow[x]]; }
+        for(int y=g_my0;y<g_my1;y++){ uint8_t *drow=ROW(MAPY+g_mo+y)+MAPX+g_mo; const uint8_t *trow=tmp+y*T;
+            for(int x=g_mx0;x<g_mx1;x++) drow[x]=lut[trow[x]]; }
         PH_END(3); return;
     }
 #endif
@@ -5484,11 +5497,11 @@ static void compose_map(const world_t*w)
          * bilinear (cheap), and the spatial mix of adjacent levels reads as a gradient even in
          * a low-colour palette. The cell's fractional light picks level k vs k+1 per pixel via
          * the Bayer threshold. (docs/design/original-st-renderer.md "native-planar" model.) */
-        for(int y=0;y<span;y++){
+        for(int y=g_my0;y<g_my1;y++){
             const uint8_t *lr=&light[(y>>4)*VT], *vr=&vis[(y>>4)*VT];
             const uint8_t *br=g_bayer4[y&3];
-            uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
-            for(int x=0;x<span;x++){
+            uint8_t *drow=ROW(MAPY+g_mo+y)+MAPX+g_mo; const uint8_t *trow=tmp+y*T;
+            for(int x=g_mx0;x<g_mx1;x++){
                 if(!vr[x>>4]){ drow[x]=0; continue; }
                 int lev=(lr[x>>4]+br[x&3])>>4; if(lev>NLEV-1)lev=NLEV-1;
                 drow[x]=g_darklut[lev][trow[x]];
@@ -5497,19 +5510,19 @@ static void compose_map(const world_t*w)
         PH_END(3); return;
     }
     if(g_light_style==LSTY_BINARY){                  /* original ST port: lit cell -> full tile, else black */
-        for(int y=0;y<span;y++){
+        for(int y=g_my0;y<g_my1;y++){
             const uint8_t *lr=&light[(y>>4)*VT], *vr=&vis[(y>>4)*VT];
-            uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
-            for(int x=0;x<span;x++) drow[x]=(vr[x>>4] && lr[x>>4])?trow[x]:0;
+            uint8_t *drow=ROW(MAPY+g_mo+y)+MAPX+g_mo; const uint8_t *trow=tmp+y*T;
+            for(int x=g_mx0;x<g_mx1;x++) drow[x]=(vr[x>>4] && lr[x>>4])?trow[x]:0;
         }
         PH_END(3); return;
     }
 #endif
-    for(int y=0;y<span;y++){
+    for(int y=g_my0;y<g_my1;y++){
         int sy=y-8; if(sy<0)sy=0; int cy0=sy>>4, fy=sy&15, cy1=cy0+1; if(cy1>=VT)cy1=VT-1;
         const uint8_t *r0=&light[cy0*VT], *r1=&light[cy1*VT], *vr=&vis[(y>>4)*VT];
-        uint8_t *drow=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET; const uint8_t *trow=tmp+y*T;
-        for(int x=0;x<span;x++){
+        uint8_t *drow=ROW(MAPY+g_mo+y)+MAPX+g_mo; const uint8_t *trow=tmp+y*T;
+        for(int x=g_mx0;x<g_mx1;x++){
 #ifdef LIGHT_DEBUG_VIS
             drow[x]= vr[x>>4] ? trow[x] : 0; continue;            /* isolate C1: visible=full, hidden=black */
 #endif
@@ -5556,13 +5569,13 @@ static uint32_t smooth_predim_selftest(world_t*w){
         if(sc==2){ int px=basepx, py=basepy;                            /* chained incremental scroll walk */
             for(int k=0;k<6;k++){ px=(px+WK_X[k])&(U6_SURFACE_TILES-1); py=(py+WK_Y[k])&(U6_SURFACE_TILES-1);
                 w->px=(uint16_t)px; w->py=(uint16_t)py; compose_map(w); } }
-        for(int y=0;y<span;y++) memcpy(snap+y*span, ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET, (size_t)span);
+        for(int y=g_my0;y<g_my1;y++) memcpy(snap+y*span, ROW(MAPY+g_mo+y)+MAPX+g_mo, (size_t)span);
         /* --- reference: SMOOTH, a full rebuild at the SAME (view,anim) --- */
         g_light_style=LSTY_SMOOTH;
         g_tmp_valid=0; g_dm_valid=0; g_pd_anim_valid=0; g_idle_allow=0;
         compose_map(w);                                              /* w->px/py + g_anim_ctr already at final state */
-        for(int y=0;y<span;y++){ const uint8_t*p=ROW(MAPY+MAP_INSET+y)+MAPX+MAP_INSET;
-            for(int x=0;x<span;x++) if(p[x]!=snap[y*span+x]) diff++; }
+        for(int y=g_my0;y<g_my1;y++){ const uint8_t*p=ROW(MAPY+g_mo+y)+MAPX+g_mo;
+            for(int x=g_mx0;x<g_mx1;x++) if(p[x]!=snap[y*span+x]) diff++; }
     }
     g_light_style=sv_ls; g_idle_allow=sv_ia; g_anim_ctr=sv_ctr; w->px=(uint16_t)basepx; w->py=(uint16_t)basepy;
 #ifdef HAVE_RDR_ST
@@ -5638,6 +5651,12 @@ static void border_strip(int r_,int save,int*same)
 static void draw_border_tiles(void)
 {
     KP(15);
+    if(g_gd==&gamedef_se){                          /* SE: SCREEN.LZC's frame covers the map's outer half-tiles; x 8..167, y 16..159 show (rules/se_screen.md §2) */
+        for(int y=MAPY;y<MAPY+VT*16;y++){ const uint8_t*src=g_paper+(int32_t)y*LW+MAPX; uint8_t*row=ROW(y)+MAPX;
+            if(y<SE_MAPY0||y>SE_MAPY1) memcpy(row,src,VT*16);
+            else { memcpy(row,src,SE_MAPX0-MAPX); memcpy(row+SE_MAPX1+1-MAPX,src+SE_MAPX1+1-MAPX,(size_t)(MAPX+VT*16-1-SE_MAPX1)); } }
+        if(g_casting||g_save_menu) spell_page_blit(PANX-SPELL_X);
+        return; }
     int x1=MAPX+(VT-1)*16, y1=MAPY+(VT-1)*16;       /* 160: last ring column/row */
     for(int r_=0;r_<4;r_++){ int same=0; if(g_brd_have[r_]) border_strip(r_,0,&same); if(same) continue;
         if(r_<2){ int y=r_?y1:MAPY; blit_tile(MAPX,y,r_?435:432,1); blit_tile(x1,y,r_?437:434,1);   /* corners, then the row */
@@ -5676,7 +5695,7 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
         for(int k=0;k<g_msg_skip;k++){ while(*s==' ') s++; int n=0,last=-1; for(const char*p=s;*p&&*p!='\n';p++,n++){ if(*p==' ') last=n; if(n>=cols) break; }
             s+=(n<cols)?n:(last>=0?last:cols); if(*s=='\n') s++; }
         g_msg_more=rows-g_msg_skip>lines;
-        if(g_msg_more){ g_msg_page=lines-1; tcur_set(x,y+(lines-1)*9,1,col); lines--; } }   /* a page less one, the arrow on the row the next line goes to */
+        if(g_msg_more){ g_msg_page=lines-1; tcur_set(x,y+(lines-1)*TPITCH,1,col); lines--; } }   /* a page less one, the arrow on the row the next line goes to */
     while(*s && row<lines){
         while(*s==' ') s++;
         if(!*s) break;
@@ -5686,7 +5705,7 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
         char line[48]; int t=take<47?take:47;
         for(int k=0;k<t;k++) line[k]=s[k];
         line[t]=0;
-        ui_text_row(x,y+row*9,line,t,col); row++;
+        ui_text_row(x,y+row*TPITCH,line,t,col); row++;
         s+=take; if(*s=='\n') s++;
     }
 }
@@ -6012,15 +6031,15 @@ static void draw_conversation(uint8_t col)
         talk_draw(PANX+6, 116, g_gamename?15:col);  /* white on SE's black panel */
     } else if(g_show_status){
         draw_char_view(col);                       /* a party member's portrait + gender + stats */
-        if(g_msg[0]) ui_text_wrap(PANX, MSGY, PANW, g_msg, 9, col);
+        if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, MSG_ROWS, col);
     } else if(g_show_inv){
         if(g_gamename){ draw_sky(); draw_inventory_list(col); if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col); }
-        else { draw_inventory(col); if(g_msg[0]) ui_text_wrap(PANX, MSGY, PANW, g_msg, g_pending_verb?7:9, col);
-            if(g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'){ const char*p=g_pending_verb=='L'?"Look-":g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":"Move-"; if(!g_msg[0]) ui_text(PANX,MSGY,p,col); } }
+        else { draw_inventory(col); if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, g_pending_verb?MSG_ROWS-2:MSG_ROWS, col);
+            if(g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'){ const char*p=g_pending_verb=='L'?"Look-":g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":"Move-"; if(!g_msg[0]) ui_text(MSG_X,MSG_Y,p,col); } }
     } else {
         draw_sky();                                /* day/night bar + party roster */
         draw_party_roster(col);
-        if(g_gamename){                            /* CORE pack (SE/MD): portrait + game name in the panel */
+        if(g_gamename && g_gd!=&gamedef_se){       /* CORE pack (MD): portrait + game name in the panel; SE has its own screen */
             int ty=100;
             const uint8_t *fc=se_face(0);
             if(fc){                                /* a real portrait (79x85 U6 shape) at the panel top */
@@ -6031,13 +6050,13 @@ static void draw_conversation(uint8_t col)
             }
             ui_text(PANX+(PANW-ui_textw(g_gamename))/2, ty, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
         }
-        if(g_msg[0]) ui_text_wrap(PANX, MSGY, PANW, g_msg, g_pending_verb?7:9, col);  /* scroll box */
+        if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, g_pending_verb?MSG_ROWS-2:MSG_ROWS, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
             const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-":
                            g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
                            g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
                            g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-";
-            ui_text_wrap(PANX, MSGY+(g_msg[0]?7*9:0), PANW, p, 2, col);
+            ui_text_wrap(MSG_X, MSG_Y+(g_msg[0]?(MSG_ROWS-2)*TPITCH:0), MSG_W, p, 2, col);
         }
     }
 }
@@ -6077,6 +6096,7 @@ static void status_text(const world_t*w,char*s)
 static void draw_status(const world_t*w,uint8_t col)
 {
     KP(12);
+    if(g_gd==&gamedef_se) return;                   /* SE has no status line (rules/se_screen.md §2) */
     char s[40]; status_text(w,s);
     /* the bottom border row is papyrus under transparent border tiles; the clock changes without a
      * scroll (a pass, a camp), so the old text must go first: papyrus, the row's tiles, then the text */
@@ -6090,13 +6110,18 @@ static void draw_status(const world_t*w,uint8_t col)
  * via SIDENT during the greeting). Used to label the party roster without baking
  * any game text into our source. STARTUP ONLY (reuses g_cv + g_script_buf, with
  * a throwaway game state so it never disturbs the persistent g_cg). */
+static int32_t se_script(int id);
 static void resolve_name(int id, char *out, int cap)
 {
     out[0]=0;
-    lib_t *L=(id<g_countA)?&g_lib[LIB_CONVA]:&g_lib[LIB_CONVB]; int ci=(id<g_countA)?id:id-g_countA;
-    int32_t elen; const uint8_t *e=lib_get(L,ci,&elen); if(!e) return;
-    int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf); if(got<=0) return;
+    int32_t got;
+    if(g_gd==&gamedef_se) got=se_script(id);        /* SE: the pack's scripts (converse.md §6c) */
+    else { lib_t *L=(id<g_countA)?&g_lib[LIB_CONVA]:&g_lib[LIB_CONVB]; int ci=(id<g_countA)?id:id-g_countA;
+        int32_t elen; const uint8_t *e=lib_get(L,ci,&elen); if(!e) return;
+        got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf); }
+    if(got<=0) return;
     cvm_game_t cg; cvm_game_init(&cg,1);
+    if(g_gd==&gamedef_se) cg.dialect=CVM_DIALECT_SE;
     cvm_init(&g_cv,g_script_buf,got,&cg,id,g_avatar_name,g_avatar_title);
     cvm_run(&g_cv);
     int o=0; while(g_cv.npcname[o]&&o<cap-1){ out[o]=g_cv.npcname[o]; o++; } out[o]=0;
@@ -9116,6 +9141,7 @@ static void draw_sky(void)
 {
     static const signed char sy[15]={6,3,1,-1,-2,-3,-4,-4,-4,-3,-2,-1,1,3,6};
     int ax=PANX, ay=4, hh=g_minutes/60;
+    if(g_gd==&gamedef_se) return;                   /* SE's sky is the top border's strip: not yet built (rules/se_screen.md §3) */
     if(g_cur_level!=0 && g_cur_level!=5){                          /* underground: the cave ribbon 372 / 373 x7 / 374 */
         blit_tile(ax+8, ay, 372, 1); for(int i=1;i<8;i++) blit_tile(ax+8+i*16, ay, 373, 1); blit_tile(ax+8+7*16+8, ay, 374, 1);
         return; }
@@ -9135,16 +9161,17 @@ static void draw_party_roster(uint8_t col)
     if(g_roster_first>0){ char c[2]={0x18,0}; ui_text(168,24,c,col); }
     if(g_roster_first+5<g_nparty){ char c[2]={0x19,0}; ui_text(168,96,c,col); }
     int smi=0; if(g_solo_m) smi=member_index(g_solo_m);
+    int se=g_gd==&gamedef_se;                                           /* SE: rows from y 8, name below the HP (rules/se_screen.md §4) */
     for(int row=g_roster_first;row<g_nparty && row<g_roster_first+5;row++){
         int i=!g_solo_m?row:(row==0?smi:(row==smi?0:row));             /* a played companion keeps its place in the list */
-        int yy=26+(row-g_roster_first)*16, a=g_party[i].actor;          /* below the sky strip */
-        if(a>=0 && a<U6_MAX_ACTORS && g_atile[a]!=0xffff) blit_tile(PANX+2, yy, g_atile[a], 1);
-        ui_text(PANX+20, yy+4, g_party[i].name[0]?g_party[i].name:"?", col);
+        int yy=(se?8:26)+(row-g_roster_first)*16, a=g_party[i].actor;   /* below the sky strip */
+        if(a>=0 && a<U6_MAX_ACTORS && g_atile[a]!=0xffff) blit_tile(se?185:PANX+2, yy, g_atile[a], 1);
+        ui_text(se?209:PANX+20, se?yy+8:yy+4, g_party[i].name[0]?g_party[i].name:"?", col);
         char hp[6]; int n=0, v=g_party[i].hp;
         if(v>=100){ hp[n++]=(char)('0'+v/100); v%=100; hp[n++]=(char)('0'+v/10); }
         else if(v>=10){ hp[n++]=(char)('0'+v/10); }
         hp[n++]=(char)('0'+v%10); hp[n]=0;
-        ui_text(PANX+PANW-ui_textw(hp)-4, yy+4, hp, (a>=0&&a<U6_MAX_ACTORS&&g_poison[a])?10:(g_party[i].hp<10?12:col));   /* green poisoned, red hurt badly */
+        ui_text((se?311:PANX+PANW-4)-ui_textw(hp), se?yy:yy+4, hp, (a>=0&&a<U6_MAX_ACTORS&&g_poison[a])?10:(g_party[i].hp<10?12:col));   /* green poisoned, red hurt badly */
     }
 }
 /* The status display's parts as DOS lays them out (equipment.md §5), in screen pixels */
@@ -9364,6 +9391,7 @@ static void restore_cmdbar(void)
 static void draw_command_bar(uint8_t hi)
 {
     KP(14);
+    if(g_gd==&gamedef_se) return;                   /* SE's icons are in SCREEN.LZC; DOS marks none (rules/se_screen.md §6) */
     restore_cmdbar();
     for(int i=0;i<NCMD;i++) blit_tile(CMDX+i*16,CMDY,400+i,0);
     if(g_default_verb){ int c=verb_cmd(g_default_verb); if(c>=0) for(int k=0;k<16;k++) ui_px(CMDX+c*16+k,CMDY+16,9); }   /* the default's blue line */
@@ -12766,9 +12794,8 @@ static void read_mouse_logical(int *lx,int *ly,int *btn)
 /* map a logical click to a tile delta (dx,dy) from the avatar; 1 if on the map */
 static int map_click_delta(int lx,int ly,int *dx,int *dy)
 {
-    int span=MAPSZ-2*MAP_INSET;                       /* terrain area (inset by MAP_INSET) */
-    int rx=lx-MAPX-MAP_INSET, ry=ly-MAPY-MAP_INSET;
-    if(rx<0||rx>=span||ry<0||ry>=span) return 0;
+    int rx=lx-MAPX-g_mo, ry=ly-MAPY-g_mo;             /* composite pixel under the click */
+    if(rx<g_mx0||rx>=g_mx1||ry<g_my0||ry>=g_my1) return 0;
     *dx=(rx/16)-VT/2; *dy=(ry/16)-VT/2;              /* tmp tile -> delta from avatar */
     return 1;
 }
@@ -16141,6 +16168,7 @@ int main(int argc, char **argv)
     g_gd = gd ? gd : &gamedef_u6;                        /* authoritative loaded-game identity */
     g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
     g_gl = g_gd==&gamedef_se ? &gl_se : g_gd==&gamedef_md ? &gl_md : &gl_u6;   /* the game layer (game_layer.md) */
+    if(g_gd==&gamedef_se){ g_mo=0; g_mx0=SE_MAPX0; g_mx1=SE_MAPX1+1; g_my0=SE_MAPY0; g_my1=SE_MAPY1+1; }   /* SE's map window (rules/se_screen.md §2) */
     rules_select(g_gd==&gamedef_se ? RULES_SE : RULES_U6);                    /* whose weapon, armour and creature tables (se_combat.md) */
     g_on = *g_gl->on;
     const uint8_t *gettable;
