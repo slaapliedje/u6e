@@ -35,8 +35,8 @@ TRANSFER A CHARACTER
   (Ultima IV, ST) or PARTY.SAV (Ultima IV, DOS).
 
 SOUND
-  Ctrl-Z turns the sound off and on, as in the original. F9 (F1 in the
-  menus) picks the music source.
+  Ctrl-Z turns the sound off and on, as in the original. F9 picks the
+  music source, in the menus too.
 
 SAVED GAMES
   S saves and Ctrl-R restores. Each opens a page of 8 slots: Up, Down or
@@ -61,7 +61,12 @@ MUSIC
 
 KNOWN LIMITS
   - Tested in the Hatari emulator on TOS 1.04, 3.06 and 4.04, and under
-    MiNT with XaAES and MagiC 6.2. Real-machine reports are very welcome.
+    MiNT with XaAES and MagiC 6.2, and by a player on a Mega STe.
+    Real-machine reports are very welcome.
+  - On a plain ST or STE, combat pauses briefly after each blow while the
+    map is redrawn.
+  - A TT with 4 MB and no TT-RAM draws on one screen to save
+    memory, so a cutscene can tear.
   - MagiC on a 4 MB ST leaves too little memory for the game: start
     the ST without MagiC.
   - Savage Empire and Martian Dreams convert and can be walked around,
