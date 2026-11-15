@@ -2408,13 +2408,19 @@ int main(int argc, char **argv)
           { static const int CX[]={0xdd,0xdd+4,0xdd+0xa,0xdd+0xe};
             for(int c=0;c<4;c++) for(int yy=0x14;yy<0x14+5;yy++)
               for(int xx=CX[c];xx<CX[c]+3;xx++) pano[yy*640+xx]=0; }
-          { scene_extra_t xs[3]={{g_scrollpix,(long)g_scw*g_sch,32},{fg,320*200,32},{NULL,0,0}};   /* the panorama is 2 screens wide: parchment and fg at x2 */
+          { scene_extra_t xs[4]={{g_scrollpix,(long)g_scw*g_sch,32},{fg,320*200,128},{NULL,0,0},{NULL,0,0}};   /* the panorama is 2 screens wide: parchment and fg at x2 */
             int nx=2; uint8_t *tvall=NULL; long tvn=0;                  /* the TV's pictures (their pixels at x4: the screen is small but always in view) */
             { long cap=0; for(int k=0;k<53;k++){ int w=0,h=0; uint8_t*tp=load_shape(dir,"INTRO_1.SHP",16+k,&w,&h); if(tp) cap+=(long)w*h; free(tp); }
               tvall=scratch((int)(cap>0?cap:1),U6SHAPE_TRANSPARENT);
               for(int k=0;k<53;k++){ int w=0,h=0; uint8_t*tp=load_shape(dir,"INTRO_1.SHP",16+k,&w,&h); if(tp&&w>0){ memcpy(tvall+tvn,tp,(size_t)w*h); tvn+=(long)w*h; } free(tp); } }
             if(tvn){ xs[2].pix=tvall; xs[2].n=tvn; xs[2].w16=8; nx=3; }   /* half: the pictures are many, the screen small */
-            build_scene_lc_x(pal, pano, 640*200, xs, nx, lc); free(tvall); }
+            /* The opening view (the left 320 columns) is on screen for both pages; the right half shows only
+             * as the pan ends. Counted once more at x3, so the room's warm wood and the wall poster keep their
+             * colours against the grey wall, window and carpet of the right half (the forum report: "the wall
+             * picture is pale"; the original ST's 16 for this room hold three browns, yellow, red and magenta). */
+            uint8_t *left=scratch(320*200,0); for(int yy=0;yy<200;yy++) memcpy(left+yy*320,pano+yy*640,320);
+            xs[nx].pix=left; xs[nx].n=320*200; xs[nx].w16=48; nx++;
+            build_scene_lc_x(pal, pano, 640*200, xs, nx, lc); free(tvall); free(left); }
           fwrite(lc,1,sizeof lc,fe);   /* quantise the panorama */
           be16(fe,640); be16(fe,200); fwrite(pano,1,640*200,fe);
           be16(fe,320);              fwrite(fg,1,320*200,fe);

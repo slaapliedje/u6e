@@ -441,6 +441,15 @@ picture's oranges and yellows back, a coloured TV, blue lightning ("searing blue
 inner frame kept. Tried and backed off: a saturation weight up to x3 with the TV pictures at full weight turned the
 TV cabinet's tan edges magenta.
 
+The living room was still pale next to the original ST release (2026-11-15). The original's frame holds three browns,
+yellow, red and magenta; ours had four greys and an olive for the wood, and the poster had lost its yellow and red.
+The cause: the room's 16 is quantised from the whole 640-wide panorama, and the right half (grey wall, window,
+carpet) outvoted the opening view, which is what stays on screen for both pages; the right half shows only as the
+pan ends. The left 320 columns are now counted once more at x3 (so x4 in all), and the seated Avatar (the fg layer)
+went from x2 to x8 so his blue shirt keeps its slot. Result on a plain ST: brown wood, a yellow-orange-red poster, a
+blue shirt, grey walls; the right half still reads. The original's own 16 was not found by a raw search of its files
+(the intro pictures, INTRO_1.NEW etc., look compressed); reading it from there would need their format first.
+
 The gargoyle-sacrifice opening (§1B) got the same treatment afterwards. Its 16 had been built from the mid-scene
 tableau alone, and its captions showed on grey parchment. It now counts the narration parchment too, at its screen
 share (weight 16), and the captions are yellow as in the 256-colour version. Tried and backed off: counting the
