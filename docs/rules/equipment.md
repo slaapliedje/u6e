@@ -80,8 +80,8 @@ and check that one's coins, usecode_vm.md); SE and MD keep one gold pool, the le
 longer one. Health in red below 10, green if poisoned. A click on a figure opens that member's inventory, on the name its
 portrait. `F1-F8` show the Nth member's portrait, `F10` returns here, `*` flips portrait and inventory, `+` / `-` step
 through members. `Tab` puts the crosshair in the display (arrows move it, Enter selects), and again back on the map. Esc from
-there also returns it. The display stays up through verbs and walking. (`F9`, not a DOS key, is the music source, F1 in the
-menus.)
+there also returns it. The display stays up through verbs and walking. (`F9`, not a DOS key, is the music source, in the
+menus too.)
 
 **Inventory** (all at x,y): the name centred on the top row; the figure, tiles 368-371, at (192,32); eight slots with the empty
 ring (tile 410): head (200,16), neck (176,24), weapon hand (224,24), first ring (176,40), body (224,40), other hand (176,56),

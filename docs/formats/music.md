@@ -206,8 +206,7 @@ midi_raw`): BOOTUP in GM mode transmits `F0 7E 7F 09 01 F7 · C1 63 · C2 64 · 
 reset, MT-32 38/39 → GM 99/100 on channels 2/3, then the notes.
 
 **Selecting the source at runtime:** MIDI.CFG (one byte: `0` auto, `1` MIDI MT-32, `2` DMA,
-`3` PSG, `4` MIDI General MIDI; absent = auto) is the boot default, and **F1** on the title menu
-or in the game steps auto → MT-32 → GM → DMA (where present) → PSG → auto, re-cues the current
+`3` PSG, `4` MIDI General MIDI; absent = auto) is the boot default, and **F9** everywhere (title screens, main menu, the game) steps auto → MT-32 → GM → DMA (where present) → PSG → auto, re-cues the current
 song on the new sink, shows the choice (menu note line / message scroll) and writes MIDI.CFG back
 (`music_cycle_pref` / `music_save_pref`, GEMDOS Fcreate 0x3C + Fwrite 0x40 via platfile).
 

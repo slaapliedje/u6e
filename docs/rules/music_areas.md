@@ -25,7 +25,7 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M10 (audio: music)
 The ST release asks for the same 12 songs in the same situations, and plays each as one of 7 tunes of its
 own (docs/formats/st_music.md §5). With the player's `U.PRG` in the game folder or `ST\\`, those tunes are a
 music source, the default where there is no DMA sound; `MIDI.CFG` byte `5`. Without `U.PRG` the source is
-left out of the F1 cycle and the automatic choice falls back to the DOS songs on the chip.
+left out of the F9 cycle and the automatic choice falls back to the DOS songs on the chip.
 
 From the same program, for every music source: Stones while camping and at a midnight moongate, and Ctrl-Z
 for sound on/off (st_music.md §5, moongates.md §2c).

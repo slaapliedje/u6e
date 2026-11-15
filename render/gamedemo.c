@@ -1204,7 +1204,7 @@ static int g_intro_mb;
 static int intro_advance(void)
 {
     int key=plat_input_raw();
-    if(key && ((key>>8)&0xFF)==0x3B){ music_cycle_pref(); return 0; }   /* F1: music source, not a page turn */
+    if(key && ((key>>8)&0xFF)==0x43){ music_cycle_pref(); return 0; }   /* F9: music source, not a page turn */
     if(key){ if((key&0xFF)==0x1b) return 2; return 1; }
     int mx,my,mb; plat_mouse(&mx,&my,&mb);
     int adv = (mb && !g_intro_mb); g_intro_mb=mb;
@@ -2152,7 +2152,7 @@ static int fe_getkey(void)
     /* then block for a fresh keystroke — OR a mouse click (nuvie wait_for_input(): input_poll()
      * returns for a button press too, so every "any input" page also advances on a click). */
     for(;;){ if((k = plat_input_raw())){
-            if(((k>>8)&0xFF)==0x3B){ music_cycle_pref(); continue; }   /* F1: music source (not "any key") */
+            if(((k>>8)&0xFF)==0x43){ music_cycle_pref(); continue; }   /* F9: music source (not "any key") */
             return k; }
         if(fe_click_edge()) return FE_KEY_CLICK;
         fe_cursor_track(); vsync_pump(); }
@@ -3253,7 +3253,7 @@ static int run_menu(void)
         if(key){
             { int d; while((d=plat_input_raw())){ (void)d; } }   /* drain auto-repeat: one press = one action */
             int a=key&0xFF, sc=(key>>8)&0xFF; note=0;
-            if(sc==0x3B){ music_cycle_pref(); note=2; }      /* F1: cycle the music source (saved to MIDI.CFG) */
+            if(sc==0x43){ music_cycle_pref(); note=2; }      /* F9: cycle the music source (saved to MIDI.CFG) */
             else if(sc==0x48) sel=(sel+nopt-1)%nopt;         /* up   */
             else if(sc==0x50) sel=(sel+1)%nopt;              /* down */
             else if(a=='i'||a=='I') act=0;                   /* first-letter hotkeys (spec §2) */
@@ -14545,7 +14545,7 @@ static void music_save_pref(void){
     plat_file f = plat_fcreate("MIDI.CFG");
     if(f != PLAT_BADFILE){ char b[2]={(char)('0'+g_music_pref),(char)('0'+g_sfx_on)}; plat_fwrite(f,b,2); plat_fclose(f); }
 }
-/* F1: step to the next music source — auto -> MIDI (MT-32) -> MIDI (General MIDI) -> DMA (only
+/* F9: step to the next music source — auto -> MIDI (MT-32) -> MIDI (General MIDI) -> DMA (only
  * where the hardware has it) -> PSG -> ST tunes (with a U.PRG) -> auto — re-cue the song on it and save the choice. */
 static void music_cycle_pref(void){
     int p = g_music_pref;
@@ -21012,7 +21012,6 @@ int main(int argc, char **argv)
                 else if (a==0x16){ msgcat(0,"Version 4.5"); redraw=1; }                                          /* Ctrl-V: the rules it follows */
                 else if (a==0x11||a==0x05){ g_show_inv=0; msgcat(0,"Exit to the desktop?"); g_pending_verb='Q'; redraw=1; }   /* Ctrl-Q, Ctrl-E */
                 else if (a==0x13){ g_show_inv=0; g_pending_verb=0; save_index_load(); g_save_menu=1; g_save_copy=0; save_detail(); redraw=1; }   /* Ctrl-S */
-                else if (g_bot && ((key>>8)&0xFF)==0x3B) { music_cycle_pref(); msgcat(0, music_pref_label()); redraw=1; }  /* F1 under the bot: the music source (the game's is F9) */
                 else if (a=='a'||a=='A') { arm_attack(); compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }  /* A)ttack: the crosshair (combat.md §6b) */
                 else if (a=='c'||a=='C') { open_cast_menu(); redraw=1; }                              /* C)ast: open the spell menu */
                 else if ((a=='b'||a=='B') && g_veh_kind && g_veh_kind!=431) { msgcat(0,"Not while aboard ship!"); redraw=1; }

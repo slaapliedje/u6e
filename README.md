@@ -30,7 +30,7 @@ The whole game is playable from the intro to the ending:
 - **Music:** the DOS songs, played through the YM2149 sound chip on any Atari, a Roland MT-32 or
   General MIDI module on the MIDI port, or pre-rendered AdLib audio through STE/TT/Falcon DMA sound.
   With `U.PRG` from your ST disks in the game folder or a folder named `ST`, the ST release's own YM
-  tunes too, the default without DMA sound. F1 cycles through the sources.
+  tunes too, the default without DMA sound. F9 cycles through the sources.
 
 Speed (idle frame rate, measured in Hatari): about **13 fps on a stock TT** and **11 fps on a
 stock Falcon**, both with no Fast RAM.
@@ -105,7 +105,7 @@ installer, `INSTALL.TOS`, for a Gotek or real floppies
 ([docs/design/distribution.md](docs/design/distribution.md)).
 
 Music: with no `.PCM` files the game uses the YM2149. For an MT-32 or General MIDI module, press
-F9 in the game (F1 on the title screens and main menu); the choice is saved in `MIDI.CFG`.
+F9 (on the title screens too); the choice is saved in `MIDI.CFG`.
 
 ### 3. Controls
 
