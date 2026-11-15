@@ -131,6 +131,30 @@ What is left on the ST, by the same profile (208 s in that run): LZW 44 s, the q
 close to its limit: read cycle by cycle, about 10% is left, at some risk, and it costs 400 cycles
 for each of 891,000 codes.
 
+**Portrait line colours (2026-11-15).** The ST conversation's per-row portrait colours (FES_PLINE,
+palette_lowcolor.md) added a step that runs a small k-means for each of 64 rows of about 190
+portraits. As first written it took 1,549 s on the ST, 26 minutes on its own. It is now 293 s;
+U6FE.PAK stayed `cmp`-identical to the host build at every stage:
+- the colour distance (`pdith_d2`, `pl_d2`, shared with the ST game) multiplies with `muls16`, and
+  the k-means' weights and sums with `mulu16`/`divu16` (`__mulsi3`, `__muldi3`, `__divsi3` before);
+- the k-means reads the weighted squares from three tables (-252..252) and stops once its centres
+  stop moving;
+- each row's colours (components, weight, distance to the fixed 12) are worked out once; the seeds
+  keep each colour's nearest distance as they are chosen, and their distances seed the k-means'
+  first pass; the k-means keeps each colour's distance to each centre and recomputes only for centres
+  that moved; the row's distinct colours come from a 256-entry index, not a linear search.
+
+What is left of the step on the ST (clock() per part): k-means 137 s, seeding 45 s, the 12 fixed
+colours (the quantiser) 33 s, building the rows 28 s, each portrait's decode and weights 21 s. About
+1.9 million distances at roughly 350 cycles each.
+
+| whole U6 conversion, 4 MB, no Fast RAM | ST | TT | Falcon |
+|---|---|---|---|
+| 2026-11-03 (above) | 185 s | 17 s | 36 s |
+| 2026-11-15, with the line colours | 502 s | 47 s | 96 s |
+
+The notice's estimate (`fr_estimate_s`, platform/firstrun.h) uses the 2026-11-15 times.
+
 **Game start on a 4 MB ST** (after the conversion, every time): from the program start to the
 main loop took 11.8 s; 2.6 s was `npc_base_fc` scanning BASETILE once per actor (now a table),
 3.9 s `build_blocked` (classifying each object's tile four times; now a per-tile cache and two

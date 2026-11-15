@@ -63,7 +63,7 @@ The release zip holds the programs and `CONVERT.TOS`, and no game data.
    `SAVEGAME` folder, to a folder named `ST` inside it. The ST's own colours and YM music then
    come with it, and the DOS version's music does not.
 3. Run the program from the desktop. The first time, it offers to convert your files and says how
-   long that takes: about 3 minutes on an 8 MHz ST, under a minute on a stock TT or Falcon. It then
+   long that takes: about 8 minutes on an 8 MHz ST, 1 to 2 minutes on a stock TT or Falcon. It then
    starts the game ([docs/design/first_boot_convert.md](docs/design/first_boot_convert.md)).
 
 Skip to [Controls](#3-controls).

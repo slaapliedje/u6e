@@ -126,9 +126,9 @@ static inline int fr_machine(void) { long m = Supexec(fr_read_mch); return m == 
 static inline long fr_estimate_s(int g, long speed)
 {
     static const long stock_s[3][4] = {                     /* [family][game], measured (first_boot_convert.md §2a) */
-        { 0, 185, 37, 41 },                                 /* ST */
-        { 0, 17, 4, 5 },                                    /* TT */
-        { 0, 36, 9, 10 } };                                  /* Falcon */
+        { 0, 502, 37, 41 },                                 /* ST  (U6 with the portrait line colours, 2026-11-15) */
+        { 0, 47, 4, 5 },                                    /* TT */
+        { 0, 96, 9, 10 } };                                  /* Falcon */
     static const long stock_speed[3] = { 29, 186, 120 };    /* fr_speed() on each stock machine */
     int m = fr_machine(), f = m == 2 ? 1 : m == 3 ? 2 : 0;
     long s = stock_s[f][g < FR_U6 || g > FR_MD ? FR_U6 : g];

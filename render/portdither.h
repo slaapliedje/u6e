@@ -14,6 +14,7 @@
 #ifndef PORTDITHER_H
 #define PORTDITHER_H
 #include <stdint.h>
+#include "../dataformats/mul16.h"
 
 typedef struct {
     uint8_t ca[256], cb[256], t[256];  /* per source colour: chunky index for slot A / slot B, B's share 0..16 */
@@ -26,9 +27,12 @@ typedef struct {
 #endif
 static const uint8_t pdith_bayer[4][4] = { {0,8,2,10}, {12,4,14,6}, {3,11,1,9}, {15,7,13,5} };
 
-/* weighted squared distance in RGB6 x16 units (eye: green > red > blue) */
+/* weighted squared distance in RGB6 x16 units (eye: green > red > blue). Every caller's differences
+ * are within +-1008, so 16-bit operands: one MULS.W each on a 68000, not a call to the 32-bit multiply
+ * routine (CONVERT.TOS runs this a few million times on a plain ST). */
 static inline int32_t pdith_d2(int dr, int dg, int db)
-{ return (int32_t)3*((int32_t)dr*dr) + (int32_t)4*((int32_t)dg*dg) + (int32_t)2*((int32_t)db*db); }
+{ int32_t r = muls16((int16_t)dr,(int16_t)dr), g = muls16((int16_t)dg,(int16_t)dg), b = muls16((int16_t)db,(int16_t)db);
+  return r + r + r + (g << 2) + (b << 1); }
 
 /* Build the table.
  *   rgb6   : the 256-colour source palette, 0..63 per component

@@ -1279,30 +1279,57 @@ static void dither_preview(int idx, const uint8_t *port, const uint8_t *pal6, co
 }
 
 /* FES_PLINE helpers: seed 4 colours far from the fixed 12 and from each other, then refine (k-means);
- * colours are RGB6 x4, dF[v] = distance from colour v to its nearest fixed colour. Returns the error. */
-static void pl_seed(const int *uc, const int *un, int nu, const uint8_t *palb, const int32_t *dF, int cen[4][3])
+ * colours are RGB6 x4, dF[v] = distance from colour v to its nearest fixed colour. Returns the error.
+ * The distance is pdith_d2's, read from tables of the weighted squares of -252..252 (every component
+ * and every difference here is in 0..252): some 18 million distances per conversion, three table
+ * reads each instead of three MULS.W on the ST's 68000. Same values, bit for bit. */
+static int32_t pl_w3[505], pl_w4[505], pl_w2[505];
+static void pl_tables(void){ static int done; if (done) return; done=1;
+    for (int d=-252; d<=252; d++){ int32_t q=(int32_t)d*d; pl_w3[d+252]=3*q; pl_w4[d+252]=4*q; pl_w2[d+252]=2*q; } }
+#define PL_D2(dr,dg,db) (pl_w3[(dr)+252] + pl_w4[(dg)+252] + pl_w2[(db)+252])
+/* One row's distinct colours, worked out once per row: components (RGB6 x4), weight (1..3) and the
+ * distance to the nearest fixed colour. d[j][k] caches the distance from colour j to centre k; bit k of
+ * ok says column k is valid (a centre that moves clears its bit). */
+typedef struct { int nu; int16_t r[PL_W], g[PL_W], b[PL_W], u[PL_W]; int32_t df[PL_W]; } PlRow;
+typedef struct { int32_t d[PL_W][4]; unsigned ok; } PlDist;
+static void pl_dcol(const PlRow *R, const int c[3], PlDist *D, int k)
 {
-    for (int k=0;k<4;k++){ int bj=-1; int64_t bw=-1;
-        for (int j=0;j<nu;j++){ int v=uc[j]; int32_t e=dF[v];
-            for (int q=0;q<k;q++){ int32_t f=pdith_d2(cen[q][0]-palb[v*3]*4,cen[q][1]-palb[v*3+1]*4,cen[q][2]-palb[v*3+2]*4); if(f<e) e=f; }
-            if ((int64_t)e*un[j] > bw){ bw=(int64_t)e*un[j]; bj=j; } }
-        for (int c=0;c<3;c++) cen[k][c] = bj>=0 ? palb[uc[bj]*3+c]*4 : 0; }
+    for (int j=0;j<R->nu;j++) D->d[j][k]=PL_D2(c[0]-R->r[j],c[1]-R->g[j],c[2]-R->b[j]);
+    D->ok |= 1u<<k;
 }
-static long pl_kmeans(const int *uc, const int *un, int nu, const uint8_t *palb, const int32_t *dF, int cen[4][3])
+/* Seeds: each in turn the colour whose weighted distance to the nearest colour already on screen (the
+ * fixed 12 and the seeds before it) is largest. e[j] keeps that nearest distance as seeds are added. */
+static void pl_seed(const PlRow *R, int cen[4][3], PlDist *D)
+{
+    int32_t e[PL_W]; for (int j=0;j<R->nu;j++) e[j]=R->df[j];
+    D->ok=0;
+    for (int k=0;k<4;k++){ int bj=-1; int32_t bw=-1;
+        for (int j=0;j<R->nu;j++){ int32_t w=e[j]; if (R->u[j]>1) w+=e[j]; if (R->u[j]>2) w+=e[j];   /* e*un, un 1..3 */
+            if (w > bw){ bw=w; bj=j; } }
+        if (bj>=0){ cen[k][0]=R->r[bj]; cen[k][1]=R->g[bj]; cen[k][2]=R->b[bj]; } else cen[k][0]=cen[k][1]=cen[k][2]=0;
+        pl_dcol(R,cen[k],D,k);                                     /* the k-means' first pass needs these too */
+        for (int j=0;j<R->nu;j++) if (D->d[j][k]<e[j]) e[j]=D->d[j][k]; }
+}
+static long pl_kmeans(const PlRow *R, int cen[4][3], PlDist *D)
 {
     long err=0;
     for (int it=0; it<5; it++){
-        long sum[4][3]={{0}}, cnt[4]={0}; int wj=-1; int32_t we=-1; err=0;
-        for (int j=0;j<nu;j++){ int v=uc[j], r=palb[v*3]*4, g=palb[v*3+1]*4, b=palb[v*3+2]*4;
-            int32_t be=dF[v]; int bk=-1;
-            for (int k=0;k<4;k++){ int32_t e=pdith_d2(cen[k][0]-r,cen[k][1]-g,cen[k][2]-b); if(e<be){ be=e; bk=k; } }
-            err += (long)(be>>4)*un[j];
-            if (bk>=0){ sum[bk][0]+=(long)r*un[j]; sum[bk][1]+=(long)g*un[j]; sum[bk][2]+=(long)b*un[j]; cnt[bk]+=un[j]; }
+        for (int k=0;k<4;k++) if (!(D->ok>>k&1)) pl_dcol(R,cen[k],D,k);
+        uint32_t sum[4][3]={{0}}; uint16_t cnt[4]={0}; int wj=-1; int32_t we=-1; err=0;
+        for (int j=0;j<R->nu;j++){ uint16_t u=(uint16_t)R->u[j];
+            int32_t be=R->df[j]; int bk=-1;
+            for (int k=0;k<4;k++){ int32_t e=D->d[j][k]; if(e<be){ be=e; bk=k; } }
+            err += (long)mulu16((uint16_t)(be>>4),u);              /* be>>4 < 65536, un <= 3 */
+            if (bk>=0){ sum[bk][0]+=mulu16((uint16_t)R->r[j],u); sum[bk][1]+=mulu16((uint16_t)R->g[j],u); sum[bk][2]+=mulu16((uint16_t)R->b[j],u); cnt[bk]+=u; }
             else if (be>we){ we=be; wj=j; } }
         if (it==4) break;                                          /* the last pass only measures */
-        for (int k=0;k<4;k++){
-            if (cnt[k]) for (int c=0;c<3;c++) cen[k][c]=(int)((sum[k][c]+cnt[k]/2)/cnt[k]);
-            else if (wj>=0){ for (int c=0;c<3;c++) cen[k][c]=palb[uc[wj]*3+c]*4; wj=-1; } } }
+        int moved=0;
+        for (int k=0;k<4;k++){ int o0=cen[k][0], o1=cen[k][1], o2=cen[k][2];
+            if (cnt[k]){ uint16_t rem;                             /* sum <= 252*168: the quotient fits 16 bits */
+                for (int c=0;c<3;c++) cen[k][c]=(int)divu16(sum[k][c]+cnt[k]/2u,cnt[k],&rem); }
+            else if (wj>=0){ cen[k][0]=R->r[wj]; cen[k][1]=R->g[wj]; cen[k][2]=R->b[wj]; wj=-1; }
+            if (cen[k][0]!=o0 || cen[k][1]!=o1 || cen[k][2]!=o2){ moved=1; D->ok &= ~(1u<<k); } }
+        if (!moved) break; }                                       /* settled: later passes would measure the same */
     return err;
 }
 
@@ -1325,6 +1352,7 @@ static void build_portrait_lines(FILE *fe, const char *dir, const uint8_t *paper
     for (int i=0;i<256;i++){ St+=g_terr[i]; Sc+=parch[i]; } if(!St) St=1; if(!Sc) Sc=1;
     for (int i=0;i<256;i++) tp[i]=(long)(((uint64_t)g_terr[i]*50000u)/(uint64_t)St + ((uint64_t)parch[i]*20000u)/(uint64_t)Sc);
     be16(fe,(unsigned)nport); be16(fe,PL_REC);
+    pl_tables();
     const char *prevfn=getenv("MKWORLD_LINEPREVIEW"); uint8_t *img=NULL; int prow=0; const int PS=3, PW_=4*PL_W*PS, PRH=PL_ROWS*PS;
     if (prevfn) img=calloc((size_t)PW_*40*PRH,3);
     for (int idx=0; idx<nport; idx++){
@@ -1350,18 +1378,23 @@ static void build_portrait_lines(FILE *fe, const char *dir, const uint8_t *paper
             /* colours in RGB6 x4 (0..252); the fixed 12 as the STE shows them */
             int fx[PL_FIXED][3]; for (int i=0;i<PL_FIXED;i++) for (int k=0;k<3;k++) fx[i][k]=pal4[i*3+k]*252/15;
             static int32_t dF[256]; for (int v=0;v<256;v++){ dF[v]=0x7fffffff; if(!pf[v]) continue;
-                for (int i=0;i<PL_FIXED;i++){ int32_t e=pdith_d2(fx[i][0]-palb[v*3]*4, fx[i][1]-palb[v*3+1]*4, fx[i][2]-palb[v*3+2]*4); if(e<dF[v]) dF[v]=e; } }
+                for (int i=0;i<PL_FIXED;i++){ int32_t e=PL_D2(fx[i][0]-palb[v*3]*4, fx[i][1]-palb[v*3+1]*4, fx[i][2]-palb[v*3+2]*4); if(e<dF[v]) dF[v]=e; } }
             int prev[4][3]; int have_prev=0;
             for (int y=0;y<PL_ROWS;y++){
                 int uc[PL_W], un[PL_W], nu=0;                          /* the row's distinct colours + weights */
-                for (int x=0;x<PL_W;x++){ int v=port[y*PL_W+x]; if(v==255) continue; int j=0; while(j<nu&&uc[j]!=v) j++;
-                    if(j==nu){ uc[nu]=v; un[nu]=0; nu++; } un[j]++; }
+                static int8_t at[256]; static int at_init; if(!at_init){ memset(at,-1,sizeof at); at_init=1; }
+                for (int x=0;x<PL_W;x++){ int v=port[y*PL_W+x]; if(v==255) continue; int j=at[v];
+                    if(j<0){ j=nu; at[v]=(int8_t)j; uc[nu]=v; un[nu]=0; nu++; } un[j]++; }   /* first-seen order, as before */
+                for (int j=0;j<nu;j++) at[uc[j]]=-1;
                 for (int j=0;j<nu;j++) if(un[j]>3) un[j]=3;            /* a few eye pixels count about as much as a patch of skin */
-                int ca[4][3], cb[4][3];
+                static PlRow R; R.nu=nu;
+                for (int j=0;j<nu;j++){ int v=uc[j]; R.r[j]=(int16_t)(palb[v*3]*4); R.g[j]=(int16_t)(palb[v*3+1]*4); R.b[j]=(int16_t)(palb[v*3+2]*4);
+                    R.u[j]=(int16_t)un[j]; R.df[j]=dF[v]; }
+                int ca[4][3], cb[4][3]; static PlDist Da, Db;
                 if (have_prev) memcpy(ca,prev,sizeof ca);
-                pl_seed(uc,un,nu,palb,dF,cb);
-                long ea = have_prev ? pl_kmeans(uc,un,nu,palb,dF,ca) : 0x7fffffffL;
-                long eb = pl_kmeans(uc,un,nu,palb,dF,cb);
+                pl_seed(&R,cb,&Db);
+                long ea = 0x7fffffffL; if (have_prev){ Da.ok=0; ea=pl_kmeans(&R,ca,&Da); }
+                long eb = pl_kmeans(&R,cb,&Db);
                 int (*cen)[3] = (!have_prev || eb < ea - ea/10) ? cb : ca;   /* fresh seeds only when clearly better: rows agree */
                 memcpy(prev,cen,sizeof prev); have_prev=1;
                 for (int k=0;k<4;k++){ int L[3]; for (int c=0;c<3;c++){ L[c]=(cen[k][c]*15+126)/252; if(L[c]>15) L[c]=15; }
@@ -1495,9 +1528,9 @@ static const uint16_t SE_STACK[]={10,26,27,36,41,44,45,47,48,54,55,56,69,70,72,7
     110,115,120,123,129,130,132,133,134,137,137,139,140,180,191,192,204,206,208,210,211,214,240,252,0};
 
 static const GameProfile G_PROFILES[] = {
-    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL,          NULL,       "U6MCGA.PTR"   },
+    { "u6",      { 'U','6','W','T' }, "U6PAL", NULL,         NULL,          NULL,       "U6MCGA.PTR", NULL },
     { "savage",  { 'S','E','W','T' }, "SEPAL", "SAVAGE.FNT", "FACES.LZC",   "TALK.LZC", "SECURSOR.PTR", SE_STACK },
-    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC", "TALK.LZC", "MDCURSOR.PTR" },
+    { "martian", { 'M','D','W','T' }, "MDPAL", "FONTS.LZC",  "MDFACES.LZC", "TALK.LZC", "MDCURSOR.PTR", NULL },
 };
 
 static const GameProfile *profile_for(const char *id)

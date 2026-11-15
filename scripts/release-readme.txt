@@ -16,8 +16,8 @@ INSTALL
        Graphics card on a 68000           GAMEVC.PRG
 
   4. Run the program from the desktop. The first time, it offers to
-     convert your files and says how long that takes: about 3 minutes
-     on an ST, under a minute on a TT or Falcon. It then starts the game.
+     convert your files and says how long that takes: about 8 minutes
+     on an ST, 1 to 2 minutes on a TT or Falcon. It then starts the game.
 
 PLAY
   Arrow keys walk. The first letter of a command starts it:

@@ -16,6 +16,7 @@
 #ifndef PORTLINES_H
 #define PORTLINES_H
 #include <stdint.h>
+#include "../dataformats/mul16.h"
 
 #define PL_ROWS  64
 #define PL_W     56
@@ -23,9 +24,11 @@
 #define PL_LINES (PL_ROWS*4*2)
 #define PL_REC   (48+48+256+PL_LINES)
 
-/* weighted squared distance in RGB6 x16 units (the same weights as portdither.h) */
+/* weighted squared distance in RGB6 x16 units (the same weights as portdither.h; differences within
+ * +-1008, so one MULS.W per component on a 68000) */
 static inline int32_t pl_d2(int dr, int dg, int db)
-{ return (int32_t)3*((int32_t)dr*dr) + (int32_t)4*((int32_t)dg*dg) + (int32_t)2*((int32_t)db*db); }
+{ int32_t r = muls16((int16_t)dr,(int16_t)dr), g = muls16((int16_t)dg,(int16_t)dg), b = muls16((int16_t)db,(int16_t)db);
+  return r + r + r + (g << 2) + (b << 1); }
 
 /* The 16 colours one portrait row sees, in RGB6 x16 units: the fixed slots from lvl (0..maxlvl),
  * slots 12..15 from the row's words (4-bit; >>1 when maxlvl is 7). */
