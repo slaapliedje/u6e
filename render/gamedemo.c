@@ -1762,7 +1762,8 @@ static void run_intro_body(void)
         if((key&0xFF)==0x1b){ for(int k=8;k>=0;k--){ fe_fade(pal,k); } break; }
         if(panlen>0){                                             /* pan the room away */
             plat_mark wfm=plat_chip_mark(); uint8_t *wf=(uint8_t*)plat_alloc_chip(640*200);   /* transient: 128 KB of ST-RAM the stock Falcon needs back for gameplay (memory_streaming.md) */
-            if(!wf){ plat_chip_reset(wfm); break; }
+            if(!wf) rdr_flip_begin();                             /* no 128 KB to spare (a 4 MB ST with accessories): on to the next scene unpanned; a break here ended the whole intro (forum, 2026-11-15) */
+            else {
             compose_wide(s, wf);                                  /* bake the whole frame once (1x, no parallax) */
             if(scroll_begin(wf, g_intro[s].w, g_intro[s].h)){     /* HARDWARE fine-scroll pan (Falcon/STe, later) */
                 for(int sx=0; sx<=panlen; sx+=2) scroll_pan(sx);  /* base+$FF8265, VBL-committed */
@@ -1780,6 +1781,7 @@ static void run_intro_body(void)
                 BENCH_PHASE(-1);
             }
             rdr_flip_begin();                                     /* re-enter double-buffer for the next scene */
+            }
             plat_chip_reset(wfm);                                 /* the pan buffer goes back to the pool */
         }
         if(g_intro[s].type==2){ int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* (as the ascent) */
@@ -3222,6 +3224,12 @@ static void run_transfer(void)
     fe_group_free(1);
 }
 
+/* Leaving the menu for play: a black screen while the game data loads (seconds on an 8 MHz ST). Setting
+ * the base 16 here re-drew the menu picture in the wrong colours for all that time (forum, 2026-11-15). */
+static void fe_leave_black(void)
+{   uint8_t *bb=rdr_backbuffer(); if(bb) memset(bb,0,(size_t)rdr_width()*LH);
+    if(g_fe_base_lc) rdr_set_lowcolor(g_black16, g_fe_base_lc+48);
+    rdr_present_doubled(LH); }
 static int run_menu(void)
 {
     if(!g_menu_pix || g_menu_w<=0 || g_menu_w>320 || g_menu_h>200) return 4;   /* no/bad art -> play */
@@ -3286,10 +3294,10 @@ static int run_menu(void)
         if(act<0){ vsync_pump(); continue; }
 
         sel=act; note=0; fe_cursor_show(0); full=1;        /* sub-flows hide it (nuvie: selected_*()); a full redraw after */
-        if(act==4){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48);
+        if(act==4){ fe_leave_black();
                     g_menu_journey=1; return 4; }    /* Journey Onward -> play (load SAVED.000 if present) */
         else if(act==0) run_intro();                     /* Introduction -> cutscene, then back */
-        else if(act==1){ run_chargen(); if(g_cc_done){ if(g_fe_base_lc) rdr_set_lowcolor(g_fe_base_lc,g_fe_base_lc+48); return 4; } }  /* Create -> new game */
+        else if(act==1){ run_chargen(); if(g_cc_done){ fe_leave_black(); return 4; } }  /* Create -> new game */
         else if(act==2){ run_transfer(); if(g_cc_done) sel=4; }   /* Transfer -> back here, on Journey Onward */
         else run_acknowledgements();                     /* Acknowledgements -> pages, then back */
     }
