@@ -591,10 +591,13 @@ bench-falcon: world $(BUILD)/benchf.prg $(BUILD)/NEWDESK.INF
 # START_MIN=<0..1439> to force night (exercises the lighting path); stage LIGHTSTY.REQ ('0'/'1'/'2')
 # in build/ before running to pick SMOOTH/DITHER/BINARY. Loads the same U6.PAK + U6FE.PAK as the game.
 BENCH_ST_SRC := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(BENCH_SRC)) render/rdr_st.c render/c2p_st.s render/ppresent_st.s
+# The 68000 builds compile the big game file with -Os (about 250 KB less code: a 4 MB ST must still hold
+# the save template with an accessory loaded); its hot code keeps -O2 (OPT_HOT_BEGIN in gamedemo.c).
+SMALL_68K = $$(test $$s = render/gamedemo.c && echo -Os)
 $(BUILD)/benchst.prg: $(BENCH_ST_SRC)
 	@mkdir -p $(BUILD)/obj_benchst
 	@for s in $^; do o=$(BUILD)/obj_benchst/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DBENCH -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DBENCH -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_benchst/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour bench)"
 # BLIT=1 adds Hatari's --blitter on so a plain-ST run emulates a Blitter-equipped Mega ST (8 MHz +
@@ -859,7 +862,7 @@ GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch)"
 game-st: $(BUILD)/gamest.prg
@@ -868,7 +871,7 @@ game-st: $(BUILD)/gamest.prg
 $(BUILD)/gamestp.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_stp
 	@for s in $^; do o=$(BUILD)/obj_stp/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_ST -DKEYPROF $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DHAVE_RDR_ST -DKEYPROF $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_stp/*.o
 game-st-prof: $(BUILD)/gamestp.prg
 
@@ -916,7 +919,7 @@ GAME_SRC_VCARD := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) ren
 $(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
 	@mkdir -p $(BUILD)/obj_vc
 	@for s in $^; do o=$(BUILD)/obj_vc/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vc/*.o -lgem16
 	@echo "built $@ (pure 68000 + card; VDI backend via render.c dispatch, libgem16)"
 game-vcard: $(BUILD)/gamevc.prg
@@ -930,7 +933,7 @@ GAME_SRC_VCARD_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) 
 $(BUILD)/gamevcs.prg: $(GAME_SRC_VCARD_ST)
 	@mkdir -p $(BUILD)/obj_vcs
 	@for s in $^; do o=$(BUILD)/obj_vcs/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vcs/*.o -lgem16
 	@echo "built $@ (pure 68000 + card; libgem16)"
 game-vcard-st: $(BUILD)/gamevcs.prg

@@ -3448,6 +3448,12 @@ static void hatched_worktype(int s,int wt)
     if(wt==0x8b||wt==0x0f) g_facing[s]=0; if(wt==0x8c) g_facing[s]=1; if(wt==0x8d) g_facing[s]=2; if(wt==0x8e) g_facing[s]=3;
     if(wt==0x0f) g_facing[s]=1; if(wt==0x10) g_facing[s]=0; }
 
+/* The 68000 builds compile this file with -Os: their 4 MB machines need the ~250 KB it saves (forum,
+ * 2026-11-15: a Mega STe with an accessory could no longer hold the save template). The code that sets the
+ * speed of play keeps -O2 between OPT_HOT_BEGIN and OPT_HOT_END: pathing, drawing the map, the combat search. */
+#define OPT_HOT_BEGIN _Pragma("GCC push_options") _Pragma("GCC optimize(\"O2\")")
+#define OPT_HOT_END   _Pragma("GCC pop_options")
+OPT_HOT_BEGIN
 /* is some other surface actor already on (x,y)? (keeps NPCs from stacking) */
 static int npc_occupied(int self,int x,int y)
 {
@@ -3581,6 +3587,7 @@ static int npc_routestep(const world_t*w,int i,int sx,int sy,int tx,int ty,int a
     for(int ci=g_pf_best, k=len; ci!=c; ci-=dys[g_pfk[ci]]*PF_W+dxs[g_pfk[ci]]) if(--k<n) g_rt_dir[i][k]=g_pfk[ci];
     g_rt_n[i]=(uint8_t)n; return 1;
 }
+OPT_HOT_END
 /* the walker took the step npc_routestep gave it */
 static void npc_routetaken(int i,int nx,int ny)
 {   g_rt_at[i]++; g_rt_x[i]=(uint16_t)nx; g_rt_y[i]=(uint16_t)ny; }
@@ -3801,6 +3808,7 @@ static int     g_dos_slips;                                          /* 1 = the 
 static uint8_t g_se_dance[U6_MAX_ACTORS];                  /* SE: dancing, the dancer's frame + 1 (se_ai.md §7) */
 static uint8_t g_se_prot[U6_MAX_ACTORS], g_se_wild[U6_MAX_ACTORS];   /* SE: Aphazz's protection (+3 armour), Motazz's frenzy (+3 str/dex; se_invoke.md) */
 static int     g_se_helper;                                 /* SE: the beast Motazz sent, while combat lasts (se_invoke.md §4) */
+OPT_HOT_BEGIN
 static int npc_tile(int i)
 {
     int tpd=g_atpd[i];
@@ -5638,6 +5646,7 @@ static void blit_tile(int sx,int sy,int tile,int transp)
     }
 }
 
+OPT_HOT_END
 /* authentic map-window border: U6 overlays frayed-papyrus edge TILES (432-439)
  * on the OUTER RING of the 11x11 window (MapWindow::drawBorder), TRANSPARENT so
  * the terrain rendered underneath shows through the burn-mark gaps — a torn page
@@ -10453,6 +10462,7 @@ static void pay(int i,int p)
     if(p<1) p=1;
     { int v=g_pts[i]-p; g_pts[i]=(int8_t)(v<-128?-128:v); } }
 /* may i aim at j at all? */
+OPT_HOT_BEGIN
 static int can_target(int i,int j)
 {   int vis=!g_ainvis[j]; if(!vis && member(i) && member(j)) vis=1;
     if(g_dragged[j]) vis=0;
@@ -10861,6 +10871,7 @@ static int sched_pick(const world_t*w)
         if(p>=d){ return i; }
         { long c=(long)p*bd-(long)d*bp; if(c>0||(c==0&&d>bd)){ best=i; bp=p; bd=d; } } }
     return best; }
+OPT_HOT_END
 static void minute_end(world_t*w)
 {
     KP(6);   for(int i=0;i<U6_MAX_ACTORS;i++){ int d=g_adex[i]?g_adex[i]:1; g_pts[i]=(int8_t)(g_pts[i]<0?g_pts[i]+d:d); }

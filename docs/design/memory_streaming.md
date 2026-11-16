@@ -300,3 +300,23 @@ eggs, S)ave, the other levels' objects, what NPCs have said) silently did not lo
 | TT, GAME.PRG, now | 268 KB | loads | 113 KB |
 | Falcon, GAME.PRG | 368 KB | loads | 213 KB |
 | ST, GAMEST.PRG | 301 KB | loads | 145 KB |
+
+## 2026-11-15: the 68000 builds compile the game file for size
+
+A Mega STe tester (TOS 2.06, 4 MB) was told there was not enough memory to save, and a ladder said there was
+no dungeon data: the save template had not fitted. Measured in Hatari (MEMINFO.BIN), 4 MB, nothing else loaded:
+
+| machine | free after the pack | free after the template |
+|---|--:|--:|
+| ST, TOS 1.04, `-O2` | 277 KB | 122 KB |
+| Mega STe, TOS 2.06, `-O2` | 220 KB | 65 KB |
+| Mega STe, TOS 2.06, `-Os` + hot `-O2` | 445 KB | 290 KB |
+
+TOS 2.06 takes ~25 KB more of the pool, and one desk accessory took the rest. The 68000 builds (gamest, its
+KEYPROF and BENCH variants, gamevc, gamevcs) now compile `render/gamedemo.c` with `-Os` (`SMALL_68K` in the
+Makefile): the ST program's code went from 1,005 KB to 774 KB. Pathing, the map compose and the combat search
+keep `-O2` (`OPT_HOT_BEGIN`/`OPT_HOT_END` in gamedemo.c): `make bench-st` scroll compose 181.2 ms, full
+239.8 ms, against 177.5 / 236.5 at `-O2` (all of it at `-Os`: 196.0 / 252.5).
+
+The intro's living-room pan takes a transient 128 KB (270 KB free there on a stock 4 MB ST); when it cannot
+be had, the scene now ends unpanned and the intro goes on (it used to end the whole intro).
