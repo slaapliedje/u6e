@@ -5657,7 +5657,15 @@ static void draw_border_tiles(void)
 {
     KP(15);
     if(g_gd==&gamedef_se){                          /* SE: SCREEN.LZC's frame covers the map's outer half-tiles; x 8..167, y 16..159 show (rules/se_screen.md §2) */
-        for(int y=MAPY;y<MAPY+VT*16;y++){ const uint8_t*src=g_paper+(int32_t)y*LW+MAPX; uint8_t*row=ROW(y)+MAPX;
+        {   int t=g_minutes, i;                     /* the top strip from tiles: sky, sun or moon, border, eyes (GAME.EXE 0x28e06; §3) */
+            for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x189,0);
+            if(g_cur_level!=0) for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x17a,1);
+            else if(t>359 && t<1081){ for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x17b,1); blit_tile(MAPX+((1080-t)/34)*8,MAPY,0x171,1); }
+            else { int d=(t+721)%1440; for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x179,1); blit_tile(MAPX+((1080-d)/34)*8,MAPY,0x172,1); }
+            for(i=0;i<VT;i++) if(i!=4&&i!=5) blit_tile(MAPX+i*16,MAPY,(uint16_t)(0x160+i),1);
+            int e=g_talking?0x175:g_combat_mode?0x177:actor_objn(1)==249?0x164:0x173;
+            blit_tile(MAPX+64,MAPY,(uint16_t)e,1); blit_tile(MAPX+80,MAPY,(uint16_t)(e+1),1); }
+        for(int y=MAPY+16;y<MAPY+VT*16;y++){ const uint8_t*src=g_paper+(int32_t)y*LW+MAPX; uint8_t*row=ROW(y)+MAPX;
             if(y<SE_MAPY0||y>SE_MAPY1) memcpy(row,src,VT*16);
             else { memcpy(row,src,SE_MAPX0-MAPX); memcpy(row+SE_MAPX1+1-MAPX,src+SE_MAPX1+1-MAPX,(size_t)(MAPX+VT*16-1-SE_MAPX1)); } }
         if(g_casting||g_save_menu) spell_page_blit(PANX-SPELL_X);
@@ -6047,7 +6055,7 @@ static void draw_conversation(uint8_t col)
         draw_char_view(col);                       /* a party member's portrait + gender + stats */
         if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, MSG_ROWS, col);
     } else if(g_show_inv){
-        if(g_gamename){ draw_sky(); draw_inventory_list(col); if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col); }
+        if(g_gamename && g_gd!=&gamedef_se){ draw_sky(); draw_inventory_list(col); if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col); }
         else { draw_inventory(col); if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, g_pending_verb?MSG_ROWS-2:MSG_ROWS, col);
             if(g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'){ const char*p=g_pending_verb=='L'?"Look-":g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":"Move-"; if(!g_msg[0]) ui_text(MSG_X,MSG_Y,p,col); } }
     } else {
@@ -9190,7 +9198,11 @@ static void draw_party_roster(uint8_t col)
 }
 /* The status display's parts as DOS lays them out (equipment.md §5), in screen pixels */
 static const uint8_t IV_SLOT[EQ_NSLOTS][2]={ /*HEAD*/{0xc8,0x10}, /*NECK*/{0xb0,0x18}, /*BODY*/{0xe0,0x28}, /*ARM*/{0xe0,0x18}, /*ARM2*/{0xb0,0x38}, /*HAND*/{0xb0,0x28}, /*HAND2*/{0xe0,0x38}, /*FOOT*/{0xc8,0x40} };
-enum { IVG_X=0xf8, IVG_Y=0x20, IVG_COLS=4, IVG_ROWS=3, IVB_Y=0x58 };
+enum { IVG_X=0xf8, IVG_Y=0x20, IVG_COLS=4, IVB_Y_U6=0x58 };
+#define IVG_ROWS (g_gd==&gamedef_se?4:3)                 /* SE's pack grid has four rows (rules/se_screen.md §4) */
+#define IVB_Y    (g_gd==&gamedef_se?0x66:IVB_Y_U6)
+#define IV_RING  (g_gd==&gamedef_se?0x188:0x19a)        /* an empty place */
+#define IV_DOLLX (g_gd==&gamedef_se?0xc8:0xc0)          /* SE's figure and places sit 8 px right of U6's */
 #define PTXT_X(c) (PANX+(c)*8)
 #define PTXT_Y(r) (8+(r)*8)
 /* a small count over a stack's tile */
@@ -9241,6 +9253,16 @@ static int32_t actor_carried(int a)
 /* the row of buttons: previous, the party, portrait or inventory, next; on the inventory the combat mode */
 static void draw_panel_buttons(int inv)
 {   int i=member_index(g_status_actor);
+    if(g_gd==&gamedef_se){                                           /* GAME.EXE 0xf0d7 / 0xe56f (rules/se_screen.md §4) */
+        if(i>0) blit_tile(0xb8,IVB_Y,0x183,1);
+        blit_tile(0xc8,IVB_Y,0x180,1); blit_tile(0xd8,IVB_Y,inv?0x181:0x182,1);
+        if(i<g_nparty-1) blit_tile(0xe8,IVB_Y,0x184,1);
+        if(inv){ int a=g_status_actor; int m=g_cmode[a]; if(m<2||m>8) m=8;
+            if(g_se_wild[a]) m=6;
+            blit_tile(0xf8,IVB_Y,(uint16_t)(a==1?0x16c:0x16d),1); blit_tile(0x108,IVB_Y,0x16e,1); blit_tile(0x118,IVB_Y,0x16f,1); blit_tile(0x128,IVB_Y,0x170,1);
+            const char*t=a==1?"CMND":g_gl->cmode_name[m-2];
+            ui_text(0x10c+(0x128+8-0x10c-ui_textw(t))/2,IVB_Y+4,t,C_BLACK); }
+        return; }
     if(i>0) blit_tile(0xb0,IVB_Y,0x183,1);
     blit_tile(0xc0,IVB_Y,0x180,1);
     blit_tile(0xd0,IVB_Y,inv?0x181:0x182,1);
@@ -9255,8 +9277,10 @@ static void iv_weight(int x,int y,int w10,int cap)
 {   char b[16]; char*e=u_num(b,(w10+5)/10); *e++='/'; e=u_num(e,cap); *e++='s'; *e=0; ui_text(x,y,b,C_BLACK); }
 /* the figure and what is readied on it; the things keep their places relative to the figure */
 static void draw_doll(int a,int fx,int fy)
-{   blit_tile(fx,fy,0x170,1); blit_tile(fx+16,fy,0x171,1); blit_tile(fx,fy+16,0x172,1); blit_tile(fx+16,fy+16,0x173,1);
-    for(int sl=0;sl<EQ_NSLOTS;sl++){ int x=IV_SLOT[sl][0]+fx-0xc0, y=IV_SLOT[sl][1]+fy-0x20; blit_tile(x,y,0x19a,1);
+{   int dt=0x170;
+    if(g_gd==&gamedef_se) dt=(a==1||a==4||a==7)?0x194:(a==6||a==37||a==48)?0x198:0x190;   /* GAME.EXE 0x29437 */
+    blit_tile(fx,fy,(uint16_t)dt,1); blit_tile(fx+16,fy,(uint16_t)(dt+1),1); blit_tile(fx,fy+16,(uint16_t)(dt+2),1); blit_tile(fx+16,fy+16,(uint16_t)(dt+3),1);
+    for(int sl=0;sl<EQ_NSLOTS;sl++){ int x=IV_SLOT[sl][0]+fx-0xc0, y=IV_SLOT[sl][1]+fy-0x20; blit_tile(x,y,IV_RING,1);
         if(g_aready[a][sl]) blit_tile(x,y,basetile(g_aready[a][sl])+(g_gl->ready_fr?g_gl->ready_fr(a,g_aready[a][sl]):0),1); } }
 static void draw_inventory(uint8_t col)
 {
@@ -9266,7 +9290,7 @@ static void draw_inventory(uint8_t col)
     { int cr=iv_cont_row(); char cn[40];
       if(cr>=0&&(g_ow.inv[cr].owner?g_ow.inv[cr].owner:1)==a){ obj_name(g_ow.inv[cr].tile,cn,sizeof cn); ui_text(PANX+(PANW-ui_textw(cn))/2, PTXT_Y(0), cn, C_BLACK); }
       else { g_iv_cont=0; ui_text(PANX+(PANW-ui_textw(nm))/2, PTXT_Y(0), nm, C_BLACK); }
-      draw_doll(a,0xc0,0x20);
+      draw_doll(a,IV_DOLLX,0x20);
       if(g_iv_cont) blit_tile(0x110,0x10,g_ow.inv[cr].tile,1); else if(g_atile[a]!=0xffff) blit_tile(0x110,0x10,g_atile[a],1); }
     { int per=IVG_COLS*IVG_ROWS, armed=(g_pending_verb=='D'||g_pending_verb=='E'||(g_pending_verb=='U'&&g_use_pack)||(g_pending_verb=='M'&&g_move_pack)||(g_pending_verb=='L'&&g_look_pack));
       if(armed && g_inv_sel>=0 && g_inv_sel<g_ow.ninv){ int o=g_ow.inv[g_inv_sel].owner?g_ow.inv[g_inv_sel].owner:1; if(o!=a && is_party_member(o)){ a=o; g_status_actor=o; } }   /* the view follows the armed thing */
@@ -9275,7 +9299,7 @@ static void draw_inventory(uint8_t col)
       if(g_inv_first>total-per) g_inv_first=((total-per+IVG_COLS-1)/IVG_COLS)*IVG_COLS;
       if(g_inv_first<0) g_inv_first=0;
       for(int k=0;k<per;k++){ int x=IVG_X+(k%IVG_COLS)*16, y=IVG_Y+(k/IVG_COLS)*16, idx=g_inv_first+k;
-          blit_tile(x,y,0x19a,1);
+          blit_tile(x,y,IV_RING,1);
           if(idx<nr){ int row=g_iv_row[idx]; const invitem_t*it=&g_ow.inv[row]; blit_tile(x,y,it->tile,1);
               if(look_counted(it->obj_n) && it->qty>0) iv_count(x,y,it->qty);
               if(armed && row==g_inv_sel) blit_tile(x,y,TILE_TARGET_CURSOR,1); }
@@ -9286,8 +9310,11 @@ static void draw_inventory(uint8_t col)
     { int32_t eq=0, all=0;
       for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]) eq+=obj_weight10(g_aready[a][sl],1);
       all=actor_carried(a);
+      if(g_gd==&gamedef_se){ ui_text(185,80,"E:",C_BLACK); iv_weight(185+16,80,(int)eq,g_astr[a]);    /* SE: one above the other */
+          ui_text(185,88,"I:",C_BLACK); iv_weight(185+16,88,(int)all,(int)g_astr[a]*2); }
+      else {
       ui_text(PTXT_X(0),PTXT_Y(9),"E:",C_BLACK); iv_weight(PTXT_X(2),PTXT_Y(9),(int)eq,g_astr[a]);
-      ui_text(PTXT_X(9),PTXT_Y(9),"I:",C_BLACK); iv_weight(PTXT_X(11),PTXT_Y(9),(int)all,(int)g_astr[a]*2); }
+      ui_text(PTXT_X(9),PTXT_Y(9),"I:",C_BLACK); iv_weight(PTXT_X(11),PTXT_Y(9),(int)all,(int)g_astr[a]*2); } }
     draw_panel_buttons(1);
     if(g_pan_focus) blit_tile(g_pan_x,g_pan_y,TILE_TARGET_CURSOR,1);
 }
@@ -18794,6 +18821,8 @@ int main(int argc, char **argv)
      * names (default Triolo, 9) and leave it on screen, for a screenshot (rules/se_screen.md §5) */
     {   int32_t sl=0; uint8_t*sb=(uint8_t*)plat_load_file("SETALKV.BIN",1,&sl);
         if(sb && g_gd==&gamedef_se) se_talk(sl>0&&sb[0]>1&&sb[0]!='x'?sb[0]:9); }
+    {   int32_t sl=0; uint8_t*sb=(uint8_t*)plat_load_file("SEINVV.BIN",1,&sl);           /* and an inventory (default Triolo's) */
+        if(sb && g_gd==&gamedef_se){ g_status_actor=sl>0&&sb[0]>0&&sb[0]!='x'?sb[0]:9; g_show_inv=1; } }
 
     /* headless validation of SAVAGE-EMPIRE USE (only meaningful when booted on SE.PAK; g_gd==savage).
      * FOOD: force a gettable world obj to SE fruit (obj_n 197), USE twice -> qty 2->1 then alive->0 +

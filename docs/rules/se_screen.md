@@ -23,8 +23,10 @@ Implemented by: /tools mkworld.c (SCREEN.LZC as SE's background in the pack), /r
   frame. The map's border with the eyes and the sky strip, the two boxes on the right, the command bar.
 - **BKGRND.LZC**: 13 items, one shape each. Item 0 (132x113) is the stone frame round a portrait with its
   name plate; items 1-12 (77x83) are scenery drawn behind a face in conversations (§5).
-- **SAVAGE.FNT**: proportional, glyphs up to 9 px wide (fonts.md). DOS draws it proportionally; our
-  converter clips it to 8x8 (open, §6).
+- **The game's text** (panels, scroll, conversations) is SYSTEM.LZC's item 3: 1024 bytes, 128 glyphs of
+  8x8, one bit a pixel, the leftmost pixel in bit 7 (U6.CH's layout, half as many glyphs), each drawn in a
+  fixed 8-px cell. The DOS screenshots match it pixel for pixel; SAVAGE.FNT (proportional, fonts.md) is the
+  cutscenes' font (item 9) and its glyphs sit 1 px further right.
 - **SECURSOR.PTR**: the pointers (skull among them, converse.md §6d).
 
 Colours are SE's own palette (SEPAL).
@@ -114,4 +116,4 @@ Our TT frame against the DOS screenshot (scratch pixel diff); none in `make chec
 ## Status
 IN PROGRESS: §1 (SCREEN.LZC in the pack), §2, §4's party list and message box, and §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
-Next: §4's inventory, §3, the font, §6's clicks.
+Next: §6's clicks.
