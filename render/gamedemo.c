@@ -9518,7 +9518,7 @@ static void present_frame(void)
 #ifdef HAVE_RDR_ST
   if(g_native_planar && !g_peer_on){                      /* panel from g_back, inner map from planar (the gem's view is drawn into g_back) */
       rdr_pcursor_hide();                                 /* the pixels under the planar cursor back first */
-      rdr_present_diff();                                  /* c2p of what changed in g_back since the last present (inner map stale), no Vsync */
+      rdr_present_diff_pmap();                             /* c2p of what changed in g_back since the last present, not under the planar map, no Vsync */
       rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
       rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);

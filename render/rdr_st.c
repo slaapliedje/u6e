@@ -461,21 +461,35 @@ void rdr_present(void)
 }
 
 void rdr_present_rect(int x, int y, int w, int h);   /* (defined below) */
+#define PMAP_TOP_ROW 8                                   /* == PMAP_TOP below (the map window's first screen row) */
 /* c2p only what changed since the last present (see g_shadow). No Vsync. Falls back to a full present
  * when there is no valid copy or the screens are flipping. */
-void rdr_present_diff(void)
+/* hole: skip groups h0..h1-1 on rows y0..y1-1 (what the planar map overlay covers anyway) */
+static int g_hole_stale;    /* a present left the backbuffer's map area unshown (the planar map covered it) */
+static void present_diff_hole(int y0, int y1, int h0, int h1)
 {
-    if (!g_shadow || !g_shadow_ok || g_flip) { rdr_present_rect(0, 0, STW, STH);
+    if (y1 > y0) g_hole_stale = 1;
+    else if (g_hole_stale && g_shadow_ok && !g_flip) {      /* a whole-screen diff after the planar map: the screen there is */
+        g_hole_stale = 0;                                    /* the planar map, not what the copy says, so show it all */
+        rdr_present_rect(16, PMAP_TOP_ROW, 144, 160);
+    }
+    if (!g_shadow || !g_shadow_ok || g_flip) {
+        if (y1 > y0) {
+            rdr_present_rect(0, 0, STW, y0); rdr_present_rect(0, y1, STW, STH - y1);
+            rdr_present_rect(0, y0, h0*16, y1 - y0); rdr_present_rect(h1*16, y0, STW - h1*16, y1 - y0);
+        } else rdr_present_rect(0, 0, STW, STH);
         if (g_shadow && !g_flip) { memcpy(g_shadow, g_back, ST_BACK_BYTES); g_shadow_ok = 1; } return; }
     for (int y = 0; y < STH; y++) {
+        int skip = y >= y0 && y < y1;
         const uint32_t *a = (const uint32_t *)(g_back + (int32_t)y * STW);
         uint32_t       *b = (uint32_t *)(g_shadow + (int32_t)y * STW);
         int g = 0;
         while (g < ST_GROUPS) {
             const uint32_t *pa = a + g*4; const uint32_t *pb = b + g*4;
+            if (skip && g == h0) { g = h1; continue; }
             if (pa[0] == pb[0] && pa[1] == pb[1] && pa[2] == pb[2] && pa[3] == pb[3]) { g++; continue; }
             int g1 = g + 1;                                       /* the run of changed groups */
-            while (g1 < ST_GROUPS) { const uint32_t *qa = a + g1*4, *qb = b + g1*4;
+            while (g1 < ST_GROUPS && !(skip && g1 == h0)) { const uint32_t *qa = a + g1*4, *qb = b + g1*4;
                 if (qa[0] == qb[0] && qa[1] == qb[1] && qa[2] == qb[2] && qa[3] == qb[3]) break; g1++; }
             c2p_seg(y, (const uint8_t *)(a + g*4), g_row_lut[y], (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES) + g*4, g, g1 - g);
             memcpy(b + g*4, a + g*4, (size_t)(g1 - g) * 16);
@@ -483,6 +497,10 @@ void rdr_present_diff(void)
         }
     }
 }
+void rdr_present_diff(void) { present_diff_hole(0, 0, 0, 0); }
+/* The same, but not under the planar map (screen rows 8-167, groups 1-9, x 16-159): rdr_ppresent draws
+ * over it at once. c2p'ing the backbuffer's map area there first showed as a slow wipe (a door, ST). */
+void rdr_present_diff_pmap(void) { present_diff_hole(PMAP_TOP_ROW, PMAP_TOP_ROW + 160, 1, 10); }
 
 /* c2p only the sub-rectangle [x,y,w,h). x,w must be multiples of 16. */
 void rdr_present_rect(int x, int y, int w, int h)

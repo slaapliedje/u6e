@@ -147,6 +147,7 @@ int      rdr_pdissolve_begin(void);                                     /* the v
 void     rdr_pdissolve_end(int to_black);
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
 void     rdr_present_diff(void);                                        /* c2p only the groups changed since the last present (ST) */
+void     rdr_present_diff_pmap(void);                                   /* the same, leaving the planar map window alone (ST) */
 void     rdr_portrait_lines(int x, int y0, int w, int n, const uint8_t *lutp, const uint8_t *lv); /* ST: 4 colours per portrait row (palette_lowcolor.md) */
 void     rdr_pcell_save(int vx, int vy, uint16_t *buf);           /* ST: one 16x16 cell of the planar map (64 words) */
 void     rdr_pcell_restore(int vx, int vy, const uint16_t *buf);
