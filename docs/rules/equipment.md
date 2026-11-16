@@ -90,7 +90,10 @@ an arrow glyph at column 8 of text rows 3 and 8 when more lies that way; `E:n/ms
 (all carried / twice strength, stones) on text row 9; the buttons along y=88: previous (176; tile 387, not for the first),
 party (192; 384), portrait (208; 385), next (224; 388, not for the last), and for a companion the combat mode (240; 391) with its
 name to the right on text row 11. A selected thing with no verb armed is readied, or taken off; a verb armed acts on it
-(L)ook, U)se, D)rop then its "Location: ", M)ove).
+(L)ook, U)se, D)rop then its "Location: ", M)ove). With A)ttack armed a cell of the display is the attack's target, out of reach: the thing's name, or
+`ethereal void` for an empty cell, then `Out of range!` (DOS observed 2026-11-16 for an empty pack cell, the Tab crosshair
+in the display while `Attack with bare hands-` waited; an occupied cell naming its thing is probable). Nothing is readied or
+taken off. (We used to drop the attack and take the readied thing off: a tester's sword came off in a fight.)
 
 **Portrait and stats:** name on the top row; the portrait at (176,16); from column 10: `STR:n`, `DEX:n`, `INT:n` on rows 2-4,
 `Magic` and `n/m` on 6-7, `Health` and `n/m` on 8-9, `Lev/Exp` and `n/m` on 10-11; the same buttons, the third with tile 386.

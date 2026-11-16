@@ -9424,7 +9424,7 @@ static void look_view(int id,int thing,const char*cap)
     int k; while(!(k=plat_input_raw())) vsync_pump();
 }
 /* the crosshair or a click in the status display: a button, a readied thing, a thing in the pack (equipment.md §5). 1 = the map needs redrawing */
-static int panel_select_pack(world_t*w,int row);
+static int panel_select_pack(world_t*w,int row); static void attack_panel(world_t*w,const char*nm);
 static int panel_select_slot(world_t*w,int sl);
 static int pack_move_into(world_t*w,int t);
 static int panel_action(world_t*w,int x,int y)
@@ -9441,7 +9441,8 @@ static int panel_action(world_t*w,int x,int y)
     if(x>=0x110&&x<0x120&&y>=0x10&&y<0x20&&g_iv_cont){ int cr=iv_cont_row();                /* the open thing's picture: a move out of it, or back up a level */
         if(g_pending_verb=='W'&&cr>=0){ g_pending_verb=0; return g_gl->move_into?g_gl->move_into(w,cr):pack_move_into(w,cr); }
         if(!g_pending_verb){ g_iv_cont=cr>=0?g_ow.inv[cr].in:0; g_inv_first=0; return 1; } }
-    if(x>=IVG_X && x<IVG_X+IVG_COLS*16 && y>=IVG_Y && y<IVG_Y+IVG_ROWS*16){ int k=g_inv_first+(y-IVG_Y)/16*IVG_COLS+(x-IVG_X)/16, nr=iv_rows(g_status_actor); if(k<nr) return panel_select_pack(w,g_iv_row[k]); return 0; }
+    if(x>=IVG_X && x<IVG_X+IVG_COLS*16 && y>=IVG_Y && y<IVG_Y+IVG_ROWS*16){ int k=g_inv_first+(y-IVG_Y)/16*IVG_COLS+(x-IVG_X)/16, nr=iv_rows(g_status_actor); if(k<nr) return panel_select_pack(w,g_iv_row[k]);
+        if(g_pending_verb=='A'){ attack_panel(w,0); return 1; } return 0; }
     for(int sl=0;sl<EQ_NSLOTS;sl++) if(x>=IV_SLOT[sl][0]+sx&&x<IV_SLOT[sl][0]+sx+16&&y>=IV_SLOT[sl][1]&&y<IV_SLOT[sl][1]+16) return panel_select_slot(w,sl);
     if(x>=PTXT_X(8)-8 && x<PTXT_X(8)){ if(y>=PTXT_Y(3)&&y<PTXT_Y(3)+8) g_inv_first-=IVG_COLS; else if(y>=PTXT_Y(8)&&y<PTXT_Y(8)+8) g_inv_first+=IVG_COLS; }
     return 0;
@@ -10419,6 +10420,14 @@ static int do_attack(world_t*w,int dx,int dy)
     return 1;
 }
 /* one crosshair done: the next weapon's, or the command's time, 10 points as DOS charges (§6c) */
+/* the armed attack aimed into the status display (equipment.md §5): out of reach, nothing readied or taken off;
+ * nm = the thing in that cell, 0 for an empty one */
+static void attack_panel(world_t*w,const char*nm){
+    int n=msgcat(g_atk_i?msg_tail():0, nm&&nm[0]?nm:"ethereal void"); msgcat(n,".\nOut of range!");
+    g_pending_verb=0;
+    if(++g_atk_i<g_atk_n){ attack_aim(); g_pending_verb='A'; return; }   /* the next readied weapon's turn, as attack_fire */
+    g_atk_n=0; g_atk_i=0;
+    if(g_atk_tried){ g_atk_tried=0; g_verb_pts=10; verb_spend(w); } }
 static void attack_fire(world_t*w,int dx,int dy){
     g_atk_cx=dx; g_atk_cy=dy;
     if(do_attack(w,dx,dy)) g_atk_tried=1;
@@ -12748,6 +12757,7 @@ static void pick_take(world_t*w,int row,int sl)
 /* a thing in the pack chosen in the status display: the armed verb acts on it; with none, it is readied */
 static int panel_select_pack(world_t*w,int row)
 {   int v=g_pending_verb, r=0; if(v=='W'){ g_pending_verb=0; g_pan_focus=0; return g_gl->move_into?g_gl->move_into(w,row):pack_move_into(w,row); }   /* "To ": the cell is the target; the thing moved stays selected; the crosshair goes back to the map as after M / D */
+    if(v=='A'){ char nm[24]; nm[0]=0; obj_name(g_ow.inv[row].tile,nm,sizeof nm); attack_panel(w,nm); return 1; }   /* equipment.md §5 */
     g_inv_sel=row;
     if(v=='L'){ g_pending_verb=0; g_look_pack=0; look_pack_item(&g_ow.inv[row]); return 1; }
     if(v=='U'){ int pr=use_pack_item(w,g_ow.inv[row].obj_n); g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_use_pack=0; return 1; }
@@ -12768,13 +12778,14 @@ static int panel_select_pack(world_t*w,int row)
     return r; }
 static int panel_select_slot(world_t*w,int sl)
 {   int a=g_status_actor; uint16_t on=(a>=1&&a<U6_MAX_ACTORS)?g_aready[a][sl]:0;
+    if(g_pending_verb=='A'){ char nm[24]; nm[0]=0; if(on) obj_name((uint16_t)basetile(on),nm,sizeof nm); attack_panel(w,nm); return 1; }
     if(!on) return 0;
     if(g_pending_verb=='L'){ invitem_t it; it.in=0; it.id=0; it.seq=0; it.owner=1; it.obj_n=on; it.tile=(uint16_t)basetile(on); it.qty=1; it.quality=0; g_pending_verb=0; look_pack_item(&it); return 1; }
     if(g_pending_verb=='U'){ g_use_readied=1; g_use_slot=sl; int pr=use_pack_item(w,on); g_use_readied=0; g_use_slot=-1;         /* a readied thing in use */
         g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_use_pack=0; return 1; }
     if(g_pending_verb=='I'){ g_pending_verb=0; pick_take(w,-1,sl); return 1; }
     if(g_pending_verb=='C'&&g_cast_spell>=0&&!strcmp(g_spells[g_cast_spell].name,"Enchant")){ g_pending_verb=0; g_cast_slot=sl; g_pan_focus=0; (void)cast_aimed(w,0,0); return 1; }
-    if(g_pending_verb) { g_pending_verb=0; }
+    if(g_pending_verb) return 0;                       /* another verb armed: it does not take the thing off (equipment.md §5), as a pack cell */
     (void)w; (void)equip_take_off(a,sl); return 1; }
 /* a key or lock pick on what stands at (dx,dy) (usecode_use.md) */
 static int key_at(world_t*w,int dx,int dy)
