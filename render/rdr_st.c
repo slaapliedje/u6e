@@ -34,6 +34,26 @@
 
 #define RDR_BACKEND st        /* namespace this backend's entry points; emit rdr_be_st (see below) */
 #include "render_backend.h"
+/* the pointer follows the mouse at the VBL (rdr_pcursor_auto) only while nothing writes the screen: every
+ * routine below that writes it, or the pointer, counts itself in g_scr_busy */
+static volatile int16_t g_scr_busy;
+static volatile uint8_t g_pauto;          /* rdr_pcursor_auto */
+#define SCR_IN  (g_scr_busy++)
+#define SCR_OUT (g_scr_busy--)
+static void rdr_flip_end_i(void);
+static void rdr_flip_begin_i(void);
+static void rdr_pcursor_place_i(const uint8_t *curpix, int w, int h, int ox, int oy);
+static void rdr_pcursor_show_i(const uint8_t *curpix, int w, int h, int ox, int oy);
+static void rdr_pcursor_hide_i(void);
+static void rdr_pdissolve_end_i(int to_black);
+static int rdr_pdissolve_begin_i(void);
+static void rdr_ppresent_i(void);
+static void rdr_present_rect_doubled_i(int x, int y, int w, int h, int lh);
+static void rdr_present_doubled_i(int lh);
+static void rdr_present_rect_i(int x, int y, int w, int h);
+static void rdr_present_diff_pmap_i(void);
+static void rdr_present_diff_i(void);
+static void rdr_present_i(void);
 
 #define STW 320
 #define STH 200
@@ -187,6 +207,7 @@ bool rdr_init(const platform_caps_t *caps)
 
 void rdr_shutdown(void)
 {
+    g_pauto = 0;
     if (g_raster_on) { (void)Supexec(raster_remove); g_raster_on = 0; }   /* stop the raster first */
     plat_mouse_hook_shutdown();
     linea9();                             /* line-A $A009: show mouse for the desktop */
@@ -309,7 +330,8 @@ static void tb_handler(void)
 }
 
 /* VBL queue routine (runs each frame during vblank): reload band 0 + arm the Timer-B chain. */
-static void vbl_routine(void)
+static void pcur_vbl(void);                         /* (below) the pointer follows the mouse */
+static void vbl_bands(void)
 {
     if (g_nb <= 1) {
         if (g_pl_n && g_pl_y0 > 0) {                /* portrait line colours: first interrupt at row y0-1, then every row */
@@ -334,6 +356,11 @@ static void vbl_routine(void)
     MFP_IPRA = (uint8_t)~TB_BIT;                    /* clear any pending */
     MFP_IERA = (uint8_t)(MFP_IERA | TB_BIT);
     MFP_IMRA = (uint8_t)(MFP_IMRA | TB_BIT);
+}
+static void vbl_routine(void)
+{
+    vbl_bands();          /* first: the band colours must be armed before the first band starts */
+    pcur_vbl();           /* then the pointer (the Timer-B band interrupts, MFP level 6, still cut in) */
 }
 
 static long raster_install(void)                   /* supervisor (Supexec) */
@@ -448,9 +475,11 @@ static void c2p_seg(int y, const uint8_t *src, const uint8_t *lut, uint16_t *dst
     c2p4_lut_asm(src, lut, dst, gn);
 }
 
+static void pcur_guard(int x0, int y0, int x1, int y1);   /* (below) the pointer off the screen only where a present writes */
 /* Full-screen present: LUT-remap + c2p the whole 320x200 backbuffer to the 4-plane screen. */
-void rdr_present(void)
+static void rdr_present_i(void)
 {
+    pcur_guard(0, 0, STW, STH);
     for (int y = 0; y < STH; y++) {
         const uint8_t *px  = g_back + (int32_t)y * STW;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES);
@@ -491,25 +520,27 @@ static void present_diff_hole(int y0, int y1, int h0, int h1)
             int g1 = g + 1;                                       /* the run of changed groups */
             while (g1 < ST_GROUPS && !(skip && g1 == h0)) { const uint32_t *qa = a + g1*4, *qb = b + g1*4;
                 if (qa[0] == qb[0] && qa[1] == qb[1] && qa[2] == qb[2] && qa[3] == qb[3]) break; g1++; }
+            pcur_guard(g*16, y, g1*16, y + 1);
             c2p_seg(y, (const uint8_t *)(a + g*4), g_row_lut[y], (uint16_t *)(g_screen + (int32_t)y * ST_ROWBYTES) + g*4, g, g1 - g);
             memcpy(b + g*4, a + g*4, (size_t)(g1 - g) * 16);
             g = g1;
         }
     }
 }
-void rdr_present_diff(void) { present_diff_hole(0, 0, 0, 0); }
+static void rdr_present_diff_i(void) { present_diff_hole(0, 0, 0, 0); }
 /* The same, but not under the planar map (screen rows 8-167, groups 1-9, x 16-159): rdr_ppresent draws
  * over it at once. c2p'ing the backbuffer's map area there first showed as a slow wipe (a door, ST). */
-void rdr_present_diff_pmap(void) { present_diff_hole(PMAP_TOP_ROW, PMAP_TOP_ROW + 160, 1, 10); }
+static void rdr_present_diff_pmap_i(void) { present_diff_hole(PMAP_TOP_ROW, PMAP_TOP_ROW + 160, 1, 10); }
 
 /* c2p only the sub-rectangle [x,y,w,h). x,w must be multiples of 16. */
-void rdr_present_rect(int x, int y, int w, int h)
+static void rdr_present_rect_i(int x, int y, int w, int h)
 {
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x + w > STW) w = STW - x;
     if (y + h > STH) h = STH - y;
     int g0 = x / 16, gn = w / 16;
+    if (gn > 0 && h > 0) pcur_guard(x, y, x + w, y + h);
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px  = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t      *dst = (uint16_t *)(g_screen + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
@@ -521,12 +552,13 @@ void rdr_present_rect(int x, int y, int w, int h)
 
 /* ST-low is 320x200 == the native UI, so "doubled" collapses to a straight 1:1 present of the
  * top `lh` logical rows (no 2x-vertical / letterbox that the taller TT needs). */
-void rdr_present_doubled(int lh)
+static void rdr_present_doubled_i(int lh)
 {
     if (lh < 1) lh = 1;
     if (lh > STH) lh = STH;
     if (!g_flip && lh == STH && g_shadow) { rdr_present_diff(); Vsync(); return; }   /* single screen: only what changed */
     g_shadow_ok = 0;
+    if (!g_flip) pcur_guard(0, 0, STW, lh);
     /* In flip mode, c2p into the HIDDEN buffer, then swap the video base at the frame boundary. */
     uint8_t *dst = (g_flip && g_vis == g_screen) ? g_screen2 : g_screen;
     if (g_flip && g_vis == g_screen2) dst = g_screen;
@@ -540,7 +572,7 @@ void rdr_present_doubled(int lh)
 }
 
 /* Sub-rectangle 1:1 present (the movement/animation perf lever — c2p just the map window). */
-void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
+static void rdr_present_rect_doubled_i(int x, int y, int w, int h, int lh)
 {
     (void)lh;
     if (x < 0) { w += x; x = 0; }
@@ -550,6 +582,7 @@ void rdr_present_rect_doubled(int x, int y, int w, int h, int lh)
     if (w <= 0 || h <= 0) return;
     int g0 = x / 16, gn = (x + w + 15) / 16 - g0;   /* every 16-pixel group the rect touches (a 7-pixel pointer is one or two) */
     uint8_t *scr = g_vis;                            /* the buffer on show (flip mode alternates them) */
+    if (scr == g_screen) pcur_guard(g0*16, y, (g0 + gn)*16, y + h);
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t     *dst = (uint16_t *)(scr + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
@@ -1009,17 +1042,20 @@ extern void ppresent_st_asm(const uint16_t *src, uint8_t *dst, long src_stride_b
 
 /* present (render.h): NO c2p, NO Vsync (caller batches). Uses the Blitter when present + enabled, else the
  * hand-asm CPU present. */
-void rdr_ppresent(void)
+static int pcur_ptmp(int put);                  /* (below) the pointer into / out of the planar map */
+static void rdr_ppresent_i(void)
 {
     blitter_flush();                            /* defensive: drain any pending dynamic blits into g_ptmp */
+    int pc = pcur_ptmp(1);                      /* a pointer over the map goes out with it: no frame without it */
     if (g_has_blitter && g_blit_present) { g_ppresent_dst = g_screen; (void)Supexec(ppresent_blitter_super); }
     else ppresent_st_asm(g_ptmp, g_screen + 8*ST_ROWBYTES, PMAP_STRIDE_W*2, ST_ROWBYTES, 160);
+    if (pc) pcur_ptmp(0);
 }
 
 /* The view changes a pixel at a time, in a fixed shift-register order (moongates.md §6). The old screen is
  * shown from the second buffer (Setscreen, XBIOS 5), the caller presents the new frame into the hidden one,
  * and the 160x160 square is carried across; to_black: to colour 0. */
-int rdr_pdissolve_begin(void)
+static int rdr_pdissolve_begin_i(void)
 {
     if (!g_screen2) return 0;
     g_shadow_ok = 0;
@@ -1027,7 +1063,7 @@ int rdr_pdissolve_begin(void)
     Setscreen(g_screen2, g_screen2, -1); Vsync();
     return 1;
 }
-void rdr_pdissolve_end(int to_black)
+static void rdr_pdissolve_end_i(int to_black)
 {
     enum { VX = 8, VY = 8, VS = 160 };
     static const uint16_t BIT[16] = { 0x8000,0x4000,0x2000,0x1000,0x800,0x400,0x200,0x100,0x80,0x40,0x20,0x10,8,4,2,1 };
@@ -1055,42 +1091,166 @@ void rdr_pdissolve_end(int to_black)
     Setscreen(g_screen, g_screen, -1); Vsync();
 }
 
-/* --- Planar mouse cursor (native-planar path) --- The chunky path draws the cursor into g_back then
- * c2p's it; the native-planar present reads g_ptmp, not g_back, so the cursor must be drawn DIRECTLY
- * into the planar screen with save-under (the map/panel under it is restored on the next move). The
- * cursor sprite is chunky (w x h, 255 = transparent) and is coloured through its screen row's LUT.
- * The cursor is small so per-pixel plane read/write is cheap. */
+/* --- Planar mouse pointer (native-planar path) --- The chunky path draws the pointer into g_back then
+ * c2p's it; the native-planar present reads g_ptmp, not g_back, so the pointer is drawn DIRECTLY into the
+ * planar screen with a save-under. The sprite is chunky (w x h, 255 = transparent), coloured through its
+ * screen row's LUT, and kept as per-row masks and plane words: a row of it covers at most PG 16-pixel groups,
+ * and every draw, restore and move is a masked word write (per pixel it cost ~35 ms a move on an 8 MHz ST,
+ * more than a frame). */
 #define PCUR_MAX 24
-static uint8_t g_pcur_save[PCUR_MAX*PCUR_MAX];   /* 4-bit colours captured under the cursor */
-static int     g_pcur_x = -1, g_pcur_y, g_pcur_w, g_pcur_h;
-static inline int pget_px(int x, int y){
-    const uint16_t *w = (const uint16_t *)(g_screen + (int32_t)y*ST_ROWBYTES) + (x>>4)*4;
-    int b = 15-(x&15);
-    return ((w[0]>>b)&1) | (((w[1]>>b)&1)<<1) | (((w[2]>>b)&1)<<2) | (((w[3]>>b)&1)<<3);
+#define PG 3                                      /* groups a row covers: ((x&15)+24+15)/16 */
+typedef struct { uint16_t m[PCUR_MAX][PG], pl[PCUR_MAX][PG][4], sv[PCUR_MAX][PG][4]; } pcur_rows_t;
+static pcur_rows_t g_pc[2];                       /* the shown pointer's rows, and the next one's (a move) */
+static int     g_pci;                             /* which of g_pc is shown */
+static int     g_pcur_x = -1, g_pcur_y, g_pcur_w, g_pcur_h, g_pcur_g;   /* g: groups a row covers */
+static uint8_t g_pcur_pix[PCUR_MAX*PCUR_MAX];    /* the shape on screen (rdr_pcursor_place keeps it) */
+static int16_t g_phx, g_phy;                      /* the hotspot */
+
+/* A present that writes under the pointer takes it off first (its save-under would go stale); one that
+ * does not leaves it on. Taking it off for every present made it flash on a real ST at each map tick. */
+static void pcur_guard(int x0, int y0, int x1, int y1)
+{
+    if (g_pcur_x >= 0 && x0 < g_pcur_x + g_pcur_w && x1 > g_pcur_x && y0 < g_pcur_y + g_pcur_h && y1 > g_pcur_y)
+        rdr_pcursor_hide();
 }
-static inline void pset_px(int x, int y, int c){
-    uint16_t *w = (uint16_t *)(g_screen + (int32_t)y*ST_ROWBYTES) + (x>>4)*4;
-    uint16_t m = (uint16_t)(1u << (15-(x&15)));
-    w[0]=(c&1)?(uint16_t)(w[0]|m):(uint16_t)(w[0]&~m); w[1]=(c&2)?(uint16_t)(w[1]|m):(uint16_t)(w[1]&~m);
-    w[2]=(c&4)?(uint16_t)(w[2]|m):(uint16_t)(w[2]&~m); w[3]=(c&8)?(uint16_t)(w[3]|m):(uint16_t)(w[3]&~m);
+static inline uint16_t *scr_grp(int y, int g){ return (uint16_t *)(g_screen + (int32_t)y*ST_ROWBYTES) + g*4; }
+
+/* the rows of shape curpix (w x h) placed at x ox: masks and plane words; returns the groups a row covers */
+static int pcur_build(pcur_rows_t *R, const uint8_t *curpix, int w, int h, int ox, int oy)
+{
+    const uint8_t *lut = g_row_lut[(oy>=0 && oy<STH) ? oy : 0];
+    int sh = ox & 15, ng = (sh + w + 15) >> 4;
+    memset(R->m, 0, sizeof R->m); memset(R->pl, 0, sizeof R->pl);
+    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+        uint8_t c = curpix[y*w+x]; if (c == PLANAR_TRANSPARENT) continue;
+        int X = sh + x, g = X >> 4; uint16_t b = (uint16_t)(0x8000u >> (X & 15)); uint8_t c4 = (uint8_t)(lut[c] & 0x0F);
+        R->m[y][g] |= b;
+        for (int k = 0; k < 4; k++) if (c4 & (1 << k)) R->pl[y][g][k] |= b;
+    }
+    return ng;
 }
-void rdr_pcursor_hide(void){                      /* restore the screen pixels the cursor overwrote */
+
+/* the pointer at the VBL: on a real ST the main loop reads the mouse once a pass, and a pass that composes the
+ * map takes 100 ms or more: the pointer stood still, then jumped. With rdr_pcursor_auto on, the VBL routine
+ * moves it to where the mouse is whenever no screen writer runs (g_scr_busy), and the game's own calls put
+ * it there too (not where the mouse was when its pass began). */
+static void pcur_auto_pos(int w, int h, int *ox, int *oy){
+    int x, y, b; plat_mouse(&x, &y, &b);
+    x -= g_phx; y -= g_phy;
+    if (x > STW - w) x = STW - w;
+    if (y > STH - h) y = STH - h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    *ox = x; *oy = y;
+}
+void rdr_pcursor_auto(int on, int hx, int hy){
+    g_phx = (int16_t)hx; g_phy = (int16_t)hy;
+    if (on && !g_raster_on) { (void)Supexec(raster_install); g_raster_on = 1; }   /* the VBL routine (XBIOS 38 for the queue) */
+    g_pauto = on ? 1 : 0;
+}
+static void pcur_vbl(void){
+    if (!g_pauto || g_scr_busy || g_pcur_x < 0) return;
+    int ox, oy; pcur_auto_pos(g_pcur_w, g_pcur_h, &ox, &oy);
+    if (ox != g_pcur_x || oy != g_pcur_y) rdr_pcursor_place(g_pcur_pix, g_pcur_w, g_pcur_h, ox, oy);
+}
+
+/* put: the part of the pointer over the map (screen x,y 8-167) goes into g_ptmp, whose pixel (x,y) shows at
+ * screen (x+8, y+8): screen group s's high byte is g_ptmp group s-1's low byte, its low byte group s's high
+ * byte. Its save-under takes the new map's bits there. Returns whether it touched the map. !put: g_ptmp gets
+ * its own words back. The map is presented with the pointer in it: a map tick never shows a frame without it. */
+static uint16_t g_pct[PCUR_MAX][PG][2][4];        /* g_ptmp's words under it during rdr_ppresent */
+static int pcur_ptmp(int put)
+{
+    if (g_pcur_x < 0 || g_pcur_x >= 168 || g_pcur_x + g_pcur_w <= 8 || g_pcur_y >= 168 || g_pcur_y + g_pcur_h <= 8) return 0;
+    pcur_rows_t *R = &g_pc[g_pci];
+    int s0 = g_pcur_x >> 4;
+    for (int r = 0; r < g_pcur_h; r++) {
+        int py = g_pcur_y + r; if (py < 8 || py >= 168) continue;
+        uint16_t *trow = g_ptmp + (int32_t)(py - 8)*PMAP_STRIDE_W;
+        for (int g = 0; g < g_pcur_g; g++) {
+            int s = s0 + g; uint16_t m = R->m[r][g];
+            if (s == 0) m &= 0x00FF; else if (s == 10) m &= 0xFF00; else if (s > 10) m = 0;
+            if (!m) continue;
+            uint16_t mA = (uint16_t)(m >> 8), mB = (uint16_t)(m << 8);
+            uint16_t *A = s > 0 ? trow + (s-1)*4 : 0, *B = s < 11 ? trow + s*4 : 0;
+            for (int k = 0; k < 4; k++) {
+                if (put) {
+                    uint16_t a = A ? A[k] : 0, b = B ? B[k] : 0;
+                    g_pct[r][g][0][k] = a; g_pct[r][g][1][k] = b;
+                    uint16_t snew = (uint16_t)((a << 8) | (b >> 8));
+                    R->sv[r][g][k] = (uint16_t)((R->sv[r][g][k] & ~m) | (snew & m));
+                    uint16_t p = R->pl[r][g][k];
+                    if (A && mA) A[k] = (uint16_t)((a & ~mA) | ((p >> 8) & mA));
+                    if (B && mB) B[k] = (uint16_t)((b & ~mB) | ((uint16_t)(p << 8) & mB));
+                } else {
+                    if (A && mA) A[k] = g_pct[r][g][0][k];
+                    if (B && mB) B[k] = g_pct[r][g][1][k];
+                }
+            }
+        }
+    }
+    return 1;
+}
+static void rdr_pcursor_hide_i(void){                      /* the screen's bits under the pointer back */
     if (g_pcur_x < 0) return;
-    for (int y = 0; y < g_pcur_h; y++) for (int x = 0; x < g_pcur_w; x++)
-        pset_px(g_pcur_x+x, g_pcur_y+y, g_pcur_save[y*g_pcur_w+x]);
+    pcur_rows_t *R = &g_pc[g_pci]; int s0 = g_pcur_x >> 4;
+    for (int r = 0; r < g_pcur_h; r++) for (int g = 0; g < g_pcur_g; g++) {
+        uint16_t m = R->m[r][g]; if (!m) continue;
+        uint16_t *d = scr_grp(g_pcur_y + r, s0 + g);
+        for (int k = 0; k < 4; k++) d[k] = (uint16_t)((d[k] & ~m) | (R->sv[r][g][k] & m));
+    }
     g_pcur_x = -1;
 }
 void rdr_pcursor_invalidate(void){ g_pcur_x = -1; }   /* forget the save-under (a full present erased it) */
-void rdr_pcursor_show(const uint8_t *curpix, int w, int h, int ox, int oy){
+static void rdr_pcursor_show_i(const uint8_t *curpix, int w, int h, int ox, int oy){
     if (w > PCUR_MAX) w = PCUR_MAX;  if (h > PCUR_MAX) h = PCUR_MAX;
-    const uint8_t *lut = g_row_lut[(oy>=0 && oy<STH) ? oy : 0];
+    if (g_pauto) pcur_auto_pos(w, h, &ox, &oy);
+    pcur_rows_t *R = &g_pc[g_pci];
+    g_pcur_g = pcur_build(R, curpix, w, h, ox, oy);
     g_pcur_x = ox; g_pcur_y = oy; g_pcur_w = w; g_pcur_h = h;
-    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++){
-        int px = ox+x, py = oy+y;
-        g_pcur_save[y*w+x] = (uint8_t)pget_px(px, py);          /* save-under */
-        uint8_t c = curpix[y*w+x];
-        if (c != PLANAR_TRANSPARENT) pset_px(px, py, lut[c] & 0x0F);
+    if (curpix != g_pcur_pix) memcpy(g_pcur_pix, curpix, (size_t)w*h);
+    int s0 = ox >> 4;
+    for (int r = 0; r < h; r++) for (int g = 0; g < g_pcur_g; g++) {
+        uint16_t *d = scr_grp(oy + r, s0 + g); uint16_t m = R->m[r][g];
+        for (int k = 0; k < 4; k++) { R->sv[r][g][k] = d[k]; if (m) d[k] = (uint16_t)((d[k] & ~m) | (R->pl[r][g][k] & m)); }
     }
+}
+/* the pointer at (ox,oy): nothing when it is already there with this shape; else the old one off and the new
+ * one on in ONE pass, row by row (taking it off and drawing it again let a real ST show the gap: it blinked
+ * while the mouse moved) */
+static void rdr_pcursor_place_i(const uint8_t *curpix, int w, int h, int ox, int oy){
+    int cw = w > PCUR_MAX ? PCUR_MAX : w, ch = h > PCUR_MAX ? PCUR_MAX : h;
+    if (g_pauto) pcur_auto_pos(cw, ch, &ox, &oy);
+    if (g_pcur_x == ox && g_pcur_y == oy && g_pcur_w == cw && g_pcur_h == ch && !memcmp(g_pcur_pix, curpix, (size_t)cw*ch)) return;
+    if (g_pcur_x < 0) { rdr_pcursor_show_i(curpix, w, h, ox, oy); return; }
+    pcur_rows_t *O = &g_pc[g_pci], *N = &g_pc[g_pci ^ 1];
+    int ng = pcur_build(N, curpix, cw, ch, ox, oy);
+    int os0 = g_pcur_x >> 4, ns0 = ox >> 4, og = g_pcur_g;
+    int y0 = oy < g_pcur_y ? oy : g_pcur_y, y1 = oy + ch > g_pcur_y + g_pcur_h ? oy + ch : g_pcur_y + g_pcur_h;
+    for (int y = y0; y < y1; y++) {
+        int ro = y - g_pcur_y, rn = y - oy;
+        int inO = ro >= 0 && ro < g_pcur_h, inN = rn >= 0 && rn < ch;
+        if (inO) for (int g = 0; g < og; g++) {                 /* the old one off this row */
+            uint16_t m = O->m[ro][g]; if (!m) continue;
+            int s = os0 + g;
+            if (inN && s >= ns0 && s < ns0 + ng) continue;        /* a group the new one covers: done below, at once */
+            uint16_t *d = scr_grp(y, s);
+            for (int k = 0; k < 4; k++) d[k] = (uint16_t)((d[k] & ~m) | (O->sv[ro][g][k] & m));
+        }
+        if (inN) for (int g = 0; g < ng; g++) {                 /* the new one on: its save-under is the word with the old one off */
+            int s = ns0 + g; uint16_t *d = scr_grp(y, s); uint16_t m = N->m[rn][g];
+            int go = s - os0; uint16_t om = (inO && go >= 0 && go < og) ? O->m[ro][go] : 0;
+            for (int k = 0; k < 4; k++) {
+                uint16_t v = d[k];
+                if (om) v = (uint16_t)((v & ~om) | (O->sv[ro][go][k] & om));
+                N->sv[rn][g][k] = v;
+                d[k] = m ? (uint16_t)((v & ~m) | (N->pl[rn][g][k] & m)) : v;
+            }
+        }
+    }
+    g_pci ^= 1; g_pcur_g = ng;
+    g_pcur_x = ox; g_pcur_y = oy; g_pcur_w = cw; g_pcur_h = ch;
+    if (curpix != g_pcur_pix) memcpy(g_pcur_pix, curpix, (size_t)cw*ch);
 }
 
 #ifdef BENCH
@@ -1408,12 +1568,12 @@ void rdr_scroll_left16(const uint8_t *chunky, int cw, int lh, int pan_x)
 
 /* Enter double-buffered (tear-free) mode for full-screen animation (the intro). No-op if a
  * second ST-RAM buffer can't be allocated (stays single-buffered). */
-void rdr_flip_begin(void)
+static void rdr_flip_begin_i(void)
 {
     if (g_screen2) { g_flip = 1; g_shadow_ok = 0; }   /* allocated in rdr_init (never lazily — see there) */
 }
 
-void rdr_flip_end(void)
+static void rdr_flip_end_i(void)
 {
     if (!g_flip) return;
     g_flip = 0; g_shadow_ok = 0;
@@ -1432,4 +1592,21 @@ void scroll_end(void) { }
 /* STE $FF8265 fine-scroll linchpin test — not used on the plain-ST path. */
 void rdr_test_hscroll(int v) { (void)v; }
 
+/* ---- the public screen writers: each counted in g_scr_busy (the VBL pointer keeps off meanwhile) ---- */
+void rdr_present(void) { SCR_IN; rdr_present_i(); SCR_OUT; }
+void rdr_present_diff(void) { SCR_IN; rdr_present_diff_i(); SCR_OUT; }
+void rdr_present_diff_pmap(void) { SCR_IN; rdr_present_diff_pmap_i(); SCR_OUT; }
+void rdr_present_rect(int x, int y, int w, int h) { SCR_IN; rdr_present_rect_i(x, y, w, h); SCR_OUT; }
+void rdr_present_doubled(int lh) { SCR_IN; rdr_present_doubled_i(lh); SCR_OUT; }
+void rdr_present_rect_doubled(int x, int y, int w, int h, int lh) { SCR_IN; rdr_present_rect_doubled_i(x, y, w, h, lh); SCR_OUT; }
+void rdr_ppresent(void) { SCR_IN; rdr_ppresent_i(); SCR_OUT; }
+int rdr_pdissolve_begin(void) { SCR_IN; int r = rdr_pdissolve_begin_i(); SCR_OUT; return r; }
+void rdr_pdissolve_end(int to_black) { SCR_IN; rdr_pdissolve_end_i(to_black); SCR_OUT; }
+void rdr_pcursor_hide(void) { SCR_IN; rdr_pcursor_hide_i(); SCR_OUT; }
+void rdr_pcursor_show(const uint8_t *curpix, int w, int h, int ox, int oy) { SCR_IN; rdr_pcursor_show_i(curpix, w, h, ox, oy); SCR_OUT; }
+void rdr_pcursor_place(const uint8_t *curpix, int w, int h, int ox, int oy) { SCR_IN; rdr_pcursor_place_i(curpix, w, h, ox, oy); SCR_OUT; }
+void rdr_flip_begin(void) { SCR_IN; rdr_flip_begin_i(); SCR_OUT; }
+void rdr_flip_end(void) { SCR_IN; rdr_flip_end_i(); SCR_OUT; }
+
 RDR_MAKE_VTABLE(st);          /* -> const rdr_vtable rdr_be_st */
+

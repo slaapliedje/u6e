@@ -156,6 +156,8 @@ int      rdr_planar_take_dirty(void);  /* 1 (once) after a LUT change -> caller 
 /* planar mouse cursor: drawn straight into the planar screen (save-under), for the native-planar path
  * where the present reads g_ptmp not the chunky backbuffer. curpix = w x h chunky, 255 = transparent. */
 void     rdr_pcursor_show(const uint8_t *curpix, int w, int h, int ox, int oy);
+void     rdr_pcursor_place(const uint8_t *curpix, int w, int h, int ox, int oy);   /* show unless already there (ST) */
+void     rdr_pcursor_auto(int on, int hx, int hy);   /* the VBL moves the shown pointer to the mouse (hotspot hx,hy) (ST) */
 void     rdr_pcursor_hide(void);        /* restore the pixels under the cursor */
 void     rdr_pcursor_invalidate(void);  /* forget the save-under (after a full present erased it) */
 

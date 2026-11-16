@@ -9517,11 +9517,11 @@ static void present_frame(void)
     KP(2);
 #ifdef HAVE_RDR_ST
   if(g_native_planar && !g_peer_on){                      /* panel from g_back, inner map from planar (the gem's view is drawn into g_back) */
-      rdr_pcursor_hide();                                 /* the pixels under the planar cursor back first */
-      rdr_present_diff_pmap();                             /* c2p of what changed in g_back since the last present, not under the planar map, no Vsync */
+      rdr_present_diff_pmap();                             /* c2p of what changed in g_back since the last present, not under the planar map, no Vsync
+                                                              (the pointer comes off only where a write lands under it: rdr_st pcur_guard) */
       rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
       rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
-      if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
+      if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       vsync_pump(); return; }
 #endif
@@ -9539,9 +9539,9 @@ static void present_map(void)
     KP(3);
 #ifdef HAVE_RDR_ST
   if(g_native_planar){                                    /* shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
-      rdr_pcursor_hide(); rdr_ppresent();                 /* restore under old cursor, then redraw the map */
+      rdr_ppresent();                                     /* redraw the map (the pointer comes off if it is over it) */
       rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
-      if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
+      if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       return; }
 #endif
@@ -9553,8 +9553,8 @@ static void present_panel_rect(int x,int y,int w,int h)
 {
     int x0=x&~15, w0=((x+w+15)&~15)-x0;
 #ifdef HAVE_RDR_ST
-    if(g_native_planar){ rdr_pcursor_hide(); rdr_present_rect_doubled(x0,y,w0,h,LH);
-        if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy); g_cur_onx=ox; g_cur_ony=oy; }
+    if(g_native_planar){ rdr_present_rect_doubled(x0,y,w0,h,LH);
+        if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy); g_cur_onx=ox; g_cur_ony=oy; }
         return; }
 #endif
     if(g_cw){ cursor_draw(g_mx,g_my); g_cur_onx=g_csx; g_cur_ony=g_csy; rdr_present_rect_doubled(x0,y,w0,h,LH); cursor_erase(); }
@@ -9569,8 +9569,8 @@ static void present_cursor(void)
 {
     if(!g_cw) return;
 #ifdef HAVE_RDR_ST
-    if(g_native_planar){ rdr_pcursor_hide();                        /* bare move: map unchanged, just move the cursor */
-        int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_show(g_curpix,g_cw,g_ch,ox,oy);
+    if(g_native_planar){                                             /* bare move: map unchanged, just move the cursor */
+        int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy);
         g_cur_onx=ox; g_cur_ony=oy; return; }
 #endif
     int oldx=g_cur_onx, oldy=g_cur_ony;
@@ -20950,6 +20950,9 @@ int main(int argc, char **argv)
     for (;;) {                                       /* interactive; holds frame for capture */
 #ifdef KEYPROF
         uint32_t kp_it=plat_ticks_200hz(); for(int k_=0;k_<18;k_++) g_kp[k_]=0; int kp_key=0;
+#endif
+#ifdef HAVE_RDR_ST
+        rdr_pcursor_auto(g_native_planar && g_cw && !g_peer_on, g_chx, g_chy);   /* the pointer follows the mouse at the VBL while a pass composes */
 #endif
         int mlx,mly,mbtn; read_mouse_logical(&mlx,&mly,&mbtn);
         int mouse_moved=(mlx!=g_mx||mly!=g_my);
