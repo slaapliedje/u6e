@@ -40,6 +40,18 @@
 #include "portlines.h"          /* ST/STE: 4 colours of its own on every portrait row (palette_lowcolor.md "Portrait line colours") */         /* ST/STE: ordered dithering of portraits (palette_lowcolor.md "Portrait dithering") */
 #include "firstrun.h"          /* first start: DOS files -> CONVERT.TOS (docs/design/first_boot_convert.md) */
 #include <osbind.h>
+
+/* The headless test hooks: make check and the bot stage a file (*.REQ, *.BIN) and the game runs that
+ * scenario. A player's folder holds none of them, so a release build (U6E_RELEASE) treats every one as
+ * absent and the compiler drops the scenarios' code (about 200 KB a 4 MB ST needs for play).
+ * MENU.REQ, MEMINFO.BIN, DIAG.REQ and the renderer switches stay: players and testers use them. */
+#ifdef U6E_RELEASE
+#define TEST_REQ(name,lenp)  ((void)(lenp), (void*)0)
+#define TEST_FSIZE(name)     0
+#else
+#define TEST_REQ(name,lenp)  plat_load_file(name,1,lenp)
+#define TEST_FSIZE(name)     plat_fsize_path(name)
+#endif
 #include <string.h>
 
 #define LW   320               /* native logical width                       */
@@ -9581,7 +9593,7 @@ static void present_cursor(void)
  * 256*3 bytes RGB6 palette, then w*h index bytes (row-major, top-down). */
 static void dump_shot(void)
 {
-    int32_t rl=0; void *req=plat_load_file("SHOT.REQ",1,&rl);
+    int32_t rl=0; void *req=TEST_REQ("SHOT.REQ",&rl);
     if(!req) return;                                   /* sentinel absent: no-op */
     plat_file f=plat_fcreate("SHOT.DAT");
     if(f==PLAT_BADFILE) return;
@@ -16104,7 +16116,7 @@ int main(int argc, char **argv)
      * it can render with all 9 voices sounding. Needs no game data (synthetic OPL
      * stream). BENCH.BIN = 4 big-endian u32: samples, 200Hz-ticks, samples/sec, rate.
      * Real-time is feasible iff samples/sec comfortably exceeds the chosen DMA rate. */
-    {   int32_t sbl=0; void *sb=plat_load_file("SBENCH.REQ",1,&sbl);
+    {   int32_t sbl=0; void *sb=TEST_REQ("SBENCH.REQ",&sbl);
         if(sb){
             /* one sustaining instrument (BRIT's) on all 9 voices, then loop on delays */
             static const uint8_t INST[11]={0x61,0x1b,0x62,0x56,0x00,0x21,0x00,0x84,0x55,0x00,0x0e};
@@ -16218,9 +16230,9 @@ int main(int argc, char **argv)
         if (!fe_ok) fe_ok = fe_group_load(FEG_COMMON,0);   /* streamed (or resident did not fit after all) */
         if (fe_ok){
             int32_t ml=0;
-            void*ireq=plat_load_file("INTRO.REQ",1,&ml);   if(ireq){ int c=ml>0?((uint8_t*)ireq)[0]:0; g_intro_start=(c>='0'&&c<='9')?c-'0':(c=='s')?-1:0;
+            void*ireq=TEST_REQ("INTRO.REQ",&ml);   if(ireq){ int c=ml>0?((uint8_t*)ireq)[0]:0; g_intro_start=(c>='0'&&c<='9')?c-'0':(c=='s')?-1:0;
                                                                        g_intro_logos=(c=='L'); if(c=='L') g_intro_start=0; run_intro(); }   /* explicit intro capture ('0'..'9' = start scene, 'L' = logos + all) */
-            void*creq=plat_load_file("CHARGEN.REQ",1,&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');
+            void*creq=TEST_REQ("CHARGEN.REQ",&ml); if(creq) chargen_capture(ml>0?((uint8_t*)creq)[0]:'1');
             void*mreq=plat_load_file("MENU.REQ",1,&ml);
             if(mreq) g_menu_ran=1;
             if(mreq){ if(!ireq && !creq){ g_intro_logos=1; run_intro(); }   /* interactive boot: logos + the (skippable) intro FIRST */
@@ -16598,7 +16610,7 @@ int main(int argc, char **argv)
     /* LINCHPIN TEST for hardware scrolling: draw a 16px-stripe pattern + a marker at x=100,
      * then write $FF8265 = (digit in HSCROLL.REQ). If TT-low honours fine-scroll, the marker
      * shifts left by that many pixels. Compare captures at values 0 and 8. */
-    { int32_t hl=0; void*hreq=plat_load_file("HSCROLL.REQ",1,&hl);
+    { int32_t hl=0; void*hreq=TEST_REQ("HSCROLL.REQ",&hl);
       if(hreq){ int v=((uint8_t*)hreq)[0]-'0'; if(v<0||v>15) v=8;
         clear_bb(0);
         for(int x=0;x<LW;x+=16) for(int y=40;y<160;y++) ROW(y)[x]=15;   /* stripe every 16px */
@@ -16701,22 +16713,22 @@ int main(int argc, char **argv)
      * here and play begins. INTRO.REQ plays the cutscene directly (headless capture of
      * Phase 2 without navigating the menu). (shapes.md; Phase 1/2.) */
 #if defined(KEYPROF) && defined(HAVE_RDR_ST)
-    { int32_t vl_=0; if(plat_load_file("FXVERIFY.REQ",1,&vl_)) g_fxverify=1; }   /* prof build: each cheap hit-flash clear checked against a full recompose (KPFX verify) */
+    { int32_t vl_=0; if(TEST_REQ("FXVERIFY.REQ",&vl_)) g_fxverify=1; }   /* prof build: each cheap hit-flash clear checked against a full recompose (KPFX verify) */
 #endif
     apply_chargen();   /* if a character was created, it becomes the Avatar (name/stats) for play */
     {   int32_t rl=0;   /* the test stock (§4): MAGIC.REQ, or a headless scene that skipped the title and is no bot */
-        { const uint8_t*sq=(const uint8_t*)plat_load_file("PARCH.REQ",1,&rl);   /* test: the mage of byte 0 beside the party, gold to buy from them */
+        { const uint8_t*sq=(const uint8_t*)TEST_REQ("PARCH.REQ",&rl);   /* test: the mage of byte 0 beside the party, gold to buy from them */
           if(sq && rl>0 && sq[0]<U6_MAX_ACTORS){ g_actx[sq[0]]=(uint16_t)(w.px+1); g_acty[sq[0]]=(uint16_t)w.py; g_actz[sq[0]]=(uint8_t)w.level; g_cg.gold+=400; } }
-        { int32_t tl_=0; if(plat_load_file("BOTTOUGH.TXT",1,&tl_)) g_bot_tough=1; }
-        if(plat_load_file("USEKIT.REQ",1,&rl)){ inv_add_objn(63,3); inv_add_objn(97,1); inv_add_objn(155,1); inv_add_objn(154,1); inv_add_objn(103,1); inv_add_objn(128,4);   /* test: U)se in two steps (usecode_use.md) */
+        { int32_t tl_=0; if(TEST_REQ("BOTTOUGH.TXT",&tl_)) g_bot_tough=1; }
+        if(TEST_REQ("USEKIT.REQ",&rl)){ inv_add_objn(63,3); inv_add_objn(97,1); inv_add_objn(155,1); inv_add_objn(154,1); inv_add_objn(103,1); inv_add_objn(128,4);   /* test: U)se in two steps (usecode_use.md) */
             (void)persist_obj_new(297,5,(w.px+1)&(U6_SURFACE_TILES-1),w.py,0); (void)persist_obj_new(234,0,(w.px-1)&(U6_SURFACE_TILES-1),w.py,0); build_blocked(); }
-        if(plat_load_file("MAGIC.REQ",1,&rl) || (!g_menu_ran && !plat_load_file("BOT.REQ",1,&rl))){ g_magic_demo=1; magic_demo_seed(); } }
+        if(TEST_REQ("MAGIC.REQ",&rl) || (!g_menu_ran && !TEST_REQ("BOT.REQ",&rl))){ g_magic_demo=1; magic_demo_seed(); } }
 
     /* headless NEW-GAME verification: if NEWGAME.BIN is staged, print the assembled new-game
      * state to the console (--conout 2) so a capture can assert the created character was
      * overlaid onto the shipped start (Lord British's castle @ 315,367, four-member party).
      * Pair with CHARGEN.REQ='N' (applies a deterministic sample). Absent in normal play. */
-    {   int32_t glen=0; void*gg=plat_load_file("NEWGAME.BIN",1,&glen);
+    {   int32_t glen=0; void*gg=TEST_REQ("NEWGAME.BIN",&glen);
         if(gg){
             Cconws("NEWGAME avatar: "); Cconws(g_avatar_name[0]?g_avatar_name:"Avatar"); Cconws("\r\n");
             dbg_num("NEWGAME pos x   =", w.px);
@@ -16735,12 +16747,12 @@ int main(int argc, char **argv)
     /* headless STATUS-view capture: if STATUS.REQ is staged, open the character status view for
      * the actor id in its byte (default = the Avatar, actor 1) so the first rendered frame shows
      * it. Pair with CHARGEN.REQ='N' to see the created character's portrait/gender/stats. */
-    {   int32_t slen=0; void*sq=plat_load_file("STATUS.REQ",1,&slen);
+    {   int32_t slen=0; void*sq=TEST_REQ("STATUS.REQ",&slen);
         if(sq){ int id=(slen>0)?((uint8_t*)sq)[0]:1; g_status_actor=(id>=1)?id:1; g_show_status=1; } }
 
     /* headless EQUIPMENT check (equipment.md §7): READY.REQ byte = mode. Prints the fold results
      * (--conout 2) and holds the status view so the capture shows the readied list. */
-    {   int32_t rl=0; void*rq=plat_load_file("READY.REQ",1,&rl);
+    {   int32_t rl=0; void*rq=TEST_REQ("READY.REQ",&rl);
         if(rq){ int mode=(rl>0)?((uint8_t*)rq)[0]:'1';
             for(int sl=0;sl<EQ_NSLOTS;sl++) (void)equip_unready(g_aready[1],sl);   /* deterministic start */
             equip_refold(1);
@@ -16766,7 +16778,7 @@ int main(int argc, char **argv)
     /* headless VEHICLE checks (vehicles.md §7): VEHICLE.REQ byte = mode. Self-locating — scans
      * outward from the start for a coast (land beside water; open water for the ship), spawns the
      * vehicle there, exercises it, and prints VEH lines for the harness to assert on. */
-    {   int32_t vl=0; void*vq=plat_load_file("VEHICLE.REQ",1,&vl);
+    {   int32_t vl=0; void*vq=TEST_REQ("VEHICLE.REQ",&vl);
         if(vq){ int mode=(vl>0)?((uint8_t*)vq)[0]:'1';
             int deep=(mode=='3');
             int lx=-1,ly=-1,wx=0,wy=0,face=0;
@@ -16868,7 +16880,7 @@ int main(int argc, char **argv)
             } } }
 
     /* headless SMALL-HANDLER checks (usecode_use.md): SMALLUSE.REQ byte = mode. */
-    {   int32_t sl_=0; const uint8_t*sq=(const uint8_t*)plat_load_file("SMALLUSE.REQ",1,&sl_);
+    {   int32_t sl_=0; const uint8_t*sq=(const uint8_t*)TEST_REQ("SMALLUSE.REQ",&sl_);
         if(sq && sl_>0){ int mode=sq[0];
             #define NEAREST_OBJ2(COND) ({ int best=-1, bd=1<<30; for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue; if(!(COND)) continue; \
                 int cx=(int)o->x-(int)w.px, cy=(int)o->y-(int)w.py; if(cx<0)cx=-cx; if(cy<0)cy=-cy; int dd=cx>cy?cx:cy; if(dd<bd){ bd=dd; best=i; } } best; })
@@ -16941,7 +16953,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless M)ove checks (usecode_use.md): PUSH.REQ byte = mode. */
-    {   int32_t pl_=0; const uint8_t*pq=(const uint8_t*)plat_load_file("PUSH.REQ",1,&pl_);
+    {   int32_t pl_=0; const uint8_t*pq=(const uint8_t*)TEST_REQ("PUSH.REQ",&pl_);
         if(pq && pl_>0){ int mode=pq[0];
             dbg_num("PU weights loaded=", g_weights!=0);
             dbg_num("PU weight chair=", g_weights?g_weights[252]:999); dbg_num("PU weight doorway=", g_weights?g_weights[301]:999);
@@ -17119,7 +17131,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless MUSIC TRIGGER checks (music_areas.md §2): MUSIC.REQ byte = mode ('G' = the group walk). */
-    {   int32_t ml_=0; const uint8_t*mq=(const uint8_t*)plat_load_file("MUSIC.REQ",1,&ml_);
+    {   int32_t ml_=0; const uint8_t*mq=(const uint8_t*)TEST_REQ("MUSIC.REQ",&ml_);
         if(mq && ml_>0 && mq[0]=='G'){
             static const char*const mg_name[5]={"RANDOM (a wandering theme)","COMBAT ENGAGE","DUNGEON","BOAT HORNPIPE","GARGOYLE"};
             #define MU_STATE(T) do{ music_update_area(w.level); Cconws("MU " T ": group="); Cconws(g_music_group>=0&&g_music_group<5?mg_name[g_music_group]:"?"); Cconws("\r\n"); }while(0)
@@ -17137,7 +17149,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless EXPERIENCE / SHRINE checks (combat.md §3, usecode_vm.md §6c): SHRINE.REQ byte = mode. */
-    {   int32_t shl_=0; const uint8_t*shq=(const uint8_t*)plat_load_file("SHRINE.REQ",1,&shl_);
+    {   int32_t shl_=0; const uint8_t*shq=(const uint8_t*)TEST_REQ("SHRINE.REQ",&shl_);
         if(shq && shl_>0){ int mode=shq[0];
             #define SH_FEED(S) do{ const char*k_=(S); g_inlen=0; while(k_[g_inlen]){ g_inbuf[g_inlen]=k_[g_inlen]; g_inlen++; } g_inbuf[g_inlen]=0; submit_input(); Cconws("SH > " S ": "); Cconws(cvm_text(&g_cv)); Cconws("\r\n"); }while(0)
             if(mode=='1'){                                             /* the kill award: creature-table based, evil/chaotic only */
@@ -17177,7 +17189,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless PERSISTENCE checks (usecode_use.md "Created and destroyed objects persist", save_load.md §5): PERSIST.REQ byte = mode. */
-    {   int32_t pl_=0; const uint8_t*pq=(const uint8_t*)plat_load_file("PERSIST.REQ",1,&pl_);
+    {   int32_t pl_=0; const uint8_t*pq=(const uint8_t*)TEST_REQ("PERSIST.REQ",&pl_);
         if(pq && pl_>0){ int mode=pq[0];
             #define PS_FR(I) ((int)g_wobj[I].tile-basetile(g_wobj[I].obj_n))
             #define PS_MSG(T) do{ Cconws("PS " T ": "); Cconws(g_msg); Cconws("\r\n"); }while(0)
@@ -17285,7 +17297,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless CLOCK / SUNDIAL checks (usecode_use.md "Clock and sundial"): SUNDIAL.REQ byte = mode. */
-    {   int32_t sdl_=0; const uint8_t*sdq=(const uint8_t*)plat_load_file("SUNDIAL.REQ",1,&sdl_);
+    {   int32_t sdl_=0; const uint8_t*sdq=(const uint8_t*)TEST_REQ("SUNDIAL.REQ",&sdl_);
         if(sdq && sdl_>0){ int mode=sdq[0];
             #define SD_HOUR(H,M) do{ g_start_min=(H)*60+(M); w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); }while(0)
             #define SD_LOOK(TAG,DX,DY) do{ (void)do_verb(&w,'L',(DX),(DY)); Cconws("SUNDIAL look " TAG ": "); for(char*c_=g_msg;*c_;c_++) if(*c_=='\n') *c_='|'; Cconws(g_msg); Cconws("\r\n"); }while(0)
@@ -17315,7 +17327,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless READY-EFFECT + small-gap checks (equipment.md §8, usecode_use.md): READYFX.REQ byte = mode. */
-    {   int32_t rl_=0; const uint8_t*rq=(const uint8_t*)plat_load_file("READYFX.REQ",1,&rl_);
+    {   int32_t rl_=0; const uint8_t*rq=(const uint8_t*)TEST_REQ("READYFX.REQ",&rl_);
         if(rq && rl_>0){ int mode=rq[0]; int av=g_nparty?g_party[0].actor:1;
             #define FX_READY(ON) ({ inv_add_objn((ON),1); int r_=-1; for(int k=0;k<g_ow.ninv;k++) if(g_ow.inv[k].obj_n==(ON)) r_=k; g_inv_sel=r_; equip_to_member(0); has_readied(av,(ON)); })
             #define FX_SLOT(ON)  ({ int s_=-1; for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[av][sl]==(ON)) s_=sl; s_; })
@@ -17422,13 +17434,13 @@ int main(int argc, char **argv)
         }
     }
     /* headless PARTY-DEATH checks (combat.md §3d): DEATH.REQ byte = mode ('1' = a companion, then the Avatar, in a dungeon) */
-    {   int32_t xl_=0; if(plat_load_file("DISSOLVE.REQ",1,&xl_)){ compose_map(&w); present_map(); uint32_t t0=plat_ticks_200hz(); view_dissolve(&w,1); uint32_t t1=plat_ticks_200hz(); view_dissolve(&w,0); uint32_t t2=plat_ticks_200hz(); dbg_num("DV to black ticks=",(int)(t1-t0)); dbg_num("DV back ticks=",(int)(t2-t1)); dbg_num("DV planar=",g_native_planar); } }
-    {   int32_t cl_=0; const uint8_t*cq=(const uint8_t*)plat_load_file("CASTFX.REQ",1,&cl_);   /* the cast effect (magic_skills.md §12) */
+    {   int32_t xl_=0; if(TEST_REQ("DISSOLVE.REQ",&xl_)){ compose_map(&w); present_map(); uint32_t t0=plat_ticks_200hz(); view_dissolve(&w,1); uint32_t t1=plat_ticks_200hz(); view_dissolve(&w,0); uint32_t t2=plat_ticks_200hz(); dbg_num("DV to black ticks=",(int)(t1-t0)); dbg_num("DV back ticks=",(int)(t2-t1)); dbg_num("DV planar=",g_native_planar); } }
+    {   int32_t cl_=0; const uint8_t*cq=(const uint8_t*)TEST_REQ("CASTFX.REQ",&cl_);   /* the cast effect (magic_skills.md §12) */
         if(cq && cl_>0 && cq[0]=='1'){ compose_map(&w); present_map(); uint32_t t0=plat_ticks_200hz(); cast_effect(&w,5); dbg_num("CF circle 5 ticks=",(int)(plat_ticks_200hz()-t0));
             t0=plat_ticks_200hz(); cast_effect(&w,1); dbg_num("CF circle 1 ticks=",(int)(plat_ticks_200hz()-t0)); }
         if(cq && cl_>0 && cq[0]=='2'){ compose_map(&w); for(int y=0;y<160;y++){ uint8_t*r=ROW(MAPY+8+y)+MAPX+8; for(int x=0;x<160;x++) r[x]^=0x0d; }
             draw_border_tiles(); present_map(); Cconws("CF holding the flash\r\n"); for(;;) vsync_pump(); } }
-    {   int32_t dl_=0; const uint8_t*dq=(const uint8_t*)plat_load_file("DEATH.REQ",1,&dl_);
+    {   int32_t dl_=0; const uint8_t*dq=(const uint8_t*)TEST_REQ("DEATH.REQ",&dl_);
         if(dq && dl_>0 && dq[0]=='1'){
             #define DE_READY() do { int n_=0; for(int sl_=0;sl_<EQ_NSLOTS;sl_++) if(g_aready[1][sl_]) n_++; dbg_num("DE avatar readied=", n_); } while(0)
             #define DE_BODIES(q_) ({ int n_=0; for(int j_=0;j_<g_ow.nobjs;j_++) if(g_wobj[j_].alive && g_wobj[j_].quality==(q_) && g_wobj[j_].obj_n>=338 && g_wobj[j_].obj_n<=341) n_++; n_; })
@@ -17446,7 +17458,7 @@ int main(int argc, char **argv)
             dbg_num("DE lord british x=", g_actx[5]); dbg_num("DE lord british y=", g_acty[5]);
         } }
     /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
-    {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)plat_load_file("REST.REQ",1,&rl2_);
+    {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)TEST_REQ("REST.REQ",&rl2_);
         if(rr && rl2_>0){ int mode=rr[0], M=U6_SURFACE_TILES-1; rng_seed(&g_crng,0x7e57u);
             #define RS_MSG(L) do { Cconws(L); Cconws(g_msg); Cconws("\r\n"); } while(0)
             #define RS_FOES() do { int px_=(int)w.px, py_=(int)w.py, n_=0; for(int i_=2;i_<U6_MAX_ACTORS;i_++){ int ax_,ay_; if(is_party_member(i_)||g_ainvis[i_]||!actor_pos(i_,&ax_,&ay_)) continue; \
@@ -17547,11 +17559,11 @@ int main(int argc, char **argv)
         }
     }
     /* headless ENDING capture (docs/design/ending.md §6): ENDING.REQ byte = the beat to hold ('1'..'9', 'a'..'i' = 10..18) */
-    {   int32_t el_=0; const uint8_t*eq=(const uint8_t*)plat_load_file("ENDING.REQ",1,&el_);
+    {   int32_t el_=0; const uint8_t*eq=(const uint8_t*)TEST_REQ("ENDING.REQ",&el_);
         if(eq && el_>0){ int c=eq[0]; g_end_hold=(c>='1'&&c<='9')?c-'0':(c>='a'&&c<='z')?10+(c-'a'):1;
             dbg_num("END hold beat=", g_end_hold); g_game_over=1; } }
     /* headless CONDITION / AREA / MIND spell checks (magic_skills.md §5b): MAGICFX.REQ byte = mode (seeded RNG) */
-    {   int32_t ml_=0; const uint8_t*mq=(const uint8_t*)plat_load_file("MAGICFX.REQ",1,&ml_);
+    {   int32_t ml_=0; const uint8_t*mq=(const uint8_t*)TEST_REQ("MAGICFX.REQ",&ml_);
         if(mq && ml_>0){ int mode=mq[0]; rng_seed(&g_crng,0x5151u); g_aint[1]=15;
             #define MX_CAST(NAME,DX,DY) do { g_free_cast=1; (void)cast_spell(&w,1,magic_find(NAME),(DX),(DY)); g_free_cast=0; } while(0)
             #define MX_HATCH(ON,DX,DY) ({ int id_=hatch_creature(&w,(int)((w.px+(DX))&(U6_SURFACE_TILES-1)),(int)((w.py+(DY))&(U6_SURFACE_TILES-1)),(ON),0); \
@@ -17589,7 +17601,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless checks of the §5f spells (magic_skills.md §9): SPELLS.REQ byte = mode (seeded RNG) */
-    {   int32_t sl_=0; const uint8_t*sq=(const uint8_t*)plat_load_file("SPELLS.REQ",1,&sl_);
+    {   int32_t sl_=0; const uint8_t*sq=(const uint8_t*)TEST_REQ("SPELLS.REQ",&sl_);
         if(sq && sl_>0){ int mode=sq[0]; rng_seed(&g_crng,0x5151u); g_aint[1]=30; g_astr[1]=30; g_msg[0]=0;
             #define SP_CAST(NAME,DX,DY) do { g_free_cast=1; (void)cast_spell(&w,1,magic_find(NAME),(DX),(DY)); g_free_cast=0; } while(0)
             #define SP_HATCH(ON,DX,DY) ({ int id_=hatch_creature(&w,(int)((w.px+(DX))&(U6_SURFACE_TILES-1)),(int)((w.py+(DY))&(U6_SURFACE_TILES-1)),(ON),0); \
@@ -17715,7 +17727,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless FOE-SPELL checks (combat.md §7b): FOESPELL.REQ byte = mode (seeded RNG) */
-    {   int32_t fl_=0; const uint8_t*fq=(const uint8_t*)plat_load_file("FOESPELL.REQ",1,&fl_);
+    {   int32_t fl_=0; const uint8_t*fq=(const uint8_t*)TEST_REQ("FOESPELL.REQ",&fl_);
         if(fq && fl_>0){ int mode=fq[0]; rng_seed(&g_crng,0x7a7au);
             #define FS_HATCH(ON,DX,DY) ({ int id_=hatch_creature(&w,(int)((w.px+(DX))&(U6_SURFACE_TILES-1)),(int)((w.py+(DY))&(U6_SURFACE_TILES-1)),(ON),ALIGN_EVIL); \
                 if(id_>=0){ g_actx[id_]=(uint16_t)((w.px+(DX))&(U6_SURFACE_TILES-1)); g_acty[id_]=(uint16_t)((w.py+(DY))&(U6_SURFACE_TILES-1)); g_aint[id_]=30; g_ahp[id_]=200; g_amaxhp[id_]=200; g_alert[id_]=1; } id_; })
@@ -17756,7 +17768,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless checks of the turn order (combat.md §8b): SCHED.REQ */
-    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("SCHED.REQ",1,&gl);
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)TEST_REQ("SCHED.REQ",&gl);
         if(gq && gl>0){
             #define SC_NUM(T,V) dbg_num("SC " T "=",(int)(V))
             #define SC_MSG() do{ Cconws("SC msg: "); Cconws(g_msg); Cconws("\r\n"); g_msg[0]=0; }while(0)
@@ -17817,7 +17829,7 @@ int main(int argc, char **argv)
             { uint32_t c0=w.clock; for(int i=2;i<U6_MAX_ACTORS;i++){ g_asleep[i]=0; g_paralyze[i]=0; } uint32_t t0=plat_ticks_200hz(); g_pts[1]=0; for(int k=0;k<30;k++){ g_pts[1]=0; sched_run(&w); g_msg[0]=0; } SC_NUM("ms per minute, castle",(plat_ticks_200hz()-t0)*5/30); SC_NUM("minutes",w.clock-c0); }
             Cconws("SC done\r\n"); Pterm0(); } }
     /* headless L)ook checks (usecode_use.md): LOOK.REQ */
-    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("LOOK.REQ",1,&gl);
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)TEST_REQ("LOOK.REQ",&gl);
         if(gq && gl>0){ int M=U6_SURFACE_TILES-1, X=-1,Y=-1;
             for(int y=300;y<500 && X<0;y+=3) for(int x=300;x<600 && X<0;x+=3){ int ok=1;
                 for(int j=-6;j<=6&&ok;j++) for(int i=-6;i<=6&&ok;i++){ int tx=x+i, ty=y+j; if(!world_is_passable(&w,tx,ty)||tile_is_water(&w,tx,ty)||objworld_at(&g_ow,tx,ty)>=0||npc_at(&w,tx,ty)>=0) ok=0; }
@@ -17977,7 +17989,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless ATTACK checks (combat.md §6c): ATTACK.REQ byte picks one */
-    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("ATTACK.REQ",1,&gl);
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)TEST_REQ("ATTACK.REQ",&gl);
         if(gq && gl>0){ int mode=gq[0], M=U6_SURFACE_TILES-1;
             /* a clear spot: 13 by 13 tiles with no wall, water, object or actor; the companions stand well off */
             int X=-1,Y=-1;
@@ -18055,7 +18067,7 @@ int main(int argc, char **argv)
                 int v=0; for(int t=0;t<600 && has_readied(1,79);t++){ g_msg[0]=0; (void)do_attack(&w,0,-1); v++; if(t%50==0) dbg_num("AT shots=", v); } AT_MSG("wand"); dbg_num("AT wand gone after shots=", v); dbg_num("AT unarmed=", g_avatar_weapon==0); }
             (void)M; } }
     /* headless THEFT checks (usecode_use.md, Theft): THEFT.REQ byte: '1' unseen, '2' seen then Yes, '3' seen then No */
-    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("THEFT.REQ",1,&gl);
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)TEST_REQ("THEFT.REQ",&gl);
         if(gq && gl>0){ int mode=gq[0], nown=0, ntot=0, it=-1, guard=-1, by=-1;
             for(int j=0;j<g_ow.nobjs;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive) continue; ntot++; if(!o->owned) continue; nown++;
                 if(it<0 && objworld_can_get(&g_ow,o->obj_n) && o->obj_n!=88) { int near=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int x,y; if(g_atile[i]!=0xffff && (int)g_actz[i]==w.level && actor_pos(i,&x,&y) && (x>(int)o->x?x-(int)o->x:(int)o->x-x)<12 && (y>(int)o->y?y-(int)o->y:(int)o->y-y)<12) near=1; } if(!near) it=j; } }
@@ -18085,7 +18097,7 @@ int main(int argc, char **argv)
                         dbg_num("TH door frame=", ({ int d_=obj_idx_at(231,184,300); d_>=0?(int)g_wobj[d_].tile-basetile(300):-1; }));
                         dbg_num("TH guard hostile=", actor_hostile(guard)); dbg_num("TH karma lost=", k0-g_cg.karma); } } } } }
     /* headless MOONGATE checks (moongates.md §6): MOONGATE.REQ byte = mode. */
-    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)plat_load_file("MOONGATE.REQ",1,&gl);
+    {   int32_t gl=0; const uint8_t*gq=(const uint8_t*)TEST_REQ("MOONGATE.REQ",&gl);
         if(gq && gl>0){ int mode=gq[0];
             if(mode=='1' || mode=='6'){
                 inv_add_objn(87,1); g_cg.talk_flags[5]|=0x20;
@@ -18156,7 +18168,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless DUNGEON-OBJECT checks (usecode_use.md): DUNGUSE.REQ byte = mode. */
-    {   int32_t ul=0; const uint8_t*uq=(const uint8_t*)plat_load_file("DUNGUSE.REQ",1,&ul);
+    {   int32_t ul=0; const uint8_t*uq=(const uint8_t*)TEST_REQ("DUNGUSE.REQ",&ul);
         if(uq && ul>0){ int mode=uq[0];
             /* nearest world object of one of the given types (frame filter f0..f1), level 0 */
             #define NEAREST_OBJ(COND) ({ int best=-1, bd=1<<30; for(int i=0;i<g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i]; if(!o->alive) continue; int fr=(int)o->tile-basetile(o->obj_n); (void)fr; if(!(COND)) continue; \
@@ -18231,7 +18243,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless WORKTYPE checks (usecode_vm.md §6b): WORKTYPE.REQ byte = mode. */
-    {   int32_t kl=0; const uint8_t*kq=(const uint8_t*)plat_load_file("WORKTYPE.REQ",1,&kl);
+    {   int32_t kl=0; const uint8_t*kq=(const uint8_t*)TEST_REQ("WORKTYPE.REQ",&kl);
         if(kq && kl>0){ int mode=kq[0];
             int np=-1, bd=1<<30;                                   /* the nearest scheduled, peaceful, non-party NPC here */
             for(int i=2;i<U6_MAX_ACTORS;i++){ if(g_atile[i]==0xffff || g_actz[i]!=0 || g_actors[i].nsched<=0) continue;
@@ -18281,7 +18293,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless CANNON checks (cannons.md §6): CANNON.REQ byte = mode. */
-    {   int32_t cl=0; const uint8_t*cq=(const uint8_t*)plat_load_file("CANNON.REQ",1,&cl);
+    {   int32_t cl=0; const uint8_t*cq=(const uint8_t*)TEST_REQ("CANNON.REQ",&cl);
         if(cq && cl>0){ int mode=cq[0];
             int wx=-1,wy=-1;                                        /* a 7x7 block of open water (as WIND '1') */
             for(int r=1;r<300 && wx<0;r++) for(int e=-r;e<=r && wx<0;e++) for(int side=0;side<4 && wx<0;side++){
@@ -18432,7 +18444,7 @@ int main(int argc, char **argv)
         }
     }
     /* headless WIND checks (wind.md §7): WIND.REQ byte = mode. */
-    {   int32_t wl=0; const uint8_t*wq=(const uint8_t*)plat_load_file("WIND.REQ",1,&wl);
+    {   int32_t wl=0; const uint8_t*wq=(const uint8_t*)TEST_REQ("WIND.REQ",&wl);
         if(wq && wl>0){ int mode=wq[0];
             dbg_num("WIND loaded=", g_wind);
             if(mode=='1'){
@@ -18578,7 +18590,7 @@ int main(int argc, char **argv)
     eggs_update(&w,2);                                             /* the eggs around the start (like the original's load; 2 = a load, SE hatches nothing) */
     if(!g_savetmpl && plat_fsize_path("SAVE.000")>0)                 /* the template did not fit: no eggs, no saving (memory_streaming.md) */
         msgcat(0,"Not enough memory to save: free some RAM (no resident programs) and restart.");
-    {   int32_t ll=0; uint8_t*lq=(uint8_t*)plat_load_file("LOAD.REQ",1,&ll);
+    {   int32_t ll=0; uint8_t*lq=(uint8_t*)TEST_REQ("LOAD.REQ",&ll);
         if(lq && ll>0 && (lq[0]=='2'||lq[0]=='3')){
             /* PERSISTENCE round-trip (save_load.md §5): a ready change, a dropped item and a sailed
              * boat must survive save -> load, and a SECOND save+load from the loaded state must not
@@ -18661,7 +18673,7 @@ int main(int argc, char **argv)
               for(int e=0;e<g_neggs;e++) if(g_eggs[e].active) act++;
               dbg_num("LOAD hatched after load=", n); dbg_num("LOAD active eggs=", act); } } }
 
-    if(g_savestate && plat_fsize_path("SAVEDEMO.REQ")>0){
+    if(g_savestate && TEST_FSIZE("SAVEDEMO.REQ")>0){
         /* Headless SAVE-WRITER demo (SAVEDEMO.REQ sentinel; `make save-engine`): walk a few
          * tiles, toggle a door, take an item + a spilled child, then write SAVED.000. Every
          * shipped pack is built from a save state now, so this is hook-gated, never automatic. */
@@ -18693,7 +18705,7 @@ int main(int argc, char **argv)
     /* headless INVENTORY<->VM sync test: seed the engine inventory + gold, push it to the VM
      * (sync_inv_in), simulate a conversation give/take + gold change on the VM state, pull it back
      * (sync_inv_out), and print the reconciled engine inventory + gold to --conout 2. */
-    {   int32_t ivl=0; void*ivb=plat_load_file("INVSYNC.BIN",1,&ivl);
+    {   int32_t ivl=0; void*ivb=TEST_REQ("INVSYNC.BIN",&ivl);
         if(ivb){
             /* HEAL/CURE/RESURRECT wiring (usecode_vm.md §6): a poisoned, wounded member and a dead one */
             { int a2=g_party[1].actor, a3=g_party[2].actor; uint8_t hp2=g_ahp[a2]; uint16_t t3=g_atile[a3];
@@ -18735,7 +18747,7 @@ int main(int argc, char **argv)
     /* headless READ demo (docs/formats/strings.md): if READ.BIN is staged, read a readable object.
      * byte>0 => show BOOK.DAT entry (byte-1) directly; byte 0 => find the first readable WORLD
      * object and read it (quality->entry). book_view holds the first page for the AVI capture. */
-    {   int32_t rlen=0; uint8_t *rb=(uint8_t*)plat_load_file("READ.BIN",1,&rlen);
+    {   int32_t rlen=0; uint8_t *rb=(uint8_t*)TEST_REQ("READ.BIN",&rlen);
         if(rb){
             int sel=(rlen>0)?rb[0]:0;
             if(sel>0){ int e=sel-1; dbg_num("READ entry=", e);
@@ -18755,7 +18767,7 @@ int main(int argc, char **argv)
      * staged (1 byte = turn count), advance that many game-turns — the clock ticks,
      * the hour rolls, and step_npcs() walks every NPC toward its schedule spot — so
      * the capture below shows NPCs that have moved/faced. Absent in normal play. */
-    {   int32_t nlen=0; uint8_t *nw=(uint8_t*)plat_load_file("NPCWALK.BIN",1,&nlen);
+    {   int32_t nlen=0; uint8_t *nw=(uint8_t*)TEST_REQ("NPCWALK.BIN",&nlen);
         if(nw && nlen>0){ int turns=nw[0];
             for(int s=0;s<turns;s++){ w.clock+=10; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w); step_npcs(&w); } }
     }
@@ -18763,7 +18775,7 @@ int main(int argc, char **argv)
     /* headless validation of Stage 3c WANDER: WANDER.BIN[0]=NPC (default 62 Jaana), [1]=turns.
      * Force noon (worktype 0x90 = wander is active), seat the NPC on its noon anchor, then step
      * — printing its (x,y) each turn. Expect it to ROAM but stay within WANDER_R of the anchor. */
-    {   int32_t wlen=0; uint8_t *wb=(uint8_t*)plat_load_file("WANDER.BIN",1,&wlen);
+    {   int32_t wlen=0; uint8_t *wb=(uint8_t*)TEST_REQ("WANDER.BIN",&wlen);
         if(wb){
             int npc=(wlen>0)?wb[0]:62, turns=(wlen>1)?wb[1]:12;
             g_start_min=12*60; w.clock=0; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
@@ -18782,7 +18794,7 @@ int main(int argc, char **argv)
     /* headless validation of Stage-USE effects (lockpick + food). LOCKPICK: force a door LOCKED,
      * put a lockpick (obj 63) in inventory, USE it → frame 9→5 (picked, closed-unlocked). FOOD:
      * make a world object a loaf of bread (obj 128, qty 2), USE twice → qty 2→1 then alive→0. */
-    {   int32_t ul=0; void*ub=plat_load_file("USEFX.BIN",1,&ul);
+    {   int32_t ul=0; void*ub=TEST_REQ("USEFX.BIN",&ul);
         if(ub){
             for(int i=0;i<g_ow.nobjs;i++){ int o=g_wobj[i].obj_n;
                 if(!g_wobj[i].alive || o<297 || o>300) continue;
@@ -18804,7 +18816,7 @@ int main(int argc, char **argv)
 
     /* headless validation of D)ROP (generic, both games): seed an inventory item, select it, drop it one
      * tile east via do_verb('D') -> it leaves the pack and appears on that map tile. Absent in play. */
-    {   int32_t dl=0; void*db=plat_load_file("DROPFX.BIN",1,&dl);
+    {   int32_t dl=0; void*db=TEST_REQ("DROPFX.BIN",&dl);
         if(db){
             inv_add_objn(129,1);                                     /* seed a food item in the pack */
             g_inv_sel=g_ow.ninv-1; int on=g_ow.inv[g_inv_sel].obj_n; int ninv0=g_ow.ninv;
@@ -18824,7 +18836,7 @@ int main(int argc, char **argv)
     /* headless check of SE conversations (converse.md §6c; SETALK.BIN, never staged in play): the
      * Kysstaa (6) through name / join / bye, then again: wait (LEAVE, and flag 15 = 8+7 in SE's second
      * flag byte), on the VM in SE's dialect. */
-    {   int32_t sl=0; void*sb=plat_load_file("SETALK.BIN",1,&sl);
+    {   int32_t sl=0; void*sb=TEST_REQ("SETALK.BIN",&sl);
         if(sb && g_gd==&gamedef_se){
             dbg_num("SETALK scripts=", g_setsc_off!=0);
             g_actx[6]=(uint16_t)((w.px+1)&(U6_SURFACE_TILES-1)); g_acty[6]=(uint16_t)w.py; g_actz[6]=(uint8_t)w.level;   /* beside the Avatar, as a talk is */
@@ -18847,9 +18859,9 @@ int main(int argc, char **argv)
 
     /* headless view of an SE conversation (SETALKV.BIN, never staged in play): talk to the actor its first byte
      * names (default Triolo, 9) and leave it on screen, for a screenshot (rules/se_screen.md §5) */
-    {   int32_t sl=0; uint8_t*sb=(uint8_t*)plat_load_file("SETALKV.BIN",1,&sl);
+    {   int32_t sl=0; uint8_t*sb=(uint8_t*)TEST_REQ("SETALKV.BIN",&sl);
         if(sb && g_gd==&gamedef_se) se_talk(sl>0&&sb[0]>1&&sb[0]!='x'?sb[0]:9); }
-    {   int32_t sl=0; uint8_t*sb=(uint8_t*)plat_load_file("SEINVV.BIN",1,&sl);           /* and an inventory (default Triolo's) */
+    {   int32_t sl=0; uint8_t*sb=(uint8_t*)TEST_REQ("SEINVV.BIN",&sl);           /* and an inventory (default Triolo's) */
         if(sb && g_gd==&gamedef_se){ g_status_actor=sl>0&&sb[0]>0&&sb[0]!='x'?sb[0]:9; g_show_inv=1; } }
 
     /* headless validation of SAVAGE-EMPIRE USE (only meaningful when booted on SE.PAK; g_gd==savage).
@@ -18857,7 +18869,7 @@ int main(int argc, char **argv)
      * food up (proves se_is_food + the g_gd dispatch to se_use_object). CONTAINER: force an obj to an
      * SE basket (183) and park a dead child on it, USE -> child spills alive (proves se_is_container +
      * spill via the SE path). Absent in normal play (SEUSE.BIN never staged). */
-    {   int32_t sl=0; void*sb=plat_load_file("SEUSE.BIN",1,&sl);
+    {   int32_t sl=0; void*sb=TEST_REQ("SEUSE.BIN",&sl);
         if(sb){
             dbg_num("SE USE game==savage=", g_gd==&gamedef_se);
             for(int i=0;i<g_ow.nobjs;i++){
@@ -19916,7 +19928,7 @@ int main(int argc, char **argv)
     /* headless LOW-COLOUR (U6WW) load check: prove the pack's low-colour section parsed to the
      * exact byte (g_have_lowcolor=1 => the whole front-end chain was consumed correctly), and
      * echo the 16-colour ST palette as shifter registers (r<<8|g<<4|b) + a couple of LUT samples. */
-    {   int32_t lcl=0; void*lcb=plat_load_file("LOWCOL.BIN",1,&lcl);
+    {   int32_t lcl=0; void*lcb=TEST_REQ("LOWCOL.BIN",&lcl);
         if(lcb){ dbg_num("LOWCOL have=", g_have_lowcolor);
             for(int i=0;i<16;i++) dbg_num("LOWCOL pal reg=",
                 (g_lc_pal[i*3]<<8)|(g_lc_pal[i*3+1]<<4)|g_lc_pal[i*3+2]);
@@ -19928,7 +19940,7 @@ int main(int argc, char **argv)
      * the command bar) uses the SAME LUT as band 0 but with R and B swapped in every palette entry.
      * If the Timer-B palette raster fires, the bottom band visibly shows swapped colours — an
      * unmistakable proof of the mechanism, independent of the real per-band palette data. */
-    {   int32_t rl=0; void*rb=plat_load_file("RASTER.BIN",1,&rl);
+    {   int32_t rl=0; void*rb=TEST_REQ("RASTER.BIN",&rl);
         if(rb && g_have_lowcolor){
             static uint8_t y0[2]={0,176};
             static uint8_t pal[2*48], lut[2*256];
@@ -19944,7 +19956,7 @@ int main(int argc, char **argv)
 
     /* VERTICAL-SLICE demo (M6 acceptance): compose the core gameplay beats in ONE live session —
      * MOVE, GET, CAST, USE — proving they interoperate (talk/combat/save are validated separately). */
-    {   int32_t vl=0; void*vb=plat_load_file("VSLICE.BIN",1,&vl);
+    {   int32_t vl=0; void*vb=TEST_REQ("VSLICE.BIN",&vl);
         if(vb){ int pass=0;
             int x0=(int)w.px,y0=(int)w.py, moved=0; int dr[4][2]={{0,1},{1,0},{0,-1},{-1,0}};   /* 1: MOVE */
             for(int k=0;k<4&&!moved;k++) for(int s=0;s<3;s++){ if(world_try_move(&w,dr[k][0],dr[k][1])){ step_npcs(&w); moved=1; } else break; }
@@ -19966,7 +19978,7 @@ int main(int argc, char **argv)
      * COMBAT.BIN byte 1 = CB1 (avatar kills an adjacent slug); byte 2 = CB2 (a hostile slug
      * approaches + attacks the party); byte 3 = CB3 (avatar shoots a distant slug with a bow).
      * Absent in normal play. */
-    {   int32_t clen=0; uint8_t *cb=(uint8_t*)plat_load_file("COMBAT.BIN",1,&clen);
+    {   int32_t clen=0; uint8_t *cb=(uint8_t*)TEST_REQ("COMBAT.BIN",&clen);
         if(cb && clen>0){
             int mode=cb[0], slot=250, bt=basetile(364);
             int sx=(mode==3)?3 : (mode>=2)?2 : 1;        /* CB3 spawns 3 east (ranged), CB2 2, CB1 1 */
@@ -20418,7 +20430,7 @@ int main(int argc, char **argv)
     /* headless MAGIC-overview demo (§5): MAGIC.BIN[0]=1 Peer, 2 Wizard Eye (both open the modal
      * overview, so the captured frame IS the overview), 3 Invisibility+Reveal (an NPC vanishes then
      * reappears). Int is boosted so every circle is castable. Absent in normal play. */
-    {   int32_t mgl=0; void*mgb=plat_load_file("MAGIC.BIN",1,&mgl);
+    {   int32_t mgl=0; void*mgb=TEST_REQ("MAGIC.BIN",&mgl);
         if(mgb){ int t=(mgl>0)?((uint8_t*)mgb)[0]:1; g_aint[1]=32;
             if(t==1) cast_spell(&w,1,magic_find("Peer"),0,0);
             else if(t==2) cast_spell(&w,1,magic_find("Wizard Eye"),0,0);
@@ -20439,7 +20451,7 @@ int main(int argc, char **argv)
     /* headless CONVERSATION-palette capture (M7): open a conversation before the initial draw so the
      * first frame shows a portrait under the ST's U6WY conversation palette. CONVPAL.BIN byte = NPC
      * id (0 => the nearest adjacent NPC). No-op without the sentinel. */
-    {   int32_t cpl=0; uint8_t *cpb=(uint8_t*)plat_load_file("CONVPAL.BIN",1,&cpl);
+    {   int32_t cpl=0; uint8_t *cpb=(uint8_t*)TEST_REQ("CONVPAL.BIN",&cpl);
         if(cpb){ int id=cpb[0];
             if(cpl>=2 && (cpb[1]&1)) g_nconvpal=0;   /* baseline: disable the swap (portrait via terrain-16) */
             if(cpl>=2 && (cpb[1]&2)) g_pd_off=1;     /* baseline: no portrait dithering (nearest colour) */
@@ -20475,7 +20487,7 @@ int main(int argc, char **argv)
      * (default 128,128 = level centre) once at boot, so a shot can capture underground geography.
      * Absent in normal play. See docs/rules/map_levels.md. */
     { static int dg_done=0;
-      if(!dg_done){ int32_t rl=0; char*rq=(char*)plat_load_file("DUNGEON.REQ",1,&rl);
+      if(!dg_done){ int32_t rl=0; char*rq=(char*)TEST_REQ("DUNGEON.REQ",&rl);
           if(rq && rl>0){ int lvl=0,x=128,y=128,i=0;
               while(i<rl && rq[i]>='0'&&rq[i]<='9'){ lvl=lvl*10+(rq[i]-'0'); i++; }
               while(i<rl && rq[i]==' ') i++;
@@ -20524,7 +20536,7 @@ int main(int argc, char **argv)
           dg_done=1; } }
     /* EGG.REQ (eggs.md §6): '1' hatch a surface egg 12 tiles away by a block change; '2' stand ON an
      * egg (must not hatch); '3' enter level 1 and count what hatched near the cave. */
-    {   int32_t el=0; const uint8_t*eq=(const uint8_t*)plat_load_file("EGG.REQ",1,&el);
+    {   int32_t el=0; const uint8_t*eq=(const uint8_t*)TEST_REQ("EGG.REQ",&el);
         if(eq && el>0){
             int mode=eq[0];
             temp_actors_clear(); for(int e=0;e<g_neggs;e++) g_eggs[e].active=0;   /* a clean slate after the boot hatch */
@@ -20623,7 +20635,7 @@ int main(int argc, char **argv)
      * that NPC's conversation once, so a headless shot can verify the FACES/TALK
      * mapping. Harmless in normal play (the file is never staged). */
     { static int tt_done=0;
-      if(!tt_done){ int32_t rl=0; char *rq=(char*)plat_load_file("TALKTEST.REQ",1,&rl);
+      if(!tt_done){ int32_t rl=0; char *rq=(char*)TEST_REQ("TALKTEST.REQ",&rl);
           if(rq){ int id=0,k=0; while(k<rl && rq[k]>='0'&&rq[k]<='9'){ id=id*10+(rq[k]-'0'); k++; }
               if(id<=0) id=find_adjacent_npc(&w);
               if(id>0){ g_talking=0; talk(id); } }
@@ -20639,7 +20651,7 @@ int main(int argc, char **argv)
     /* INTRO bench (gated on INTROBENCH.REQ): run the living-room scene (0) through the REAL
      * run_intro and report its per-frame cost, split HOLD vs PAN x compose/c2p+double/output.
      * BENCH.BIN = 8 big-endian u32: HOLD{compose,c2p,out,frames}, PAN{compose,c2p,out,frames}. */
-    {   int32_t ibl=0; void *ib=plat_load_file("IBENCH.REQ",1,&ibl);   /* 8.3 name (GEMDOS clips >8.3) */
+    {   int32_t ibl=0; void *ib=TEST_REQ("IBENCH.REQ",&ibl);   /* 8.3 name (GEMDOS clips >8.3) */
         if(ib){
             fe_group_load(FEG_COMMON,0);                          /* the front-end may have been streamed + freed */
             g_intro_bench1=1;                                     /* scene 0 only = living room (has HOLD + PAN) */
@@ -20671,7 +20683,7 @@ int main(int argc, char **argv)
         /* STARTMIN.REQ (decimal minute-of-day 0..1439) forces the game clock to exercise NIGHT lighting —
          * the scattered light-dirty cells that the incremental static-object gate must handle (uniform day
          * light only dirties the lead band). g_pd_valid=0 below forces a fresh first frame. */
-        { int32_t sml=0; char *smq=(char*)plat_load_file("STARTMIN.REQ",1,&sml);
+        { int32_t sml=0; char *smq=(char*)TEST_REQ("STARTMIN.REQ",&sml);
           if(smq && sml>0){ int m=0,i=0; while(i<sml && smq[i]>='0'&&smq[i]<='9'){ m=m*10+(smq[i]-'0'); i++; }
               if(m>=0 && m<1440){ g_start_min=m; g_hour=clock_hour(&w); g_minutes=clock_minutes(&w);
                   dbg_num("START MIN=", g_start_min); } } }
@@ -20902,7 +20914,7 @@ int main(int argc, char **argv)
     /* M10 test hook: SONG.REQ pins a specific song (base name, e.g. "BRIT") via the runtime-selected
      * backend and DISABLES per-area auto-switching — for `make music-tt/dma/st`. Absent in normal
      * play, where music_update_area() drives the music from the game context instead. */
-    {   int32_t rl=0; void *req=plat_load_file("SONG.REQ",1,&rl);
+    {   int32_t rl=0; void *req=TEST_REQ("SONG.REQ",&rl);
         if(req && rl>0){ char nm[16]; int i=0; const char*s=(const char*)req;
             /* "A,B,C" = a PLAYLIST: A now, then B / C / A ... every SONGLIST_SECS (resident-cache test:
              * a song heard again should come from RAM — see "music from_cache" in the console) */
@@ -20920,7 +20932,7 @@ int main(int argc, char **argv)
      * many tiles through compose_map + present_map — the native-planar present when PREDIM+ST — so the
      * capture shows a WALKED frame produced by rdr_ppresent (not the boot full-present). Cursor forced
      * off so present_map takes the planar branch. Absent in normal play. */
-    { int32_t al=0; uint8_t*aw=(uint8_t*)plat_load_file("AUTOWALK.REQ",1,&al);
+    { int32_t al=0; uint8_t*aw=(uint8_t*)TEST_REQ("AUTOWALK.REQ",&al);
       if(aw && al>0){ int n=aw[0]; if(n<1)n=1; if(n>32)n=32; g_mx=100; g_my=50; /* cursor left ON, over the map */
           present_frame();                              /* establish border + panel + map + cursor in g_screen */
           for(int s=0;s<n;s++){ if(world_try_move(&w,1,0)) step_npcs(&w);
@@ -20930,7 +20942,7 @@ int main(int argc, char **argv)
           for(;;) vsync_pump(); } }   /* HOLD the walked frame (no anim advance) so planar vs chunky A/B is deterministic */
 #endif
 
-    { int32_t bl=0; uint8_t*br=(uint8_t*)plat_load_file("BOT.REQ",1,&bl); if(br){ g_bot=1;      /* "n" = NatFeats output (Hatari --natfeats on) */
+    { int32_t bl=0; uint8_t*br=(uint8_t*)TEST_REQ("BOT.REQ",&bl); if(br){ g_bot=1;      /* "n" = NatFeats output (Hatari --natfeats on) */
           if(bl>0 && br[0]=='n') g_bot_nf=bot_nf_id("NF_STDERR"); bot_report(&w); } }   /* bot mode: first report = ready */
     int prev_btn=0;
     uint32_t last_anim=plat_ticks_200hz(), last_cyc=last_anim, last_tcur=last_anim;  /* 200Hz-clock cadence (loop-rate independent) */

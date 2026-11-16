@@ -815,12 +815,14 @@ GAME_SRC := platform/detect.c platform/platmem.c platform/platfile.c platform/pl
 # Falcon030 / FPU-less TT030. (Hand-asm c2p stays 68000.) See docs/design/toolchain.md.
 # $(1)=output .prg  $(2)=sources  $(3)=obj subdir  $(4)=extra CFLAGS  $(5)=extra link libs
 HYBRID_INC := -Iplatform -Irender -Iengine -Idataformats
+# U6E_RELEASE=1 (make release): the player's programs, without the headless test hooks (gamedemo.c TEST_REQ)
+REL_DEF := $(if $(U6E_RELEASE),-DU6E_RELEASE)
 define HYBRID_BUILD
 	@mkdir -p $(BUILD)/$(3)
 	@for s in $(2); do o=$(BUILD)/$(3)/`echo $$s | tr / _`.o; \
 	  a=-m68020-60; \
 	  case $$s in *plattime.c|*rdr_st.c) a=-m68000;; esac; \
-	  $(CC) $$a -std=gnu11 -O2 -Wall $(WSTYLE) $(HYBRID_INC) $(4) -c $$s -o $$o || exit 1; done
+	  $(CC) $$a -std=gnu11 -O2 -Wall $(WSTYLE) $(HYBRID_INC) $(4) $(REL_DEF) -c $$s -o $$o || exit 1; done
 	$(CC) -std=gnu11 -O2 -o $(1) $(BUILD)/$(3)/*.o $(5)
 	@echo "built $(1) (68020 codegen + 68000 soft-float libc; runs FPU-free)"
 endef
@@ -862,7 +864,7 @@ GAME_SRC_ST := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) render
 $(BUILD)/gamest.prg: $(GAME_SRC_ST)
 	@mkdir -p $(BUILD)/obj_st
 	@for s in $^; do o=$(BUILD)/obj_st/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) $(REL_DEF) -Wall $(WSTYLE) -DHAVE_RDR_ST $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_st/*.o
 	@echo "built $@ (pure 68000, ST-low 16-colour shifter via render.c dispatch)"
 game-st: $(BUILD)/gamest.prg
@@ -919,7 +921,7 @@ GAME_SRC_VCARD := $(filter-out render/rdr_tt.c render/c2p_asm.s,$(GAME_SRC)) ren
 $(BUILD)/gamevc.prg: $(GAME_SRC_VCARD)
 	@mkdir -p $(BUILD)/obj_vc
 	@for s in $^; do o=$(BUILD)/obj_vc/`echo $$s | tr / _`.o; \
-	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
+	  $(CC) -m68000 -std=gnu11 -O2 $(SMALL_68K) $(REL_DEF) -Wall $(WSTYLE) -DHAVE_RDR_VCARD $(HYBRID_INC) -c $$s -o $$o || exit 1; done
 	$(CC) -m68000 -std=gnu11 -O2 -o $@ $(BUILD)/obj_vc/*.o -lgem16
 	@echo "built $@ (pure 68000 + card; VDI backend via render.c dispatch, libgem16)"
 game-vcard: $(BUILD)/gamevc.prg
@@ -1422,8 +1424,11 @@ st-disks-tt:
 
 # the player's zip: programs + CONVERT.TOS, no game data (needs no refdata to build)
 .PHONY: release
-release: convert game game-st game-vcard
-	BUILD=$(BUILD) scripts/make-release.sh $(RELEASE_VERSION)
+# The programs are built apart, in $(BUILD)/rel, with U6E_RELEASE: no test hooks (about 250 KB less
+# code; a 4 MB ST needs it). make check and the bot keep using the ordinary builds.
+release:
+	$(MAKE) BUILD=$(BUILD)/rel U6E_RELEASE=1 convert game game-st game-vcard
+	PRG_BUILD=$(BUILD)/rel BUILD=$(BUILD) scripts/make-release.sh $(RELEASE_VERSION)
 
 clean:
 	rm -rf $(BUILD)

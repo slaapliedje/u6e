@@ -8,10 +8,11 @@ BUILD=${BUILD:-build}
 VER=${1:-$(git rev-parse --short HEAD)}
 OUT=$BUILD/release/u6e-$VER
 STRIP=${STRIP:-m68k-atari-mint-strip}
+PRG_BUILD=${PRG_BUILD:-$BUILD}     # where the programs come from (make release: the U6E_RELEASE build)
 
 rm -rf "${OUT:?}"; mkdir -p "$OUT"
 for f in game.prg:GAME.PRG gamest.prg:GAMEST.PRG gamevc.prg:GAMEVC.PRG CONVERT.TOS:CONVERT.TOS; do
-    "$STRIP" -o "$OUT/${f#*:}" "$BUILD/${f%:*}"
+    "$STRIP" -o "$OUT/${f#*:}" "$PRG_BUILD/${f%:*}"
 done
 sed 's/$/\r/' LICENSE > "$OUT/LICENSE.TXT"
 sed -e "s/@VER@/$VER/" -e 's/$/\r/' scripts/release-readme.txt > "$OUT/README.TXT"

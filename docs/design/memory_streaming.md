@@ -320,3 +320,24 @@ keep `-O2` (`OPT_HOT_BEGIN`/`OPT_HOT_END` in gamedemo.c): `make bench-st` scroll
 
 The intro's living-room pan takes a transient 128 KB (270 KB free there on a stock 4 MB ST); when it cannot
 be had, the scene now ends unpanned and the intro goes on (it used to end the whole intro).
+
+## 2026-11-16: release builds leave the test hooks out
+
+About 70 headless scenarios (`*.REQ`/`*.BIN` files that make check and the bot stage) lived in the player's
+program. `make release` now builds the programs apart in `build/rel` with `U6E_RELEASE`, where `TEST_REQ` in
+gamedemo.c reads every such file as absent and the compiler drops the scenario code. A player's folder holds
+none of these files, so play is the same code path as the dev build. MENU.REQ, MEMINFO.BIN, DIAG.REQ and the
+renderer switches (LIGHTSTY/PLANAR/BLITTER.REQ) stay live.
+
+| program | code, dev build | code, release |
+|---|--:|--:|
+| GAME.PRG (TT/Falcon) | 969 KB | 670 KB |
+| GAMEST.PRG | 774 KB | 521 KB |
+| GAMEVC.PRG | 760 KB | 508 KB |
+
+The release GAMEST.PRG at 4 MB, nothing else loaded (MEMINFO.BIN):
+
+| machine | free after the pack | free after the template |
+|---|--:|--:|
+| ST, TOS 1.04 | 784 KB | 629 KB |
+| Mega STe, TOS 2.06 | 727 KB | 572 KB |
