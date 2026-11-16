@@ -91,6 +91,18 @@ text (narration pages, menu notes, gypsy questions, chargen screens) is set in t
 `ui_text` (in-game HUD/scroll) stays 8×8 U6.CH. On the ST the pointer is nulled with the rest of
 the front-end when U6FE is freed.
 
+## Savage Empire: the game-text font (SYSTEM.LZC item 3)
+
+Provenance: the user's own SE `SYSTEM.LZC` decoded with our LZC reader (2026-11-15); its item 3 compared
+with DOS SE's screen in DOSBox (the party list's names and numbers match pixel for pixel, glyph by glyph).
+Confidence: **confirmed**.
+
+- SYSTEM.LZC holds 4 items; item 3 is **1024 bytes**: 128 glyphs x 8 rows, 1 byte a row, bit 7 = the
+  leftmost pixel, set = ink. The same layout as U6.CH with half the glyphs (characters 128-255 absent).
+- DOS draws the panels, the scroll and the conversations with it in fixed 8-px cells. (SAVAGE.FNT below is
+  not the game text's font.)
+- Pack: mkworld ships it in the font block's first 1024 bytes for SE (the rest zero).
+
 ## Savage / Martian: the WOU proportional font (`SAVAGE.FNT` / `FONTS.LZC`)
 
 Games: Savage Empire (`SAVAGE.FNT`) / Martian Dreams (`FONTS.LZC`) — SE/MD only.

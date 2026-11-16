@@ -59,7 +59,9 @@ The sky's own pixels are only in the strip x 2-170, y 2-8: the border tiles cove
 Two boxes inside the frame: **x 183-314, y 6-118** (top) and **x 183-314, y 126-194** (bottom).
 
 - **Party list** (top box, the normal view): one row per member, 16 px apart from y 8: the member's
-  figure at x 186, the name from x 209, the HP right-aligned to x 310.
+  figure at x 185, the name's text cell from x 208 on the row's second line (y + 8), the HP on its first
+  line, its last cell ending at x 311 (Triolo's row matches DOS pixel for pixel). A click on the figure
+  opens that member's inventory, on the name the portrait.
 - **Inventory** (F1-F8 for a member, F10 back to the list): the name centred at y 9; the figure with the
   readied places as gold rings round it (x 186-, y 17-77), the 4x4 pack grid of rings to its right; the
   weights `E:0/16s` and `I:0/32s` at y 80-94; the buttons (previous member, portrait, next member) and the
@@ -108,12 +110,14 @@ the backdrop) at (210,7), the name centred on x 249 at y 104.
 
 ## 6. The command bar
 Nine icons in SCREEN.LZC, each in an 18-px cell from x 8, y 178-196: move, get, drop, use, talk, look,
-attack, rest, combat (`x = 8 + 18k`). Clicking and highlighting: open.
+attack, rest, combat (`x = 8 + 18k`); a click in a cell (not on its 1-px divider) picks that command. DOS draws
+no highlight on them (Look from the keyboard leaves the bar untouched).
 
 ## Test hooks
 Our TT frame against the DOS screenshot (scratch pixel diff); none in `make check` yet.
 
 ## Status
-IN PROGRESS: §1 (SCREEN.LZC in the pack), §2, §4's party list and message box, and §5 (the pack's CBKG
+IN PROGRESS: §1 (SCREEN.LZC and SYSTEM.LZC's font in the pack), §2, §3, §4, §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
-Next: §6's clicks.
+§6's clicks built, not yet driven by a mouse in a test. Open: the `name>` prompt, the party list's
+length, the figure's frame, the Avatar's chosen name (item 9's creation).

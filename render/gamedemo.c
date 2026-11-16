@@ -725,6 +725,7 @@ static int            g_cc_xfer, g_cc_xexp, g_cc_xlevel, g_cc_xhp;   /* ...and a
 #define MSG_Y    (g_gd==&gamedef_se?128:MSGY)
 #define MSG_W    (g_gd==&gamedef_se?128:PANW)
 #define MSG_ROWS (g_gd==&gamedef_se?8:9)
+#define RST_Y    (g_gd==&gamedef_se?8:26)    /* the party list's first row */
 #define TPITCH   (g_gd==&gamedef_se?8:9)   /* wrapped text's line pitch: DOS SE puts rows 8 px apart */
 #define NCMD 10
 /* mouse cursor (decoded from U6MCGA.PTR) + save-under */
@@ -9188,12 +9189,12 @@ static void draw_party_roster(uint8_t col)
         int i=!g_solo_m?row:(row==0?smi:(row==smi?0:row));             /* a played companion keeps its place in the list */
         int yy=(se?8:26)+(row-g_roster_first)*16, a=g_party[i].actor;   /* below the sky strip */
         if(a>=0 && a<U6_MAX_ACTORS && g_atile[a]!=0xffff) blit_tile(se?185:PANX+2, yy, g_atile[a], 1);
-        ui_text(se?209:PANX+20, se?yy+8:yy+4, g_party[i].name[0]?g_party[i].name:"?", col);
+        ui_text(se?208:PANX+20, se?yy+8:yy+4, g_party[i].name[0]?g_party[i].name:"?", col);
         char hp[6]; int n=0, v=g_party[i].hp;
         if(v>=100){ hp[n++]=(char)('0'+v/100); v%=100; hp[n++]=(char)('0'+v/10); }
         else if(v>=10){ hp[n++]=(char)('0'+v/10); }
         hp[n++]=(char)('0'+v%10); hp[n]=0;
-        ui_text((se?311:PANX+PANW-4)-ui_textw(hp), se?yy:yy+4, hp, (a>=0&&a<U6_MAX_ACTORS&&g_poison[a])?10:(g_party[i].hp<10?12:col));   /* green poisoned, red hurt badly */
+        ui_text((se?312:PANX+PANW-4)-ui_textw(hp), se?yy:yy+4, hp, (a>=0&&a<U6_MAX_ACTORS&&g_poison[a])?10:(g_party[i].hp<10?12:col));   /* green poisoned, red hurt badly */
     }
 }
 /* The status display's parts as DOS lays them out (equipment.md §5), in screen pixels */
@@ -9399,20 +9400,20 @@ static int panel_select_slot(world_t*w,int sl);
 static int pack_move_into(world_t*w,int t);
 static int panel_action(world_t*w,int x,int y)
 {
-    int i=member_index(g_status_actor), inv=g_show_inv&&!g_show_status;
-    if(y>=IVB_Y && y<IVB_Y+16 && x>=0xb0 && x<0xf0){ int b=(x-0xb0)/16;
+    int i=member_index(g_status_actor), inv=g_show_inv&&!g_show_status, se=g_gd==&gamedef_se, bx=se?0xb8:0xb0, sx=se?8:0;   /* SE: 8 px right (rules/se_screen.md §4) */
+    if(y>=IVB_Y && y<IVB_Y+16 && x>=bx && x<bx+0x40){ int b=(x-bx)/16;
         if(b==0 && i>0) g_status_actor=g_party[i-1].actor;
         else if(b==1){ g_inv_open=0; g_show_inv=0; g_show_status=0; g_pan_focus=0; }
         else if(b==2){ if(inv){ g_inv_open=0; g_show_inv=0; g_show_status=1; } else { g_show_status=0; g_inv_open=1; g_show_inv=1; } }
         else if(b==3 && i<g_nparty-1) g_status_actor=g_party[i+1].actor;
         return 0; }
-    if(inv && i>0 && y>=IVB_Y && y<IVB_Y+16 && x>=0xf0 && x<0x100){ int m=g_gl->cmode_next?g_gl->cmode_next(g_cmode[g_status_actor]):g_cmode[g_status_actor]+1; g_cmode[g_status_actor]=(uint8_t)(m>8||m<2?2:m); return 0; }   /* the next combat mode */
+    if(inv && i>0 && y>=IVB_Y && y<IVB_Y+16 && x>=(se?0xf8:0xf0) && x<(se?0x138:0x100)){ int m=g_gl->cmode_next?g_gl->cmode_next(g_cmode[g_status_actor]):g_cmode[g_status_actor]+1; g_cmode[g_status_actor]=(uint8_t)(m>8||m<2?2:m); return 0; }   /* the next combat mode */
     if(!inv) return 0;
     if(x>=0x110&&x<0x120&&y>=0x10&&y<0x20&&g_iv_cont){ int cr=iv_cont_row();                /* the open thing's picture: a move out of it, or back up a level */
         if(g_pending_verb=='W'&&cr>=0){ g_pending_verb=0; return g_gl->move_into?g_gl->move_into(w,cr):pack_move_into(w,cr); }
         if(!g_pending_verb){ g_iv_cont=cr>=0?g_ow.inv[cr].in:0; g_inv_first=0; return 1; } }
     if(x>=IVG_X && x<IVG_X+IVG_COLS*16 && y>=IVG_Y && y<IVG_Y+IVG_ROWS*16){ int k=g_inv_first+(y-IVG_Y)/16*IVG_COLS+(x-IVG_X)/16, nr=iv_rows(g_status_actor); if(k<nr) return panel_select_pack(w,g_iv_row[k]); return 0; }
-    for(int sl=0;sl<EQ_NSLOTS;sl++) if(x>=IV_SLOT[sl][0]&&x<IV_SLOT[sl][0]+16&&y>=IV_SLOT[sl][1]&&y<IV_SLOT[sl][1]+16) return panel_select_slot(w,sl);
+    for(int sl=0;sl<EQ_NSLOTS;sl++) if(x>=IV_SLOT[sl][0]+sx&&x<IV_SLOT[sl][0]+sx+16&&y>=IV_SLOT[sl][1]&&y<IV_SLOT[sl][1]+16) return panel_select_slot(w,sl);
     if(x>=PTXT_X(8)-8 && x<PTXT_X(8)){ if(y>=PTXT_Y(3)&&y<PTXT_Y(3)+8) g_inv_first-=IVG_COLS; else if(y>=PTXT_Y(8)&&y<PTXT_Y(8)+8) g_inv_first+=IVG_COLS; }
     return 0;
 }
@@ -9424,6 +9425,14 @@ static int verb_cmd(int v){ switch(v){case 'A':return 0;case 'C':return 1;case '
 static int cmd_verb(int c){ switch(c){case 0:return 'A';case 1:return 'C';case 2:return 'T';case 3:return 'L';
     case 4:return 'G';case 5:return 'D';case 6:return 'M';case 7:return 'U';} return 0; }
 
+/* the U6 icon number (0-9, as cmd_verb and the click code count them) under (x,y), or -1. SE's nine icons sit
+ * in 18-px cells from x 8, y 178-195: move, get, drop, use, talk, look, attack, rest, combat (rules/se_screen.md §6) */
+static int cmd_hit(int x,int y)
+{   if(g_gd==&gamedef_se){ static const int8_t SE_ICON[9]={6,4,5,7,2,3,0,8,9};
+        if(y<178||y>=196||x<8||x>=8+9*18||(x-8)%18==17) return -1;
+        return SE_ICON[(x-8)/18]; }
+    if(y>=CMDY && y<CMDY+16 && x>=CMDX && x<CMDX+NCMD*16) return (x-CMDX)/16;
+    return -1; }
 static void restore_cmdbar(void)
 { for(int y=CMDY-1;y<CMDY+17 && y<LH;y++)
     memcpy(ROW(y)+(CMDX-1), g_paper+(int32_t)y*LW+(CMDX-1), NCMD*16+2); }
@@ -21185,13 +21194,13 @@ int main(int argc, char **argv)
             redraw=1;
         } else if (rclick && !g_talking && !g_casting && !g_save_menu && !g_pending_verb) {   /* a default command (DOS: the blue line under its icon) */
             int rdx,rdy;
-            if (g_my>=CMDY && g_my<CMDY+16 && g_mx>=CMDX && g_mx<CMDX+NCMD*16) { g_default_verb=cmd_verb((g_mx-CMDX)/16); redraw=1; }
+            if (cmd_hit(g_mx,g_my)>=0) { g_default_verb=cmd_verb(cmd_hit(g_mx,g_my)); redraw=1; }
             else if (g_default_verb && map_click_delta(g_mx,g_my,&rdx,&rdy)) { int v=g_default_verb; g_mouse_target=1;
                 if(v=='A') arm_attack(); if(v!='D'){ int rc=resolve_target(&w,v,rdx,rdy); (void)rc; }
                 g_mouse_target=0; g_pending_verb=g_next_verb; g_next_verb=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
         } else if (click) {                          /* mouse: command bar / map */
-            if (g_my>=CMDY && g_my<CMDY+16 && g_mx>=CMDX && g_mx<CMDX+NCMD*16) {
-                int icon=(g_mx-CMDX)/16, v=cmd_verb(icon);   /* select a command */
+            if (cmd_hit(g_mx,g_my)>=0) {
+                int icon=cmd_hit(g_mx,g_my), v=cmd_verb(icon);   /* select a command */
                 if (icon==9 && g_veh_kind && g_veh_kind!=431){ msgcat(0,"Not while aboard ship!"); }
                 else if (icon==9 && g_solo_on){ msgcat(0,"Not in solo mode!"); }
                 else if (icon==9){ g_combat_mode=!g_combat_mode; g_pending_verb=0; g_show_inv=0;  /* Combat icon toggles combat */
@@ -21204,15 +21213,15 @@ int main(int argc, char **argv)
                 else if (v){ g_pending_verb=v; g_move_pack=0; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; if(VERB_CURSOR(v)){ compose_map(&w); draw_border_tiles(); } }
                 else  { msgcat(0,"Not yet implemented."); g_pending_verb=0; g_show_inv=0; }
                 redraw=1;
-            } else if ((g_show_status||(g_show_inv&&!g_gamename)) && !g_talking && !g_casting && !g_save_menu && g_mx>=0xa8 && g_my<MSGY) {   /* in the status display */
+            } else if ((g_show_status||(g_show_inv&&(!g_gamename||g_gd==&gamedef_se))) && !g_talking && !g_casting && !g_save_menu && g_mx>=0xa8 && g_my<(g_gd==&gamedef_se?0x76:MSGY)) {   /* in the status display */
                 if(panel_action(&w,g_mx,g_my)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                 redraw=1;
-            } else if (!g_talking && !g_casting && !g_save_menu && !g_show_inv && g_mx>=168 && g_mx<PANX && g_my<112) { g_roster_first+=g_my<60?-1:1; redraw=1;   /* the roster's arrows */
+            } else if (g_gd!=&gamedef_se && !g_talking && !g_casting && !g_save_menu && !g_show_inv && g_mx>=168 && g_mx<PANX && g_my<112) { g_roster_first+=g_my<60?-1:1; redraw=1;   /* the roster's arrows */
             } else if (!g_talking && !g_casting && !g_save_menu && !g_show_inv &&
-                       g_mx>=PANX && g_my>=26 && g_my<26+5*16) {   /* a roster member: the figure opens the inventory, the name the portrait and stats */
-                int row=g_roster_first+(g_my-26)/16;
+                       g_mx>=(g_gd==&gamedef_se?183:PANX) && g_my>=RST_Y && g_my<RST_Y+5*16) {   /* a roster member: the figure opens the inventory, the name the portrait and stats */
+                int row=g_roster_first+(g_my-RST_Y)/16;
                 if (row>=0 && row<g_nparty){ g_status_actor=g_party[row].actor;
-                    if(g_mx<PANX+18){ g_inv_open=1; g_show_inv=1; } else g_show_status=1;
+                    if(g_mx<(g_gd==&gamedef_se?203:PANX+18)){ g_inv_open=1; g_show_inv=1; } else g_show_status=1;
                     g_pending_verb=0; g_msg[0]=0; redraw=1; }
             } else {
                 int dx,dy;

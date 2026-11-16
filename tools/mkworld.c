@@ -1865,7 +1865,13 @@ int main(int argc, char **argv)
     uint8_t *font;                                 /* 2048 bytes: U6.CH, or SE/MD's WOU font made 8x8 */
     if (u6) font=slurp(dir,"U6.CH",&fn);
     else { font=malloc(2048); fn=2048;
-        if (!font || !gp->font || !convert_wou_font(dir,gp->font,marker,font)){ printf("font conversion failed\n"); return 2; } }
+        int sysfont=0;
+        if (font && marker==U6LZC_COMP_SE){             /* SE's game text: SYSTEM.LZC item 3, 128 glyphs 8x8 as DOS draws it (rules/se_screen.md §1) */
+            long sn; uint8_t *sb=slurp(dir,"SYSTEM.LZC",&sn); u6lzc_t sl;
+            if (sb && u6lzc_open(&sl,sb,(int32_t)sn,marker) && u6lzc_count(&sl)>3){
+                memset(font,0,2048); if (u6lzc_read(&sl,3,font,2048)==1024) sysfont=1; }
+            free(sb); }
+        if (!font || (!sysfont && (!gp->font || !convert_wou_font(dir,gp->font,marker,font)))){ printf("font conversion failed\n"); return 2; } }
     long adn; uint8_t *adat=slurp(dir,"ANIMDATA",&adn);   /* tile-animation table */
     if (fn != 2048) { printf("U6.CH is %ld bytes, expected 2048\n", fn); return 2; }
 
