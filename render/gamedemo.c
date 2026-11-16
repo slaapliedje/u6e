@@ -21196,7 +21196,6 @@ int main(int argc, char **argv)
                 else if (a=='e'||a=='E') { g_msg[0]=0; arm_equip(); redraw=1; }                        /* E)quip (equipment.md §5) */
                 else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a==' ') { msgcat(0,"Pass!"); if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* pass a turn (a raft/balloon drifts) */
-                else if (a=='i'||a=='I') { g_show_status=0; g_inv_open=!g_inv_open; g_show_inv=g_inv_open; g_pan_focus=0; if(g_inv_open&&(g_status_actor<1||!is_party_member(g_status_actor))) g_status_actor=g_nparty?g_party[0].actor:1; redraw=1; }
                 else if (a=='s'||a=='S'||a==0x12) { g_show_inv=0; g_pending_verb=0;   /* S)ave, Ctrl-R: the slot page (save_load.md §2b) */
                     save_index_load(); g_save_menu=(a==0x12)?2:1; g_save_copy=0; save_detail(); redraw=1; }
                 else if (a==0x1a) { g_show_inv=0; music_sound_toggle(w.level); redraw=1; }             /* Ctrl-Z: sound (st_music.md §5) */
@@ -21218,6 +21217,7 @@ int main(int argc, char **argv)
                     if (player_step(&w,dx,dy)){         /* foot / horse / vessel; NPCs + triggers inside */
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); moved=1; }  /* map-only */
                 }
+                else if ((a>='a'&&a<='z')||(a>='A'&&a<='Z')) { msgcat(0,"what?"); redraw=1; }   /* a letter with no command (DOS, observed 2026-11-16: i, k, x, y) */
             }
         }
         if (click && g_save_menu) {                  /* the slot page: a row acts, elsewhere cancels */
