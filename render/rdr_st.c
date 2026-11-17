@@ -586,7 +586,7 @@ static void rdr_present_rect_doubled_i(int x, int y, int w, int h, int lh)
     for (int yy = y; yy < y + h; yy++) {
         const uint8_t *px = g_back + (int32_t)yy * STW + g0 * 16;
         uint16_t     *dst = (uint16_t *)(scr + (int32_t)yy * ST_ROWBYTES) + g0 * 4;
-        c2p_seg(yy, px, g_lut, dst, g0, gn);
+        c2p_seg(yy, px, g_row_lut[yy], dst, g0, gn);     /* the row's band (it took band 0's for every row) */
     }
     if (scr == g_screen && !g_flip) shadow_rect(x, g0, gn, y, h); else g_shadow_ok = 0;
     /* no Vsync: caller batches */

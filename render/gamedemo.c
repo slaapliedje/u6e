@@ -5720,17 +5720,23 @@ static void ui_text_row(int x,int y,const char*s,int t,uint8_t col)
  * (an arrow: wait for a key) or 5 (typing); the frame steps while it waits. -1 = none on screen. */
 static int g_tcur_x=-1, g_tcur_y, g_tcur_base, g_tcur_col;
 static uint8_t g_tcur_frame;
+static uint8_t g_tcur_bg[64];                              /* what lies under the glyph, taken when it is placed */
 static void tcur_glyph(void)
 {   char c[2]={(char)(g_tcur_base+(g_tcur_frame&3)),0};
-    for(int y=g_tcur_y;y<g_tcur_y+8;y++) memcpy(ROW(y)+g_tcur_x, g_paper+(int32_t)y*LW+g_tcur_x, 8);
+    for(int y=0;y<8;y++) memcpy(ROW(g_tcur_y+y)+g_tcur_x, g_tcur_bg+y*8, 8);
     ui_text(g_tcur_x,g_tcur_y,c,g_tcur_col); }
-static void tcur_set(int x,int y,int base,uint8_t col){ g_tcur_x=x; g_tcur_y=y; g_tcur_base=base; g_tcur_col=col; tcur_glyph(); }
+static void tcur_set(int x,int y,int base,uint8_t col)
+{   g_tcur_x=x; g_tcur_y=y; g_tcur_base=base; g_tcur_col=col;
+    for(int r=0;r<8;r++) memcpy(g_tcur_bg+r*8, ROW(y+r)+x, 8);
+    tcur_glyph(); }
 
+static char g_mcur[4800];
+static int  g_wrap_pitch;                         /* ui_text_wrap's row pitch when set (the message box: 8, as DOS) */                         /* the box's current command: prompt + its words (msg_box) */
 /* word-wrap `s` into a box [x..x+w) from y, up to `lines` rows of font text */
 static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
 {
     int cols=w/8, row=0;
-    if(s==g_msg){                                   /* too long for the box: a page at a time, an arrow, a key for the next (DOS) */
+    if(s==g_msg || s==g_mcur){                      /* too long for the box: a page at a time, an arrow, a key for the next (DOS) */
         int rows=0; const char*q=s;
         while(*q){ while(*q==' ') q++; if(!*q) break; int n=0,last=-1; for(const char*p=q;*p&&*p!='\n';p++,n++){ if(*p==' ') last=n; if(n>=cols) break; }
             q+=(n<cols)?n:(last>=0?last:cols); if(*q=='\n') q++; rows++; }
@@ -5738,7 +5744,7 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
         for(int k=0;k<g_msg_skip;k++){ while(*s==' ') s++; int n=0,last=-1; for(const char*p=s;*p&&*p!='\n';p++,n++){ if(*p==' ') last=n; if(n>=cols) break; }
             s+=(n<cols)?n:(last>=0?last:cols); if(*s=='\n') s++; }
         g_msg_more=rows-g_msg_skip>lines;
-        if(g_msg_more){ g_msg_page=lines-1; tcur_set(x,y+(lines-1)*TPITCH,1,col); lines--; } }   /* a page less one, the arrow on the row the next line goes to */
+        if(g_msg_more){ g_msg_page=lines-1; tcur_set(x,y+(lines-1)*(g_wrap_pitch?g_wrap_pitch:TPITCH),1,col); lines--; } }   /* a page less one, the arrow on the row the next line goes to */
     while(*s && row<lines){
         while(*s==' ') s++;
         if(!*s) break;
@@ -5748,7 +5754,7 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
         char line[48]; int t=take<47?take:47;
         for(int k=0;k<t;k++) line[k]=s[k];
         line[t]=0;
-        ui_text_row(x,y+row*TPITCH,line,t,col); row++;
+        ui_text_row(x,y+row*(g_wrap_pitch?g_wrap_pitch:TPITCH),line,t,col); row++;
         s+=take; if(*s=='\n') s++;
     }
 }
@@ -6046,12 +6052,92 @@ static void draw_save_page(uint8_t col)
         r[t]=0; ui_text(SPELL_X+16,y,r,col); }
     ui_text(SPELL_X+16,SPELL_Y+SPELL_H+4,g_save_menu==1?"Save game":"Restore game",col);
 }
+
+/* ---- the message scroll and its prompt (rules/message_scroll.md) --------------------------------
+ * DOS keeps a running scroll: each command's words follow a prompt, the leader's name ("Name:" on its
+ * own row after a blank one, then ">" in U6; "name>" in SE), and the scroll ends with the prompt and
+ * the typing cursor. g_msg stays the current command's words (the bot and the tests read it); this
+ * keeps what went before. A new command is seen when g_msg stops growing from what it was. */
+static const char* pending_text(void)
+{   return g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-":
+                           g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
+                           g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-"; }
+static char g_mhist[1200]; static int g_mhist_n;          /* the finished commands, prompts included */
+static char g_mcbase[512];                                /* this command's earlier words (a verb's first step) */
+static char g_mshadow[1024]; static int g_msh_len; static uint32_t g_msh_sum;   /* g_msg as last seen: its tail, length, sum */
+static int  g_mprev_pend; static char g_mprev_pp[48];
+static int  g_tcur_idle;                                  /* the prompt's cursor is up (it steps like a wait's) */
+static uint32_t msg_sum(const char*t,int n){ uint32_t h=2166136261u; for(int i=0;i<n;i++) h=(h^(uint8_t)t[i])*16777619u; return h; }
+static int  mput(char*o,int n,int cap,const char*t){ while(*t && n<cap-1) o[n++]=*t++; o[n]=0; return n; }
+static int  msg_use_scroll(void){ return !(g_gamename && g_gd!=&gamedef_se); }    /* MD keeps its own panel (item 13) */
+#define MB_ROWS  (g_gd==&gamedef_se?8:10)              /* DOS: U6 10 rows from y 112, SE 8 from y 128, 8 px apart */
+#define MB_PITCH 8
+static int  msg_prompt_after(char*o,int n,int cap,int after)   /* after: text stands before it */
+{   char nm[24]; actor_name(g_nparty?g_party[0].actor:1,nm,sizeof nm);
+    if(g_gd==&gamedef_se){ n=mput(o,n,cap,nm); return mput(o,n,cap,">"); }
+    if(after) n=mput(o,n,cap,"\n");
+    n=mput(o,n,cap,nm); return mput(o,n,cap,":\n>"); }
+static int  msg_prompt(char*o,int n,int cap){ return msg_prompt_after(o,n,cap,g_mhist_n!=0); }
+static void mhist_add(const char*e)
+{   int L=(int)strlen(e); if(L>(int)sizeof g_mhist-2) e+=L-((int)sizeof g_mhist-2), L=(int)sizeof g_mhist-2;
+    while(g_mhist_n && g_mhist_n+1+L>(int)sizeof g_mhist-1){          /* the oldest rows go */
+        int k=0; while(k<g_mhist_n && g_mhist[k]!='\n') k++; if(k<g_mhist_n) k++;
+        memmove(g_mhist,g_mhist+k,(size_t)(g_mhist_n-k)); g_mhist_n-=k; }
+    if(g_mhist_n) g_mhist[g_mhist_n++]='\n';
+    memcpy(g_mhist+g_mhist_n,e,(size_t)L); g_mhist_n+=L; g_mhist[g_mhist_n]=0; }
+static void msg_track(const char*pp)
+{   int L=(int)strlen(g_msg);
+    int same = L==g_msh_len && msg_sum(g_msg,L)==g_msh_sum;
+    if(!same){
+        int cont = g_msh_len && L>=g_msh_len && msg_sum(g_msg,g_msh_len)==g_msh_sum;    /* it grew: the same command */
+        if(!cont){
+            if(g_mprev_pend){                                     /* a verb's next step: its words stay on this command */
+                if(g_msh_len){ int n=(int)strlen(g_mcbase); n=mput(g_mcbase,n,sizeof g_mcbase,g_mshadow); mput(g_mcbase,n,sizeof g_mcbase,"\n"); }
+                else if(g_mprev_pp[0] && strncmp(g_msg,g_mprev_pp,strlen(g_mprev_pp)))   /* "Look-" then "what?" */
+                    mput(g_mcbase,(int)strlen(g_mcbase),sizeof g_mcbase,g_mprev_pp);
+            } else if(g_msh_len || g_mcbase[0]){                  /* the last command is done */
+                static char e[1700]; int n=msg_prompt(e,0,sizeof e); n=mput(e,n,sizeof e,g_mcbase); mput(e,n,sizeof e,g_mshadow);
+                mhist_add(e); g_mcbase[0]=0; }
+        }
+        g_msh_len=L; g_msh_sum=msg_sum(g_msg,L);
+        { const char*t=g_msg+(L>(int)sizeof g_mshadow-1?L-((int)sizeof g_mshadow-1):0); mput(g_mshadow,0,sizeof g_mshadow,t); }
+    }
+    g_mprev_pend=pp!=0; mput(g_mprev_pp,0,sizeof g_mprev_pp,pp?pp:""); }
+/* split t into wrapped rows as ui_text_wrap does: starts and lengths, up to max */
+static int msg_rows(const char*t,int cols,const char**st,int*ln,int max)
+{   int r=0;
+    while(*t){ while(*t==' ') t++; if(!*t) break;
+        int n=0,last=-1; for(const char*q=t;*q&&*q!='\n';q++,n++){ if(*q==' ') last=n; if(n>=cols) break; }
+        int take=(n<cols)?n:(last>=0?last:cols); st[r%max]=t; ln[r%max]=take; r++;      /* a ring: the newest max rows */
+        t+=take; if(*t=='\n'){ t++; if(!*t){ st[r%max]=t; ln[r%max]=0; r++; } } }   /* a closing newline: the next row is empty */
+    return r; }
+static void msg_box(uint8_t col)
+{   const char*pp=g_pending_verb?pending_text():0;
+    msg_track(pp);
+    int n=msg_prompt(g_mcur,0,sizeof g_mcur); n=mput(g_mcur,n,sizeof g_mcur,g_mcbase); n=mput(g_mcur,n,sizeof g_mcur,g_msg);
+    if(pp && !(g_msg[0] && strstr(g_msg,pp))){ if(g_msg[0]) n=mput(g_mcur,n,sizeof g_mcur,"\n"); n=mput(g_mcur,n,sizeof g_mcur,pp); }
+    if(!pp && (g_msg[0]||g_mcbase[0])){ n=mput(g_mcur,n,sizeof g_mcur,"\n"); n=msg_prompt_after(g_mcur,n,sizeof g_mcur,1); }   /* done: the next prompt */
+    int cols=MSG_W/8, rows=MB_ROWS; enum { MR=64 }; const char*st[MR]; int ln[MR];
+    {   int lim=pp?MSG_ROWS-2:MSG_ROWS, mr=g_msg[0]?msg_rows(g_msg,cols,st,ln,MR):0;      /* the page wait as before: on the words alone */
+        if(g_msg[0] && (mr>lim || g_msg_skip)){ g_tcur_idle=0; g_wrap_pitch=MB_PITCH;
+            ui_text_wrap(MSG_X,MSG_Y,MSG_W,g_msg,lim,col);
+            if(pp) ui_text_wrap(MSG_X,MSG_Y+lim*MB_PITCH,MSG_W,pp,2,col);
+            g_wrap_pitch=0; return; } }
+    int rc=msg_rows(g_mcur,cols,st,ln,MR), first=rc>rows?rc-rows:0;
+    g_msg_more=0;
+    int room=rows-(rc-first), y=MSG_Y;
+    if(room>0 && g_mhist_n){ const char*hs[MR]; int hl[MR]; int hr=msg_rows(g_mhist,cols,hs,hl,MR);
+        for(int k=(hr>room?hr-room:0);k<hr;k++){ ui_text_row(MSG_X,y,hs[k%MR],hl[k%MR],col); y+=MB_PITCH; } }
+    for(int k=first;k<rc;k++){ ui_text_row(MSG_X,y,st[k%MR],ln[k%MR],col); y+=MB_PITCH; }
+    int cx=ln[(rc-1)%MR], cy=y-MB_PITCH; if(cx>=cols){ cx=0; cy+=MB_PITCH; }
+    if(cy<MSG_Y+rows*MB_PITCH){ g_tcur_idle=1; tcur_set(MSG_X+cx*8,cy,5,col); } else g_tcur_idle=0; }
 static void draw_conversation(uint8_t col)
 {
     KP(13);
     int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
     restore_panel();                               /* clean papyrus before text */
-    g_tcur_x=-1;                                   /* a wait's cursor is drawn again below if one is up */
+    g_tcur_x=-1; g_tcur_idle=0;                    /* a wait's cursor is drawn again below if one is up */
     if(g_save_menu){                               /* the slot page (save_load.md §2b) */
         draw_save_page(col);
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
@@ -6083,9 +6169,10 @@ static void draw_conversation(uint8_t col)
         talk_draw(PANX+6, 116, g_gamename?15:col);  /* white on SE's black panel */
     } else if(g_show_status){
         draw_char_view(col);                       /* a party member's portrait + gender + stats */
-        if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, MSG_ROWS, col);
+        if(msg_use_scroll()) msg_box(col); else if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, MSG_ROWS, col);
     } else if(g_show_inv){
         if(g_gamename && g_gd!=&gamedef_se){ draw_sky(); draw_inventory_list(col); if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col); }
+        else if(msg_use_scroll()){ draw_inventory(col); msg_box(col); }
         else { draw_inventory(col); if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, g_pending_verb?MSG_ROWS-2:MSG_ROWS, col);
             if(g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'){ const char*p=g_pending_verb=='L'?"Look-":g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":"Move-"; if(!g_msg[0]) ui_text(MSG_X,MSG_Y,p,col); } }
     } else {
@@ -6102,14 +6189,12 @@ static void draw_conversation(uint8_t col)
             }
             ui_text(PANX+(PANW-ui_textw(g_gamename))/2, ty, g_gamename, 15);  /* 15 = white (SEPAL/MDPAL) */
         }
-        if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, g_pending_verb?MSG_ROWS-2:MSG_ROWS, col);  /* scroll box */
+        if(msg_use_scroll()) msg_box(col);
+        else { if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, g_pending_verb?MSG_ROWS-2:MSG_ROWS, col);  /* scroll box */
         if(g_pending_verb){                        /* awaiting a direction */
-            const char*p = g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-":
-                           g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
-                           g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
-                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-";
+            const char*p = pending_text();
             ui_text_wrap(MSG_X, MSG_Y+(g_msg[0]?(MSG_ROWS-2)*TPITCH:0), MSG_W, p, 2, col);
-        }
+        } }
     }
 }
 
@@ -21318,7 +21403,7 @@ int main(int argc, char **argv)
             draw_border_tiles(); draw_status(&w,ink); anim_redraw=1; }
 
         /* a wait's cursor steps (converse.md §6d): only its cell is drawn and shown */
-        if (g_tcur_x>=0 && ((g_talking && (talk_waiting()||g_await_input)) || g_msg_more) && (uint32_t)(now - last_tcur) >= 33){
+        if (g_tcur_x>=0 && ((g_talking && (talk_waiting()||g_await_input)) || g_msg_more || g_tcur_idle) && (uint32_t)(now - last_tcur) >= 33){
             last_tcur = now; g_tcur_frame++; tcur_glyph(); if(!redraw) present_panel_rect(g_tcur_x,g_tcur_y,8,8); }
 
         /* colour cycling: rotate the CLUT — no recompose/present needed, the shifter shows the

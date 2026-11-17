@@ -77,7 +77,8 @@ Two boxes inside the frame: **x 183-314, y 6-118** (top) and **x 183-314, y 126-
 - The party's names are the names their scripts give (Triolo's script names him), the Avatar's the
   name chosen at creation.
 - Open: how many rows the list shows before it scrolls; which frame a member's figure shows (DOS showed
-  the Avatar standing while the map showed him lying on the bed); the `name>` prompt.
+  the Avatar standing while the map showed him lying on the bed). The `name>` prompt: rules/message_scroll.md
+  (built 2026-11-17).
 
 ## 5. Conversations
 The talk text fills the map window (the frame stays): x 16, rows 8 px apart from y 24, 16 rows (to y 151),
@@ -119,5 +120,5 @@ Our TT frame against the DOS screenshot (scratch pixel diff); none in `make chec
 ## Status
 IN PROGRESS: §1 (SCREEN.LZC and SYSTEM.LZC's font in the pack), §2, §3, §4, §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
-§6's clicks built, not yet driven by a mouse in a test. Open: the `name>` prompt, the party list's
+§6's clicks built, not yet driven by a mouse in a test. The `name>` prompt built (message_scroll.md). Open: the party list's
 length, the figure's frame, the Avatar's chosen name (item 9's creation).
