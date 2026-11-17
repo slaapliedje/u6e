@@ -76,9 +76,16 @@ Two boxes inside the frame: **x 183-314, y 6-118** (top) and **x 183-314, y 126-
   leader's name and `>`, then the skull cursor) after the last line.
 - The party's names are the names their scripts give (Triolo's script names him), the Avatar's the
   name chosen at creation.
-- Open: how many rows the list shows before it scrolls; which frame a member's figure shows (DOS showed
-  the Avatar standing while the map showed him lying on the bed). The `name>` prompt: rules/message_scroll.md
-  (built 2026-11-17).
+- **The list never scrolls** (GAME.EXE 0x0e13:0x000a, every caller passes first row 0): it draws members
+  0-6 only, at most 7 rows (the 7th at y 104, clipped to the box at y 118); an eighth member is not listed.
+  No arrows, and `+`/`-` do not move it.
+- **The figure** is the member's kind facing south, not its frame on the map (the Avatar on the bed shows
+  standing): base tile of the actor's obj_n + a frame from GAME.EXE 0x0a5d:0x0068 with direction 4 —
+  obj_n 0x136-0x146 (the people) +8; 0x120 +18; 0x150/0x151 +2; 0x14f +10; the big creatures' heads (0x11c,
+  0x121, 0x126, 0x129, 0x12f, 0x131) +17; anything else +0. (For a big creature's other parts DOS reads a
+  table left over from the last head it looked up: a slip no party member can reach; ours gives +0.)
+  Checked: the start's Avatar and Triolo match the DOS list.
+- The `name>` prompt: rules/message_scroll.md (built 2026-11-17).
 
 ## 5. Conversations
 The talk text fills the map window (the frame stays): x 16, rows 8 px apart from y 24, 16 rows (to y 151),
@@ -120,5 +127,5 @@ Our TT frame against the DOS screenshot (scratch pixel diff); none in `make chec
 ## Status
 IN PROGRESS: §1 (SCREEN.LZC and SYSTEM.LZC's font in the pack), §2, §3, §4, §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
-§6's clicks built, not yet driven by a mouse in a test. The `name>` prompt built (message_scroll.md). Open: the party list's
-length, the figure's frame, the Avatar's chosen name (item 9's creation).
+§6's clicks built, not yet driven by a mouse in a test. The `name>` prompt built (message_scroll.md). The party list's length
+and figures built 2026-11-17. Open: the Avatar's chosen name (item 9's creation).

@@ -9280,18 +9280,28 @@ static void draw_sky(void)
 
 /* the party: each member's sprite icon + name + right-aligned HP (top-right,
  * where U6 shows the roster). */
+/* SE's party list figure: the member's kind facing south, whatever it is doing (se_screen.md §4) */
+static int se_list_frame(int on)
+{   if(on>=0x136 && on<=0x146) return 8;                 /* the people */
+    if(on==0x120) return 18;
+    if(on==0x150 || on==0x151) return 2;
+    if(on==0x14f) return 10;
+    if(on==0x11c||on==0x121||on==0x126||on==0x129||on==0x12f||on==0x131) return 17;   /* a big creature's head */
+    return 0; }
 static void draw_party_roster(uint8_t col)
 {
+    if(g_gd==&gamedef_se) g_roster_first=0;              /* SE: never scrolls, the first seven */
     if(g_roster_first>g_nparty-5) g_roster_first=g_nparty>5?g_nparty-5:0;
     if(g_roster_first<0) g_roster_first=0;
-    if(g_roster_first>0){ char c[2]={0x18,0}; ui_text(168,24,c,col); }
-    if(g_roster_first+5<g_nparty){ char c[2]={0x19,0}; ui_text(168,96,c,col); }
-    int smi=0; if(g_solo_m) smi=member_index(g_solo_m);
     int se=g_gd==&gamedef_se;                                           /* SE: rows from y 8, name below the HP (rules/se_screen.md §4) */
-    for(int row=g_roster_first;row<g_nparty && row<g_roster_first+5;row++){
+    if(!se && g_roster_first>0){ char c[2]={0x18,0}; ui_text(168,24,c,col); }
+    if(!se && g_roster_first+5<g_nparty){ char c[2]={0x19,0}; ui_text(168,96,c,col); }
+    int smi=0; if(g_solo_m) smi=member_index(g_solo_m);
+    for(int row=g_roster_first;row<g_nparty && row<g_roster_first+(se?7:5);row++){
         int i=!g_solo_m?row:(row==0?smi:(row==smi?0:row));             /* a played companion keeps its place in the list */
         int yy=(se?8:26)+(row-g_roster_first)*16, a=g_party[i].actor;   /* below the sky strip */
-        if(a>=0 && a<U6_MAX_ACTORS && g_atile[a]!=0xffff) blit_tile(se?185:PANX+2, yy, g_atile[a], 1);
+        if(a>=0 && a<U6_MAX_ACTORS && g_atile[a]!=0xffff){ int on=se?actor_objn(a):-1;
+            blit_tile(se?185:PANX+2, yy, on>0?(uint16_t)(basetile(on)+se_list_frame(on)):g_atile[a], 1); }
         ui_text(se?208:PANX+20, se?yy+8:yy+4, g_party[i].name[0]?g_party[i].name:"?", col);
         char hp[6]; int n=0, v=g_party[i].hp;
         if(v>=100){ hp[n++]=(char)('0'+v/100); v%=100; hp[n++]=(char)('0'+v/10); }
@@ -21140,7 +21150,7 @@ int main(int argc, char **argv)
                   else if(a=='*' && !g_talking){ if(g_status_actor<1) g_status_actor=g_nparty?g_party[0].actor:1;
                       if(g_show_status){ g_show_status=0; g_inv_open=1; g_show_inv=1; } else { g_show_status=1; g_inv_open=0; g_show_inv=0; } redraw=1; a=0; in=IN_NONE; dx=dy=0; }
                   else if((a=='+'||a=='-') && !g_talking){ int d=a=='+'?1:-1;
-                      if(g_show_status||g_show_inv){ int i=member_index(g_status_actor)+d; if(i>=0&&i<g_nparty) g_status_actor=g_party[i].actor; } else g_roster_first+=d;
+                      if(g_show_status||g_show_inv){ int i=member_index(g_status_actor)+d; if(i>=0&&i<g_nparty) g_status_actor=g_party[i].actor; } else if(g_gd!=&gamedef_se) g_roster_first+=d;
                       redraw=1; a=0; in=IN_NONE; dx=dy=0; }
                   else if(a==0x09 && !g_talking){ if(!g_show_status&&!g_show_inv){ if(g_status_actor<1||!is_party_member(g_status_actor)) g_status_actor=g_nparty?g_party[0].actor:1; g_inv_open=1; g_show_inv=1; }
                       g_pan_focus=!g_pan_focus; g_pan_x=IVG_X; g_pan_y=g_show_status?IVB_Y:IVG_Y; redraw=1; a=0; in=IN_NONE; dx=dy=0; }
@@ -21331,7 +21341,7 @@ int main(int argc, char **argv)
                 redraw=1;
             } else if (g_gd!=&gamedef_se && !g_talking && !g_casting && !g_save_menu && !g_show_inv && g_mx>=168 && g_mx<PANX && g_my<112) { g_roster_first+=g_my<60?-1:1; redraw=1;   /* the roster's arrows */
             } else if (!g_talking && !g_casting && !g_save_menu && !g_show_inv &&
-                       g_mx>=(g_gd==&gamedef_se?183:PANX) && g_my>=RST_Y && g_my<RST_Y+5*16) {   /* a roster member: the figure opens the inventory, the name the portrait and stats */
+                       g_mx>=(g_gd==&gamedef_se?183:PANX) && g_my>=RST_Y && g_my<RST_Y+(g_gd==&gamedef_se?7:5)*16) {   /* a roster member: the figure opens the inventory, the name the portrait and stats */
                 int row=g_roster_first+(g_my-RST_Y)/16;
                 if (row>=0 && row<g_nparty){ g_status_actor=g_party[row].actor;
                     if(g_mx<(g_gd==&gamedef_se?203:PANX+18)){ g_inv_open=1; g_show_inv=1; } else g_show_status=1;
