@@ -114,7 +114,9 @@ Each member's arrows and bolts are its own. A person outside the party has a pac
 **Weight:** G)et refuses at `The total is too heavy.` when what the leader carries plus the thing passes 2 stones per point of
 strength. Reagents are the caster's own. Keys, scripts and the rest still look through the whole party.
 
-**E)quip** (key E, not DOS, kept): the pack in order, E steps, 1-5 readies on that member.
+**No E)quip key** (2026-11-16): neither DOS nor the ST has one; E, like every letter without a command, answers `what?` (checked on the ST
+original in Hatari). A thing is readied by selecting it in its member's inventory (mouse, or Tab and the crosshair); it is
+M)oved to another member first to go on them. Our E)quip key (E steps the pooled pack, 1-5 the member) was removed.
 
 ## 6. Pack + save representation
 
@@ -153,7 +155,7 @@ then shield refused); '3' = unready flow. Combat assert: after '1', avatar hits 
   (unless a second is worn), a vanished cloak ends the storm.
 - The effects apply to PARTY members (the original's loop is `in_party`); an NPC wearing a ring
   (Lord British wears the protection and regeneration rings in the starting data) keeps the AC only.
-- Hooked at every ready/unready path: E)quip, the status view digit (§5), the pool absorb at load.
+- Hooked at every ready/unready path: a pack thing selected in the status display, a readied slot selected (§5), the pool absorb at load.
 - Test hook `READYFX.REQ` mode '1' (usecode_use.md): the invisibility ring hides the Avatar while worn
   and not after; the regeneration ring heals 1/turn; the cloak sets the storm to 20, counts it down,
   clears it when removed; the amulet refuses removal; a worn ring vanishes within a long run.

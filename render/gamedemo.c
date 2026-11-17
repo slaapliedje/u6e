@@ -9047,18 +9047,7 @@ static void arm_drop(void)          /* start a D)rop: open the pack, arm the ver
 }
 
 static int g_avatar_weapon=43;                            /* readied weapon obj_n (default sword) */
-/* ---- E)quip: ready pooled pack items to a party member (docs/rules/equipment.md §5) ---- */
-static void equip_prompt(void)
-{
-    if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) g_inv_sel=0;
-    char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
-    int n=msgcat(0,"Equip the "); n=msgcat(n,dn); msgcat(n,"? (E=next, 1-5=who)");
-}
-static void arm_equip(void)
-{
-    if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to equip."); g_pending_verb=0; g_show_inv=0; return; }
-    g_show_inv=1; g_inv_sel=0; g_pending_verb='E'; equip_prompt();
-}
+/* ---- readying: a pack thing selected in the status display goes on its member (docs/rules/equipment.md §5) ---- */
 /* refresh an actor's combat fold + the avatar's live weapon after a readied-set change */
 static void equip_refold(int a)
 {
@@ -9153,7 +9142,7 @@ static char *u_num(char *b, int v){ char t[8]; int n=0; if(v<0) v=0;
 static void draw_inventory_list(uint8_t col)      /* SE/MD: the plain list */
 {
     ui_text(PANX+(PANW-ui_textw("Inventory"))/2, 16, "Inventory", col);
-    int armed=(g_pending_verb=='D' || g_pending_verb=='E' || (g_pending_verb=='U' && g_use_pack) || (g_pending_verb=='M' && g_move_pack));
+    int armed=(g_pending_verb=='D' || (g_pending_verb=='U' && g_use_pack) || (g_pending_verb=='M' && g_move_pack));
     int first=0;
     if(armed && g_ow.ninv>INV_ROWS){ first=g_inv_sel-INV_ROWS/2; if(first>g_ow.ninv-INV_ROWS) first=g_ow.ninv-INV_ROWS; if(first<0) first=0; }
     if(g_ow.ninv==0) ui_text(PANX+8, 28, "(nothing)", col);
@@ -9322,7 +9311,7 @@ static void draw_inventory(uint8_t col)
       else { g_iv_cont=0; ui_text(PANX+(PANW-ui_textw(nm))/2, PTXT_Y(0), nm, C_BLACK); }
       draw_doll(a,IV_DOLLX,0x20);
       if(g_iv_cont) blit_tile(0x110,0x10,g_ow.inv[cr].tile,1); else if(g_atile[a]!=0xffff) blit_tile(0x110,0x10,g_atile[a],1); }
-    { int per=IVG_COLS*IVG_ROWS, armed=(g_pending_verb=='D'||g_pending_verb=='E'||(g_pending_verb=='U'&&g_use_pack)||(g_pending_verb=='M'&&g_move_pack)||(g_pending_verb=='L'&&g_look_pack));
+    { int per=IVG_COLS*IVG_ROWS, armed=(g_pending_verb=='D'||(g_pending_verb=='U'&&g_use_pack)||(g_pending_verb=='M'&&g_move_pack)||(g_pending_verb=='L'&&g_look_pack));
       if(armed && g_inv_sel>=0 && g_inv_sel<g_ow.ninv){ int o=g_ow.inv[g_inv_sel].owner?g_ow.inv[g_inv_sel].owner:1; if(o!=a && is_party_member(o)){ a=o; g_status_actor=o; } }   /* the view follows the armed thing */
       int nr=iv_rows(a), gold=(g_gl->gold_pool&&actor_real(a)==1&&g_cg.gold>0&&!g_iv_cont), total=nr+gold;
       if(armed){ int si=0; for(int k=0;k<nr;k++) if(g_iv_row[k]==g_inv_sel) si=k; while(si<g_inv_first) g_inv_first-=IVG_COLS; while(si>=g_inv_first+per) g_inv_first+=IVG_COLS; }
@@ -15152,8 +15141,9 @@ static void bot_dump_objects(const world_t*w)
         int n=bot_put(0,"@O"); n=bot_kv(n,"i",i); n=bot_kv(n,"obj",o->obj_n); n=bot_kv(n,"fr",(int)o->tile-basetile(o->obj_n));
         n=bot_kv(n,"x",o->x); n=bot_kv(n,"y",o->y); n=bot_kv(n,"qty",o->qty); n=bot_kv(n,"q",o->quality);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
+    for(int i=0;i<g_ow.ninv;i++) if(!g_ow.inv[i].seq) g_ow.inv[i].seq=++g_inv_seq;   /* as iv_rows: the display lists the highest seq first */
     for(int i=0;i<g_ow.ninv;i++){ const invitem_t*it=&g_ow.inv[i]; char nm[40]; obj_name(it->tile,nm,sizeof nm);
-        int n=bot_put(0,"@I"); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"fr",(int)it->tile-basetile(it->obj_n)); n=bot_kv(n,"own",actor_real(it->owner?it->owner:1)); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality); n=bot_kv(n,"in",it->in); n=bot_kv(n,"id",it->id);
+        int n=bot_put(0,"@I"); n=bot_kv(n,"seq",it->seq); n=bot_kv(n,"row",i); n=bot_kv(n,"obj",it->obj_n); n=bot_kv(n,"fr",(int)it->tile-basetile(it->obj_n)); n=bot_kv(n,"own",actor_real(it->owner?it->owner:1)); n=bot_kv(n,"qty",it->qty); n=bot_kv(n,"q",it->quality); n=bot_kv(n,"in",it->in); n=bot_kv(n,"id",it->id);
         n=bot_put(n," name="); n=bot_put(n,nm); bot_flush(n); }
     for(int p=0;p<g_nparty;p++){ int a=g_party[p].actor; if(a<1||a>=U6_MAX_ACTORS) continue;   /* readied things "@E id slot obj" */
         for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]){ int n=bot_put(0,"@E"); n=bot_kv(n,"id",a); n=bot_kv(n,"slot",sl); n=bot_kv(n,"obj",g_aready[a][sl]); bot_flush(n); } }
@@ -21131,15 +21121,9 @@ int main(int argc, char **argv)
                     else if (g_pending_verb=='D' && (a=='d'||a=='D') && !(dx||dy) && g_ow.ninv>0){
                         g_inv_sel=(g_inv_sel+1)%g_ow.ninv; drop_prompt(); redraw=1;   /* D again -> next item */
                     }
-                    else if (g_pending_verb=='E' && (a=='e'||a=='E') && !(dx||dy) && g_ow.ninv>0){
-                        g_inv_sel=(g_inv_sel+1)%g_ow.ninv; equip_prompt(); redraw=1;  /* E again -> next item */
-                    }
                     else if (g_pending_verb=='P' && a>='1' && a<='5' && !(dx||dy)){
                         potion_to_member(a-'1'); g_pending_verb=0; g_show_inv=0; redraw=1; }     /* a potion: on whom (usecode_use.md) */
-                    else if (g_pending_verb=='E' && a>='1' && a<='5' && !(dx||dy)){
-                        equip_to_member(a-'1'); redraw=1;                             /* 1..5 -> that member */
-                    }
-                    else if ((g_pending_verb=='E'||g_pending_verb=='P') && (dx||dy)) { }   /* E / On-whom ignore directions */
+                    else if (g_pending_verb=='P' && (dx||dy)) { }                     /* On-whom ignores directions */
                     else if (g_pending_verb=='X' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){   /* "On ": U picks from the pack instead */
                         if(!g_on_pack){ g_on_pack=1; g_show_inv=1; g_inv_sel=0; } else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;
                         { char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn); int o=0; const char*q="On the "; while(*q&&o<40) g_on_prompt[o++]=*q++;
@@ -21193,7 +21177,6 @@ int main(int argc, char **argv)
                 else if (a=='l'||a=='L') { g_pending_verb='L'; g_look_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }                         /* D)rop */
-                else if (a=='e'||a=='E') { g_msg[0]=0; arm_equip(); redraw=1; }                        /* E)quip (equipment.md §5) */
                 else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a==' ') { msgcat(0,"Pass!"); if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* pass a turn (a raft/balloon drifts) */
                 else if (a=='s'||a=='S'||a==0x12) { g_show_inv=0; g_pending_verb=0;   /* S)ave, Ctrl-R: the slot page (save_load.md §2b) */

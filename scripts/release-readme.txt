@@ -21,8 +21,11 @@ INSTALL
 
 PLAY
   Arrow keys walk. The first letter of a command starts it:
-    A)ttack  C)ast  T)alk  L)ook  G)et  D)rop  U)se  M)ove  E)quip
-    R)est  I)nventory  S)ave     B turns combat mode on and off.
+    A)ttack  C)ast  T)alk  L)ook  G)et  D)rop  U)se  M)ove  R)est
+    S)ave     B turns combat mode on and off.
+  Click a member in the party roster to open their inventory, or press
+  Tab (* on the keypad flips portrait and inventory). Select a thing
+  there to ready it, or a readied thing to take it off.
   Commands that need a direction or a target take the arrow keys, or a
   crosshair and then Return. Esc cancels. With nothing to cancel it asks
   whether to quit. The mouse works on the command bar, the party roster
@@ -46,7 +49,7 @@ SAVED GAMES
 
 MAGIC
   As in the original, you begin with no spellbook and no reagents. Look
-  around Lord British's castle for a book, Get it, and E)quip it: C)ast
+  around Lord British's castle for a book, Get it, and ready it: C)ast
   asks for a readied book. Reagents are found or bought, and your level
   limits the circles you can cast. Mages sell spells as parchments. Put
   one in your book yourself: press M twice, M again until it is selected,

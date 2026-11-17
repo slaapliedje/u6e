@@ -812,15 +812,37 @@ SHRINES = [(0, (935, 263), 0, 2, 'ahm'), (1, (503, 359), 0, 4, 'mu'), (2, (159, 
            (4, (831, 167), 0, 24, 'cah'), (5, (327, 823), 0, 22, 'summ'), (6, (23, 23), 1, 16, 'om'), (7, (919, 935), 0, 6, 'lum')]
 
 def ready(p, obj_n, member=1):
-    """E)quip: E steps through the pack until it names the thing, a digit readies it on that member (equipment.md)"""
-    names = [r.get('name', '') for r in p.g.objects()[1] if r['obj'] == obj_n]
-    if not names: return False
-    p.idle(); st = p.key('e', 'equip')
-    for _ in range(len(p.g.objects()[1]) + 2):
-        if names[0] and names[0] in st['msg']: break
-        st = p.key('e', 'next')
-    n0 = len(names)
-    st = p.key(str(member), 'ready'); p.idle(); p.log('  ready %s on %d: %r' % (names[0], member, st['msg'][-60:]))
+    """ready a carried thing on roster member `member` as DOS does (equipment.md §5): it goes to that member
+    first (M)ove), their inventory opens, the Tab crosshair goes to its cell (first cell (248,32), 16 px a cell,
+    8 px a step; the down arrow at (232,72) scrolls a row of 4) and Enter readies it"""
+    party = p.g.state['party']
+    if not 1 <= member <= len(party): return False
+    who = party[member - 1]['id']
+    inv = p.g.objects()[1]
+    if not any(r['obj'] == obj_n for r in inv): return False
+    n0 = sum(1 for r in inv if r['obj'] == obj_n)
+    if not any(r['obj'] == obj_n and r.get('own', 1) == who and not r.get('in', 0) for r in inv):
+        give_to(p, obj_n, who); inv = p.g.objects()[1]
+    rows = sorted((r for r in inv if r.get('own', 1) == who and not r.get('in', 0)), key=lambda r: -r.get('seq', 0))
+    k = next((i for i, r in enumerate(rows) if r['obj'] == obj_n), -1)
+    if k < 0: p.log('  ready %d: not loose with member %d' % (obj_n, member)); return False
+    name = rows[k].get('name', '')
+    p.idle(); p.key('f10', 'party view'); p.key('star', 'a portrait'); p.key('star', 'its inventory')
+    for _ in range(8): p.key('minus', 'back to the first member')
+    for _ in range(member - 1): p.key('plus', 'the next member')
+    p.key('tab', 'the panel')
+    first = max(0, (k - 12 + 4) // 4 * 4) if k >= 12 else 0
+    if first:
+        p.key('left', 'to the arrow'); p.key('left', 'to the arrow')
+        for _ in range(5): p.key('down', 'to the arrow')
+        for _ in range(first // 4): p.key('ret', 'a row down')
+        p.key('right', 'back'); p.key('right', 'back')
+        for _ in range(5): p.key('up', 'back')
+    c, r = (k - first) % 4, (k - first) // 4
+    for _ in range(2 * c): p.key('right', 'to the cell')
+    for _ in range(2 * r): p.key('down', 'to the cell')
+    st = p.key('ret', 'ready it'); p.log('  ready %s on %d: %r' % (name, member, st['msg'][-60:]))
+    p.key('tab', 'back'); p.key('f10', 'party view'); p.idle()
     return sum(1 for r in p.g.objects()[1] if r['obj'] == obj_n) < n0
 
 def seg_shrines(p, kw):
@@ -1870,7 +1892,7 @@ def seg_book(p, kw):
     if st['spells'] != 7: p.issue('book', 'the book gave %d spells, not 7 (%r)' % (st['spells'], st['msg']))
     st = p.key('c', 'cast')
     if st['cast'] or 'No spellbook is readied' not in st['msg']: p.issue('book', 'C with the book in the pack: cast=%s %r' % (st['cast'], st['msg'])); p.idle()
-    ready(p, 57, 1)                                                    # E)quip through the pack (the kit makes it long)
+    ready(p, 57, 1)                                                    # from the Avatar's inventory (the kit makes it long)
     st = p.g.state
     if not st['book']: p.issue('book', 'the book is not readied (%r)' % st['msg'])
     st = p.key('c', 'cast')
