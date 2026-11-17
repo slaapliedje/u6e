@@ -1152,6 +1152,7 @@ static double quant_rms(const long freq[256], const uint8_t *palb, const uint8_t
 /* terrain colour histogram: every pixel of every tile but the transparent 255, counted as main()
  * writes the tileset (the low-colour and conversation palettes both weigh by it) */
 static long g_terr[256];
+static long g_frame_hist[256];   /* the game frame's rows 0-181 (SCREEN.LZC), x4: SE only */
 static void terrain_count(const uint8_t tile[256])
 {
     cv_hist(tile, 256, g_terr);
@@ -1162,6 +1163,7 @@ static double build_lowcolor(const uint8_t *palb,
                              uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=g_terr[i];
+    for (int i=0;i<256;i++) freq[i]+=g_frame_hist[i];   /* SE/MD: the frame always on screen above the bar (U6's border is tiles) */
     /* Hold the fire ramp OUT of the median-cut: it gets ST_CYC_SLOTS dedicated slots (reserve_cycle
      * below) so the engine can rotate it. Leaving it in would waste a general box on a colour we
      * pin anyway, and let non-fire pixels land on the (rotating) reserved slots. */
@@ -1186,11 +1188,12 @@ static double build_lowcolor(const uint8_t *palb,
  * command bar renders in icon-optimised colours (and band 0 stops spending slots on icon-only hues).
  * SCENE-NEUTRAL: this content is identical in every scene, so it never hurts other maps. */
 static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint8_t *palb,
-                               uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256])
+                               uint8_t pal_lvl[48], uint8_t pal_lvl4[48], uint8_t lut[256], int icon_tiles)
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     for (int y=182;y<200;y++) for (int x=0;x<320;x++){ int c=paper[y*320+x]; if(c!=255) freq[c]++; }
-    for (int t=400;t<410;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);
+    if (!icon_tiles) freq[0] += 18*132/3;                /* SE: the message box's last row (y 184-191) is in this band: its black ink */
+    for (int t=400;t<400+icon_tiles;t++){ uint8_t tile[256]; u6tile_decode(ts,t,tile);   /* U6's icons; SE's are in its frame */
         for (int p=0;p<256;p++){ int c=tile[p]; if(c!=255) freq[c]++; } }
     static CCol col[256]; int ncol=colors_from_freq(freq,palb,col);
     CCol snap[16]; quantize_colors(col,ncol,palb,pal_lvl,pal_lvl4,lut,snap,16);   /* command bar has no cycling ramp */
@@ -2016,7 +2019,8 @@ int main(int argc, char **argv)
             long scn; uint8_t *scd = load_core_asset(dir,"SCREEN.LZC",marker,&scn); int sw=0, sh=0;
             if (!scd || !u6shape_decode(scd,(int32_t)scn,0,&sw,&sh,paperd+4,64000) || sw!=320 || sh!=200){
                 printf("SCREEN.LZC: not a 320x200 shape (%dx%d)\n",sw,sh); return 2; }
-            free(scd); } }
+            free(scd);
+            for (int i=0;i<182*320;i++){ int c=paperd[4+i]; if(c!=255) g_frame_hist[c]+=4; } } }
     uint8_t *paper = paperd+4;                      /* 64000 pixels */
 
 
@@ -2150,7 +2154,7 @@ int main(int argc, char **argv)
     /* U6WX band 1 (the command bar's 16) is the tileset's last use: work it out now, so the
      * 400 KB tileset is freed before the front-end art (written below U6WW) */
     static uint8_t cb_pal[48], cb_pal4[48], cb_lut[256];
-    build_command_band(&ts, paperd+4, palb, cb_pal, cb_pal4, cb_lut);
+    build_command_band(&ts, paperd+4, palb, cb_pal, cb_pal4, cb_lut, u6?10:0);
     free(comb); free(msk); free(ti); comb=NULL;
     cv_step("Indoor map");
     if (u6) indoor_rle = build_indoor_rle(dir, mapb, mn, chk, cn, tflag, objs, nobj, bt,   /* SE/MD: all outdoors for now */

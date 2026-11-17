@@ -18,13 +18,16 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 REF = os.path.join(ROOT, os.environ.get('SE_REFDATA', 'refdata/dos/savage/SAVAGE'))
 VM_ERRORS = ('unknown command', 'control char', 'error')        # the interpreter's own complaints (converse.md §6c)
 
+MACHINE = os.environ.get('BOT_MACHINE', 'falcon')    # st / tt / falcon
+
 def prepare(hd, tough, start=None):
     """the drive: build/SE.PAK, or with start='x,y' a pack whose party starts there (mkworld's start, as
     make world-se SE_X= SE_Y=)"""
     if os.path.isdir(hd): shutil.rmtree(hd)
     os.makedirs(hd)
     b = os.path.join(ROOT, 'build')
-    for src, dst in (('SE.PAK', 'U6.PAK'), ('SAVE.SE', 'SAVE.000'), ('gamef.prg', 'GAMEF.PRG'), ('NEWDESK.INF', 'NEWDESK.INF')):
+    prg = {'st': ('gamest.prg', 'GAMEST.PRG'), 'tt': ('game.prg', 'GAME.PRG')}.get(MACHINE, ('gamef.prg', 'GAMEF.PRG'))
+    for src, dst in (('SE.PAK', 'U6.PAK'), ('SAVE.SE', 'SAVE.000'), prg, ('NEWDESK.INF', 'NEWDESK.INF')):
         shutil.copyfile(os.path.join(b, src), os.path.join(hd, dst))
     if start:
         x, y = start.split(',')
@@ -112,7 +115,7 @@ def main():
     def stop(sig, frame): raise SystemExit('signal %d' % sig)
     signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGHUP, stop)
     kw = keywords(REF)
-    g = Game(hd, out, machine='falcon'); p = Player(g, out, REF, log)
+    g = Game(hd, out, machine=MACHINE, timeout=900 if MACHINE == 'st' else 120); p = Player(g, out, REF, log)
     t0 = time.time()
     try:
         for s in segs:

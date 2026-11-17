@@ -5275,7 +5275,8 @@ static void compose_map(const world_t*w)
     /* Native-planar enable (recomputed each frame): master switch + PREDIM + ST backend + single-LUT
      * (a band raster gives each row its own LUT, which pre-converted planar tiles can't honour). On the
      * off->on edge or after a palette (LUT) change, force a planar-static rebuild. */
-    { int elig = g_planar_allow && predim && !g_dim_smooth && rdr_active_backend()==0 && rdr_native_planar_ok();  /* SMOOTH-PREDIM is per-pixel -> chunky only */
+    { int elig = g_planar_allow && predim && !g_dim_smooth && rdr_active_backend()==0 && rdr_native_planar_ok()
+               && g_gd!=&gamedef_se;   /* SMOOTH-PREDIM is per-pixel -> chunky only; SE's 16-px grid from 0,0 is not the planar path's 8-px inset (chunky until it is) */
       if(elig){ if(!g_native_planar){ g_pd_valid=0; rdr_pcursor_invalidate(); } /* enabled -> rebuild + drop stale cursor save-under */
                 if(rdr_planar_take_dirty()) g_pd_valid=0;   /* LUT changed (new scene) -> rebuild       */
                 g_native_planar=1; }

@@ -121,6 +121,16 @@ Nine icons in SCREEN.LZC, each in an 18-px cell from x 8, y 178-196: move, get, 
 attack, rest, combat (`x = 8 + 18k`); a click in a cell (not on its 1-px divider) picks that command. DOS draws
 no highlight on them (Look from the keyboard leaves the bar untouched).
 
+## 7. On the ST (16 colours)
+- The ST's palettes are worked out by mkworld from SE's own art, as for U6 (palette_lowcolor.md), with two
+  SE changes: the main 16 (rows 0-181) also weigh SCREEN.LZC's frame (x4 per pixel; U6's border is tiles
+  and already counted), and the command-bar band (rows 182-199) is quantised from the frame's own rows there
+  (SE's icons are part of it) plus the black of the message box's last text row, not U6's icon tiles.
+- The map is composed on the chunky path: the native-planar map (native-planar-st.md) assumes U6's 8-px
+  inset, SE's grid starts at 0,0. Open: a planar path for SE's grid if the ST needs the speed.
+- Checked in Hatari (ST, TOS 1.04, 4 MB): the start screen, the status and inventory displays, a talk with
+  Triolo (portrait palette), the bot's smoke and talk segments (0 issues).
+
 ## Test hooks
 Our TT frame against the DOS screenshot (scratch pixel diff); none in `make check` yet.
 
@@ -128,4 +138,5 @@ Our TT frame against the DOS screenshot (scratch pixel diff); none in `make chec
 IN PROGRESS: §1 (SCREEN.LZC and SYSTEM.LZC's font in the pack), §2, §3, §4, §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
 §6's clicks built, not yet driven by a mouse in a test. The `name>` prompt built (message_scroll.md). The party list's length
-and figures built 2026-11-17. Open: the Avatar's chosen name (item 9's creation).
+and figures built 2026-11-17. The ST path built 2026-11-17 (§7). Open: the Avatar's chosen name
+(item 9's creation); a planar map for SE on the ST.
