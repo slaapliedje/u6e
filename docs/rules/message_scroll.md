@@ -10,7 +10,7 @@ Tracked in: /docs/INDEX.md  ·  SE checklist item 8
 > - Tools        : DOSBox-X + Xvfb screenshots, Hatari screenshots, our bot harness (keys + screenshots)
 > - Validated by  : side-by-side screenshots of the same key sequence (Look, an unknown key, Get) in DOS and in our TT and ST builds, 2026-11-17
 > - Confidence   : confirmed for the layout below; probable for when the prompt appears relative to a turn's NPC moves
-> - Last updated : 2026-11-17
+> - Last updated : 2026-11-18 (conversations, a letter at the crosshair, the prompt after the turn)
 
 ## 1. System
 The message box (U6: the bottom of the right panel; SE: the bottom box) is a running scroll. Each command's
@@ -27,9 +27,26 @@ The box is drawn the same way under the party list, the status display and the i
 | Its result | follows on the same row: `>Look-Thou dost see Test` | the same |
 | Later lines of the same turn | under the command (`Dupre grazed.`), above the next prompt | the same |
 | A letter with no command | `>what?` | `>what?` |
+| A letter or digit at a verb's crosshair | `>Look-what?`, the verb dropped (g, k, l, 5 tried); Space is ignored | (not tried) |
 | Rows | 10, 8 px apart, from y 112 (17 columns) | 8, 8 px apart, from y 128 |
 
 The first prompt of a game has no blank row above it. The name is the leader's (in Solo, the member in control).
+
+## 2b. Conversations (U6, DOS observed 2026-11-18)
+The talk runs on in the message scroll, under the lines before it: `Test:`, `>Talk-Dupre`, a blank row, the
+look line (`You see a ruggedly handsome man, wearing a gleaming suit of armor.`), a blank row, the greeting, a
+blank row, `you say:` and the ankh. What is typed follows `you say:`; then a blank row and the answer, and so on.
+After `bye` the talk stays in the scroll and the next prompt follows it.
+- The panel above: the sky strip stays; the face (56x64) has no frame, at y 24, centred (x 216), the name on
+  the row under it (y 88). For a party member the face moves right (x 248) and the figure with its readied
+  places stands left of it, the inventory's doll 8 px lower (figure at 0xc0,0x28).
+- The name is the one the script gives once the Avatar has met the speaker (talk flag 0) or for a party
+  member; a stranger goes by its kind (`mage`, and `>Talk-mage`).
+- Page waits as converse.md §6d, the window's count 8 (two of it gone on `Talk-name` and the blank row, so
+  the first page shows 5 rows of the look line before the arrow), the box showing 10 rows.
+- A `*` inside the look line is not a wait (Dupre's `armor. *`: DOS's arrow is the page wait on the next row).
+  A `*` right after a line break shows the arrow at the end of the line before (Nystul's `mage.` then `*`):
+  DOS has not moved down yet.
 
 ## 3. Our build
 - The words of the current command are kept as before (the bot and the tests read them); the box adds the
@@ -41,15 +58,21 @@ The first prompt of a game has no blank row above it. The name is the leader's (
   The limit is unchanged (9 rows, 7 with a verb waiting, counted on the words alone).
 - The words that are ours, not DOS's (the pack picker's `(L=next, Enter=look)`), show as they are.
 
+- The fresh prompt waits while the turn's moves are still to come (the command's time not yet spent, a rest,
+  a moongate walk, a click-travel), as DOS shows it once they are done.
+- A letter or digit at a verb's crosshair: `what?` and the verb dropped, as DOS. Our pack pickers (the verb's
+  own letter again at Look-, Use-, Move-, Drop-) still step through the pack: an addition, waiting for the
+  user's call (deviations.md, "Found, not yet built").
+- U6 conversations: §2b, all of it (the scroll, `you say:`, the unframed face, the member's figure, the
+  stranger's kind, rows 8 px apart). The bot reads `you say:word` where SE keeps `> word`.
+
 ## 4. Open
-- DOS U6 sometimes shows a finished command without the fresh prompt for a moment (the prompt comes once the
-  turn's moves are done); ours shows it at once.
-- With a verb's crosshair up, DOS answers an unknown key with `what?` and drops the verb; ours ignores it.
-- U6 DOS puts conversation text 8 px apart too; our U6 conversation keeps 9 (TPITCH).
+- SE's answer to a letter at the crosshair was not tried in DOS SE (ours: as U6).
+- On the ST the member's figure in a conversation shows in that portrait's 16 colours.
 
 ## 5. Test hooks
 Screenshots only (the bot's key sequence on ST and TT); no `make check` hook. `make bot-smoke` proves the
 message text is unchanged.
 
 ## 6. Status
-IN PROGRESS: §1-3 built for U6 and SE; §4 open.
+BUILT for U6 (§1-3, 2b); SE's scroll built, its conversation keeps its own screen (se_screen.md §5); §4 open.

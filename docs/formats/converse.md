@@ -230,8 +230,10 @@ Martian Dreams' GAME.EXE has no such loop; it is read with the rest of MD (se_md
 
 The message scroll pages by the same rule (u6e: a page less one row, the arrow on the last row).
 
-In u6e (render/gamedemo.c `talk_page_sync`/`talk_advance`/`talk_draw`): the panel's text area is 8
-rows, the typing row counting as a line; the panel shows the newest 8 rows of what is out. The `*`s
+In u6e (render/gamedemo.c `talk_page_sync`/`talk_advance`/`talk_draw`): the count's height is 8, the typing
+row counting as a line. U6 shows the talk in the message box (10 rows, the older scroll above it; the first
+page's count starts at 6, `Talk-name` and a blank row having taken two: message_scroll.md §2b); SE shows the
+newest 16 rows in the map window. The `*`s
 stay in the transcript (the bot and the tests read it whole) and are not drawn.
 
 ## 7. Status

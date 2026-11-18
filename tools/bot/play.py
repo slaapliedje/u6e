@@ -162,7 +162,7 @@ class Player:
 
     def answer(self, aid, conv):
         """if the text ends with a question the script itself answers, its first keyword"""
-        tail = conv.rstrip()
+        tail = conv.rstrip(' |\n')                         # (U6 ends with a blank row before "you say:": "||")
         if tail.endswith(':'):                                 # SE's waking questions end "(page N):" (convkw's jump sections)
             norm = lambda t: re.sub(r'[^a-z0-9]', '', t.lower())
             nt = norm(tail[-300:])
@@ -229,8 +229,9 @@ class Player:
             st = self.say(w) if (self.g.state.get('askc') and len(w) == 1) else self.g.type(w)
             self.check('say %r to %d' % (w, aid))
             reply = st['conv']
-            if '> ' + w not in reply: self.issue('talk', '%d %s: no reply to %r' % (aid, name, w), shot=False)
-            elif not reply.split('> ' + w, 1)[1].strip(): self.issue('talk', '%d %s: empty reply to %r' % (aid, name, w), shot=False)
+            echo = ('you say:' if 'you say:' in reply else '> ') + w    # U6 echoes as DOS ("you say:"), SE "> "
+            if echo not in reply: self.issue('talk', '%d %s: no reply to %r' % (aid, name, w), shot=False)
+            elif not reply.split(echo, 1)[1].strip(): self.issue('talk', '%d %s: empty reply to %r' % (aid, name, w), shot=False)
             out.append((w, reply))
         yn, prev = ('y' if yes else 'n'), None                # a y/n after bye: 'n' (no purchases) or 'y', the other key if it asks again
         for _ in range(16):

@@ -738,7 +738,7 @@ static int            g_cc_xfer, g_cc_xexp, g_cc_xlevel, g_cc_xhp;   /* ...and a
 #define MSG_W    (g_gd==&gamedef_se?128:PANW)
 #define MSG_ROWS (g_gd==&gamedef_se?8:9)
 #define RST_Y    (g_gd==&gamedef_se?8:26)    /* the party list's first row */
-#define TPITCH   (g_gd==&gamedef_se?8:9)   /* wrapped text's line pitch: DOS SE puts rows 8 px apart */
+#define TPITCH   8                         /* wrapped text's line pitch: DOS puts rows 8 px apart (U6 and SE) */
 #define NCMD 10
 /* mouse cursor (decoded from U6MCGA.PTR) + save-under */
 #define CURMAX 64
@@ -5764,8 +5764,15 @@ static void ui_text_wrap(int x,int y,int w,const char*s,int lines,uint8_t col)
  * window since the last key; when the count runs out it waits (Space, Enter, Esc or a click) with the
  * arrow on the next row, then shows a window less one; a `*` in the text waits for any key where it
  * stands, and that key starts the count again. The panel shows the newest TROWS rows of what is out. */
-#define TROWS (g_gd==&gamedef_se?16:8)   /* SE talks in the map window: 16 rows of 18 (rules/se_screen.md §5) */
-#define TCOLS (g_gd==&gamedef_se?18:(PANW-12)/8)
+#define TROWS (g_gd==&gamedef_se?16:8)   /* the count's height; SE talks in the map window: 16 rows of 18 (rules/se_screen.md §5) */
+#define TALK_SCROLL (!g_gamename)        /* U6: the talk runs on in the message scroll, as DOS (message_scroll.md §2b) */
+#define TCOLS (g_gd==&gamedef_se?18:TALK_SCROLL?PANW/8:(PANW-12)/8)
+#define TVIS  (g_gd==&gamedef_se?16:TALK_SCROLL?10:8)   /* rows shown: U6 the message box's 10 */
+static int g_thead;
+static void obj_name(int tile,char*out,int cap);
+static char g_mhist[1200]; static int g_mhist_n;          /* the message scroll's finished commands, prompts included */
+static void draw_doll(int a,int fx,int fy);
+static int msg_rows(const char*t,int cols,const char**st,int*ln,int max);                      /* U6: a talk just began: its "Talk-name" row and the blank row took two of the count */
 #define TMAXR 128
 static char    g_tdisp[1024];                 /* the transcript without its `*`s */
 static int16_t g_trs[TMAXR], g_tre[TMAXR], g_tstar[64];
@@ -5805,7 +5812,7 @@ static void talk_page_sync(void)
         g_trs[g_tnr]=(int16_t)i; g_tre[g_tnr]=(int16_t)(i+take); g_tnr++;
         i+=take; if(g_tdisp[i]=='\n') i++;
     }
-    g_trow=0; g_tpos=0; g_tcounted=0; g_tsn=0; g_tcnt=TROWS;          /* the key that opened it reset the count */
+    g_trow=0; g_tpos=0; g_tcounted=0; g_tsn=0; g_tcnt=TROWS-(g_thead?2:0); g_thead=0;   /* the key that opened it reset the count */
     talk_advance();
 }
 static int talk_waiting(void){ talk_page_sync(); return g_twait; }
@@ -5826,13 +5833,17 @@ static void talk_draw(int x,int y,uint8_t col)
     if(inrow>=0) last=inrow;
     if(g_twait==1){ cx=0; cy=last+1; }                             /* the arrow where the next row goes */
     else if(g_twait==2){ if(part>=0){ cx=part; cy=g_trow; } else { cx=g_tnr?g_tre[g_tnr-1]-g_trs[g_tnr-1]:0; cy=g_tnr-1; }
+        if(TALK_SCROLL && part==0 && g_trow>0){ cy=g_trow-1; cx=g_tre[cy]-g_trs[cy]; }   /* a `*` just after a line break: DOS has not moved down yet */
         if(cy<0){ cy=0; cx=0; } if(cx>=cols){ cx=0; cy++; } }
-    int occ=(cy>last?cy:last)+1, first=occ>TROWS?occ-TROWS:0;
+    int occ=(cy>last?cy:last)+1, first=occ>TVIS?occ-TVIS:0;
+    if(TALK_SCROLL && occ<TVIS && g_mhist_n){                     /* U6: the scroll's older rows above the talk */
+        enum { MR=16 }; const char*hs[MR]; int hl[MR]; int hr=msg_rows(g_mhist,TCOLS,hs,hl,MR), room=TVIS-occ;
+        for(int k=(hr>room?hr-room:0);k<hr;k++){ ui_text_row(x,y,hs[k%MR],hl[k%MR],col); y+=TPITCH; } }
     for(int r=first;r<=last;r++){
         int yy=y+(r-first)*TPITCH;
-        if(r==inrow){                                              /* the input row: "> typed" and the cursor */
-            char line[24]; int t=0; line[t++]='>'; line[t++]=' ';
-            for(int k=0;k<g_inlen && t<21;k++) line[t++]=g_inbuf[k];
+        if(r==inrow){                                              /* the input row: "you say:typed" (U6; SE "> typed") and the cursor */
+            char line[32]; int t=0; const char*pf=TALK_SCROLL?"you say:":"> "; while(*pf) line[t++]=*pf++;
+            for(int k=0;k<g_inlen && t<29;k++) line[t++]=g_inbuf[k];
             line[t]=0; ui_text(x,yy,line,col); tcur_set(x+t*8,yy,5,col); continue; }
         int n=(r==g_trow)?part:g_tre[r]-g_trs[r];
         char line[48]; int t=n<47?n:47; for(int k=0;k<t;k++) line[k]=g_tdisp[g_trs[r]+k];
@@ -5953,9 +5964,13 @@ static void pl_draw(const uint8_t *src, int lx, int ly)
     }
     for(int y=0;y<PL_ROWS;y++) for(int x=0;x<PL_W;x++) ui_px(lx+x,ly+y,g_pl_img[y*PL_W+x]);
 }
+static void draw_portrait_raw(const uint8_t*src,int lx,int ly);
 static void draw_portrait_buf(const uint8_t*src,int lx,int ly)
 {
     ui_frame(lx-1,ly-1,PW+2,PH+2,C_BLACK);
+    draw_portrait_raw(src,lx,ly); }
+static void draw_portrait_raw(const uint8_t*src,int lx,int ly)   /* no frame: DOS's conversation face */
+{
     if(g_pl_ok && src==g_cur_portrait){ pl_draw(src,lx,ly); if(g_pl_ok) return; }
     const pdith_t *d=pdith_for(src,ly);
     if(d){ for(int y=0;y<PH;y++)for(int x=0;x<PW;x++) ui_px(lx+x,ly+y,pdith_px(d,src[y*PW+x],lx+x,ly+y)); return; }
@@ -6064,7 +6079,7 @@ static const char* pending_text(void)
                            g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
                            g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
                            g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-"; }
-static char g_mhist[1200]; static int g_mhist_n;          /* the finished commands, prompts included */
+
 static char g_mcbase[512];                                /* this command's earlier words (a verb's first step) */
 static char g_mshadow[1024]; static int g_msh_len; static uint32_t g_msh_sum;   /* g_msg as last seen: its tail, length, sum */
 static int  g_mprev_pend; static char g_mprev_pp[48];
@@ -6105,6 +6120,22 @@ static void msg_track(const char*pp)
         { const char*t=g_msg+(L>(int)sizeof g_mshadow-1?L-((int)sizeof g_mshadow-1):0); mput(g_mshadow,0,sizeof g_mshadow,t); }
     }
     g_mprev_pend=pp!=0; mput(g_mprev_pp,0,sizeof g_mprev_pp,pp?pp:""); }
+/* U6 talk in the scroll (message_scroll.md §2b): the command before it goes to the history, then
+ * "Name:" ">Talk-who" and a blank row; each exchange's words join the history when the next starts */
+static void msg_commit(void)
+{   if(g_msh_len || g_mcbase[0]){ static char e[1700]; int n=msg_prompt(e,0,sizeof e); n=mput(e,n,sizeof e,g_mcbase); mput(e,n,sizeof e,g_mshadow); mhist_add(e); }
+    g_mcbase[0]=0; g_mshadow[0]=0; g_msh_len=0; g_msh_sum=msg_sum(g_msg,0); g_msg[0]=0; g_mprev_pend=0; g_mprev_pp[0]=0; }
+static void talk_scroll_begin(const char*who)
+{   msg_commit();
+    static char e[80]; int n=msg_prompt(e,0,sizeof e); n=mput(e,n,sizeof e,"Talk-"); mput(e,n,sizeof e,who);
+    mhist_add(e); mhist_add(""); g_thead=1; }
+static void talk_ask_gap(void)                    /* U6: a blank row before "you say:" (DOS) */
+{   if(!TALK_SCROLL || !g_await_input) return; int n=(int)strlen(g_transcript);
+    while(n>0 && g_transcript[n-1]=='\n') n--; g_transcript[n]=0; tappend(n,"\n\n"); }
+static void talk_scroll_keep(void)                /* the words out so far join the history (the `*`s dropped) */
+{   static char e[1024]; int n=0; for(const char*p=g_transcript;*p && n<1023;p++) if(*p!='*') e[n++]=*p; e[n]=0;
+    while(n>0 && e[n-1]=='\n') e[--n]=0;
+    if(n) mhist_add(e); }
 /* split t into wrapped rows as ui_text_wrap does: starts and lengths, up to max */
 static int msg_rows(const char*t,int cols,const char**st,int*ln,int max)
 {   int r=0;
@@ -6118,7 +6149,8 @@ static void msg_box(uint8_t col)
     msg_track(pp);
     int n=msg_prompt(g_mcur,0,sizeof g_mcur); n=mput(g_mcur,n,sizeof g_mcur,g_mcbase); n=mput(g_mcur,n,sizeof g_mcur,g_msg);
     if(pp && !(g_msg[0] && strstr(g_msg,pp))){ if(g_msg[0]) n=mput(g_mcur,n,sizeof g_mcur,"\n"); n=mput(g_mcur,n,sizeof g_mcur,pp); }
-    if(!pp && (g_msg[0]||g_mcbase[0])){ n=mput(g_mcur,n,sizeof g_mcur,"\n"); n=msg_prompt_after(g_mcur,n,sizeof g_mcur,1); }   /* done: the next prompt */
+    int busy=g_verb_pts||g_resting||g_gw||g_travel_active;   /* the turn's moves still to come: DOS shows the prompt after them */
+    if(!pp && !busy && (g_msg[0]||g_mcbase[0])){ n=mput(g_mcur,n,sizeof g_mcur,"\n"); n=msg_prompt_after(g_mcur,n,sizeof g_mcur,1); }   /* done: the next prompt */
     int cols=MSG_W/8, rows=MB_ROWS; enum { MR=64 }; const char*st[MR]; int ln[MR];
     {   int lim=pp?MSG_ROWS-2:MSG_ROWS, mr=g_msg[0]?msg_rows(g_msg,cols,st,ln,MR):0;      /* the page wait as before: on the words alone */
         if(g_msg[0] && (mr>lim || g_msg_skip)){ g_tcur_idle=0; g_wrap_pitch=MB_PITCH;
@@ -6132,11 +6164,11 @@ static void msg_box(uint8_t col)
         for(int k=(hr>room?hr-room:0);k<hr;k++){ ui_text_row(MSG_X,y,hs[k%MR],hl[k%MR],col); y+=MB_PITCH; } }
     for(int k=first;k<rc;k++){ ui_text_row(MSG_X,y,st[k%MR],ln[k%MR],col); y+=MB_PITCH; }
     int cx=ln[(rc-1)%MR], cy=y-MB_PITCH; if(cx>=cols){ cx=0; cy+=MB_PITCH; }
-    if(cy<MSG_Y+rows*MB_PITCH){ g_tcur_idle=1; tcur_set(MSG_X+cx*8,cy,5,col); } else g_tcur_idle=0; }
+    if(!busy && cy<MSG_Y+rows*MB_PITCH){ g_tcur_idle=1; tcur_set(MSG_X+cx*8,cy,5,col); } else g_tcur_idle=0; }
 static void draw_conversation(uint8_t col)
 {
     KP(13);
-    int pxx=PANX+(PANW-PW)/2, pyy=MAPY+16;
+    int pxx=PANX+(PANW-PW)/2;
     restore_panel();                               /* clean papyrus before text */
     g_tcur_x=-1; g_tcur_idle=0;                    /* a wait's cursor is drawn again below if one is up */
     if(g_save_menu){                               /* the slot page (save_load.md §2b) */
@@ -6163,11 +6195,15 @@ static void draw_conversation(uint8_t col)
                     ui_px(fx+xx, fy+yy, fc[yy*g_sefw+xx]);
                 ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, fy+g_sefh+4, g_talk_name, 15);
             } else ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, MAPY+8, g_talk_name, 15);
-        } else {
-        if(g_have_pc) draw_portrait_buf(g_cur_portrait,pxx,pyy);
-        ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, pyy+PH+4, g_talk_name, col);
+        } else {                                   /* U6 as DOS: the sky, the face unframed at y 24 (a member's figure and places beside it), the name under it */
+        int mem=g_talk_actor>0 && g_talk_actor<U6_MAX_ACTORS && is_party_member(g_talk_actor);
+        draw_sky();
+        if(mem) draw_doll(g_talk_actor,0xc0,0x28);
+        if(g_have_pc) draw_portrait_raw(g_cur_portrait,mem?248:pxx,24);
+        ui_text(PANX+(PANW-ui_textw(g_talk_name))/2, 24+PH, g_talk_name, col);
         }
-        talk_draw(PANX+6, 116, g_gamename?15:col);  /* white on SE's black panel */
+        if(TALK_SCROLL) talk_draw(MSG_X, MSG_Y, col);
+        else talk_draw(PANX+6, 116, g_gamename?15:col);  /* white on SE's black panel */
     } else if(g_show_status){
         draw_char_view(col);                       /* a party member's portrait + gender + stats */
         if(msg_use_scroll()) msg_box(col); else if(g_msg[0]) ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_msg, MSG_ROWS, col);
@@ -6656,9 +6692,16 @@ static cvm_status talk_vm(int id,int32_t got,int look)
     cvm_init(&g_cv,g_script_buf,got,&g_cg,id,g_avatar_name,g_avatar_title);
     cvm_status st=cvm_run(&g_cv);
     { int o=0; while(g_cv.npcname[o]&&o<31){ g_talk_name[o]=g_cv.npcname[o]; o++; } g_talk_name[o]=0; }
-    { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting */
-      if(!look) while(*q && *q!='"') q++;
-      tappend(0, *q?q:gt); }
+    { const char*gt=cvm_text(&g_cv), *q=gt;     /* skip the look desc to the greeting (U6 shows it, then a blank row: DOS, observed 2026-11-18) */
+      while(*q && *q!='"') q++;
+      if(TALK_SCROLL && !look && *q && q>gt){      /* the look line (its `*`s are not waits in DOS), a blank row, the greeting;
+                                                      * a `*` the script puts between them stays, on the blank row */
+          static char d[200]; int n=0; const char*p=gt;
+          for(;p<q && *p!='\n' && n<150;p++) if(*p!='*') d[n++]=*p;
+          d[n++]='\n';                              /* (its closing space stays: the arrow after "mage. ") */
+          for(;p<q && n<196;p++) if(*p=='*') d[n++]='*';
+          d[n++]='\n'; d[n]=0; int tl=tappend(0,d); tappend(tl,q); }
+      else { if(look) q=gt; tappend(0, *q?q:gt); } }
     sync_party_out(); if(!g_cg.inv_count) sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* greeting may JOIN/LEAVE, give/take items, heal */
     return st;
 }
@@ -6686,7 +6729,10 @@ static void u6_talk(int id)
     int32_t got=u6lzw_decompress(e,elen,g_script_buf,(int32_t)sizeof g_script_buf);
     if(got<=0) return;
 
+    int met=(id>=0 && id<256 && (g_cg.talk_flags[id]&1)) || is_party_member(id);   /* talk flag 0: met; a member is known (DOS: "Dupre") */
     cvm_status st=talk_vm(id,got,0);
+    if(TALK_SCROLL && !met && !g_talk_obj && id>1 && id<U6_MAX_ACTORS && g_atile[id]!=0xffff)   /* a stranger goes by its kind ("mage"): DOS, observed 2026-11-18 */
+        obj_name(g_atile[id],g_talk_name,sizeof g_talk_name);
 
     /* portrait: index id-1, library A for <98 else B (PORTRAIT.A holds 98) */
     g_have_pc=0;
@@ -6701,11 +6747,13 @@ static void u6_talk(int id)
     g_talking=1; g_talk_actor=id;
     g_inlen=0; g_inbuf[0]=0;
     g_await_input=(st==CVM_ASK);   /* wait for the player to type a keyword/number */
+    if(TALK_SCROLL){ talk_scroll_begin(g_talk_name); talk_ask_gap(); }
 }
 
 /* close the conversation panel (BYE / walk away) */
 static void end_talk(void)
-{ g_talking=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0; conv_palette_leave(); }   /* ST: restore game palette */
+{ if(g_talking && TALK_SCROLL){ talk_scroll_keep(); g_transcript[0]=0; g_tgen++; }   /* U6: the talk stays in the scroll */
+  g_talking=0; g_await_input=0; g_inlen=0; g_inbuf[0]=0; conv_palette_leave(); }   /* ST: restore game palette */
 
 /* feed the typed keyword/number to the paused VM and resume it. The transcript
  * shows this exchange (echoed input + the NPC's reply); we keep the box open
@@ -6716,10 +6764,11 @@ static void submit_input(void)
     cvm_input(&g_cv,g_inbuf);
     cvm_status st=cvm_run(&g_cv);
     int tl=0;
-    tl=tappend(tl,"> "); tl=tappend(tl,g_inbuf); tl=tappend(tl,"  ");
+    if(TALK_SCROLL){ talk_scroll_keep(); tl=tappend(tl,"you say:"); tl=tappend(tl,g_inbuf); tl=tappend(tl,"\n\n"); }   /* U6: DOS's words, the last exchange kept above */
+    else { tl=tappend(tl,"> "); tl=tappend(tl,g_inbuf); tl=tappend(tl,"  "); }
     tappend(tl,cvm_text(&g_cv));
     g_inlen=0; g_inbuf[0]=0;
-    g_await_input=(st==CVM_ASK);
+    g_await_input=(st==CVM_ASK); talk_ask_gap();
     sync_party_out(); if(!g_cg.inv_count) sync_inv_out(); sync_health_out(); sync_stats_out(); sync_worktype_out(); sync_carry_in();   /* a keyword may change the party, give/take items/gold, heal */
     if(g_cg.dialect==CVM_DIALECT_SE && g_cg.portrait_npc>=0) g_talk_face=g_cg.portrait_npc;   /* SE: the last PORTRAIT shown */
     if(g_game_over) end_talk();                                                               /* SE's EVENT 10 ends the game */
@@ -21247,6 +21296,10 @@ int main(int argc, char **argv)
                         move_pack_item(); g_pending_verb=g_next_verb; g_next_verb=0; g_move_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0; redraw=1; }
+                    else if (VERB_CURSOR(g_pending_verb) && g_pending_verb!='R' && !VERB_PACK() &&
+                             ((a>='a'&&a<='z')||(a>='A'&&a<='Z')||(a>='0'&&a<='9'))) {   /* a letter or digit at the crosshair: "what?", the command dropped (DOS, observed 2026-11-18: g k l 5; Space is ignored) */
+                        g_pending_verb=0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_show_inv=0; msgcat(0,"what?");
+                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (a==0x1b) { if(g_pending_verb=='C'&&!g_free_cast){ g_msg[0]=0; msgcat(0,"nothing"); cast_finish(0); } else if(g_pending_verb=='X'){ msgcat(msg_end(),"\nOn nothing!"); g_on_pack=0; } else g_msg[0]=0; g_tk_move=0; g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_move_pack=0; g_look_pack=0; g_use_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* cancel */
                 }
                 else if (a>='1' && a<='8' && a-'1'<g_nparty){ int act=g_party[a-'1'].actor, who=actor_real(act);   /* Solo: this one alone; 0 back to the party (combat.md §8) */
