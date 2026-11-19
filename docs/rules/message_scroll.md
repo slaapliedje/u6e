@@ -56,13 +56,12 @@ After `bye` the talk stays in the scroll and the next prompt follows it.
   a result that does not repeat it (`Look-` then `what?`).
 - A command's own words longer than the box still page as before (converse.md §6d): the arrow, then a key.
   The limit is unchanged (9 rows, 7 with a verb waiting, counted on the words alone).
-- The words that are ours, not DOS's (the pack picker's `(L=next, Enter=look)`), show as they are.
 
 - The fresh prompt waits while the turn's moves are still to come (the command's time not yet spent, a rest,
   a moongate walk, a click-travel), as DOS shows it once they are done.
-- A letter or digit at a verb's crosshair: `what?` and the verb dropped, as DOS. Our pack pickers (the verb's
-  own letter again at Look-, Use-, Move-, Drop-) still step through the pack: an addition, waiting for the
-  user's call (deviations.md, "Found, not yet built").
+- A letter or digit at a verb's crosshair: `what?` and the verb dropped, as DOS, the verb's own letter too (at
+  Drop- as well). A carried thing is picked in the inventory display (equipment.md §5); the pack pickers that
+  stepped through the pack on the verb's letter were removed 2026-11-18 at the user's call.
 - U6 conversations: §2b, all of it (the scroll, `you say:`, the unframed face, the member's figure, the
   stranger's kind, rows 8 px apart). The bot reads `you say:word` where SE keeps `> word`.
 

@@ -153,8 +153,9 @@ until it is built, the door just opens.
 Many uses ask for a second thing: `On ` is printed after the echo and a cursor picks a map tile or
 a thing in the pack (29 functions call the picker). The answer's name follows on the same line; a
 map thing must be within one tile of the acting member (`Out of range!`); no answer prints
-`On nothing!`. The engine's verb is `X`: the arrows walk the crosshair and Enter takes the tile, U
-picks from the pack instead (U again for the next thing, Enter takes it), Esc answers nothing.
+`On nothing!`. The engine's verb is `X`: the arrows walk the crosshair and Enter takes the tile; a
+thing in the pack is picked in the inventory display (Tab and the crosshair, or the mouse), Esc answers nothing.
+(Our U picker, the letter stepping through the pack, was removed 2026-11-18: it was not DOS's.)
 
 **The fire** (0x2215f; lava, the oven, a fire, the fire pit):
 

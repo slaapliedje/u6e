@@ -561,14 +561,41 @@ class Player:
             return st
         return self.g.state
 
-    def use_pack(self, obj_n, name=''):
-        """U)se a carried item (whose name holds `name`): U, then U until the pack prompt names it,
-        Enter; the state after"""
+    def display_pick(self, row):
+        """the crosshair in the inventory display onto a carried thing (an @I row, loose in its holder's pack) and
+        Enter, as DOS picks one (equipment.md §5): Tab unless D)rop put it there already, + / - to the holder,
+        the arrows a cell a step (past the last row the pack scrolls); the state after Enter, or None"""
+        own = row.get('own', 1)
         _, inv = self.g.objects()
-        names = [r.get('name', '') for r in inv if r['obj'] == obj_n and name in r.get('name', '').lower()]
-        if not names: return None
+        rows = sorted((r for r in inv if r.get('own', 1) == own and not r.get('in', 0)), key=lambda r: -r.get('seq', 0))
+        k = next((i for i, r in enumerate(rows) if r.get('row') == row.get('row')), -1)
+        if k < 0: return None
+        st = self.g.state
+        if not st.get('pf'): st = self.key('tab', 'the display')
+        ids = [m['id'] for m in st['party']]
+        if own not in ids: return None
+        for _ in range(10):
+            if st.get('sa') == own or st.get('sa') not in ids: break
+            st = self.key('plus' if ids.index(own) > ids.index(st['sa']) else 'minus', 'the holder')
+        if st.get('sa') != own: return None
+        nr = st.get('ir', 3)
+        for _ in range(80):
+            col, vr = (st['pfx'] - 248) // 16, (st['pfy'] - 32) // 16
+            tr, tc = k // 4 - st['ifst'] // 4, k % 4
+            if not (0 <= col < 4 and 0 <= vr < nr): st = self.key('up' if vr >= nr else 'down' if vr < 0 else 'right' if col < 0 else 'left', 'into the pack')
+            elif tr < 0 or vr > tr: st = self.key('up', 'to the cell')
+            elif tr >= nr or vr < tr: st = self.key('down', 'to the cell')
+            elif col < tc: st = self.key('right', 'to the cell')
+            elif col > tc: st = self.key('left', 'to the cell')
+            else: return self.key('ret', 'pick %s' % row.get('name', ''))
+        self.issue('display', 'the crosshair never reached %r (k %d)' % (row.get('name'), k)); return None
+
+    def use_pack(self, obj_n, name=''):
+        """U)se a carried item (whose name holds `name`): U, the crosshair on it in the display, Enter; the state after"""
+        _, inv = self.g.objects()
+        rows = [r for r in inv if r['obj'] == obj_n and name in r.get('name', '').lower() and not r.get('in', 0)]
+        if not rows: self.log('  use_pack %d%s: not loose in the pack (%s)' % (obj_n, ' ' + name if name else '', [(r['obj'], r.get('name'), r.get('in')) for r in inv if r['obj'] == obj_n])); return None
         self.key('u')
-        for _ in range(len(inv) + 4):
-            st = self.key('u')
-            if st['inv'] and st['msg'].startswith('Use the ' + names[0] + '?'): return self.key('ret', 'use pack obj %d' % obj_n)
-        self.issue('use', 'the pack prompt never named %r (last %r)' % (names[0], self.g.state['msg'])); self.idle(); return None
+        st = self.display_pick(rows[0])
+        if st is None: self.issue('use', 'the display never picked %r (last %r)' % (rows[0].get('name'), self.g.state['msg'])); self.idle()
+        return st

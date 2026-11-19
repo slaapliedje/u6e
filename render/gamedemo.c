@@ -671,8 +671,7 @@ static int msgcat(int n,const char*s);     /* fwd: append to g_msg (defined belo
 static const char* rest_prompt_text(void);  /* fwd: the R)est prompt line (rest.md §2) */
 static int            g_pending_verb;      /* 0/'L'/'G'/'U'/'T'/'M' awaiting a target */
 #define SEON_OFFER 16                                       /* the totems' offering (0x12ef7, se_invoke.md) */
-static int g_se_on, g_on_pack;                             /* SE's "On " prompt (se_use.md §5): which handler asks, and whether the pack is being picked from */
-static char g_on_prompt[48];
+static int g_se_on;                                       /* SE's "On " prompt (se_use.md §5): which handler asks */
 static int se_on_map(world_t*w,int dx,int dy); static int se_on_pack(world_t*w,int row);
 static int            g_fx_on;             /* one-tile overlay drawn over everything: a cannonball in flight / a burst (cannons.md §1) */
 #define TILE_TARGET_CURSOR 365               /* the A)ttack crosshair (combat.md §6b) */
@@ -687,8 +686,6 @@ static uint8_t        g_gw_hidden[8];
 static int            g_tcur_dx, g_tcur_dy;/* the crosshair's offset from the Avatar while 'A' is armed */
 static uint16_t       g_fx_tile; static int g_fx_x, g_fx_y, g_fx_extra, g_fx_ex[16], g_fx_ey[16];
 static int            g_travel_active=0;   /* 1 = auto-walking toward a clicked tile      */
-static int            g_use_pack;                 /* U)se armed on a carried item (U pressed twice) */
-static int            g_move_pack;                /* M)ove armed on a carried item (M pressed twice) */
 static int            g_inv_open;                 /* the status display stays on the inventory (DOS: until F10) */
 static int            g_inv_first;                /* the first pack item shown; moves by a row of 4 */
 static int            g_pan_focus, g_pan_x, g_pan_y;   /* Tab: the crosshair is in the status display, at this pixel */
@@ -703,11 +700,12 @@ static int g_drop_pick;                               /* D)rop is still choosing
 static int g_rest_stage, g_rest_guard;
 static int basetile(int obj_n);
 static int            g_look_test;                /* LOOK.REQ: the views do not wait for a key */
-static int            g_look_pack;                /* L)ook armed on a carried item (L pressed twice) */
 static int            g_book_read;                /* the spell page is open to read, from L)ook (usecode_use.md) */
 /* the verbs that arm the crosshair, as DOS: arrows walk it, Enter or a click acts (usecode_use.md) */
 #define VERB_CURSOR(v) ((v)=='A'||((v)=='R'&&g_rest_stage==2)||(v)=='T'||(v)=='O'||(v)=='L'||(v)=='G'||(v)=='U'||(v)=='M'||(v)=='D'||(v)=='W'||(v)=='K')
-#define VERB_PACK() (g_use_pack||g_move_pack||g_look_pack||g_drop_pick||g_on_pack)
+enum { IVG_X=0xf8, IVG_Y=0x20, IVG_COLS=4, IVB_Y_U6=0x58 };
+#define DROP_LIST() (g_gamename && g_gd!=&gamedef_se)         /* MD: D)rop still picks in its plain list (its panel is checklist item 13) */
+#define VERB_PACK() (g_drop_pick && (g_pan_focus||DROP_LIST()))   /* D)rop choosing in the display: no map crosshair */
 static int            g_travel_tx, g_travel_ty, g_travel_level;  /* the click-to-travel destination tile (+ level: a transition ends it) */
 static int            g_show_inv;          /* 1 = inventory list shown in the panel */
 static int            g_menu_journey;      /* "Journey Onward" chosen -> resume SAVED.000 at boot if present */
@@ -6078,7 +6076,7 @@ static const char* pending_text(void)
 {   return g_pending_verb=='R'?rest_prompt_text():g_pending_verb=='O'?"Where:":g_pending_verb=='P'?"On whom:":g_pending_verb=='A'?g_atk_prompt:g_pending_verb=='L'?"Look-":
                            g_pending_verb=='G'?"Get-":g_pending_verb=='U'?"Use-":
                            g_pending_verb=='C'?(spell_prompt(g_cast_spell)?spell_prompt(g_cast_spell):"Cast-"):g_pending_verb=='H'?"To phase ":
-                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":g_on_pack?g_on_prompt:"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-"; }
+                           g_pending_verb=='T'?"Talk-":g_pending_verb=='N'||g_pending_verb=='W'?(g_tk_move?"Direction-":"To "):g_pending_verb=='Q'?"(y/n)":g_pending_verb=='J'?"(y/n)":g_pending_verb=='K'?"On ":g_pending_verb=='X'?(g_se_on==SEON_OFFER?"offering-- ":"On "):g_pending_verb=='V'?(g_dir_verb==154?"Direction-":"Direction:"):g_pending_verb=='Y'?"Make a wish?":"Move-"; }
 
 static char g_mcbase[512];                                /* this command's earlier words (a verb's first step) */
 static char g_mshadow[1024]; static int g_msh_len; static uint32_t g_msh_sum;   /* g_msg as last seen: its tail, length, sum */
@@ -9156,12 +9154,6 @@ static int book_target(void){ if(g_abook[1][0]) return g_abook[1][0]; if(g_abook
     return 0; }
 /* does the known set hold spell number q already? (255: every spell) */
 /* ---- M)ove from the pack: a spell into the spellbook held, readied or not (magic_skills.md §4) ---- */
-static void move_prompt(void)
-{
-    if(g_inv_sel<0||g_inv_sel>=g_ow.ninv) g_inv_sel=0;
-    char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
-    int n=msgcat(0,"Move the "); n=msgcat(n,dn); msgcat(n,"? (M=next, Enter=move)");
-}
 static int book_readied(void){ for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[1][sl]==57) return 1; return 0; }
 static void move_pack_item(void)
 {
@@ -9178,7 +9170,8 @@ static void move_pack_item(void)
 static void arm_drop(void)          /* start a D)rop: open the pack, arm the verb, select the first item */
 {
     if(g_ow.ninv==0){ msgcat(0,"Thou hast nothing to drop."); g_pending_verb=0; g_show_inv=0; return; }
-    g_show_inv=1; g_inv_sel=0; g_pending_verb='D'; g_drop_pick=1; g_count=0; { int n=msgcat(0,"Drop-"); (void)n; }
+    g_show_inv=1; g_inv_open=1; g_show_status=0; g_inv_sel=0; g_pending_verb='D'; g_drop_pick=1; g_count=0; { int n=msgcat(0,"Drop-"); (void)n; }
+    if(!DROP_LIST()){ if(g_status_actor<1||!is_party_member(g_status_actor)) g_status_actor=g_nparty?g_party[0].actor:1; g_pan_focus=1; g_pan_x=IVG_X; g_pan_y=IVG_Y; }   /* the crosshair on the first pack cell (DOS, observed 2026-11-18) */
 }
 
 static int g_avatar_weapon=43;                            /* readied weapon obj_n (default sword) */
@@ -9277,7 +9270,7 @@ static char *u_num(char *b, int v){ char t[8]; int n=0; if(v<0) v=0;
 static void draw_inventory_list(uint8_t col)      /* SE/MD: the plain list */
 {
     ui_text(PANX+(PANW-ui_textw("Inventory"))/2, 16, "Inventory", col);
-    int armed=(g_pending_verb=='D' || (g_pending_verb=='U' && g_use_pack) || (g_pending_verb=='M' && g_move_pack));
+    int armed=(g_pending_verb=='D');
     int first=0;
     if(armed && g_ow.ninv>INV_ROWS){ first=g_inv_sel-INV_ROWS/2; if(first>g_ow.ninv-INV_ROWS) first=g_ow.ninv-INV_ROWS; if(first<0) first=0; }
     if(g_ow.ninv==0) ui_text(PANX+8, 28, "(nothing)", col);
@@ -9362,7 +9355,6 @@ static void draw_party_roster(uint8_t col)
 }
 /* The status display's parts as DOS lays them out (equipment.md §5), in screen pixels */
 static const uint8_t IV_SLOT[EQ_NSLOTS][2]={ /*HEAD*/{0xc8,0x10}, /*NECK*/{0xb0,0x18}, /*BODY*/{0xe0,0x28}, /*ARM*/{0xe0,0x18}, /*ARM2*/{0xb0,0x38}, /*HAND*/{0xb0,0x28}, /*HAND2*/{0xe0,0x38}, /*FOOT*/{0xc8,0x40} };
-enum { IVG_X=0xf8, IVG_Y=0x20, IVG_COLS=4, IVB_Y_U6=0x58 };
 #define IVG_ROWS (g_gd==&gamedef_se?4:3)                 /* SE's pack grid has four rows (rules/se_screen.md §4) */
 #define IVB_Y    (g_gd==&gamedef_se?0x66:IVB_Y_U6)
 #define IV_RING  (g_gd==&gamedef_se?0x188:0x19a)        /* an empty place */
@@ -9456,7 +9448,7 @@ static void draw_inventory(uint8_t col)
       else { g_iv_cont=0; ui_text(PANX+(PANW-ui_textw(nm))/2, PTXT_Y(0), nm, C_BLACK); }
       draw_doll(a,IV_DOLLX,0x20);
       if(g_iv_cont) blit_tile(0x110,0x10,g_ow.inv[cr].tile,1); else if(g_atile[a]!=0xffff) blit_tile(0x110,0x10,g_atile[a],1); }
-    { int per=IVG_COLS*IVG_ROWS, armed=(g_pending_verb=='D'||(g_pending_verb=='U'&&g_use_pack)||(g_pending_verb=='M'&&g_move_pack)||(g_pending_verb=='L'&&g_look_pack));
+    { int per=IVG_COLS*IVG_ROWS, armed=0;   /* the display's own crosshair marks the choice (DOS) */
       if(armed && g_inv_sel>=0 && g_inv_sel<g_ow.ninv){ int o=g_ow.inv[g_inv_sel].owner?g_ow.inv[g_inv_sel].owner:1; if(o!=a && is_party_member(o)){ a=o; g_status_actor=o; } }   /* the view follows the armed thing */
       int nr=iv_rows(a), gold=(g_gl->gold_pool&&actor_real(a)==1&&g_cg.gold>0&&!g_iv_cont), total=nr+gold;
       if(armed){ int si=0; for(int k=0;k<nr;k++) if(g_iv_row[k]==g_inv_sel) si=k; while(si<g_inv_first) g_inv_first-=IVG_COLS; while(si>=g_inv_first+per) g_inv_first+=IVG_COLS; }
@@ -11582,7 +11574,7 @@ static int spell_telekinesis(world_t*w,int dx,int dy){
     int on=g_wobj[idx].obj_n;
     if(on==288||on==268){ use_object(idx); return 1; }  /* a crank, a lever: it works from afar */
     if(g_weights && !g_weights[on]){ msgcat(0,"Not Possible"); return 0; }
-    g_push_idx=idx; g_push_act=-1; g_push_x=g_wobj[idx].x; g_push_y=g_wobj[idx].y; g_move_pack=0;   /* then "Direction-": it moves a tile */
+    g_push_idx=idx; g_push_act=-1; g_push_x=g_wobj[idx].x; g_push_y=g_wobj[idx].y;   /* then "Direction-": it moves a tile */
     g_tk_move=1; g_next_verb='N'; g_msg[0]=0; return 1;
 }
 /* offensive bolt: first actor along (dx,dy) within range takes `wmax`-based damage. */
@@ -12630,7 +12622,7 @@ static int tile_seen(const world_t*w,int dx,int dy)
 /* "Move-": pick the actor, else the topmost object, on the tile (dx,dy) from the Avatar; arms "To-" */
 static __attribute__((noinline)) int push_select(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1));
-    g_push_idx=-1; g_push_act=-1; g_move_pack=0;
+    g_push_idx=-1; g_push_act=-1;
     if(!tile_seen(w,dx,dy)){ msgcat(0,"Move-nothing"); return 0; }   /* the dark hides it */
     if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(0,"Move-\n\nOut of range!"); return 0; }   /* the thing beside the party */
     int id=npc_at(w,tx,ty); char nm[40];
@@ -12767,7 +12759,7 @@ static int se_lost(const world_t*w,int x,int y){
     return objworld_at(&g_ow,x,y)<0; }
 static int se_push_select(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), id, idx=-1, n; char nm[40];
-    g_push_idx=-1; g_push_act=-1; g_move_pack=0;
+    g_push_idx=-1; g_push_act=-1;
     id=tile_seen(w,dx,dy)?npc_at(w,tx,ty):-1;
     if(id<0 && tile_seen(w,dx,dy)) idx=objworld_at(&g_ow,tx,ty);
     if(id<0 && idx<0){ msgcat(0,"Move-nothing!"); return 0; }
@@ -12893,9 +12885,10 @@ static int panel_select_pack(world_t*w,int row)
 {   int v=g_pending_verb, r=0; if(v=='W'){ g_pending_verb=0; g_pan_focus=0; return g_gl->move_into?g_gl->move_into(w,row):pack_move_into(w,row); }   /* "To ": the cell is the target; the thing moved stays selected; the crosshair goes back to the map as after M / D */
     if(v=='A'){ char nm[24]; nm[0]=0; obj_name(g_ow.inv[row].tile,nm,sizeof nm); attack_panel(w,nm); return 1; }   /* equipment.md §5 */
     g_inv_sel=row;
-    if(v=='L'){ g_pending_verb=0; g_look_pack=0; look_pack_item(&g_ow.inv[row]); return 1; }
-    if(v=='U'){ int pr=use_pack_item(w,g_ow.inv[row].obj_n); g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_use_pack=0; return 1; }
-    if(v=='M'){ move_pack_item(); g_pending_verb=g_next_verb; g_next_verb=0; g_move_pack=0; g_pan_focus=0; return 1; }
+    if(v=='L'){ g_pending_verb=0; g_pan_focus=0; look_pack_item(&g_ow.inv[row]); return 1; }
+    if(v=='U'){ g_pan_focus=0; int pr=use_pack_item(w,g_ow.inv[row].obj_n);   /* the crosshair back to the map for what it is used on */ g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; return 1; }
+    if(v=='M'){ move_pack_item(); g_pending_verb=g_next_verb; g_next_verb=0; g_pan_focus=0; return 1; }
+    if(v=='X'){ g_pending_verb=0; g_pan_focus=0; (void)se_on_pack(w,row); g_pending_verb=g_next_verb; g_next_verb=0; return 1; }   /* SE's "On ": a thing in the pack (se_use.md §5) */
     if(v=='D'){ g_pan_focus=0; if(ask_count('D')) return 1; g_drop_pick=0; g_tcur_dx=g_tcur_dy=0; drop_prompt(); return 1; }   /* then "Location: " on the map */
     if(v=='I'){ g_pending_verb=0; pick_take(w,row,-1); return 1; }           /* Pickpocket's "Which object: " */
     if(v=='C'){ const char*nm=g_cast_spell>=0?g_spells[g_cast_spell].name:"";  /* the spells that take a thing in the pack */
@@ -12915,8 +12908,8 @@ static int panel_select_slot(world_t*w,int sl)
     if(g_pending_verb=='A'){ char nm[24]; nm[0]=0; if(on) obj_name((uint16_t)basetile(on),nm,sizeof nm); attack_panel(w,nm); return 1; }
     if(!on) return 0;
     if(g_pending_verb=='L'){ invitem_t it; it.in=0; it.id=0; it.seq=0; it.owner=1; it.obj_n=on; it.tile=(uint16_t)basetile(on); it.qty=1; it.quality=0; g_pending_verb=0; look_pack_item(&it); return 1; }
-    if(g_pending_verb=='U'){ g_use_readied=1; g_use_slot=sl; int pr=use_pack_item(w,on); g_use_readied=0; g_use_slot=-1;         /* a readied thing in use */
-        g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_use_pack=0; return 1; }
+    if(g_pending_verb=='U'){ g_pan_focus=0; g_use_readied=1; g_use_slot=sl; int pr=use_pack_item(w,on); g_use_readied=0; g_use_slot=-1;         /* a readied thing in use */
+        g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; return 1; }
     if(g_pending_verb=='I'){ g_pending_verb=0; pick_take(w,-1,sl); return 1; }
     if(g_pending_verb=='C'&&g_cast_spell>=0&&!strcmp(g_spells[g_cast_spell].name,"Enchant")){ g_pending_verb=0; g_cast_slot=sl; g_pan_focus=0; (void)cast_aimed(w,0,0); return 1; }
     if(g_pending_verb) return 0;                       /* another verb armed: it does not take the thing off (equipment.md §5), as a pack cell */
@@ -15236,7 +15229,7 @@ static void bot_report(const world_t*w)
       n=bot_put(n," sk="); for(int s=0,c=0;s<SPELL_COUNT;s++){ int q=magic_spell_num(s), has=g_magic_demo?g_known[s]:0;   /* the known spells' numbers */
           for(int b=0;b<BOOK_SETS&&!has;b++) if(g_bookused[b]&&book_has(b+1,q)) has=1;
           if(has){ if(c++) n=bot_put(n,","); n=bot_num(n,q); } } }
-    n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status);
+    n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status); n=bot_kv(n,"sa",g_status_actor); n=bot_kv(n,"pf",g_pan_focus); n=bot_kv(n,"pfx",g_pan_x); n=bot_kv(n,"pfy",g_pan_y); n=bot_kv(n,"ifst",g_inv_first); n=bot_kv(n,"ir",IVG_ROWS);
     { plat_mem_info_t mi_; plat_mem_get_info(&mi_); n=bot_kv(n,"cfree",(int)(((long)mi_.chip_size-(long)mi_.chip_used)/1024)); }
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"more",g_msg_more); n=bot_kv(n,"cwait",g_talking?talk_waiting():0); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
     n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",gold_total()); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
@@ -21204,7 +21197,11 @@ int main(int argc, char **argv)
                       redraw=1; a=0; in=IN_NONE; dx=dy=0; }
                   else if(a==0x09 && !g_talking){ if(!g_show_status&&!g_show_inv){ if(g_status_actor<1||!is_party_member(g_status_actor)) g_status_actor=g_nparty?g_party[0].actor:1; g_inv_open=1; g_show_inv=1; }
                       g_pan_focus=!g_pan_focus; g_pan_x=IVG_X; g_pan_y=g_show_status?IVB_Y:IVG_Y; redraw=1; a=0; in=IN_NONE; dx=dy=0; }
-                  else if(g_pan_focus && (dx||dy)){ int nx=g_pan_x+dx*(g_pan_x>=IVG_X||dx>0?16:8), ny=g_pan_y+dy*8; nx=g_pan_x+dx*8; if(nx>=0xb0&&nx<=0x128) g_pan_x=nx; if(ny>=0x10&&ny<=IVB_Y) g_pan_y=ny; redraw=1; a=0; in=IN_NONE; dx=dy=0; }
+                  else if(g_pan_focus && (dx||dy)){ int nx=g_pan_x+dx*16, ny=g_pan_y+dy*16, a_=g_status_actor, grid=g_show_inv&&!g_show_status&&g_pan_x>=IVG_X&&g_pan_x<IVG_X+IVG_COLS*16,   /* a cell a step (DOS, observed 2026-11-18) */
+                          tot=grid?iv_rows(a_)+(g_gl->gold_pool&&actor_real(a_)==1&&g_cg.gold>0&&!g_iv_cont):0;
+                      if(grid && dy>0 && g_pan_y==IVG_Y+(IVG_ROWS-1)*16 && g_inv_first+IVG_COLS*IVG_ROWS<tot) g_inv_first+=IVG_COLS;   /* past the last row with more below: the pack scrolls (not seen in DOS) */
+                      else if(grid && dy<0 && g_pan_y==IVG_Y && g_inv_first>0) g_inv_first-=IVG_COLS;
+                      else { if(nx>=0xb0&&nx<=0x128) g_pan_x=nx; if(ny>=0x10&&ny<IVB_Y+16) g_pan_y=ny; } redraw=1; a=0; in=IN_NONE; dx=dy=0; }
                   else if(g_pan_focus && a==0x0d){ if(panel_action(&w,g_pan_x+4,g_pan_y+4)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; a=0; in=IN_NONE; dx=dy=0; } }
                 if (g_talking && !g_await_input) { end_talk(); redraw=1; }   /* a finished conversation stays up until the next key, which then still acts */
                 if (g_pending_verb) {                /* armed verb awaiting a direction */
@@ -21223,11 +21220,9 @@ int main(int argc, char **argv)
                     else if (g_pending_verb=='A' && (dx||dy)){ (void)attack_cursor_move(dx,dy);        /* the crosshair walks (combat.md §6b) */
                         compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if ((g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M') && (dx||dy)){ int pv=g_pending_verb;   /* Get, Use, Move: a direction acts on the next tile at once (DOS: cursor range 0xFF, usecode_use.md) */
-                        if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
                         g_pending_verb=0; (void)resolve_target(&w,pv,dx,dy); g_pending_verb=g_next_verb; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; if(!g_casting) g_show_inv=0;
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if ((g_pending_verb=='T'||g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||g_pending_verb=='X'||(g_pending_verb=='C'&&!(g_cast_spell>=0&&g_cast_spell<SPELL_COUNT&&!strcmp(g_spells[g_cast_spell].name,"Wind Change")))) && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the verbs' crosshair walks the map window (usecode_use.md) */
-                        if(VERB_PACK()){ g_use_pack=g_move_pack=g_look_pack=0; g_show_inv=0; g_msg[0]=0; }
                         if(nx>=-VT/2 && nx<=VT/2 && ny>=-VT/2 && ny<=VT/2){ g_tcur_dx=nx; g_tcur_dy=ny; }
                         compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='O' && (dx||dy)){ int nx=g_tcur_dx+dx, ny=g_tcur_dy+dy;   /* the orb's Where: crosshair walks its 6x5 box (moongates.md §3) */
@@ -21244,16 +21239,8 @@ int main(int argc, char **argv)
                         (void)resolve_target(&w,'O',cx,cy); compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='T' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: talk to whoever stands there */
                         compose_map(&w); draw_border_tiles(); (void)resolve_target(&w,'T',cx,cy); draw_status(&w,ink); redraw=1; }
-                    else if ((g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||g_pending_verb=='X') && a==0x0d && !VERB_PACK()){ int cx=g_tcur_dx, cy=g_tcur_dy, pv=g_pending_verb;   /* Enter: the verb acts on the tile under the crosshair */
+                    else if ((g_pending_verb=='L'||g_pending_verb=='G'||g_pending_verb=='U'||g_pending_verb=='M'||g_pending_verb=='D'||g_pending_verb=='W'||g_pending_verb=='K'||g_pending_verb=='X') && a==0x0d && !g_drop_pick){ int cx=g_tcur_dx, cy=g_tcur_dy, pv=g_pending_verb;   /* Enter: the verb acts on the tile under the crosshair */
                         g_pending_verb=0; (void)resolve_target(&w,pv,cx,cy); g_pending_verb=g_next_verb; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; if(!g_casting) g_show_inv=0;
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                    else if (g_pending_verb=='L' && (a=='l'||a=='L') && !(dx||dy) && g_ow.ninv>0){
-                        if(!g_look_pack){ g_look_pack=1; g_show_inv=1; g_inv_sel=0; }   /* L again -> look at a carried thing */
-                        else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;
-                        { char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn); int n=msgcat(0,"Look-"); n=msgcat(n,dn); msgcat(n,"? (L=next, Enter=look)"); }
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                    else if (g_pending_verb=='L' && g_look_pack && a==0x0d && !(dx||dy)){
-                        g_pending_verb=0; g_look_pack=0; g_show_inv=0; if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) look_pack_item(&g_ow.inv[g_inv_sel]);
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                     else if (g_pending_verb=='A' && a==0x0d){ int cx=g_tcur_dx, cy=g_tcur_dy; g_pending_verb=0;   /* Enter: the attack lands there */
                         (void)resolve_target(&w,'A',cx,cy); g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0;
@@ -21261,46 +21248,18 @@ int main(int argc, char **argv)
                     else if (g_pending_verb=='R' && g_rest_stage==2 && (dx||dy)){ g_tcur_dx+=dx; g_tcur_dy+=dy; compose_map(&w); redraw=1; }
                     else if (g_pending_verb=='R' && (a||in==IN_QUIT)){ (void)rest_key(&w,a?a:0x1b);                   /* the R)est prompts (rest.md §2) */
                         if(g_resting || !g_pending_verb){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }
-                    else if (g_pending_verb=='D' && g_drop_pick && a==0x0d && g_ow.ninv>0){ (void)panel_select_pack(&w,g_inv_sel); compose_map(&w); draw_status(&w,ink); redraw=1; }
-                    else if (g_pending_verb=='D' && g_drop_pick && (dx||dy) && g_ow.ninv>0){ g_inv_sel=(g_inv_sel+g_ow.ninv+dx+dy*IVG_COLS)%g_ow.ninv; redraw=1; }
-                    else if (g_pending_verb=='D' && (a=='d'||a=='D') && !(dx||dy) && g_ow.ninv>0){
-                        g_inv_sel=(g_inv_sel+1)%g_ow.ninv; drop_prompt(); redraw=1;   /* D again -> next item */
-                    }
+                    else if (g_pending_verb=='D' && g_drop_pick && DROP_LIST() && a==0x0d && g_ow.ninv>0){ (void)panel_select_pack(&w,g_inv_sel); compose_map(&w); draw_status(&w,ink); redraw=1; }
+                    else if (g_pending_verb=='D' && g_drop_pick && DROP_LIST() && (dx||dy) && g_ow.ninv>0){ g_inv_sel=(g_inv_sel+g_ow.ninv+dx+dy*IVG_COLS)%g_ow.ninv; redraw=1; }
                     else if (g_pending_verb=='P' && a>='1' && a<='5' && !(dx||dy)){
                         potion_to_member(a-'1'); g_pending_verb=0; g_show_inv=0; redraw=1; }     /* a potion: on whom (usecode_use.md) */
                     else if (g_pending_verb=='P' && (dx||dy)) { }                     /* On-whom ignores directions */
-                    else if (g_pending_verb=='X' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){   /* "On ": U picks from the pack instead */
-                        if(!g_on_pack){ g_on_pack=1; g_show_inv=1; g_inv_sel=0; } else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;
-                        { char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn); int o=0; const char*q="On the "; while(*q&&o<40) g_on_prompt[o++]=*q++;
-                          for(int k=0;dn[k]&&o<46;k++) g_on_prompt[o++]=dn[k]; g_on_prompt[o++]='?'; g_on_prompt[o]=0; }
-                        redraw=1; }
-                    else if (g_pending_verb=='X' && g_on_pack && a==0x0d && !(dx||dy)){
-                        g_pending_verb=0; g_on_pack=0; g_show_inv=0; if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) (void)se_on_pack(&w,g_inv_sel);
-                        g_pending_verb=g_next_verb; g_next_verb=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                    else if (g_pending_verb=='U' && (a=='u'||a=='U') && !(dx||dy) && g_ow.ninv>0){
-                        if(!g_use_pack){ g_use_pack=1; g_show_inv=1; g_inv_sel=0; }     /* U again -> use a carried item */
-                        else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;                        /* ... U once more -> next item */
-                        { char dn[40]; obj_name(g_ow.inv[g_inv_sel].tile,dn,sizeof dn);
-                          int n=msgcat(0,"Use the "); n=msgcat(n,dn); msgcat(n,"? (U=next, Enter=use)"); }
-                        redraw=1; }
-                    else if (g_pending_verb=='U' && g_use_pack && a==0x0d && !(dx||dy)){
-                        { int pr=0; if(g_inv_sel>=0 && g_inv_sel<g_ow.ninv) pr=use_pack_item(&w, g_ow.inv[g_inv_sel].obj_n);
-                          g_pending_verb=g_next_verb?g_next_verb:(pr==2)?'O':(pr==3)?'P':(pr==4)?'C':0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; }   /* 2 = the orb asks "Where:" (its crosshair starts on the Avatar), 3 = a potion asks "On whom:", 4 = the staff's targeted charge */
-                        g_show_inv=0; g_use_pack=0;
-                        compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                    else if (g_pending_verb=='M' && (a=='m'||a=='M') && !(dx||dy) && g_ow.ninv>0){
-                        if(!g_move_pack){ g_move_pack=1; g_show_inv=1; g_inv_sel=0; }   /* M again -> move a carried item */
-                        else g_inv_sel=(g_inv_sel+1)%g_ow.ninv;                        /* ... M once more -> next item */
-                        move_prompt(); redraw=1; }
-                    else if (g_pending_verb=='M' && g_move_pack && a==0x0d && !(dx||dy)){
-                        move_pack_item(); g_pending_verb=g_next_verb; g_next_verb=0; g_move_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); redraw=1; }
                     else if (dx||dy) { if(resolve_target(&w,g_pending_verb,dx,dy)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); }
                                   g_pending_verb=g_next_verb; g_next_verb=0; g_show_inv=0; redraw=1; }
-                    else if (VERB_CURSOR(g_pending_verb) && g_pending_verb!='R' && !VERB_PACK() &&
+                                    else if (VERB_CURSOR(g_pending_verb) && g_pending_verb!='R' && !(g_drop_pick&&DROP_LIST()) &&
                              ((a>='a'&&a<='z')||(a>='A'&&a<='Z')||(a>='0'&&a<='9'))) {   /* a letter or digit at the crosshair: "what?", the command dropped (DOS, observed 2026-11-18: g k l 5; Space is ignored) */
                         g_pending_verb=0; g_next_verb=0; g_tcur_dx=g_tcur_dy=0; g_show_inv=0; msgcat(0,"what?");
                         compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                    else if (a==0x1b) { if(g_pending_verb=='C'&&!g_free_cast){ g_msg[0]=0; msgcat(0,"nothing"); cast_finish(0); } else if(g_pending_verb=='X'){ msgcat(msg_end(),"\nOn nothing!"); g_on_pack=0; } else g_msg[0]=0; g_tk_move=0; g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_move_pack=0; g_look_pack=0; g_use_pack=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* cancel */
+                    else if (a==0x1b) { if(g_pending_verb=='C'&&!g_free_cast){ g_msg[0]=0; msgcat(0,"nothing"); cast_finish(0); } else if(g_pending_verb=='X'){ msgcat(msg_end(),"\nOn nothing!"); } else g_msg[0]=0; g_tk_move=0; g_pending_verb=0; g_next_verb=0; g_free_cast=0; g_drop_pick=0; g_pan_focus=0; g_show_inv=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }   /* cancel */
                 }
                 else if (a>='1' && a<='8' && a-'1'<g_nparty){ int act=g_party[a-'1'].actor, who=actor_real(act);   /* Solo: this one alone; 0 back to the party (combat.md §8) */
                     if(g_ahp[act]==0||g_asleep[act]||g_paralyze[act]||g_charm[act]){ char nb[20]; actor_name(act,nb,sizeof nb); int n=msgcat(0,nb); msgcat(n," fails to respond."); }
@@ -21323,10 +21282,10 @@ int main(int argc, char **argv)
                 else if ((a=='b'||a=='B') && g_solo_on) { msgcat(0,"Not in solo mode!"); redraw=1; }
                 else if (a=='b'||a=='B') { g_combat_mode=!g_combat_mode; g_show_inv=0;                /* B)attle: combat-mode toggle (moved off 'c') */
                     msgcat(0, g_combat_mode?"Begin combat!":"Break off combat!"); redraw=1; }
-                else if (a=='l'||a=='L') { g_pending_verb='L'; g_look_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='l'||a=='L') { g_pending_verb='L'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='g'||a=='G') { g_pending_verb='G'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a=='d'||a=='D') { g_msg[0]=0; arm_drop(); g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }                         /* D)rop */
-                else if (a=='u'||a=='U') { g_pending_verb='U'; g_use_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
+                else if (a=='u'||a=='U') { g_pending_verb='U'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_cursor(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
                 else if (a==' ') { msgcat(0,"Pass!"); if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* pass a turn (a raft/balloon drifts) */
                 else if (a=='s'||a=='S'||a==0x12) { g_show_inv=0; g_pending_verb=0;   /* S)ave, Ctrl-R: the slot page (save_load.md §2b) */
                     save_index_load(); g_save_menu=(a==0x12)?2:1; g_save_copy=0; save_detail(); redraw=1; }
@@ -21342,7 +21301,7 @@ int main(int argc, char **argv)
                 else if (in==IN_QUIT) { msgcat(0,"Pass!"); if(player_pass(&w)){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1; }   /* Esc passes, as Space */
                 else if (in==IN_TALK) { g_pending_verb='T'; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0;   /* T)alk-: the crosshair picks anyone in view, as the original (a trainer advances thy level) */
                     compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }
-                else if (a=='m'||a=='M') { g_pending_verb='M'; g_move_pack=0; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }    /* M)ove- (usecode_use.md) */
+                else if (a=='m'||a=='M') { g_pending_verb='M'; g_msg[0]=0; g_show_inv=0; g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); draw_status(&w,ink); redraw=1; }    /* M)ove- (usecode_use.md) */
                 else if (dx||dy) {                   /* walk (or steer the vehicle) */
                     if (g_talking||g_show_inv||g_msg[0]) {   /* closing a panel needs a full present */
                         end_talk(); if(!g_inv_open) g_show_inv=0; g_msg[0]=0; redraw=1; }
@@ -21387,7 +21346,7 @@ int main(int argc, char **argv)
                 else if (v=='C'){ open_cast_menu(); }        /* Cast icon opens the spell menu */
                 else if (v=='D'){ g_msg[0]=0; arm_drop(); g_tcur_dx=g_tcur_dy=0; compose_map(&w); draw_border_tiles(); }  /* Drop icon: open the pack + arm the drop */
                 else if (v=='A'){ arm_attack(); }           /* Attack icon: the crosshair */
-                else if (v){ g_pending_verb=v; g_move_pack=0; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; if(VERB_CURSOR(v)){ compose_map(&w); draw_border_tiles(); } }
+                else if (v){ g_pending_verb=v; g_tcur_dx=g_tcur_dy=0; g_msg[0]=0; g_show_inv=0; if(VERB_CURSOR(v)){ compose_map(&w); draw_border_tiles(); } }
                 else  { msgcat(0,"Not yet implemented."); g_pending_verb=0; g_show_inv=0; }
                 redraw=1;
             } else if ((g_show_status||(g_show_inv&&(!g_gamename||g_gd==&gamedef_se))) && !g_talking && !g_casting && !g_save_menu && g_mx>=0xa8 && g_my<(g_gd==&gamedef_se?0x76:MSGY)) {   /* in the status display */

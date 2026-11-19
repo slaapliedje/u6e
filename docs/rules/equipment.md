@@ -14,7 +14,7 @@ Implemented by: /engine (slot model + combat fold), /render gamedemo.c (R)eady U
 > - Validated by  : headless captures (READY.REQ modes) + combat asserts (readied sword changes
 >   avatar damage; readied armour changes AC) — see §7.
 > - Confidence   : confirmed (slot rules + readiable set, ids cross-checked two ways); §5 UI is OUR design.
-> - Last updated : 2026-09-20
+> - Last updated : 2026-11-18 (the display's crosshair: a cell a step, D)rop starts in it; the pack pickers gone)
 
 ## 1. Body slots
 
@@ -79,7 +79,14 @@ and check that one's coins, usecode_vm.md); SE and MD keep one gold pool, the le
 **Party display** (the default): the sky and the roster, five rows; `+` / `-` or the arrows at (168,24), (168,96) scroll a
 longer one. Health in red below 10, green if poisoned. A click on a figure opens that member's inventory, on the name its
 portrait. `F1-F8` show the Nth member's portrait, `F10` returns here, `*` flips portrait and inventory, `+` / `-` step
-through members. `Tab` puts the crosshair in the display (arrows move it, Enter selects), and again back on the map. Esc from
+through members. `Tab` puts the crosshair in the display (arrows move it, Enter selects), and again back on the map. In the pack it
+moves a cell a step (DOS observed 2026-11-18); outside the pack DOS hops between the doll's slots and the buttons
+(down from the last pack row to the buttons, up from the left button to the doll's left slots): ours steps 16 px
+there, which reaches every slot and button. Down past the last pack row with more below scrolls the pack a row, up
+from the first row back (ours: not seen in DOS, whose test pack held two things). `D)rop` opens the inventory
+(the shown member's, else the leader's) with the crosshair already on the first pack cell (`Drop-`, DOS observed 2026-11-18). A thing carried is
+picked for any verb this way or by the mouse; the verb's letter again answers `what?` (message_scroll.md §2)
+(our pack pickers, `Use the ...? (U=next, Enter=use)`, were removed 2026-11-18). Esc from
 there also returns it. The display stays up through verbs and walking. (`F9`, not a DOS key, is the music source, in the
 menus too.) There is no inventory letter: `I`, like any letter with no command, answers `what?` (DOS observed 2026-11-16
 for i, k, x, y; no time passes). (We had kept an `I` key from the first builds; removed.)

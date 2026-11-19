@@ -396,19 +396,15 @@ HEAVY = (73, 90, 394, 396, 62, 48, 149, 422, 421, 284, 264, 141, 140)    # moons
 
 SURPLUS = {129: 4, 67: 10, 90: 4, 128: 2, 133: 1, 68: 12, 71: 12}           # meat, garlic, torches, bread, ham, ginseng, silk: what to keep
 def drop_surplus(p):
-    """D)rop what the Avatar carries beyond SURPLUS: D, D through the pack to it, Enter, the count, Enter, Enter (at the feet)"""
+    """D)rop what the Avatar carries beyond SURPLUS: D, the display's crosshair to it, Enter, the count, Enter, Enter (at the feet)"""
     for obj, keep in SURPLUS.items():
         n = count(p, obj, 1)
         if n <= keep: continue
         inv = p.g.objects()[1]; rows = [r for r in inv if r['obj'] == obj and r.get('own', 1) == 1]
         if not rows: continue
         name = rows[0].get('name', '')
-        p.idle(); st = p.key('d', 'drop')
-        for _ in range(len(inv) + 2):
-            st = p.key('d', 'next')
-            if ('Drop-' + name) in st['msg'] or ('Drop the ' + name) in st['msg']: break
-        else: p.idle(); continue
-        st = p.key('ret')
+        p.idle(); st = p.key('d', 'drop'); st = p.display_pick(rows[0])
+        if st is None: p.idle(); continue
         if 'How many' in st['msg']: p.g.type(str(n - keep)); st = p.key('ret', 'the count')
         if 'Location' in st['msg']: st = p.key('ret', 'at the feet')
         p.log('  drop %d %s: %r (%d left)' % (n - keep, name, st['msg'][-50:], count(p, obj, 1))); p.idle()
@@ -587,19 +583,15 @@ def payer(p):
     return str(ids.index(max(ids, key=lambda i: gold[i])) + 1) if ids else '1'
 
 def give_to_avatar(p, obj_n, others=False):
-    """M)ove a carried thing to the Avatar: M, M through the pack to it, Enter, then the crosshair on the Avatar
+    """M)ove a carried thing to the Avatar: M, the display's crosshair to it, Enter, then the crosshair on the Avatar
     (it starts on the leader) and Enter (usecode_use.md: "To " a party member). others: the first row someone
-    else holds (the pack steps in row order)"""
+    else holds"""
     inv = p.g.objects()[1]
-    rows = [k for k, r in enumerate(inv) if r['obj'] == obj_n and (not others or r.get('own', 1) != 1)]
+    rows = [r for r in inv if r['obj'] == obj_n and not r.get('in', 0) and (not others or r.get('own', 1) != 1)]
     if not rows: return False
-    name = inv[rows[0]].get('name', '')
-    p.idle(); p.key('m', 'move')
-    for k in range(len(inv) + 2):
-        st = p.key('m', 'the pack')
-        if st['msg'].startswith('Move the ' + name + '?') and (not others or k >= rows[0]): break
-    else: p.idle(); return False
-    st = p.key('ret', 'this one')
+    name = rows[0].get('name', '')
+    p.idle(); p.key('m', 'move'); st = p.display_pick(rows[0])
+    if st is None: p.idle(); return False
     if 'How many' in st['msg']: st = p.key('ret', 'all of them')            # a stack asks first (equipment.md)
     st = p.key('ret', 'to the Avatar'); p.log('  %s to the Avatar: %r' % (name, st['msg'][-50:]))
     p.idle(); return 'To Avatar' in st['msg']
@@ -727,15 +719,11 @@ def unlock_with_key(p, x, y):
     """U)se each carried key on the locked door beside the leader at (x,y) until one fits (a lock's key is
     the key with its quality, usecode_use.md); True when unlocked"""
     px, py = p.nav.pos(); d = VDIR[(x - px, y - py)]
-    nkeys = sum(1 for r in p.g.objects()[1] if r['obj'] == 64)
-    for k in range(nkeys):
-        p.key('u'); seen = 0; st = p.g.state
-        for _ in range(len(p.g.objects()[1]) + 4):                    # the pack prompt: the k-th key
-            st = p.key('u')
-            if st['inv'] and st['msg'].startswith('Use the key'):
-                seen += 1
-                if seen > k: break
-        st = p.key('ret', 'the key'); st = p.at(d, 'the key on the door') if st['verb'] else st
+    keys = [r for r in p.g.objects()[1] if r['obj'] == 64 and not r.get('in', 0)]
+    for k, row in enumerate(keys):
+        p.key('u'); st = p.display_pick(row)
+        if st is None: p.idle(); continue
+        st = p.at(d, 'the key on the door') if st['verb'] else st
         p.log('  key %d on (%d,%d): %r' % (k, x, y, st['msg'][-60:]))
         if 'unlocked' in st['msg']: return True
         p.idle()
@@ -813,8 +801,7 @@ SHRINES = [(0, (935, 263), 0, 2, 'ahm'), (1, (503, 359), 0, 4, 'mu'), (2, (159, 
 
 def ready(p, obj_n, member=1):
     """ready a carried thing on roster member `member` as DOS does (equipment.md §5): it goes to that member
-    first (M)ove), their inventory opens, the Tab crosshair goes to its cell (first cell (248,32), 16 px a cell,
-    8 px a step; the down arrow at (232,72) scrolls a row of 4) and Enter readies it"""
+    first (M)ove), their inventory opens, the Tab crosshair goes to its cell (display_pick) and Enter readies it"""
     party = p.g.state['party']
     if not 1 <= member <= len(party): return False
     who = party[member - 1]['id']
@@ -827,21 +814,9 @@ def ready(p, obj_n, member=1):
     k = next((i for i, r in enumerate(rows) if r['obj'] == obj_n), -1)
     if k < 0: p.log('  ready %d: not loose with member %d' % (obj_n, member)); return False
     name = rows[k].get('name', '')
-    p.idle(); p.key('f10', 'party view'); p.key('star', 'a portrait'); p.key('star', 'its inventory')
-    for _ in range(8): p.key('minus', 'back to the first member')
-    for _ in range(member - 1): p.key('plus', 'the next member')
-    p.key('tab', 'the panel')
-    first = max(0, (k - 12 + 4) // 4 * 4) if k >= 12 else 0
-    if first:
-        p.key('left', 'to the arrow'); p.key('left', 'to the arrow')
-        for _ in range(5): p.key('down', 'to the arrow')
-        for _ in range(first // 4): p.key('ret', 'a row down')
-        p.key('right', 'back'); p.key('right', 'back')
-        for _ in range(5): p.key('up', 'back')
-    c, r = (k - first) % 4, (k - first) // 4
-    for _ in range(2 * c): p.key('right', 'to the cell')
-    for _ in range(2 * r): p.key('down', 'to the cell')
-    st = p.key('ret', 'ready it'); p.log('  ready %s on %d: %r' % (name, member, st['msg'][-60:]))
+    p.idle(); p.key('f10', 'party view')
+    st = p.display_pick(rows[k]) or p.g.state
+    p.log('  ready %s on %d: %r' % (name, member, st['msg'][-60:]))
     p.key('tab', 'back'); p.key('f10', 'party view'); p.idle()
     return sum(1 for r in p.g.objects()[1] if r['obj'] == obj_n) < n0
 
@@ -949,18 +924,14 @@ def dispel_at(p, x, y, d):
     return 'Success' in st['msg']
 
 def give_to(p, obj_n, who):
-    """M)ove every row of obj_n someone else carries to member who: M through the pack, Enter, the count for a
+    """M)ove every row of obj_n someone else carries to member who: M, the display's crosshair on it, Enter, the count for a
     stack, the crosshair on them, Enter (equipment.md §5 M)ove)"""
     for _ in range(4):
-        rows = [r for r in p.g.objects()[1] if r['obj'] == obj_n and r.get('own', 1) != who]
+        rows = [r for r in p.g.objects()[1] if r['obj'] == obj_n and r.get('own', 1) != who and not r.get('in', 0)]
         if not rows: return True
-        inv = p.g.objects()[1]; name = rows[0].get('name', ''); at = rows[0].get('row', 0)
-        p.idle(); p.key('m', 'move')
-        for k in range(len(inv) + 2):                                    # the pack steps in row order: to that row, not an earlier one
-            st = p.key('m', 'the pack')
-            if st['msg'].startswith('Move the ' + name) and k >= at: break
-        else: p.idle(); return False
-        st = p.key('ret', 'this one')
+        name = rows[0].get('name', '')
+        p.idle(); p.key('m', 'move'); st = p.display_pick(rows[0])
+        if st is None: p.idle(); return False
         if 'How many' in st['msg']: p.g.type(str(rows[0]['qty'] or 1))
         st = p.aim_at(who, 'to the holder'); p.idle()
         p.log('  %s to %d: %r' % (name, who, st['msg'][-40:]))
@@ -1225,16 +1196,13 @@ def shed(p):
             if not drop_here(p, obj, min(n - keep, rows[0]['qty'] or 1)): break
 
 def drop_here(p, obj_n, n=1):
-    """D)rop n of obj_n at the leader's feet: D, D through the pack to it, Enter, Enter (a stack asks how many)"""
-    inv = p.g.objects()[1]; rows = [r for r in inv if r['obj'] == obj_n]
+    """D)rop n of obj_n at the leader's feet: D, the display's crosshair to it, Enter, Enter (a stack asks how many)"""
+    inv = p.g.objects()[1]; rows = [r for r in inv if r['obj'] == obj_n and not r.get('in', 0)]
     if not rows: return False
     name = rows[0].get('name', ''); n0 = count(p, obj_n)
-    p.idle(); p.key('d', 'drop')
-    for _ in range(len(inv) + 2):
-        st = p.key('d', 'next')
-        if ('Drop-' + name) in st['msg']: break
-    else: p.idle(); return False
-    p.key('ret'); st = p.key('ret', 'at the feet')
+    p.idle(); p.key('d', 'drop'); st = p.display_pick(rows[0])
+    if st is None: p.idle(); return False
+    if 'Location' in st['msg'] and 'How many' not in st['msg']: st = p.key('ret', 'at the feet')
     if 'How many' in st['msg']: p.g.type(str(n)); st = p.g.state
     if 'Location' in st['msg']: st = p.key('ret', 'here')
     p.log('  drop %s: %r' % (name, st['msg'][-50:])); p.idle()
@@ -1619,21 +1587,18 @@ def restock(p, n=6):
 KEEP = {57, 60, 62, 63, 64, 73, 87, 88, 90, 128, 129, 130, 131, 132, 133, 209, 210, 258, 265, 275, 394, 395, 396} | set(range(65, 73)) | set(range(242, 250))
 def drop_junk(p):
     """leave behind what the fights brought (spare weapons and armour, mugs, lutes): the party's load has a
-    limit and a moonstone must still fit. D)rop: D, D through the pack to it, Enter, Enter (at the feet)"""
+    limit and a moonstone must still fit. D)rop: D, the display's crosshair to it, Enter, Enter (at the feet)"""
     if p.g.state['L'] != 0: return
     for _ in range(40):
         inv = p.g.objects()[1]
         full = {r.get('in') for r in inv if r.get('in')}                    # a bag or basket holding something (the start's reagents) stays
-        junk = [r for r in inv if r['obj'] not in KEEP and (r['obj'] < 57 or r['obj'] in (89, 114, 115, 116, 117, 118, 119, 120, 153, 158, 188, 191))
+        junk = [r for r in inv if not r.get('in', 0) and r['obj'] not in KEEP and (r['obj'] < 57 or r['obj'] in (89, 114, 115, 116, 117, 118, 119, 120, 153, 158, 188, 191))
                 and not (r.get('id') and r['id'] in full)]
         if not junk: return
         name = junk[0].get('name', '')
-        p.idle(); st = p.key('d', 'drop')
-        for _ in range(len(inv) + 2):
-            st = p.key('d', 'next')
-            if ('Drop-' + name) in st['msg']: break
-        else: p.idle(); return
-        p.key('ret'); st = p.key('ret', 'at the feet')
+        p.idle(); st = p.key('d', 'drop'); st = p.display_pick(junk[0])
+        if st is None: p.idle(); return
+        if 'Location' in st['msg'] and 'How many' not in st['msg']: st = p.key('ret', 'at the feet')
         if 'How many' in st['msg'] or 'Location' in st['msg']: st = p.key('ret', 'all of it')
         p.log('  drop %s: %r' % (name, st['msg'][-50:])); p.idle()
         if any(r['obj'] == junk[0]['obj'] for r in p.g.objects()[1]) and len([r for r in p.g.objects()[1] if r['obj'] == junk[0]['obj']]) >= len([r for r in inv if r['obj'] == junk[0]['obj']]):
@@ -1694,15 +1659,14 @@ def to_mage(p, aid):
     return go_to_actor(p, aid, name)
 
 def put_parchments(p):
-    """each bought parchment into the readied book: M, M (the pack), M to the spell, Enter (magic_skills.md §4)"""
+    """each bought parchment into the readied book: M, the display's crosshair on it, Enter (magic_skills.md §4)"""
     for _ in range(8):
         if not p.g.state.get('parch'): return
-        p.key('m', 'move'); st = p.key('m', 'the pack')
-        for _ in range(40):
-            if 'Move the spell?' in st['msg']: break
-            st = p.key('m', 'next')
-        else: p.idle(); p.issue('magic', 'no parchment in the pack list: %r' % st['msg'][-60:]); return
-        st = p.key('ret', 'into the book'); p.log('  parchment: %r spells %d' % (st['msg'][-50:], st['spells'])); p.idle()
+        rows = [r for r in p.g.objects()[1] if r['obj'] == 58 and not r.get('in', 0)]
+        if not rows: p.idle(); p.issue('magic', 'no loose parchment in the pack'); return
+        p.key('m', 'move'); st = p.display_pick(rows[0])
+        if st is None: p.idle(); return
+        p.log('  parchment: %r spells %d' % (st['msg'][-50:], st['spells'])); p.idle()
 
 def learn(p, spells):
     """buy the spells the book lacks from the mage who teaches them, gold permitting"""
@@ -1743,7 +1707,7 @@ def fill_cube(p, who=3):
     """The moonstones go INTO the vortex cube (usecode_use.md cube; equipment.md, containers in the pack: M)ove a
     moonstone, "To ", the cube). All eight and then the cube go to one lightly laden member, so the cube is the
     newest thing, the first cell of his pack, and the moonstones sit on the same page; then per moonstone:
-    M, M through the pack to its row, Enter, Tab (the crosshair on the first cell), Enter"""
+    M, the display's crosshair to it, Enter, Tab (the crosshair on the first cell), Enter"""
     for _ in range(4):
         give_to(p, 73, who)
         if all(r.get('own') == who for r in p.g.objects()[1] if r['obj'] == 73): break
@@ -1754,10 +1718,9 @@ def fill_cube(p, who=3):
         cid = cube[0].get('id', 0)
         loose = [r for r in inv if r['obj'] == 73 and (not cid or r.get('in', 0) != cid)]
         if not loose: return True
-        p.idle(); p.key('m', 'move'); st = p.key('m', 'the pack')
-        for _ in range(loose[0]['row']): st = p.key('m', 'next')
-        if not st['msg'].startswith('Move the moonstone'): p.issue('ending', 'the pack prompt: %r' % st['msg'][-40:]); p.idle(); return False
-        p.key('ret', 'this one'); p.key('tab', 'the panel'); st = p.key('ret', 'the first cell')
+        p.idle(); p.key('m', 'move'); st = p.display_pick(loose[0])
+        if st is None: p.issue('ending', 'the display never picked the moonstone'); p.idle(); return False
+        p.key('tab', 'the panel'); st = p.key('ret', 'the first cell')
         p.log('  moonstone %d: %r' % (loose[0]['fr'], st['msg'][-40:])); p.idle()
     return False
 
@@ -1924,13 +1887,9 @@ def seg_parchment(p, kw):
     if st['parch'] < 2: p.issue('parchment', 'bought 2 parchments, the pack holds %d' % st['parch']); return
     if st['spells'] != before: p.issue('parchment', 'a parchment joined the book by itself: %d -> %d' % (before, st['spells']))
     def into_book(skip=0):
-        p.key('m', 'move'); st = p.key('m', 'the pack')
-        for _ in range(40):
-            if 'Move the spell?' in st['msg']: break
-            st = p.key('m', 'next')
-        for _ in range(skip): st = p.key('m', 'the next spell')
-        time.sleep(0.5); p.g.shot('movepack.png')
-        return p.key('ret', 'into the book')
+        rows = sorted((r for r in p.g.objects()[1] if r['obj'] == 58 and not r.get('in', 0)), key=lambda r: -r.get('seq', 0))
+        p.key('m', 'move'); time.sleep(0.5); p.g.shot('movepack.png')
+        return p.display_pick(rows[min(skip, len(rows) - 1)]) or p.g.state
     st = into_book(); p.log('  Light: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))     # the castle's book has it
     if 'already has' not in st['msg'] or st['spells'] != before or st['parch'] != 2: p.issue('parchment', 'a known spell: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))
     st = into_book(1); p.log('  Infravision: %r spells %d parch %d' % (st['msg'], st['spells'], st['parch']))
@@ -1972,7 +1931,7 @@ def seg_panel(p, kw):
     st = p.key('asterisk' if 0 else 'tab', 'tab'); time.sleep(0.2); p.g.shot('inv_tab.png')
     st = p.key('tab', 'tab back'); st = p.key('f10', 'leave'); time.sleep(0.2)
     if st.get('inv'): p.issue('panel', 'F10 left the inventory open')
-    st = p.key('tab', 'tab opens'); st = p.key('down'); st = p.key('down'); st = p.key('ret', 'select'); p.log('  selected: %r' % st['msg'])
+    st = p.key('tab', 'tab opens'); st = p.key('down'); st = p.key('ret', 'select'); p.log('  selected: %r' % st['msg'])
     st = p.key('tab', 'done'); time.sleep(0.2); p.g.shot('inv_ready.png'); st = p.key('f10', 'leave')
     x0, y0 = p.nav.pos()
     st = p.g.char('2'); p.check('solo'); p.log('  solo: %r at (%d,%d)' % (st['msg'], st['X'], st['Y'])); time.sleep(0.3); p.g.shot('solo.png')
@@ -2005,13 +1964,31 @@ def seg_usekit(p, kw):
     if 'degrees' in st['msg']:
         st = p.g.type('200n'); p.log('  ball bad: %r' % st['msg'])
     st = p.use_pack(97, 'gargish') or p.use_pack(97); p.log('  vocabulary: %r' % st['msg'])
-    st = p.key('d')
-    for _ in range(80):
-        if 'bread' in st['msg']: break
-        st = p.key('d')
-    st = p.key('down'); st = p.key('ret', 'where'); p.log('  how many: %r' % st['msg'])
+    bread = [r for r in p.g.objects()[1] if r['obj'] == 128 and not r.get('in', 0)]
+    st = p.key('d'); st = (p.display_pick(bread[0]) if bread else None) or p.g.state; p.log('  how many: %r' % st['msg'])
     st = p.g.type('2'); p.log('  dropped: %r' % st['msg'])
     if 'bread' not in st['msg']: p.issue('usekit', 'drop: %r' % st['msg'])
+
+def seg_packtest(p, kw):
+    """the inventory display picks carried things for every verb (equipment.md §5): L)ook, M)ove to the Avatar,
+    D)rop at the feet, a ready, and a row past the first page (the pack scrolls)"""
+    inv = p.g.objects()[1]
+    p.log('  pack: %s' % sorted((r.get('own'), r['obj'], r.get('name')) for r in inv if not r.get('in')))
+    other = [r for r in inv if r.get('own', 1) != 1 and not r.get('in')]
+    if other:
+        r = other[-1]; p.idle(); p.key('l'); st = p.display_pick(r) or p.g.state
+        p.log('  look %s of %d: %r' % (r.get('name'), r.get('own'), st['msg'][-60:]))
+        if 'see' not in st['msg'].lower(): p.issue('packtest', 'look: %r' % st['msg'][-60:])
+        p.idle()
+        ok = give_to_avatar(p, r['obj'], others=True); p.log('  to the Avatar: %s' % ok)
+        if not ok: p.issue('packtest', 'move %s to the Avatar' % r.get('name'))
+        more = [x for x in p.g.objects()[1] if x.get('own', 1) != 1 and not x.get('in') and x['obj'] != r['obj']]
+        if more: p.log('  and %s: %s' % (more[0].get('name'), give_to_avatar(p, more[0]['obj'], others=True)))
+    mine = sorted((r for r in p.g.objects()[1] if r.get('own', 1) == 1 and not r.get('in')), key=lambda r: -r.get('seq', 0))
+    if mine:
+        r = mine[-1]; ok = drop_here(p, r['obj'], 1); p.log('  drop %s (cell %d): %s' % (r.get('name'), len(mine) - 1, ok))
+        if not ok: p.issue('packtest', 'drop %s' % r.get('name'))
+    p.idle()
 
 LEVEL_XP = (0, 100, 200, 400, 800, 1600, 3200, 6400)   # the shrine scripts' table, by current level (combat.md §3)
 def party_line(p):
@@ -2233,8 +2210,8 @@ def free_book_hand(p):
     p.idle(); p.key('f10', 'party view'); p.key('star', 'a portrait'); p.key('star', 'its inventory')   # (F1-F8 are the bot's reports)
     for _ in range(8): p.key('minus', 'back to the first member')          # the Avatar leads the roster
     st = p.key('tab', 'the panel')
-    for _ in range(9): p.key('left', 'to the slot')
-    for _ in range(3): p.key('down', 'to the slot')
+    for _ in range(5): p.key('left', 'to the slot')                    # a cell a step: 248 to 184, 32 to 64 (the slot at 176,56)
+    for _ in range(2): p.key('down', 'to the slot')
     st = p.key('ret', 'take it off'); p.log('  free the book hand: %r' % st['msg'][-50:])
     p.key('tab', 'back'); p.key('f10', 'party view'); p.idle()
     return 'Unready' in st['msg']
@@ -2272,7 +2249,7 @@ def seg_eqcheck(p, kw):
     p.log('  readied before %s / after %s' % (sorted(e0.items()), sorted(e1.items())))
     if e0 != e1: p.issue('save', 'readied things changed across save and restore: %s -> %s' % (sorted(e0.items()), sorted(e1.items())))
 
-SEGS = dict(usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, train4=seg_train4, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, givetest=seg_givetest, honestyrune=lambda p, kw: honesty_rune(p), eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
+SEGS = dict(packtest=seg_packtest, usekit=seg_usekit, castle=seg_castle,panel=seg_panel, look=seg_look,  book=seg_book, parchment=seg_parchment, bridge=seg_bridge, britain=seg_britain, shop=seg_shop, sell=seg_sell, death=seg_death, healer=seg_healer, help=seg_help, cave=seg_cave, farm=seg_farm, trade=seg_trade, paid=seg_paid, orb=seg_orb, shrine=seg_shrine, justice=seg_justice, honor=seg_honor, spirituality=seg_spirituality, humility=seg_humility, sacrifice=seg_sacrifice, valor=seg_valor, honesty=seg_honesty, shrines=seg_shrines, gargish=seg_gargish, gargoyles=seg_gargoyles, lenses=seg_lenses, cube=seg_cube, keg=seg_keg, gate=seg_gate, sutek=seg_sutek, catacombs=seg_catacombs, balloon=seg_balloon, singularity=seg_singularity, statues=seg_statues, ending=seg_ending, train=seg_train, train4=seg_train4, camp=seg_camp, cheat=seg_cheat, levertest=seg_levertest, probe=seg_probe, givetest=seg_givetest, honestyrune=lambda p, kw: honesty_rune(p), eqcheck=seg_eqcheck, meditate=lambda p, kw: meditate(p))
 
 LATE = ('train4', 'gargoyles', 'lenses', 'cube', 'keg', 'gate', 'sutek', 'catacombs', 'balloon', 'singularity', 'statues', 'ending')
 QUEST = ('justice', 'honor', 'spirituality', 'humility', 'sacrifice', 'valor', 'honesty', 'shrines', 'gargish')   # the route's chapters (bot_walkthrough.md §3)
@@ -2299,7 +2276,7 @@ def main():
     import shutil
     args = sys.argv[1:]; start = None
     if '--from' in args: i = args.index('--from'); start = args[i + 1]; del args[i:i + 2]
-    hd, out = args[0], os.path.abspath(args[1]); segs = args[2:] or [s for s in SEGS if s not in ('book', 'parchment', 'usekit')]
+    hd, out = args[0], os.path.abspath(args[1]); segs = args[2:] or [s for s in SEGS if s not in ('book', 'parchment', 'usekit', 'packtest')]
     os.makedirs(out, exist_ok=True)
     if start:                                                          # the checkpoint's slot into the drive folder
         for f in CKPT_FILES: shutil.copyfile(os.path.join(ckpt_dir(out, start), f), os.path.join(hd, f))

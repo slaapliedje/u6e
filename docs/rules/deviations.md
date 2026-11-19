@@ -5,14 +5,11 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-08 (the user keeps the foes' "casts" line as an addition); 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
+> - Last updated: 2026-11-18 (the pack pickers removed, as DOS); 2026-11-08 (the user keeps the foes' "casts" line as an addition); 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
 
 ## Found, not yet built
-- **The pack pickers (found 2026-11-18, waiting for the user's call):** at Look-, Use-, Move-, Drop- and SE's
-  "On", pressing the verb's letter again steps through the pack (`(L=next, Enter=look)`, `Use the ...? (U=next,
-  Enter=use)`). DOS has no such thing: a letter at the crosshair answers "what?" and drops the command
-  (message_scroll.md §2), and a carried thing is picked in the inventory display. Ours is an addition the bot
-  leans on (tools/bot use_pack); keep it as an addition, or drop it and teach the bot the display.
+(The pack pickers, found 2026-11-18, were removed the same day at the user's call: a carried thing is picked in the
+inventory display, as DOS; equipment.md §5.)
 
 (The conversation page waits, found 2026-11-07, are built: converse.md §6d.) The foes' charge roll was read in DOS
 2026-11-07 (weapon pick at image 0x1dcb7: each readied charge or spellbook, 1 in 4 with no storm, then
