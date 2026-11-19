@@ -27,9 +27,10 @@ PLAY
   Tab (* on the keypad flips portrait and inventory). Select a thing
   there to ready it, or a readied thing to take it off.
   Commands that need a direction or a target take the arrow keys, or a
-  crosshair and then Return. Esc cancels. With nothing to cancel it asks
-  whether to quit. The mouse works on the command bar, the party roster
-  and the map.
+  crosshair and then Return. For something you carry, press Tab during
+  the command and pick it in the inventory (D)rop starts there), or click
+  it. Esc cancels. With nothing to cancel it asks whether to quit. The
+  mouse works on the command bar, the party roster and the map.
 
 TRANSFER A CHARACTER
   The title menu can bring your Avatar over from Ultima IV or Ultima V,
@@ -52,8 +53,8 @@ MAGIC
   around Lord British's castle for a book, Get it, and ready it: C)ast
   asks for a readied book. Reagents are found or bought, and your level
   limits the circles you can cast. Mages sell spells as parchments. Put
-  one in your book yourself: press M twice, M again until it is selected,
-  then Return.
+  one in your book yourself: press M, then Tab, the parchment in the
+  inventory, and Return.
 
 MUSIC
   Have the ST disks? Copy U.PRG from them next to the game and you get the
