@@ -34,7 +34,7 @@ The first prompt of a game has no blank row above it. The name is the leader's (
 
 ## 2b. Conversations (U6, DOS observed 2026-11-18)
 The talk runs on in the message scroll, under the lines before it: `Test:`, `>Talk-Dupre`, a blank row, the
-look line (`You see a ruggedly handsome man, wearing a gleaming suit of armor.`), a blank row, the greeting, a
+look line (`You see` and the speaker's description, Dupre's ending on his armour), a blank row, the greeting, a
 blank row, `you say:` and the ankh. What is typed follows `you say:`; then a blank row and the answer, and so on.
 After `bye` the talk stays in the scroll and the next prompt follows it.
 - The panel above: the sky strip stays; the face (56x64) has no frame, at y 24, centred (x 216), the name on
