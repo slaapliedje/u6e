@@ -5885,6 +5885,7 @@ static const pdith_t *pdith_for(const uint8_t *src, int ly)
 static uint8_t  g_pl_rec[PL_REC];
 static int      g_pl_ok;                          /* 1 = the record is loaded and its palette is up */
 static int      g_pl_off;                         /* CONVPAL.BIN byte 1 bit 2: off (U6WY + dithering instead) */
+static int      g_pl_paper=-1;                    /* PAPER.BMP's panel colour (pl_enter finds it) */
 static uint8_t  g_pl_img[PL_W*PL_ROWS];           /* the portrait as written to the backbuffer */
 static int      g_pl_x=-1, g_pl_y;  static uint32_t g_pl_sum;
 static int fe_section(int id, int32_t *off, int32_t *len);   /* fwd: U6FE.PAK directory */
@@ -5920,8 +5921,21 @@ static int pl_enter(int pidx)
            && plat_read_at(f,off+4+(int32_t)pidx*PL_REC,g_pl_rec,PL_REC)==PL_REC) ok=1; }
     plat_fclose(f);
     if(!ok) return 0;
-    const uint8_t *pal = g_is_ste ? g_pl_rec+48 : g_pl_rec;
+    uint8_t *pal = g_is_ste ? g_pl_rec+48 : g_pl_rec;
+    {   /* the game's colours come back below the face: the parchment's slot takes the game's parchment, so
+         * the panel shows no step there (the most common colour of PAPER.BMP's panel) */
+        int paper=g_pl_paper;
+        if(paper<0 && g_paper){ static uint16_t h[256]; memset(h,0,sizeof h);
+            for(int y=MAPY;y<196;y++){ const uint8_t*r=g_paper+(int32_t)y*LW; for(int x=PANX;x<LW;x++) h[r[x]]++; }
+            paper=0; for(int c=1;c<256;c++) if(h[c]>h[paper]) paper=c; g_pl_paper=paper; }
+        const uint8_t *gp=g_lcx_nb>=2 ? LCPAL(g_lcx_pal, g_lcx_pal4) : LCPAL(g_lc_pal, g_lc_pal4), *gl=g_lcx_nb>=2 ? g_lcx_lut : g_lc_lut;
+        int s=paper>=0 ? g_pl_rec[96+paper] : PL_FIXED;
+        if(gp && gl && s<PL_FIXED) for(int k=0;k<3;k++) pal[s*3+k]=gp[gl[paper]*3+k]; }
     rdr_set_lowcolor(pal, g_pl_rec+96);
+#ifdef HAVE_RDR_ST
+    if(g_lcx_nb>=2) rdr_portrait_tail(g_lcx_nb, g_lcx_y0, LCPAL(g_lcx_pal, g_lcx_pal4), g_lcx_lut);   /* the game's colours below the face */
+    else { static const uint8_t y00[1]={0}; rdr_portrait_tail(1, y00, LCPAL(g_lc_pal, g_lc_pal4), g_lc_lut); }
+#endif
     g_pl_ok=1; pl_pointer(1); return 1;
 }
 static void pl_leave(void)
@@ -5946,11 +5960,13 @@ static void pl_draw(const uint8_t *src, int lx, int ly)
         uint8_t inv[PL_FIXED]; unsigned avail=0;
         for(int c=0;c<255;c++){ int sl=lut[c]; if(sl<PL_FIXED && !(avail&(1u<<sl)) && c!=code[0]&&c!=code[1]&&c!=code[2]&&c!=code[3]){ inv[sl]=(uint8_t)c; avail|=1u<<sl; } }
         static uint8_t lv[PL_ROWS*4*3];
+        const uint8_t *pp = (g_pl_paper>=0 && g_basepal) ? g_basepal+g_pl_paper*3 : 0;
         for(int y=0;y<PL_ROWS;y++){
             const uint8_t *wd=g_pl_rec+96+256+y*8; int16_t cc[16][3]; uint8_t sl[PL_W];
             pl_row_colours(pal,maxlvl,wd,cc);
             pl_map_row(src+y*PL_W,PL_W,g_basepal,cc,avail,sl);
-            for(int x=0;x<PL_W;x++){ int v=sl[x]; g_pl_img[y*PL_W+x] = v==255 ? 255 : v<PL_FIXED ? inv[v] : code[v-PL_FIXED]; }
+            for(int x=0;x<PL_W;x++){ int v=sl[x]; g_pl_img[y*PL_W+x] = v==255 ? 255 : v<PL_FIXED ? inv[v] : code[v-PL_FIXED];
+                if(pp && v!=255 && !memcmp(g_basepal+src[y*PL_W+x]*3,pp,3)) g_pl_img[y*PL_W+x]=(uint8_t)g_pl_paper; }   /* the parchment stays the panel's colour (the game's comes back below) */
             for(int k=0;k<4;k++){ unsigned w=((unsigned)wd[k*2]<<8)|wd[k*2+1];
                 for(int c=0;c<3;c++){ int L=(int)((w>>(8-4*c))&15u); lv[(y*4+k)*3+c]=(uint8_t)(g_is_ste?L:L>>1); } } }
 #ifdef HAVE_RDR_ST

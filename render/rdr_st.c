@@ -127,6 +127,14 @@ static volatile int     g_pl_n;                      /* rows (0 = off)          
 static int              g_pl_y0, g_pl_g0, g_pl_g1;
 static uint8_t          g_pl_lut[256];
 extern uint16_t         g_pl_reg[PL_MAXROWS][4];    /* (defined with the Timer-B handler) */
+/* Below the portrait the game's own palette comes back (rdr_portrait_tail): band 0 is then the
+ * portrait's 16, band 1 starts on the row after the portrait with the game band found there, and the
+ * game's later bands (the command bar) follow. g_pl_tailreg -> band 1's 16 words while that is on. */
+static int              g_tl_nb;                     /* the game's bands (0 = none given)    */
+static uint8_t          g_tl_y0[MAXBANDS];
+static uint16_t         g_tl_reg[MAXBANDS][16];
+static uint8_t          g_tl_lut[MAXBANDS][256];
+uint16_t * volatile     g_pl_tailreg;                /* read by pl_tb_line                   */
 
 static short     g_old_rez;
 static void     *g_old_phys, *g_old_log;
@@ -284,7 +292,12 @@ static inline void load_regs(const uint16_t *p)
  * address counter with a DIVU and took ~570 cycles, more than a row: Timer-B was always pending again
  * as it returned and the ACIA, below it in the MFP's priorities, was starved for the whole portrait —
  * lost key releases, so TOS repeated the key.) A held-up interrupt is served late, within its row; one
- * held up by more than a row shifts the rest of the portrait down a row until the next frame. */
+ * held up by more than a row shifts the rest of the portrait down a row until the next frame.
+ * With the game's palette below the portrait (g_pl_tailreg), the last row's interrupt goes on: it loads
+ * the 16 words into d0-d7, waits for the end of the portrait's last row (Timer-B pending, IPRA bit 0;
+ * at most ~64 polls) and writes all 16 registers in that row's blank (movem, ~76 cycles of the ~190 the
+ * blank leaves), clears the pending bit and lets pl_tail_next arm the next band. It holds the CPU about
+ * one row a frame; the map has no quiet row there, so the switch cannot wait for the next interrupt. */
 uint16_t          g_pl_reg[PL_MAXROWS][4];           /* each row's 4 colour words (read by the handler) */
 uint16_t * volatile g_pl_ptr;                        /* the next row's colours (the handler advances it) */
 uint16_t *        g_pl_end;                          /* past the last row's                              */
@@ -300,13 +313,40 @@ __asm__(
 "	move.l	%a0,_g_pl_ptr\n"
 "	cmp.l	_g_pl_end,%a0\n"
 "	bcs.s	1f\n"
+"	tst.l	_g_pl_tailreg\n"
+"	bne.s	2f\n"
 "	bclr	#0,0xfffffa13\n"
 "1:	move.l	(%sp)+,%a0\n"
 "	move.b	#0xfe,0xfffffa0f\n"
-"	rte\n");
+"	rte\n"
+"2:	movem.l	%d0-%d7/%a1,-(%sp)\n"
+"	move.l	_g_pl_tailreg,%a0\n"
+"	movem.l	(%a0),%d0-%d7\n"
+"	move.w	#64,%a0\n"
+"3:	btst	#0,0xfffffa0b\n"
+"	bne.s	4f\n"
+"	subq.l	#1,%a0\n"
+"	cmpa.w	#0,%a0\n"
+"	bne.s	3b\n"
+"4:	movem.l	%d0-%d7,0xffff8240\n"
+"	move.b	#0xfe,0xfffffa0b\n"
+"	jsr	_pl_tail_next\n"
+"	movem.l	(%sp)+,%d0-%d7/%a1\n"
+"	bra.s	1b\n");
 
 /* Timer-B interrupt: load band g_bidx's palette, re-arm for the next boundary (or mask if last). */
 static void tb_handler(void) __attribute__((interrupt_handler));
+void pl_tail_next(void);
+void pl_tail_next(void)                             /* (called from pl_tb_line, registers saved) */
+{
+    if (g_nb > 2) {
+        *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&tb_handler;
+        g_bidx = 2;
+        MFP_TBCR = 0;
+        MFP_TBDR = (uint8_t)(g_band_y0[2] - g_band_y0[1]);
+        MFP_TBCR = 0x08;
+    } else MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);
+}
 static void tb_handler(void)
 {
     if (g_nb <= 1) {                                               /* nothing to raster: stop it */
@@ -333,8 +373,9 @@ static void tb_handler(void)
 static void pcur_vbl(void);                         /* (below) the pointer follows the mouse */
 static void vbl_bands(void)
 {
-    if (g_nb <= 1) {
-        if (g_pl_n && g_pl_y0 > 0) {                /* portrait line colours: first interrupt at row y0-1, then every row */
+    if (g_pl_n && g_pl_y0 > 0) {                    /* portrait line colours: first interrupt at row y0-1, then every row */
+        if (g_pl_tailreg) load_regs(g_band_reg[0]);  /* the portrait's 16 (the game's came back below it last frame) */
+        {
             g_pl_ptr = &g_pl_reg[0][0]; g_pl_end = &g_pl_reg[g_pl_n][0];
             *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&pl_tb_line;
             MFP_TBCR = 0;
@@ -347,6 +388,7 @@ static void vbl_bands(void)
         }
         return;
     }
+    if (g_nb <= 1) return;
     *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&tb_handler;   /* (the portrait mode swaps it) */
     load_regs(g_band_reg[0]);
     g_bidx = 1;
@@ -416,9 +458,46 @@ void rdr_set_lowcolor_bands(int nb, const uint8_t *y0, const uint8_t *pal, const
  * for its 16-pixel groups on those rows; lv = n x 4 colours {r,g,b} for slots 12..15, row by row, as
  * levels for this hardware (0..7 ST, 0..15 STE). Takes effect from the next frame. */
 static long pl_mask_tb(void){ MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT); return 0; }
+/* The game's bands for the rows below the portrait (nb, first rows, nb x 16 {r,g,b} levels, nb x 256 LUTs),
+ * given after the portrait's palette went up (rdr_set_lowcolor) and before its rows (rdr_portrait_lines).
+ * nb = 0 forgets them. */
+void rdr_portrait_tail(int nb, const uint8_t *y0, const uint8_t *pal, const uint8_t *lut)
+{
+    if (nb > MAXBANDS) nb = MAXBANDS;
+    if (nb < 1 || !y0 || !pal || !lut) { g_tl_nb = 0; return; }
+    for (int b = 0; b < nb; b++) {
+        g_tl_y0[b] = y0[b];
+        for (int i = 0; i < 16; i++) g_tl_reg[b][i] = st_reg(pal[b*48+i*3+0], pal[b*48+i*3+1], pal[b*48+i*3+2]);
+        memcpy(g_tl_lut[b], lut + (int32_t)b*256, 256);
+    }
+    g_tl_nb = nb;
+}
+/* bands from the portrait's rows and the game's (rdr_portrait_tail): band 0 = the palette up now, rows
+ * 0 .. ys-1; then the game band holding row ys, and the game's later bands */
+static void pl_tail_build(void)
+{
+    int ys = g_pl_y0 + g_pl_n, nb = 1;
+    g_band_y0[0] = 0;
+    for (int i = 0; i < 16; i++) g_band_reg[0][i] = g_stpal[i];
+    memcpy(g_band_lut[0], g_lut, 256);
+    int b = 0; while (b + 1 < g_tl_nb && g_tl_y0[b+1] <= ys) b++;
+    for (; b < g_tl_nb && nb < MAXBANDS; b++, nb++) {
+        g_band_y0[nb] = (uint8_t)(nb == 1 ? ys : g_tl_y0[b]);
+        memcpy(g_band_reg[nb], g_tl_reg[b], sizeof g_band_reg[nb]);
+        memcpy(g_band_lut[nb], g_tl_lut[b], 256);
+    }
+    for (int k = 0; k < nb; k++) {
+        int r0 = g_band_y0[k], r1 = (k+1 < nb) ? g_band_y0[k+1] : STH;
+        for (int y = r0; y < r1; y++) g_row_lut[y] = g_band_lut[k];
+    }
+    g_nb = nb;
+    planar_mark_dirty();                             /* the map now spans two LUTs (native planar is off) */
+    g_pl_tailreg = &g_band_reg[1][0];
+}
 void rdr_portrait_lines(int x, int y0, int w, int n, const uint8_t *lutp, const uint8_t *lv)
 {
     g_pl_n = 0;                                      /* the handler leaves the registers alone meanwhile */
+    g_pl_tailreg = 0;
     if (n > PL_MAXROWS) n = PL_MAXROWS;
     if (n > 0 && y0 > 0 && y0 + n <= STH && lutp && lv && w > 0) {
         g_pl_y0 = y0; g_pl_g0 = x / 16; g_pl_g1 = (x + w - 1) / 16 + 1;
@@ -427,8 +506,8 @@ void rdr_portrait_lines(int x, int y0, int w, int n, const uint8_t *lutp, const 
             const uint8_t *c = lv + (r*4 + k)*3;
             g_pl_reg[r][k] = st_reg(c[0], c[1], c[2]); }
         if (!g_raster_on) { (void)Supexec(raster_install); g_raster_on = 1; }
-        if (g_vblslot >= 0) g_pl_n = n;
-    } else if (g_raster_on) (void)Supexec(pl_mask_tb);
+        if (g_vblslot >= 0) { g_pl_n = n; if (g_tl_nb && y0 + n < STH) pl_tail_build(); }
+    } else { g_tl_nb = 0; if (g_raster_on) (void)Supexec(pl_mask_tb); }
     g_shadow_ok = 0;                                 /* the portrait groups present differently now */
 }
 

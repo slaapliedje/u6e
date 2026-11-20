@@ -16,7 +16,7 @@
 >                  BAND raster proven with an R↔B-swap band 1 (`make shot-st-raster`, crisp seam).
 > - Confidence   : confirmed — quantiser core + U6WW pack + rdr_st shifter backend + U6WX band
 >                  rasters all validated on the ST. Remaining work is footprint + per-scene palettes.
-> - Last updated : 2026-07-13
+> - Last updated : 2026-11-20
 
 ## Goal
 Base ST/STE looks BETTER than the original "lazy" ST port, which reused a fixed EGA-ish
@@ -256,7 +256,24 @@ so it does not matter where along the row the reload lands.
   in the rest of each row. The cost: an interrupt held up by more than a whole row (a long keyboard
   or mouse handler, a Blitter burst) is lost, and the rest of the portrait shows its colours one row
   down until the next frame. One held up by less is served late within its row.
-- **Costs and limits.** The map and parchment share 12 colours instead of 16 during a conversation.
+- **The game's colours below the face (2026-11-20).** The 12 are a compromise and flatten the map
+  (the castle's brick floor, the carpet's stripes) and the command bar's icons; an outside tester on a
+  Mega STe took it for a glitch. So the portrait's 16 hold only down to its last row. From the next
+  row the game's own bands come back: band 0 is the portrait's 16, band 1 the game band found at that
+  row, then the game's later bands (the command bar). The map runs through that row, so there is no
+  quiet row to switch on: the interrupt that loads the last portrait row's colours goes on. It loads
+  the game's 16 words into eight registers, polls Timer-B's pending bit (IPRA bit 0, at most 64
+  polls) until the last portrait row ends, and writes all 16 in that row's blank with one movem
+  (about 76 cycles of the roughly 190 the blank leaves). It then clears the pending bit and arms the
+  next band (the command bar) with the ordinary band handler. That holds the CPU for about one row a
+  frame; the keyboard ACIA waits that row, well inside a byte's time (ST bot: castle conversations
+  clean). The engine passes the game's bands with `rdr_portrait_tail` before the portrait's rows.
+  The two parchments differed ((255,255,187) against the game's (238,238,221) in the Mega STe frame),
+  a visible step across the panel. So when a conversation opens, the portrait palette's slot for
+  PAPER.BMP's commonest panel colour takes the game's colour for it, and portrait pixels of exactly
+  that colour are written as the panel's index (the row's line colours had been nearer on some rows).
+  The map's two LUTs turn the native planar path off during a conversation; the map is frozen then.
+- **Costs and limits.** The map and parchment share 12 colours instead of 16 beside and above the face.
   The darkest is kept in slot 0, which the screen border shows. The mouse pointer gets no colours of
   its own: with its own (nearest-slot) colours its white and light grey came out lavender or blue and
   faint over the parchment. So while the line colours are up it is drawn in two colours: its light
@@ -264,7 +281,7 @@ so it does not matter where along the row the reload lands.
   back when the conversation closes. Giving the pointer's colours weight in the choice of the 12
   instead was tried: it worked for the pointer, but it flattened the map's brick floor and the
   carpet's stripes (2026-11-14).
-- **Where.** `render/portlines.h` (shared), `render/rdr_st.c` (`rdr_portrait_lines`, `c2p_seg`,
+- **Where.** `render/portlines.h` (shared), `render/rdr_st.c` (`rdr_portrait_lines`, `rdr_portrait_tail`, `pl_tail_next`, `c2p_seg`,
   `tb_handler`), `render/gamedemo.c` (`pl_enter`/`pl_draw`/`pl_leave`). Off on 256-colour backends
   and with old packs without the section, where U6WY with dithering applies.
   `CONVPAL.BIN` byte 1 bit 2 turns it off. `MKWORLD_LINEPREVIEW=file.ppm` writes VGA | the 16 as
