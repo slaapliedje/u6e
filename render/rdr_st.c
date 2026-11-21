@@ -166,6 +166,8 @@ static bool planar_alloc(void);
 bool rdr_init(const platform_caps_t *caps)
 {
     if (!planar_alloc()) return false;
+    { extern uint16_t g_c2p_slow; uint32_t cpu = 0;           /* a 68060 traps movep: the carry-chain c2p */
+      g_c2p_slow = (uint16_t)(plat_cookie(0x5F435055UL /* '_CPU' */, &cpu) && cpu >= 60); }
     g_has_blitter = caps && caps->has_blitter;   /* Phase 3: gate the Blitter masked-blit path */
     g_blit_present = g_has_blitter;              /* Blitter present is a clear win; on by default when present */
 
@@ -1385,6 +1387,10 @@ int rdr_c2p_selftest(void)
     c2p4_lut    (src, g_lut, a, 16);
     c2p4_lut_asm(src, g_lut, b, 16);
     int diff = 0; for (int i = 0; i < 64; i++) if (a[i] != b[i]) diff++;
+    {   uint8_t lut[256]; uint32_t r = 12345;          /* a LUT with high bits set too (both ignore them) */
+        for (int i = 0; i < 256; i++) { r = r*1103515245UL + 12345UL; lut[i] = (uint8_t)(r >> 16); src[i] = (uint8_t)(r >> 8); }
+        c2p4_lut(src, lut, a, 16); c2p4_lut_asm(src, lut, b, 16);
+        for (int i = 0; i < 64; i++) if (a[i] != b[i]) diff++; }
     return diff;
 }
 

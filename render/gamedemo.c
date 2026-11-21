@@ -3059,6 +3059,66 @@ static void menu_highlight(int mx,int my,int mw,int mh,int sel,int rowh)
             if(v==14 || (v>=33 && v<=36)) d[x]=col; } }   /* text pixels -> distance tint */
 }
 
+/* The menu's text, found once (the art does not change) as runs of text pixels, row by row: a highlight
+ * move recolours just these instead of clearing, re-blitting and re-scanning the whole box (an 8 MHz ST:
+ * 1.1 s a move, 0.7 s of it that C work; a tester, 2026-11-19: "still a bit slow"). Run k is g_mt_x[k],
+ * g_mt_len[k]; row y's runs are g_mt_row[y]..g_mt_row[y+1]. A box wider than 255 keeps the old way. */
+enum { MT_MAX = 2048, MT_ROWS = 200 };
+static uint8_t g_mt_x[MT_MAX], g_mt_len[MT_MAX];
+static uint16_t g_mt_row[MT_ROWS+1];
+static const uint8_t *g_mt_pix;                      /* the art they were found in (0 = none) */
+static void menu_text_find(int mx,int my,int mw,int mh)
+{
+    int n=0; g_mt_pix=0; if(mh>MT_ROWS || mw>255) return;
+    for(int y=0;y<mh;y++){ const uint8_t*d=ROW(my+y)+mx; g_mt_row[y]=(uint16_t)n;
+        for(int x=0;x<mw;){ uint8_t v=d[x];
+            if(v==14 || (v>=33 && v<=36)){ int x0=x; while(x<mw && (d[x]==14 || (d[x]>=33 && d[x]<=36))) x++;
+                if(n>=MT_MAX) return; g_mt_x[n]=(uint8_t)x0; g_mt_len[n]=(uint8_t)(x-x0); n++; }
+            else x++; } }
+    g_mt_row[mh]=(uint16_t)n; g_mt_pix=g_menu_pix;
+}
+static void menu_text_tint(int mx,int my,int mh,int sel,int rowh)   /* sel < 0: every option in 14 (the bands tint them) */
+{
+    for(int y=0;y<mh;y++){ uint8_t*d=ROW(my+y)+mx;
+        int opt = rowh>0 ? y/rowh : 0; if(opt>=MENU_NRAMP) opt=MENU_NRAMP-1;
+        int dist = sel<0 ? 0 : opt>sel ? opt-sel : sel-opt; if(dist>=MENU_NRAMP) dist=MENU_NRAMP-1;
+        uint8_t col = MENU_RAMP[dist];
+        for(int k=g_mt_row[y];k<g_mt_row[y+1];k++) memset(d+g_mt_x[k],col,g_mt_len[k]); }
+}
+
+/* ST: the highlight in the palette. All the text is drawn in 14; each option's rows are a Timer-B band
+ * whose 16 differ from the menu's only in 14's slot, which takes the colour of that option's tint (the
+ * slot MENU_RAMP[distance] has in the menu's 16, so it looks as before). A move then changes six bands'
+ * colours and draws nothing: on an 8 MHz ST it was 0.4 s (1.1 s before the runs above) for the box's
+ * redraw and present. Only when nothing else in those rows (nor the pointer) uses 14's slot; else the
+ * redraw. Bands: the title, the five options, the rest. */
+static int8_t g_mb_ok=-1;                            /* -1 = not checked for this art */
+static const uint8_t *g_mb_pix;
+static uint8_t g_mb_pal[7*48], g_mb_lut[7*256];
+static int menu_bands_ok(int mx,int my,int mw,int mh,int rowh)
+{
+    if(g_mb_pix==g_menu_pix && g_mb_ok>=0) return g_mb_ok;
+    g_mb_pix=g_menu_pix; g_mb_ok=0;
+    if(!g_menu_lc || rdr_active_backend()!=0 || rowh<=0 || g_mt_pix!=g_menu_pix || my<1 || my+mh>LH) return 0;
+    const uint8_t *lut=g_menu_lc+48; int T=lut[14]&15;
+    for(int y=my;y<my+mh;y++){ const uint8_t*d=ROW(y);       /* (called right after the box's blit, before any tint) */
+        for(int x=0;x<LW;x++){ uint8_t v=d[x];
+            int text = x>=mx && x<mx+mw && (v==14 || (v>=33 && v<=36));
+            if(!text && (lut[v]&15)==T) return 0; } }
+    for(int i=0;i<g_cw*g_ch;i++){ uint8_t v=g_curpix[i]; if(v!=FE_TRANSP && (lut[v]&15)==T) return 0; }
+    for(int b=0;b<7;b++){ memcpy(g_mb_pal+b*48,g_menu_lc,48); memcpy(g_mb_lut+b*256,lut,256); }
+    g_mb_ok=1; return 1;
+}
+static void menu_bands(int my,int mh,int sel,int rowh)
+{
+    const uint8_t *lut=g_menu_lc+48; int T=lut[14]&15;
+    uint8_t y0[7]; y0[0]=0; for(int o=0;o<5;o++) y0[1+o]=(uint8_t)(my+o*rowh); y0[6]=(uint8_t)(my+mh);
+    for(int o=0;o<5;o++){ int dist=o>sel?o-sel:sel-o; if(dist>=MENU_NRAMP) dist=MENU_NRAMP-1;
+        int src=lut[MENU_RAMP[dist]]&15;
+        for(int k=0;k<3;k++) g_mb_pal[(1+o)*48+T*3+k]=g_menu_lc[src*3+k]; }
+    rdr_set_lowcolor_bands(my+mh<LH?7:6, y0, g_mb_pal, g_mb_lut);
+}
+
 /* ---- Acknowledgements and Transfer a Character (docs/formats/transfer_saves.md) ---- */
 /* wait for a key or a click; returns 0 on Esc */
 static int fe_wait_page(void)
@@ -3260,7 +3320,7 @@ static int run_menu(void)
     int mw=g_menu_w, mx=(LW-mw)/2, my=ty+g_title_h+20;
     int rowh=g_menu_h/nopt;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }  /* flush stale boot keys */
-    int full=1, shown_sel=-1, shown_note=-1;                /* what is on screen: redraw only what changed */
+    int full=1, shown_sel=-1, shown_note=-1, bands=0;      /* what is on screen: redraw only what changed; bands = the ST palette highlight */
     for(;;){
         /* ST: the title screen has its OWN 16 (U6WU per-scene) — tuned to the logo's metallic gradient
          * + the gold menu ramp instead of the terrain-16. Re-asserted on every full redraw, which follows
@@ -3275,17 +3335,24 @@ static int run_menu(void)
             clear_bb(0);
             if(g_title_pix) blit_indexed(g_title_pix,g_title_w,g_title_h,tx,ty);
             blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
-            menu_highlight(mx,my,mw,g_menu_h,sel,rowh);     /* yellow->orange distance tint */
+            if(g_mt_pix!=g_menu_pix) menu_text_find(mx,my,mw,g_menu_h);   /* (before the tint: it finds 14 and 33..36) */
+            bands=menu_bands_ok(mx,my,mw,g_menu_h,rowh);
+            if(bands) menu_text_tint(mx,my,g_menu_h,-1,rowh);   /* all in 14: the bands tint it */
+            else menu_highlight(mx,my,mw,g_menu_h,sel,rowh);     /* yellow->orange distance tint */
             if(note==2){ const char*ml=music_pref_label(); ptext((LW-ptextw(ml))/2, my+g_menu_h+10, ml, 15); }
             fe_cursor_show(1);                              /* nuvie: pointer visible on the main menu */
             rdr_present_doubled(LH);
-            if(blk) rdr_set_lowcolor(g_menu_lc, NULL);      /* now that it is on screen */
+            if(bands) menu_bands(my,g_menu_h,sel,rowh);     /* now that it is on screen */
+            else if(blk) rdr_set_lowcolor(g_menu_lc, NULL);
             fe_cursor_draw(1);                              /* (the pointer stays out of the backbuffer: fe_cursor_draw presents it alone) */
             full=0; shown_sel=sel; shown_note=note;
+        } else if(sel!=shown_sel && bands){                 /* ST: the bands' colours alone */
+            menu_bands(my,g_menu_h,sel,rowh); shown_sel=sel;
         } else if(sel!=shown_sel){                          /* a new highlight: the menu's box alone (a full present per hover is slow on an ST) */
-            for(int y=my;y<my+g_menu_h&&y<LH;y++){ uint8_t*d=ROW(y); for(int x=mx;x<mx+mw&&x<LW;x++) d[x]=0; }
-            blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
-            menu_highlight(mx,my,mw,g_menu_h,sel,rowh);
+            if(g_mt_pix==g_menu_pix) menu_text_tint(mx,my,g_menu_h,sel,rowh);   /* the text pixels alone */
+            else { for(int y=my;y<my+g_menu_h&&y<LH;y++){ uint8_t*d=ROW(y); for(int x=mx;x<mx+mw&&x<LW;x++) d[x]=0; }
+                   blit_indexed(g_menu_pix,mw,g_menu_h,mx,my);
+                   menu_highlight(mx,my,mw,g_menu_h,sel,rowh); }
             rdr_present_rect_doubled(mx,my,mw,g_menu_h,LH); fe_cursor_draw(1);
             shown_sel=sel;
         } else fe_cursor_track();                           /* the pointer alone */
@@ -3315,6 +3382,7 @@ static int run_menu(void)
         }
         if(act<0){ vsync_pump(); continue; }
 
+        if(bands) rdr_set_lowcolor(g_menu_lc, NULL);       /* the bands off: one 16 for what comes next */
         sel=act; note=0; fe_cursor_show(0); full=1;        /* sub-flows hide it (nuvie: selected_*()); a full redraw after */
         if(act==4){ fe_leave_black();
                     g_menu_journey=1; return 4; }    /* Journey Onward -> play (load SAVED.000 if present) */

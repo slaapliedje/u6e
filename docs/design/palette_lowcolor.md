@@ -502,3 +502,12 @@ the palette: entry 144+i takes the base LUT's slot for 144+((i+shift)&15), and `
 loads it; the gate's rectangle is re-presented on each turn during the caption holds (the rise, the clutch
 beat and the walk present anyway). During the walk the base is the walk's LUT (entry 25 black). Only the gate
 uses those entries, so nothing else on screen changes. Result on a plain ST: four reds in rings that move.
+
+### The main menu's highlight (2026-11-21)
+The menu tints each option by its distance from the selected one (14, 33..36). On the ST all the text is
+drawn in 14, and seven bands (title, the five option rows, the rest) carry the menu's 16 with 14's slot
+set, per option row, to the colour that row's tint has in those 16. A highlight move rewrites six bands'
+registers and draws nothing, so it shows at once (it was 1.1 s on an 8 MHz ST, docs/design/performance.md).
+The shades are the same as before: Hatari's frames match colour for colour. Only used when nothing else in the option rows, nor
+the pointer, maps to 14's slot (checked once per menu art); otherwise the menu is redrawn. The bands go off
+before any sub-screen (`rdr_set_lowcolor`).

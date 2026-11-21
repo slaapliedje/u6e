@@ -16,9 +16,64 @@
 | the LUT byte are consumed (4 planes), so any high bits are ignored exactly as the
 | C's `& 0x0F` — no mask needed. Planes 0-3 accumulate in d1-d4.
 
+| Fast method (2026-11-21; about 62 cycles a pixel against the carry chain's ~102, so a whole-screen
+| present on an 8 MHz ST went from ~0.8 s to ~0.5 s): the LUT nibble indexes c2p_spread, which puts its
+| four bits at bit 0 of the long's four bytes (plane 0 in the top byte). Eight pixels shift left into one
+| long, which then holds the four planes' bytes for those pixels, and movep.l scatters them to the high
+| (pixels 0-7) or low (8-15) bytes of the group's four plane words. movep is not on the 68060 (it
+| traps there), so g_c2p_slow = 1 (set at start-up from the _CPU cookie) keeps the carry chain below.
+
+	.data
+	.even
+c2p_spread:
+	.set	cv,0
+	.rept	256
+	.long	((cv&1)<<24)+(((cv>>1)&1)<<16)+(((cv>>2)&1)<<8)+((cv>>3)&1)
+	.set	cv,cv+1
+	.endr
+	.globl	_g_c2p_slow
+_g_c2p_slow:
+	.word	0
+
 	.text
+	.macro	C2PPIX
+	moveq	#0,%d0
+	move.b	(%a0)+,%d0		| raw pixel
+	move.b	(%a1,%d0.w),%d0		| LUT byte (high bits ignored by the table)
+	add.w	%d0,%d0
+	add.w	%d0,%d0			| x4: a long index
+	add.l	%d1,%d1			| the earlier pixels one bit up
+	or.l	(%a3,%d0.w),%d1		| this pixel at bit 0 of each plane byte
+	.endm
+
 	.globl	_c2p4_lut_asm
 _c2p4_lut_asm:
+	tst.w	_g_c2p_slow
+	bne.w	c2p4_slow
+	movem.l	%d2-%d4/%a2-%a4,-(%sp)
+	move.l	28(%sp),%a0		| a0 = src
+	move.l	32(%sp),%a1		| a1 = lut
+	move.l	36(%sp),%a2		| a2 = dst
+	move.l	40(%sp),%d4		| d4 = ngroups
+	ble.w	8f
+	lea	c2p_spread,%a3
+0:	moveq	#0,%d1
+	.rept	8
+	C2PPIX
+	.endr
+	movep.l	%d1,0(%a2)		| pixels 0-7: the high bytes of planes 0..3
+	moveq	#0,%d1
+	.rept	8
+	C2PPIX
+	.endr
+	movep.l	%d1,1(%a2)		| pixels 8-15: the low bytes
+	addq.l	#8,%a2
+	subq.l	#1,%d4
+	bne.w	0b
+8:	movem.l	(%sp)+,%d2-%d4/%a2-%a4
+	rts
+
+c2p4_slow:
 	movem.l	%d2-%d4/%a2-%a4,-(%sp)	| save callee-saved (6 regs = 24 bytes)
 	move.l	28(%sp),%a0		| a0 = src
 	move.l	32(%sp),%a1		| a1 = lut

@@ -991,3 +991,20 @@ here (a clear went from 0.4-0.9 s to 0.6-1.3 s). Proof: FXVERIFY.REQ in the prof
 full recompose of the planar map; 0 bytes differed over 15 clears. A clear now costs 80-235 ms (the present); passes
 3.65 -> 3.1 s, 3.9 -> 3.2 s, 2.45 -> 2.2 s (the original ST: 6.1-7.1 s).
 
+
+## 2026-11-21 — ST c2p: a spread table and movep (present ~30% faster); the main menu's highlight in the palette
+A tester on an 8 MHz Mega STe found the main menu "still a bit slow" (2026-11-19). Measured on an emulated plain ST
+(20 highlight moves timed with `_hz_200`, a temporary hook): a move cost **1.1 s**, of it 0.39 s the present of the
+223×114 menu box and the rest the C redraw (clear, blit, re-tint scan).
+- **c2p** (`render/c2p_st.s`): the carry chain cost ~102 cycles a pixel. Now the LUT byte indexes a 1 KB spread table
+  (its four plane bits at bit 0 of a long's four bytes), eight pixels shift into one long and `movep.l` writes the
+  four plane bytes (high bytes for pixels 0-7, low for 8-15): ~62 cycles a pixel. The menu box present
+  went 0.39 → 0.28 s. Every ST present gains. The 2026-07-19 note above expected the bus to be the floor; the
+  CPU work was larger than that. Byte-identical: the BENCH INV2 gate (planar compose vs c2p) showed 0 differences over 63
+  frames, and `rdr_c2p_selftest` now also runs a random LUT with its high bits set. `movep` traps on a 68060, so a
+  `_CPU` cookie of 60 or more keeps the carry chain (`g_c2p_slow`).
+- **Menu redraw**: the text is found once as runs per row and only those are recoloured (0.11 s a move with the
+  present above: 0.39 s).
+- **Menu highlight on the ST**: all the text drawn in index 14; the five option rows are Timer-B bands whose 16
+  differ only in 14's slot (docs/design/palette_lowcolor.md). A move redraws nothing: it is immediate. Used only
+  when nothing else in those rows, nor the pointer, maps to that slot; otherwise the redraw above.
