@@ -479,3 +479,16 @@ share (weight 16), and the captions are yellow as in the 256-colour version. Tri
 scene's two smaller scrolls (BLOCKS.SHP 0, 1) and the rescuers (INTRO.SHP 0..2, x2) as well. Against the TT's
 256-colour frames, they turned the Avatar's blue shirt and the grey altar olive or purple. The parchment alone keeps
 both. (The Avatar's brown hair shows grey on the ST with or without it.)
+
+### The moongate's crimson rings (2026-11-20)
+The gate (INTRO_3.SHP shape 2) is sixteen concentric rings, one palette entry each (144..159), and the
+256-colour targets rotate those entries (nuvie's stones palette rotation), so the rings ripple outward.
+The ramp's reds are close (R 55..61, G 6..15 of 63): the scene's 16 merged them into one or two slots and
+the ST showed a flat glow with a faint inner frame (the outside tester's Mega STe, against a DOS frame). So
+`build_scene_lc_r` gives the gate-rise scene's ramp up to 4 slots of its own (a median cut of the 16 ramp
+colours, snapped; the 3-bit grid has 5 distinct ones), quantising the rest of the scene to the other 12; the
+ramp's entries are left out of the main cut. On the shifter `intro_crimson_cycle` turns the LUT instead of
+the palette: entry 144+i takes the base LUT's slot for 144+((i+shift)&15), and `rdr_set_lowcolor(NULL, lut)`
+loads it; the gate's rectangle is re-presented on each turn during the caption holds (the rise, the clutch
+beat and the walk present anyway). During the walk the base is the walk's LUT (entry 25 black). Only the gate
+uses those entries, so nothing else on screen changes. Result on a plain ST: four reds in rings that move.
