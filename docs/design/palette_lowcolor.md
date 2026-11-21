@@ -16,7 +16,7 @@
 >                  BAND raster proven with an R↔B-swap band 1 (`make shot-st-raster`, crisp seam).
 > - Confidence   : confirmed — quantiser core + U6WW pack + rdr_st shifter backend + U6WX band
 >                  rasters all validated on the ST. Remaining work is footprint + per-scene palettes.
-> - Last updated : 2026-11-20
+> - Last updated : 2026-11-21
 
 ## Goal
 Base ST/STE looks BETTER than the original "lazy" ST port, which reused a fixed EGA-ish
@@ -118,6 +118,16 @@ so each horizontal band of the screen shows its own 16 → up to nb×16 colours 
   Timer-B for the first boundary; each Timer-B interrupt loads the next band's 16 colours straight
   into `$FF8240..` and re-arms (stop/reload/restart). A few interrupts/frame — negligible cost.
   `rdr_present` also picks each row's LUT from a per-row table so the c2p remaps to the right band.
+- **Clean first rows (2026-11-21).** The handler was C and wrote the 16 registers 200-400 cycles after
+  the row before the band ended (its register saving, the exception, the 68000's interrupt latency),
+  which is into the band's first visible row: that row's left part showed the old band's colours.
+  On the command bar (row 182) it was a streak of map colours over the icons' top edge, a little
+  different each frame. Hatari shows it too (`make shot-st`), and so did a tester's Mega STe
+  ("glitching with the menu bar", 2026-11-19). Now Timer-B fires a row early (event count gap-1, then
+  reload 1). A hand-written handler loads the 16 words into d0-d7, polls Timer-B's pending bit for the end of
+  the last row before the band, writes them with one movem in that row's blank and re-arms through
+  `tb_next` (C). It holds the CPU about a row per boundary. Bands one row apart are handled in the same
+  interrupt. A band starting at row 1 can't be fired early from the VBL and switches a row late.
 - **Data** (`tools/mkworld.c` → U6WX, appended after U6WW): `[u8 nb][nb u8 y0][nb*48 pal][nb*256 lut]`,
   palette as raw 3-bit levels. Loaded into `g_lcx_*` and handed over via `rdr_set_lowcolor_bands`.
 - **Layout** (2 bands, SCENE-NEUTRAL so it never hurts other maps): band 0 (rows 0..181 = map + panel

@@ -109,7 +109,7 @@ static inline uint16_t st_reg(unsigned r, unsigned g, unsigned b)
  * Timer-B handler reloads the shifter registers at each band boundary; present() picks each
  * row's LUT from g_row_lut. nb<=1 => single palette, no raster (g_row_lut all -> g_lut). */
 #define MAXBANDS 8
-static int              g_nb;                        /* active band count (0/1 = no raster)  */
+int                     g_nb;                        /* active band count (0/1 = no raster)  */
 static uint8_t          g_band_y0[MAXBANDS];         /* first display row of each band       */
 static uint16_t         g_band_reg[MAXBANDS][16];    /* per-band ST palette (0x0RGB) words   */
 static uint8_t          g_band_lut[MAXBANDS][256];   /* per-band 256->16 remap               */
@@ -334,40 +334,79 @@ __asm__(
 "	movem.l	(%sp)+,%d0-%d7/%a1\n"
 "	bra.s	1b\n");
 
-/* Timer-B interrupt: load band g_bidx's palette, re-arm for the next boundary (or mask if last). */
-static void tb_handler(void) __attribute__((interrupt_handler));
+/* Band switches (game bands). Timer-B fires one row early: at the end of the row two before the band
+ * (event count gap-1, reload 1). The handler loads the band's 16 colour words into d0-d7, waits for the
+ * next end of display-enable (Timer-B pending again, IPRA bit 0) and writes all 16 registers with one
+ * movem in that row's blank (~76 cycles of the ~190 it leaves), so the new band starts clean on its first
+ * row. (The C handler it replaces wrote the registers 200-400 cycles after the row ended: its register
+ * saving, the exception and the 68000's interrupt latency ran into the band's first row, whose left part
+ * then showed the old colours, a little more or less each frame: the command bar's top row shimmered on
+ * a real Mega STe, 2026-11-19.) It holds the CPU about a row per boundary. tb_next (C) moves on to the
+ * next band and re-arms; it returns nonzero when that band starts on the very next row (the timer is
+ * still counting rows one at a time), and the handler goes round again. A band whose first row is 1
+ * cannot be fired early from the VBL and switches a row late. */
+extern void tb_handler(void);
+uint16_t * volatile g_tb_regs;                      /* the colours the handler writes next */
+static void tb_arm(int gap)                         /* gap rows to the next band (>= 1) */
+{
+    MFP_TBCR = 0;
+    MFP_TBDR = (uint8_t)(gap > 1 ? gap - 1 : 1);    /* stopped: loads the counter */
+    MFP_TBCR = 0x08;                                /* event count */
+    MFP_TBDR = 1;                                   /* running: the reload, one row from then on */
+}
+int tb_next(void);
+int tb_next(void)                                   /* (called from the handler, registers saved) */
+{
+    int i = g_bidx + 1;
+    if (i >= g_nb) {                                /* done this frame */
+        MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);
+        MFP_TBCR = 0;
+        return 0;
+    }
+    g_bidx = i;
+    g_tb_regs = g_band_reg[i];
+    int gap = g_band_y0[i] - g_band_y0[i-1];
+    if (gap <= 1) return 1;                         /* the next row's end: go round again */
+    tb_arm(gap);
+    return 0;
+}
 void pl_tail_next(void);
 void pl_tail_next(void)                             /* (called from pl_tb_line, registers saved) */
 {
     if (g_nb > 2) {
         *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&tb_handler;
         g_bidx = 2;
-        MFP_TBCR = 0;
-        MFP_TBDR = (uint8_t)(g_band_y0[2] - g_band_y0[1]);
-        MFP_TBCR = 0x08;
+        g_tb_regs = g_band_reg[2];
+        tb_arm(g_band_y0[2] - g_band_y0[1]);
     } else MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);
 }
-static void tb_handler(void)
-{
-    if (g_nb <= 1) {                                               /* nothing to raster: stop it */
-        MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);
-        MFP_ISRA = (uint8_t)~TB_BIT;
-        return;
-    }
-    int i = g_bidx;
-    if (i < g_nb) {
-        load_regs(g_band_reg[i]);
-        i++; g_bidx = i;
-        if (i < g_nb) {
-            MFP_TBCR = 0;                                          /* stop */
-            MFP_TBDR = (uint8_t)(g_band_y0[i] - g_band_y0[i-1]);   /* lines to next boundary */
-            MFP_TBCR = 0x08;                                       /* event-count restart */
-        } else {
-            MFP_IMRA = (uint8_t)(MFP_IMRA & ~TB_BIT);              /* done this frame: mask TB */
-        }
-    }
-    MFP_ISRA = (uint8_t)~TB_BIT;                                   /* software EOI: clear in-service */
-}
+__asm__(
+"	.text\n"
+"	.even\n"
+"	.globl	_tb_handler\n"
+"_tb_handler:\n"
+"	movem.l	%d0-%d7/%a0-%a1,-(%sp)\n"
+"	moveq	#1,%d0\n"
+"	cmp.l	_g_nb,%d0\n"
+"	blt.s	1f\n"
+"	bclr	#0,0xfffffa13\n"            /* nothing to raster: mask it */
+"	bra.s	5f\n"
+"1:	move.l	_g_tb_regs,%a0\n"
+"	movem.l	(%a0),%d0-%d7\n"
+"	move.w	#64,%a0\n"
+"2:	btst	#0,0xfffffa0b\n"
+"	bne.s	3f\n"
+"	subq.l	#1,%a0\n"
+"	cmpa.w	#0,%a0\n"
+"	bne.s	2b\n"
+"3:	movem.l	%d0-%d7,0xffff8240\n"
+"	move.b	#0xfe,0xfffffa0b\n"
+"	jsr	_tb_next\n"
+"	tst.l	%d0\n"
+"	bne.s	1b\n"
+"5:	movem.l	(%sp)+,%d0-%d7/%a0-%a1\n"
+"	move.b	#0xfe,0xfffffa0f\n"
+"	rte\n");
 
 /* VBL queue routine (runs each frame during vblank): reload band 0 + arm the Timer-B chain. */
 static void pcur_vbl(void);                         /* (below) the pointer follows the mouse */
@@ -392,9 +431,8 @@ static void vbl_bands(void)
     *(volatile uint32_t *)0x120UL = (uint32_t)(uintptr_t)&tb_handler;   /* (the portrait mode swaps it) */
     load_regs(g_band_reg[0]);
     g_bidx = 1;
-    MFP_TBCR = 0;
-    MFP_TBDR = g_band_y0[1];                        /* fire after y0[1] lines -> band 1 start */
-    MFP_TBCR = 0x08;
+    g_tb_regs = g_band_reg[1];
+    tb_arm(g_band_y0[1]);                           /* fire a row before band 1 starts */
     MFP_IPRA = (uint8_t)~TB_BIT;                    /* clear any pending */
     MFP_IERA = (uint8_t)(MFP_IERA | TB_BIT);
     MFP_IMRA = (uint8_t)(MFP_IMRA | TB_BIT);
