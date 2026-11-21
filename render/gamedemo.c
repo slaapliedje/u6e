@@ -10578,7 +10578,7 @@ static int do_attack(world_t*w,int dx,int dy)
  * nm = the thing in that cell, 0 for an empty one */
 static void attack_panel(world_t*w,const char*nm){
     int n=msgcat(g_atk_i?msg_tail():0, nm&&nm[0]?nm:"ethereal void"); msgcat(n,".\nOut of range!");
-    g_pending_verb=0;
+    g_pending_verb=0; g_pan_focus=0;   /* the crosshair back to the map, as after L/U/M/D: an Enter queued behind a slow turn must not take the weapon off */
     if(++g_atk_i<g_atk_n){ attack_aim(); g_pending_verb='A'; return; }   /* the next readied weapon's turn, as attack_fire */
     g_atk_n=0; g_atk_i=0;
     if(g_atk_tried){ g_atk_tried=0; g_verb_pts=10; verb_spend(w); } }

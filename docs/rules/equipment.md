@@ -101,7 +101,10 @@ name to the right on text row 11. A selected thing with no verb armed is readied
 (L)ook, U)se, D)rop then its "Location: ", M)ove). With A)ttack armed a cell of the display is the attack's target, out of reach: the thing's name, or
 `ethereal void` for an empty cell, then `Out of range!` (DOS observed 2026-11-16 for an empty pack cell, the Tab crosshair
 in the display while `Attack with bare hands-` waited; an occupied cell naming its thing is probable). Nothing is readied or
-taken off. (We used to drop the attack and take the readied thing off: a tester's sword came off in a fight.)
+taken off. (We used to drop the attack and take the readied thing off: a tester's sword came off in a fight.) The crosshair
+then goes back to the map, as after L)ook, U)se, M)ove and D)rop (ours; where DOS leaves it is not yet observed): left in the
+display with no verb armed, a second Enter, typed ahead while a slow machine finished the turn, took the weapon off (the
+same tester, 2026-11-19).
 
 **Portrait and stats:** name on the top row; the portrait at (176,16); from column 10: `STR:n`, `DEX:n`, `INT:n` on rows 2-4,
 `Magic` and `n/m` on 6-7, `Health` and `n/m` on 8-9, `Lev/Exp` and `n/m` on 10-11; the same buttons, the third with tile 386.
