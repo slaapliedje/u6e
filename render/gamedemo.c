@@ -987,11 +987,18 @@ static void fe_fade(const uint8_t*pal,int num)
 
 /* crimson moongate glow: rotate palette entries 144..159 by `shift` (nuvie stones_rotate_palette
  * cycles the crimson ramp so the gate pulses). Sets the whole palette from `basepal` + the rotate. */
+/* The 16-colour shifter can't rotate the 256 entries, so its LUT's ramp entries turn instead: the converter gave
+ * the ramp slots of its own (build_scene_lc_r), and entry 144+i takes the slot of 144+((i+shift)&15), as the
+ * palette does. g_crim_lut = the gate scene's base LUT while it is up on the ST (NULL elsewhere). */
+static const uint8_t *g_crim_lut;
 static void intro_crimson_cycle(const uint8_t*basepal,int shift)
 { uint8_t p[768]; memcpy(p,basepal,768);
   for(int i=0;i<16;i++){ int src=144+((i+shift)&15);
     p[(144+i)*3]=basepal[src*3]; p[(144+i)*3+1]=basepal[src*3+1]; p[(144+i)*3+2]=basepal[src*3+2]; }
-  rdr_set_palette(p,256); }
+  rdr_set_palette(p,256);
+  if(g_crim_lut){ uint8_t l[256]; memcpy(l,g_crim_lut,256);
+    for(int i=0;i<16;i++) l[144+i]=g_crim_lut[144+((i+shift)&15)];
+    rdr_set_lowcolor(NULL,l); } }
 
 /* Which layers draw_intro_frame emits, so the static hold can split the frame into a
  * compose-once background and a per-frame animation overlay (dirty-rect). IF_BG omits the
@@ -1520,6 +1527,7 @@ static void avatar_climax(int s)
     if(have_lc){ const uint8_t *p16=g_intro[s].lc; int dk=0, dv=999;
         for(int c=0;c<16;c++){ int v=p16[c*3]+p16[c*3+1]+p16[c*3+2]; if(v<dv){ dv=v; dk=c; } }
         memcpy(lutb,g_intro[s].lc+48,256); lutb[25]=(uint8_t)dk; rdr_set_lowcolor(g_intro[s].lc,lutb); }
+    const uint8_t *crim0=g_crim_lut; if(crim0) g_crim_lut=lutb;   /* the rings turn over the black-figure LUT meanwhile */
     #define STAGE_SCENE(gyv) do{ blit_opaque(bg,g_intro[s].w,g_intro[s].h,0,0); \
         blit_indexed_clip(g_gate,g_gate_w,g_gh,g_gx+(int)rng_range(&r,2),(gyv)+(int)rng_range(&r,3),0,0,LW,GATE_CLIP_Y); \
         if(g_cover) blit_indexed(g_cover,g_cvw,g_cvh,g_cvx,g_cvy); }while(0)
@@ -1550,6 +1558,7 @@ static void avatar_climax(int s)
             if(keep==0) break;
         } }
     if(have_lc) rdr_set_lowcolor(g_intro[s].lc,g_intro[s].lc+48);   /* entry 25 back to grey (nuvie 0x74) */
+    if(crim0) g_crim_lut=crim0;
     {   /* the gate sinks back into the earth (intro_gate_move: nuvie's pace; the ST presents only what moved) */
         STAGE_SCENE(gy); rdr_present_doubled(LH);
         int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();
@@ -1671,6 +1680,7 @@ static void run_intro_body(void)
         g_intro_page=0;
         draw_intro_frame(s,0,1); rdr_present_doubled(LH);
         if(g_intro[s].lc) rdr_set_lowcolor(g_intro[s].lc, NULL);   /* ST: this scene's own 16 (no-op on TT), now that it is on screen */
+        g_crim_lut = (g_intro[s].type==2 && g_intro[s].lc && rdr_active_backend()==0) ? g_intro[s].lc+48 : NULL;   /* ST: the gate's rings turn in the LUT */
         for(int k=0;k<=8;k++){ fe_fade(pal,k); }      /* fade in */
         if(g_intro[s].type==2 && g_gate){                         /* the moongate ASCENDS (nuvie 0x64->0x5) */
             int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* ST: one screen, so each step presents only what moved (a full flip a step took 1.2 s at 8 MHz) */
@@ -1760,7 +1770,7 @@ static void run_intro_body(void)
                     int paldirty=0;
                     for(int k=0;k<nst && cyc;k++){ if(++cf>=5){ cf=0; intro_crimson_cycle(pal,++cs); paldirty=1; }
                         if(shake){ g_gate_jx=(int)rng_range(&sr,2); g_gate_y=5+(int)rng_range(&sr,4); } }
-                    if(nst>0 && (shake || (paldirty && rdr_palette_deferred() && g_gate))){   /* gate rect: shake and/or LUT re-present */
+                    if(nst>0 && (shake || (paldirty && (rdr_palette_deferred() || g_crim_lut) && g_gate))){   /* gate rect: shake and/or LUT re-present */
                         if(shake) intro_compose(s,0,1);                                        /* bg + jittered gate + cover (+caption) */
                         rdr_present_rect_doubled(g_gx&~15, 5, ((g_gate_w+(g_gx&15)+1+15)&~15), g_gh+3, LH); }
                     int a=intro_advance(); if(a){ key=(a==2)?0x1b:0; break; }
@@ -1768,6 +1778,7 @@ static void run_intro_body(void)
             }
             g_gate_jx=0; if(cyc) g_gate_y=5;
             if(cyc){ rdr_set_palette((uint8_t*)pal,256); rdr_flip_begin(); }   /* restore the un-rotated palette + double buffer */
+            if(g_crim_lut) rdr_set_lowcolor(NULL,g_crim_lut);   /* (and the ST's LUT) */
         }
         if((key&0xFF)==0x1b){ for(int k=8;k>=0;k--){ fe_fade(pal,k); } break; }
         if(panlen>0){                                             /* pan the room away */
@@ -1796,6 +1807,7 @@ static void run_intro_body(void)
         }
         if(g_intro[s].type==2){ int st1=(rdr_active_backend()==0); if(st1) rdr_flip_end();   /* (as the ascent) */
             avatar_climax(s); if(st1) rdr_flip_begin(); }         /* Avatar walks into the moongate + it sinks */
+        g_crim_lut=NULL;
         for(int k=8;k>=0;k--){ fe_fade(pal,k); }      /* fade out */
         if(s==0){ int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){(void)gk;} g_intro_mb=0;
             storm_scene(); }                                      /* window/storm scene after the living room */

@@ -1211,10 +1211,15 @@ static void build_command_band(u6tileset_t *ts, const uint8_t *paper, const uint
  * left out. Each scene's colours are also weighted up by saturation (x1 grey .. x2 pure), so a small vivid area
  * keeps a slot against a large grey one. */
 typedef struct { const uint8_t *pix; long n; int w16; } scene_extra_t;
-static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, uint8_t lc[48+256]);
+/* A colour-cycling ramp (ramp_n entries from ramp_lo; 0 = none) gets up to 4 slots of its own: a median cut
+ * of its colours, snapped. The engine rotates the LUT's ramp entries as the 256-colour targets rotate the
+ * palette (the moongate's crimson rings, intro_sequence.md), so each ring keeps its own shade. */
+static void build_scene_lc_r(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, int ramp_lo, int ramp_n, uint8_t lc[48+256]);
+static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, uint8_t lc[48+256])
+{ build_scene_lc_r(pal6,pix,npix,xs,nx,0,0,lc); }
 static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, uint8_t lc[48+256])
 { build_scene_lc_x(pal6,pix,npix,NULL,0,lc); }
-static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, uint8_t lc[48+256])
+static void build_scene_lc_r(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, int ramp_lo, int ramp_n, uint8_t lc[48+256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
     cv_hist(pix,npix,freq);
@@ -1223,18 +1228,25 @@ static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, 
     for (int k=0;k<nx;k++){ static long xf[256]; for (int i=0;i<256;i++) xf[i]=0;
         if(xs[k].pix) cv_hist(xs[k].pix,(int)xs[k].n,xf); xf[U6SHAPE_TRANSPARENT]=0;
         for (int i=0;i<256;i++) freq[i]+=xf[i]*xs[k].w16/16; }
+    CCol rr[4]; int nr=0;                        /* the ramp's own slots */
+    if (ramp_n > 0) { CCol rc[16]; int n=ramp_n>16?16:ramp_n;
+        for (int j=0;j<n;j++){ int i=ramp_lo+j; rc[j].r=RGB6TO8(pal6[i*3]); rc[j].g=RGB6TO8(pal6[i*3+1]); rc[j].b=RGB6TO8(pal6[i*3+2]); rc[j].w=1; }
+        CCol tmp[4]; int nt=q_median_cut(rc,n,4,tmp); q_snap_pal(tmp,nt,3);
+        for (int k=0;k<nt;k++){ int dup=0; for (int m=0;m<nr;m++) if(rr[m].r==tmp[k].r&&rr[m].g==tmp[k].g&&rr[m].b==tmp[k].b) dup=1; if(!dup) rr[nr++]=tmp[k]; } }
     static CCol col[256]; int ncol=0;
     for (int i=0;i<256;i++){ if(!freq[i]) continue;
+        if (nr && i>=ramp_lo && i<ramp_lo+ramp_n) continue;   /* (served by its own slots) */
         col[ncol].r=RGB6TO8(pal6[i*3]); col[ncol].g=RGB6TO8(pal6[i*3+1]); col[ncol].b=RGB6TO8(pal6[i*3+2]);
         { int mx=col[ncol].r, mn=col[ncol].r;      /* saturation weight: x1 + (max-min)/max */
           if(col[ncol].g>mx) mx=col[ncol].g; if(col[ncol].b>mx) mx=col[ncol].b; if(col[ncol].g<mn) mn=col[ncol].g; if(col[ncol].b<mn) mn=col[ncol].b;
           col[ncol].w = freq[i] + (mx ? freq[i]*(mx-mn)/mx : 0); }
         ncol++; }
-    CCol pal[16]; int np = ncol ? q_median_cut(col,ncol,16,pal) : 0;
+    CCol pal[16]; int np = ncol ? q_median_cut(col,ncol,16-nr,pal) : 0;
     q_snap_pal(pal,np,3);
     if (np && freq[0]) {                         /* colour 0 is the background: keep it exact, or black drifts grey */
         int r=q_snap3[RGB6TO8(pal6[0])], g=q_snap3[RGB6TO8(pal6[1])], b=q_snap3[RGB6TO8(pal6[2])];
         int k=q_nearest(pal,np,r,g,b); pal[k].r=(uint8_t)r; pal[k].g=(uint8_t)g; pal[k].b=(uint8_t)b; }
+    for (int k=0;k<nr;k++) pal[np++]=rr[k];
     uint8_t *lvl=lc; uint8_t *lut=lc+48;
     for (int i=0;i<16;i++){ int r=0,g=0,b=0;
         if(i<np){ r=q_lv3[pal[i].r]; g=q_lv3[pal[i].g]; b=q_lv3[pal[i].b]; }
@@ -2465,7 +2477,7 @@ int main(int argc, char **argv)
                 spr=scratch((size_t)(cap>0?cap:1),U6SHAPE_TRANSPARENT);
                 for(int k=0;k<4;k++){ int w=0,h=0; uint8_t*sp=load_shape(dir,SC[i].file,SP[k],&w,&h); if(sp&&w>0){ memcpy(spr+sn,sp,(size_t)w*h); sn+=(long)w*h; } free(sp); }
                 xs[1].pix=spr; xs[1].n=sn; xs[1].w16=48; nx=2; }   /* x3: the gate's few shades each keep a colour */
-            build_scene_lc_x(pal, canvas, 320*200, xs, nx, lc); free(spr); } fwrite(lc,1,sizeof lc,fe);
+            build_scene_lc_r(pal, canvas, 320*200, xs, nx, SC[i].type==2?144:0, SC[i].type==2?16:0, lc); free(spr); } fwrite(lc,1,sizeof lc,fe);   /* the gate's crimson ramp (144..159) its own slots */
           be16(fe,320); be16(fe,200); fwrite(canvas,1,320*200,fe); free(canvas);
           printf("intro scene %d: type %d %s shape0=%d pal %d\n", i, SC[i].type, SC[i].file, SC[i].bg[0].idx, SC[i].pal);
         } else {
