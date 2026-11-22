@@ -121,7 +121,8 @@ with that frame, quality the creature, on the creature's level.
 
 A dying big creature lies as its remains in its own slot (se_combat.md §3i): its pieces are deleted and the second
 remains made beside it. A sleeping one lies the same way and stands up again on waking (se_combat.md §3i). The
-engine removes the pieces at death, as when a temporary creature is unloaded far from the party (se_eggs.md §2).
+engine does the same (the pieces go, the second remains made) and keeps the creature in its slot as its remains
+(se_combat.md §3i); a temporary one unloaded far away goes with its pieces (se_eggs.md §2).
 
 ## 8. The reach (0x1be13)
 

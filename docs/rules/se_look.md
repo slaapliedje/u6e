@@ -93,7 +93,7 @@ None, or a thing inside something: `nothing!`. Else its count or article and nam
 
 SEUSE self-test: `SE look count`, `SE look bucket`, `SE look sundial`, `SE look statue`, `SE look search`,
 `SE look shut crate`, `SE look map`, `SE get body`, `SE get torch`, `SE get egg`, `SE get diamonds`, `SE get range`
-(and the older `SE gold` wants for the pooled gold). Not tested by a want: a big creature's piece and a sleeper.
+`SE gold: in the pack`, `SE dead looked at as itself`, `SE dead not taken`. Not tested by a want: a big creature's piece and a sleeper.
 
 ## 7. Slips and engine choices
 - Slip 27: actors 0-15 asleep or dead are named by the tile they show (their remains: `a body`), not by their saved
@@ -101,9 +101,9 @@ SEUSE self-test: `SE look count`, `SE look bucket`, `SE look sundial`, `SE look 
 - Slip 28: a lit torch taken by a leader other than the member whose inventory is shown goes to no hand but is still
   marked readied. The engine puts it in the leader's first free hand.
 - The statue's note shows from any distance (DOS, kept).
-- Engine choice: gold taken goes to the party's pool, as everywhere in the engine (DOS: a counted thing in the pack).
-- Engine choice: the dead leave a map object (se_deviations.md), so looking at a dead creature names its remains
-  object, not the creature; its things are searched from that object as from a body.
+- As DOS (the user's choice, 2026-11-22): gold (69) is a counted thing taken into the leader's pack; the dead lie in
+  their slots as their remains, looked at as actors (named by what they were, never searched) and passed over by
+  G)et, their things with them (se_combat.md §3i).
 - Not built: L)ook and G)et also turn the leader to face an adjacent target (0x142e4); the engine does not track the
   leader's facing for this.
 

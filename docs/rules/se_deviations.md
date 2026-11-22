@@ -60,9 +60,10 @@ The user's rule for the rows that were engine choices: build DOS's behaviour. Ea
 | Eggs were looked at within 20 tiles of the party | se_eggs.md §2 | DOS's 40 x 40 window: unload measured from its centre, the scan taking the eggs inside it |
 | A hatchling took the lowest free slot of 192-254 | se_eggs.md §4 | DOS's free list: the last slot freed is taken first |
 | The ending's time taken | design/se_front_end.md "The ending" | Kept as DOS (it counts from the calendar's origin, so a new game is already "6 months, 3 days and 61 years") |
-
-Still to build (in progress): a death leaving the actor in its slot as its remains, looking at the dead as actors,
-a big creature's pieces at death, and gold as a counted thing in the pack.
+| A death left the remains as a map object holding the victim's things, the actor off the map | se_combat.md §3i | The actor lies in its slot as its remains, its things with it, saved there; with no remains an object of its own look holds its things and it goes to level 6 |
+| Looking at a dead creature named its remains object and searched it | se_look.md §2, §7 | Looked at as the actor: named by what it was, never searched; G)et passes over it |
+| A dead or unloaded big creature's pieces were removed | se_big.md §7 | The pieces go and the second remains is made, the creature lying in its slot; only one with no remains goes to level 6 |
+| G)et of gold put it in the party's pool | se_look.md §5 | Gold (69) is a counted thing taken into the leader's pack |
 
 ## Kept as ours by the user's choice (2026-11-22)
 | Difference | Where | What DOS does |

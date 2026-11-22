@@ -8939,6 +8939,16 @@ static int horse_dismount(world_t*w)
  * turtles and their riders (307: the member drawn on its turtle). The raft is a vessel the party is
  * inside (g_veh_kind 237); a rider is a member with another look, moving as a swimmer. ---- */
 static uint8_t  g_se_rider[U6_MAX_ACTORS];   /* rides a turtle */
+/* SE's dead (se_combat.md §3i): DOS keeps a fallen actor in its slot showing its remains, its things with it. The engine
+ * draws the remains as a runtime object (quality = the actor) made again whenever its place is loaded, and the save
+ * writes the actor in its slot. g_se_dl: 1 lies as its remains, 2 had none (0xa5d:0x19bf, gone to level 6) */
+static uint8_t  g_se_dl[U6_MAX_ACTORS], g_se_dfr[U6_MAX_ACTORS];
+static uint16_t g_se_don[U6_MAX_ACTORS], g_se_was[U6_MAX_ACTORS];   /* the remains' obj_n; what it was (obj_n, 0 unknown) */
+/* the actor whose remains object j is, or -1 */
+static int se_dead_of(int j){ const wobj_t*o=&g_wobj[j]; int q=o->quality;
+    if(g_gd!=&gamedef_se||!o->alive||q<1||q>=U6_MAX_ACTORS||g_se_dl[q]!=1||o->obj_n!=g_se_don[q]||o->x!=g_actx[q]||o->y!=g_acty[q]) return -1;
+    return q; }
+static int se_rem_obj(int i){ for(int j=0;j<g_ow.nobjs;j++) if(se_dead_of(j)==i) return j; return -1; }
 static uint16_t g_se_rtile[U6_MAX_ACTORS];   /* its own tile, to stand up as */
 static int se_shore(int t){ return (t>=0x20&&t<=0x2f)||t==0xbe; }   /* 0x1dbd:0xa29 */
 static int se_wtile(const world_t*w,int x,int y){ int M=U6_SURFACE_TILES-1; return world_tile(w,x&M,y&M); }
@@ -9217,6 +9227,11 @@ static int missile_reaches(const world_t*w,int x0,int y0,int x1,int y1);
 static int use_under(int tx,int ty,int skip)
 {   for(int j=g_ow.nobjs-1;j>=0;j--){ const wobj_t*o=&g_wobj[j];
         if(j!=skip && o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && !(g_tflags3 && (g_tflags3[o->tile]&0x10))) return j; }
+    return -1; }
+/* the first thing not ignored and not a dead actor's remains (an actor gives way to what is under it, se_look.md §5) */
+static int se_under(int tx,int ty)
+{   for(int j=g_ow.nobjs-1;j>=0;j--){ const wobj_t*o=&g_wobj[j];
+        if(o->alive && o->x==(uint16_t)tx && o->y==(uint16_t)ty && !(g_tflags3 && (g_tflags3[o->tile]&0x10)) && se_dead_of(j)<0) return j; }
     return -1; }
 static int g_use_take=-1;                                  /* what U)se took, for do_verb_at */
 #define USE_NOTHING (g_gl->nothing?g_gl->nothing:"nothing")
@@ -11467,7 +11482,7 @@ typedef struct { uint16_t obj_n, qty; uint8_t quality, frame, copies, flags; } k
 static kit_t   g_kit[U6_MAX_ACTORS-160][KIT_MAX];
 static uint8_t g_nkit[U6_MAX_ACTORS-160];
 static int summon_alloc(void){ g_view_ct++;
-    for(int i=U6_MAX_ACTORS-1;i>=224;i--) if(g_atile[i]==0xffff){ g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
+    for(int i=U6_MAX_ACTORS-1;i>=224;i--) if(g_atile[i]==0xffff && g_se_dl[i]!=1){ g_se_dl[i]=0; g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
             for(int k=0;k<U6_MAX_ACTORS;k++) if(g_last_striker[k]==i) g_last_striker[k]=0; g_last_striker[i]=0; return i; }
     return -1;
 }
@@ -11706,12 +11721,12 @@ static void obj_destroy(int idx);
  * those found together go back in ascending order (as DOS's unload loop pushes them) */
 static uint8_t g_se_fnext[U6_MAX_ACTORS], g_se_held[U6_MAX_ACTORS]; static int g_se_fhead=-1, g_se_free_ok;
 static int se_slot_take(void)
-{   if(!g_se_free_ok){ g_se_fhead=-1; for(int i=254;i>=192;i--){ g_se_held[i]=g_atile[i]!=0xffff; if(!g_se_held[i]){ g_se_fnext[i]=(uint8_t)(g_se_fhead<0?0:g_se_fhead); g_se_fhead=i; } } g_se_free_ok=1; }
-    for(int i=192;i<=254;i++) if(g_se_held[i] && g_atile[i]==0xffff){ g_se_held[i]=0; g_se_fnext[i]=(uint8_t)(g_se_fhead<0?0:g_se_fhead); g_se_fhead=i; }
-    while(g_se_fhead>=192){ int s=g_se_fhead, nx=g_se_fnext[s]; g_se_fhead=nx>=192?nx:-1; g_se_held[s]=1; if(g_atile[s]==0xffff) return s; }
+{   if(!g_se_free_ok){ g_se_fhead=-1; for(int i=254;i>=192;i--){ g_se_held[i]=g_atile[i]!=0xffff||g_se_dl[i]==1; if(!g_se_held[i]){ g_se_fnext[i]=(uint8_t)(g_se_fhead<0?0:g_se_fhead); g_se_fhead=i; } } g_se_free_ok=1; }
+    for(int i=192;i<=254;i++) if(g_se_held[i] && g_atile[i]==0xffff && g_se_dl[i]!=1){ g_se_held[i]=0; g_se_fnext[i]=(uint8_t)(g_se_fhead<0?0:g_se_fhead); g_se_fhead=i; }
+    while(g_se_fhead>=192){ int s=g_se_fhead, nx=g_se_fnext[s]; g_se_fhead=nx>=192?nx:-1; g_se_held[s]=1; if(g_atile[s]==0xffff&&g_se_dl[s]!=1) return s; }
     g_se_fhead=-1; return -1; }
 static int se_slot_alloc(void){ g_view_ct++;                         /* 192-254, from DOS's free list (se_eggs.md §4, §7) */
-    { int i=se_slot_take(); if(i>=0){ g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
+    { int i=se_slot_take(); if(i>=0){ g_nkit[i-160]=0; g_se_dl[i]=0; g_se_was[i]=0; g_adead[i]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
             for(int k=0;k<U6_MAX_ACTORS;k++) if(g_last_striker[k]==i) g_last_striker[k]=0; g_last_striker[i]=0; g_se_orc[i]=g_se_odir[i]=0; return i; } }
     return -1; }
 /* a new creature (0x267cd): the table's stats rolled, or 10/10/10 and 30; its kit; the orchid's four heads */
@@ -11786,6 +11801,7 @@ static void se_egg_hatch(const world_t*w,egg_t*eg,int teleport,int*heard)
         int sx=ax*2<ay?0:ex<0?-1:1, sy=ay*2<ax?0:ey<0?-1:1, d=sy<0?(sx<0?7:sx>0?1:0):sy>0?(sx<0?5:sx>0?3:4):(sx<0?6:2);
         int nn=msg_tail(); nn=msgcat(nn,"You hear something to the "); nn=msgcat(nn,D[d]); msgcat(nn,"!"); *heard=1;
         if(!g_combat_mode && g_se_cur>=0 && g_se_cur<=4) se_song_queue(5,1); } }   /* the interlude (0x274b7; formats/se_music.md §5.3) */
+static void se_remains_sync(const world_t*w);
 static void se_eggs_update(const world_t *w, int teleport)
 {   int bx=w->px>>3, by=w->py>>3, bz=w->level;
     if(!teleport && bx==g_egg_blk_x && by==g_egg_blk_y && bz==g_egg_blk_z) return;
@@ -11810,6 +11826,7 @@ static void se_eggs_update(const world_t *w, int teleport)
         if(((eg->x-wx)&M)>=40||((eg->y-wy)&M)>=40) continue;                                 /* the scan (0x26f50) takes the window's eggs */
         if(teleport==2 || (dx<=8 && dy<=8 && !teleport)) continue;                           /* a start or load hatches nothing (DS:0x2362) */
         se_egg_hatch(w,eg,teleport,&heard); }
+    se_remains_sync(w);
     build_blocked(); }
 /* nearest living hostile to (x,y) within `maxd`, or -1 (fills *tx,*ty). */
 /* place a summon of obj_n on the first free/passable tile at or beside (tx,ty). */
@@ -11995,16 +12012,44 @@ static void kit_drop(int id,int bi,int x,int y){
             if(holder>=0){ o->alive=0; o->parent=(uint16_t)holder; }
             if(ON_IS(e->obj_n,g_on.chest)) chest=slot; } }
     g_nkit[id-160]=0; }
+static int se_dying(int id,int temp); static int temp_obj_new(int obj_n,int frame,int x,int y,int quality);
+/* SE's death (0x1a6ad, se_combat.md §3i): with remains the actor lies in its slot as them, its things with it (-1:
+ * done); without (actors 11 31 47 55, flags 0x800/0x1000) 0xa5d:0x19bf makes an object of its own look at its place,
+ * holding its things, and moves it to level 6: the object's obj_n is returned (frame in *fr) for actor_die's body path */
+static int se_die(int id,int temp,int*fr)
+{   int was=actor_objn(id), tile=g_atile[id], r=se_dying(id,temp), x=g_actx[id], y=g_acty[id];
+    if(r==2){ g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0; if(!temp) g_adead[id]=1; build_blocked(); return -1; }   /* a rider lost in open water */
+    if(r==0){ int f=0, body=monster_remains(was,&f);
+        if(f==255){ int b=basetile(was); f=(tile!=0xffff && b>0 && tile>=b && tile<b+64) ? tile-b : 0; }
+        g_se_dl[id]=1; g_se_don[id]=(uint16_t)body; g_se_dfr[id]=(uint8_t)f; g_se_was[id]=(uint16_t)was;
+        g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0; g_adead[id]=1;
+        (void)temp_obj_new(body,f,x,y,id);
+        build_blocked(); return -1; }
+    { int b=basetile(was); *fr=(tile!=0xffff && b>0 && tile>=b && tile<b+64) ? tile-b : 0; }
+    g_se_dl[id]=2; g_se_was[id]=(uint16_t)was;
+    return was; }
+/* the dead lying in the loaded window get their remains again (after a load, a level change, the window moving); a
+ * temporary one whose remains were unloaded is gone, its slot free (se_eggs.md §2) */
+static void se_remains_sync(const world_t*w)
+{   if(g_gd!=&gamedef_se||!w) return;
+    int span=(w->level==0)?U6_SURFACE_TILES:256, M=span-1, cx=((((int)w->px-16)&M&~7)+20)&M, cy=((((int)w->py-16)&M&~7)+20)&M;
+    for(int i=1;i<U6_MAX_ACTORS;i++){ if(g_se_dl[i]!=1||(int)g_actz[i]!=w->level||se_rem_obj(i)>=0) continue;
+        if(g_temp[i]||i>=192){ g_se_dl[i]=0; g_adead[i]=0; g_temp[i]=0; g_se_was[i]=0; continue; }
+        if(wrap_dist(g_actx[i],cx,span)>20||wrap_dist(g_acty[i],cy,span)>20) continue;
+        (void)temp_obj_new(g_se_don[i],g_se_dfr[i],g_actx[i],g_acty[i],i); }
+    build_blocked(); }
 static void actor_die(int id){
     sfx_play(15,0);
     if(id<1 || id>=U6_MAX_ACTORS) return;
     if(!member(id)&&align_of(id)==0) g_cg.karma=(int16_t)(g_cg.karma>5?g_cg.karma-5:0);   /* killing the innocent (combat.md §3d) */
-    int temp=(id>=160) || g_temp[id] || g_summon[id];
-    if(g_gl->dying && g_gl->dying(id,temp)){ g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0; if(!temp) g_adead[id]=1; build_blocked(); return; }   /* it leaves nothing: its things go with it */
-    int on=actor_objn(id), fr=0, body=monster_remains(on,&fr);
+    int temp=(id>=160) || g_temp[id] || g_summon[id], sebody=-1, sefr=0;
+    if(g_gd==&gamedef_se){ if((sebody=se_die(id,temp,&sefr))<0) return; }   /* SE: lies as its remains in its slot, or 0xa5d:0x19bf below */
+    else if(g_gl->dying && g_gl->dying(id,temp)){ g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0; if(!temp) g_adead[id]=1; build_blocked(); return; }   /* it leaves nothing: its things go with it */
+    int on=actor_objn(id), fr=0, body=sebody>=0?sebody:monster_remains(on,&fr);
     int x=g_actx[id], y=g_acty[id], lv=g_wp?g_wp->level:0;
-    if(fr==255){ int b=basetile(on); fr=(g_atile[id]!=0xffff && b>0 && (int)g_atile[id]>=b && (int)g_atile[id]<b+64) ? (int)g_atile[id]-b : 0; }
-    if(body==338) fr=(int)rng_range(&g_crng,3);
+    if(sebody>=0) fr=sefr;
+    else if(fr==255){ int b=basetile(on); fr=(g_atile[id]!=0xffff && b>0 && (int)g_atile[id]>=b && (int)g_atile[id]<b+64) ? (int)g_atile[id]-b : 0; }
+    if(body==338&&sebody<0) fr=(int)rng_range(&g_crng,3);
     g_atile[id]=0xffff; g_ahp[id]=0; g_charm[id]=0; g_ally[id]=0;
     int bi=-1;
     if(body) bi = temp ? temp_obj_new(body,fr,x,y,id) : persist_obj_new(body,fr,x,y,id);
@@ -13825,7 +13870,11 @@ static int do_save(const world_t *w)
         else sav_set_actor_level_mana(d, off, a, g_alevel[a], g_amana[a]);
     }
     for(int i=1;i<U6_MAX_ACTORS;i++){ sav_set_actor_dead(d, off, i, g_adead[i]);   /* the dead flag; the slain parked at (0,0,0) with 0 HP */
-        if(g_adead[i]){ sav_set_actor_pos(d, off, i, 0, 0, 0); sav_set_actor_stats(d, off, i, 0, g_astr[i], g_adex[i], g_aint[i]); } }
+        if(g_adead[i]){ sav_set_actor_stats(d, off, i, 0, g_astr[i], g_adex[i], g_aint[i]);
+            if(g_gd==&gamedef_se && g_se_dl[i]==1){ sav_set_actor_pos(d, off, i, g_actx[i], g_acty[i], g_actz[i]);   /* SE: in its slot as its remains (se_combat.md §3i) */
+                d[off+0x400+i*2]=(uint8_t)(g_se_don[i]&0xff); d[off+0x401+i*2]=(uint8_t)(((g_se_don[i]>>8)&3)|(g_se_dfr[i]<<2)); }
+            else if(g_gd==&gamedef_se && g_se_dl[i]==2) sav_set_actor_pos(d, off, i, g_actx[i], g_acty[i], 6);   /* none: on level 6 (0xa5d:0x19bf) */
+            else sav_set_actor_pos(d, off, i, 0, 0, 0); } }
     sav_set_alcohol(d, off+OL_GLOB, g_alcohol);
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
     if(g_gl->ol_talk){ for(int i=0;i<256;i++){ d[off+g_gl->ol_talk+i]=g_cg.talk_flags[i]; d[off+g_gl->ol_talk_hi+i]=g_cg.talk_flags_hi[i]; } }   /* SE: its own places (converse.md §6c) */
@@ -14070,6 +14119,17 @@ static void gear_to_body(int id,int bi,int x,int y)
 /* a companion at 0 HP: its body (quality = the actor) where it stood, holding all it carried; off the map and off the
  * roster, but still marked in the party for when it rises (combat.md §3d) */
 static void companion_die(const world_t*w,int id){
+    if(g_gd==&gamedef_se){ int k=member_index(id), sf=0, sb;               /* SE: lies as its remains (or 0x19bf), its things with it */
+        if(k>=0) for(int e=sizeof g_party[0].name,n=0;n<e;n++) g_lost_name[id][n<16?n:15]=g_party[k].name[n<16?n:15];
+        if(veh_aboard()){ g_actx[id]=(uint16_t)w->px; g_acty[id]=(uint16_t)w->py; g_actz[id]=(uint8_t)w->level; }
+        sb=se_die(id,0,&sf);
+        if(sb>=0){ int bi=persist_obj_new(sb,sf,g_actx[id],g_acty[id],id); gear_to_body(id,bi,g_actx[id],g_acty[id]); }
+        equip_refold(id);
+        g_atile[id]=0xffff; g_ahp[id]=0; g_asleep[id]=g_paralyze[id]=g_poison[id]=0; g_charm[id]=g_ally[id]=0; g_amoved[id]=0; g_dragged[id]=0;
+        g_adead[id]=1; g_lost[id]=1;
+        if(k>=0){ for(int m=k;m<g_nparty-1;m++) g_party[m]=g_party[m+1]; g_nparty--; }
+        if(g_status_actor==id) g_status_actor=1;
+        sync_party_hp(); build_blocked(); return; }
     int none=g_gl->dying && g_gl->dying(id,0);                     /* nothing left: its things go with it */
     int on=actor_objn(id), fr=0, body=monster_remains(on,&fr), x=g_actx[id], y=g_acty[id];
     if(fr==255) fr=0;
@@ -14184,6 +14244,8 @@ static void party_recall(world_t*w,int forget,int tx,int ty,int se){
     else if(g_veh_kind){ veh_show_party(w,(int)w->px,(int)w->py); g_veh_kind=0; g_avatar_ovr=0; g_avatar_hide=0; }
     if(!g_armageddon) for(int i=2;i<U6_MAX_ACTORS;i++) if(g_lost[i]){   /* the dead rise where they fell, with what their bodies hold, before the move (combat.md §3d steps 2, 6) */
         int here=0, bx, by, bz;
+        if(se){ if(g_se_dl[i]==1){ int j=se_rem_obj(i); companion_revive(w,i); if(j>=0&&g_wobj[j].alive) obj_destroy(j); g_se_dl[i]=0; g_se_was[i]=0; }   /* SE: each one lying as its remains stands up, its things with it */
+            continue; }
         for(int k=0;k<g_ow.ninv;k++) if((on_body(g_ow.inv[k].obj_n)||(g_on.mouse&&g_ow.inv[k].obj_n==g_on.mouse))&&g_ow.inv[k].quality==(uint8_t)i) here=1;
         for(int j=0;j<g_ow.nobjs&&!here;j++){ const wobj_t*o=&g_wobj[j]; if(!o->alive||o->quality!=(uint8_t)i||!remains_of_member(o->obj_n)) continue;
             for(int k=0;k<g_ow.nobjs&&!here;k++) if(g_wobj[k].parent==(uint16_t)j) here=1; }   /* one that holds something (an older empty one may linger) */
@@ -14446,6 +14508,7 @@ static int load_game(world_t *w)
     g_veh_kind = 0; g_veh_horse = -1; g_avatar_hide = 0; g_avatar_ovr = 0;   /* re-boarded below if the save says so */
     memset(g_se_rider,0,sizeof g_se_rider);                       /* SE's riders stand as the save has them */
     g_se_free_ok=0;                                               /* SE's free list is built again from the loaded actors */
+    for(int j=0;j<g_ow.nobjs;j++) if(se_dead_of(j)>0) g_wobj[j].alive=0;   /* the old remains; the loaded dead get theirs below */
     g_nmoved = 0; g_horse_moved = -1;                                        /* every record is at its saved position again */
     for(int i = 0; i < U6_MAX_ACTORS; i++) g_temp[i] = 0;                    /* hatched creatures are not saved */
 
@@ -14457,6 +14520,8 @@ static int load_game(world_t *w)
         g_actx[i] = (uint16_t)x; g_acty[i] = (uint16_t)y; g_actz[i] = (uint8_t)z;
         g_atile[i] = on ? (uint16_t)(basetile(on) + fr) : 0xffff;
         g_adead[i] = (uint8_t)sav_get_actor_dead(d, ol, i); if(g_adead[i]) g_atile[i] = 0xffff;   /* slain: not placed (objlist 0x800 bit 0x10) */
+        if(g_gd==&gamedef_se){ g_se_dl[i]=0; g_se_was[i]=0;                   /* SE's dead lie in their slots as their remains (se_combat.md §3i) */
+            if(g_adead[i]){ if(on==249||on==280){ g_se_dl[i]=1; g_se_don[i]=(uint16_t)on; g_se_dfr[i]=(uint8_t)fr; } else g_se_dl[i]=2; } }
         g_astr[i] = d[ol + 0x900 + i]; g_adex[i] = d[ol + 0xa00 + i]; g_aint[i] = d[ol + 0xb00 + i];
         g_aexp[i] = (uint16_t)(d[ol + 0xc00 + i*2] | (d[ol + 0xc00 + i*2 + 1] << 8));
         g_ahp[i]  = d[ol + 0xe00 + i]; g_amaxhp[i] = g_ahp[i];              /* boot semantics (pack load) */
@@ -14550,6 +14615,7 @@ static int load_game(world_t *w)
     else if(wobj_boat_at(423, w->px, w->py) >= 0) (void)use_balloon(w, wobj_boat_at(423, w->px, w->py));   /* saved aloft */
     else { int hi = horse_actor_at(w->px, w->py); if(hi >= 0) (void)horse_mount(w, hi); }
     sched_settle();
+    se_remains_sync(w);                                           /* SE's dead lie as their remains again */
     msgcat(0, "Game restored.");
     return 1;
 }
@@ -15881,7 +15947,7 @@ static int se_dying(int id,int temp)
         if(id==1||is_party_member(id)) g_se_tide=-1; else if((g_align_hostile[id]||g_hostile[id]) && !g_se_tide) g_se_tide=1; }
     if(id==23) g_cg.talk_flags[53]|=0x20;
     if(id==180) g_cg.talk_flags[48]|=0x80;
-    if(g_se_rider[id] && (!w || !se_dismount(w,id))) return 1;    /* in open water a rider leaves nothing */
+    if(g_se_rider[id] && (!w || !se_dismount(w,id))) return 2;    /* in open water a rider leaves nothing */
     int on=actor_objn(id), f=monster_type_flags(on), x=g_actx[id], y=g_acty[id];
     int body=(id==11||id==31||id==47||id==55||(f&0x1800))?0:monster_remains(on,&fr);
     int big=(on==284||on==289||on==294||on==297||on==303||on==305);
@@ -16445,6 +16511,10 @@ static int se_look(world_t*w,int dx,int dy)
     int idx=use_under(tx,ty,-1);                                        /* the first thing not ignored */
     if(id<0 && idx>=0){ int on=g_wobj[idx].obj_n, q=g_wobj[idx].quality, b=se_big_base(on);   /* a piece names its creature */
         if(b && b!=on && q && q<U6_MAX_ACTORS && g_atile[q]!=0xffff) id=q; }
+    if(id<0 && idx>=0){ int q=se_dead_of(idx);                          /* a dead actor lying as its remains: an actor, never searched */
+        if(q>0){ int t=g_wobj[idx].tile; n=msgcat(n,look_article(t));
+            obj_name(g_se_was[q]?basetile(g_se_was[q]):t,nm,sizeof nm);    /* by its saved object (slip 27 below 16 as the intent) */
+            n=msgcat(n,nm); msgcat(n,"."); return 1; } }
     if(id>=0){
         if(id==1||is_party_member(id)) actor_name(id,nm,sizeof nm);
         else { int t=npc_tile(id); n=msgcat(n,look_article(t));
@@ -16481,7 +16551,7 @@ static int se_take(int idx,int a)
 #define SE_TOO_MUCH "You are carrying too much already."
 static int se_get(world_t*w,int dx,int dy)
 {   int tx=(int)((w->px+dx)&(U6_SURFACE_TILES-1)), ty=(int)((w->py+dy)&(U6_SURFACE_TILES-1)), a=use_actor(), hx, hy;
-    int idx=use_under(tx,ty,-1), n=msgcat(0,"Get-");                     /* an actor or an ignored thing gives way to what is under it */
+    int idx=se_under(tx,ty), n=msgcat(0,"Get-");                         /* an actor (the dead too) or an ignored thing gives way to what is under it */
     if(idx<0){ msgcat(n,"nothing!"); g_verb_pts=0; return 0; }
     int on=g_wobj[idx].obj_n, q=g_wobj[idx].qty?g_wobj[idx].qty:1, x=g_wobj[idx].x, y=g_wobj[idx].y;
     n=look_thing(n,on,g_wobj[idx].tile,g_wobj[idx].qty,0); n=msgcat(n,"\n");
@@ -16511,7 +16581,7 @@ static int se_get(world_t*w,int dx,int dy)
         if(eg->made!=3 && eg->x==(uint16_t)x && eg->y==(uint16_t)y && eg->nemb && g_emb[eg->emb].obj_n==292){ eg->nemb=0; eg->active=0; eg->made=3; } }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ending=se_ending, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .ol_cmode=0x13f1, .ol_glob=0x100, .ol_nomana=1, .load_reset=se_load_reset, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .ending=se_ending, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .ol_cmode=0x13f1, .ol_glob=0x100, .ol_nomana=1, .load_reset=se_load_reset, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -20751,17 +20821,17 @@ int main(int argc, char **argv)
                 dbg_num("SE get: obj taken=", g_wobj[i].alive==0);                                /* expect 1 (off map) */
                 dbg_num("SE get: inv fruit gained=", objworld_count(&g_ow,197)-before);           /* expect 3 */
                 break; } }
-            /* GOLD: SE gold (69) GET must feed the Gold POOL (g_cg.gold), not an inventory stack. */
+            /* GOLD: SE gold (69) is a counted thing G)et into the leader's pack, as DOS (se_look.md §5), not a pool. */
             { int ex=(int)((w.px+1)&(U6_SURFACE_TILES-1)), ey=(int)(w.py&(U6_SURFACE_TILES-1));
               for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive && g_wobj[j].x==ex && g_wobj[j].y==ey) g_wobj[j].alive=0;
               for(int i=0;i<g_ow.nobjs;i++){ if(g_wobj[i].alive) continue;
                 g_wobj[i].obj_n=69; g_wobj[i].tile=(uint16_t)basetile(69); g_wobj[i].qty=40;
                 g_wobj[i].x=(uint16_t)ex; g_wobj[i].y=(uint16_t)ey; g_wobj[i].parent=WOBJ_PARENT_NONE;
                 g_wobj[i].quality=0; g_wobj[i].origin=WOBJ_PARENT_NONE; g_wobj[i].alive=1; build_blocked();
-                int gold0=g_cg.gold, ninv0=g_ow.ninv;
+                int gold0=g_cg.gold, inv0=objworld_count(&g_ow,69);
                 do_verb(&w,'G',1,0);
-                dbg_num("SE gold: pool gained=", g_cg.gold-gold0);                                /* expect 40 */
-                dbg_num("SE gold: NOT an inv stack=", (g_ow.ninv==ninv0 && objworld_count(&g_ow,69)==0)); /* expect 1 */
+                dbg_num("SE gold: pool gained=", g_cg.gold-gold0);                                /* expect 0 */
+                dbg_num("SE gold: in the pack=", objworld_count(&g_ow,69)-inv0);                   /* expect 40 */
                 { int pages=0, starts=0;                                                              /* the scene player (rules/se_scenes.md) */
                   dbg_num("SE scene block=", g_cmid_off>0);
                   se_scene_start(1,0,3,0); starts=g_scene==1 && strncmp(g_scene_txt,"You move",8)==0 && g_scene_pw==160 && g_scene_ph==144;
@@ -20790,6 +20860,25 @@ int main(int argc, char **argv)
                   int ld=load_game(&w);
                   dbg_num("SE save round trip=", sv && ld && g_cmode[9]==7 && g_alevel[9]==5 && g_rest_counter==9 && g_alcohol==2 && g_cg.talk_flags_hi[5]==0x40 && clock_minutes(&w)==mod0);
                   dbg_num("SE save max hp=", g_amaxhp[9]==2*g_astr[9]+4*5);
+                  { int M=U6_SURFACE_TILES-1, tx=-1, ty=-1;                                           /* a death leaves the actor in its slot as its remains (se_combat.md §3i) */
+                    for(int k=0;k<8&&tx<0;k++){ int x=(w.px+VDX[k&3]*(1+(k>>2)))&M, y=(w.py+VDY[k&3]*(1+(k>>2)))&M;
+                        if(world_is_passable(&w,x,y)&&npc_at(&w,x,y)<0&&objworld_at(&g_ow,x,y)<0){ tx=x; ty=y; } }
+                    int h=tx>=0?se_hatch_creature(&w,tx,ty,331):-1, s=-1;
+                    for(int i=191;i>=100&&h>=0&&s<0;i--) if(g_atile[i]==0xffff&&!g_adead[i]&&!is_party_member(i)) s=i;   /* a fixed slot: 192 and up are temporary */
+                    if(s>=0){ g_atile[s]=g_atile[h]; g_abase[s]=g_abase[h]; g_atpd[s]=g_atpd[h]; g_actx[s]=g_actx[h]; g_acty[s]=g_acty[h]; g_actz[s]=g_actz[h];
+                      g_ahp[s]=g_ahp[h]; g_astr[s]=g_astr[h]; g_adex[s]=g_adex[h]; g_aint[s]=g_aint[h]; g_temp[s]=0; g_atile[h]=0xffff; g_temp[h]=0;
+                      actor_die(s); int j=se_rem_obj(s);
+                      dbg_num("SE dead lies in its slot=", g_se_dl[s]==1 && g_adead[s] && j>=0 && g_wobj[j].obj_n==g_se_don[s] && g_atile[s]==0xffff);
+                      { int h2=se_hatch_creature(&w,tx,ty,331); if(h2>=0){ g_actx[h2]=g_actx[s]; actor_die(h2); }   /* a dead hatchling keeps its slot while it lies */
+                        int tk=se_slot_take(); dbg_num("SE dead slot held=", h2>=0 && g_se_dl[h2]==1 && tk!=h2);
+                        if(tk>=0) g_se_held[tk]=0, g_se_free_ok=0; if(h2>=0){ int j3=se_rem_obj(h2); if(j3>=0) obj_destroy(j3); g_se_dl[h2]=0; g_adead[h2]=0; } }
+                      g_msg[0]=0; (void)se_look(&w,tx-(int)w.px,ty-(int)w.py); dbg_num("SE dead looked at as itself=", strstr(g_msg,"sabretooth")!=0 && !strstr(g_msg,"Searching"));
+                      g_msg[0]=0; (void)se_get(&w,tx-(int)w.px,ty-(int)w.py); dbg_num("SE dead not taken=", strstr(g_msg,"nothing!")!=0 && se_rem_obj(s)>=0);
+                      int sv2=do_save(&w); const uint8_t*q=g_savetmpl+g_objlist_off; int sp=sav_get_actor_dead(q-g_objlist_off+0,g_objlist_off,s);
+                      int qon=q[0x400+s*2]|((q[0x401+s*2]&3)<<8);
+                      int ld2=load_game(&w); int j2=se_rem_obj(s);
+                      dbg_num("SE dead saved in its slot=", sv2 && sp && qon==g_se_don[s] && ld2 && g_se_dl[s]==1 && j2>=0 && g_wobj[j2].x==tx && g_wobj[j2].y==ty);
+                      if(j2>=0) obj_destroy(j2); g_se_dl[s]=0; g_adead[s]=0; g_atile[s]=0xffff; build_blocked(); } }
                   g_cmode[9]=cm; g_alevel[9]=lv; g_rest_counter=rc; g_alcohol=al; g_cg.talk_flags_hi[5]=th; g_cg.talk_flags[33]=t33; g_amaxhp[9]=(uint8_t)se_max_hp(9); }
                 break; } }
         }

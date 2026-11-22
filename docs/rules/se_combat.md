@@ -332,8 +332,15 @@ and up); the blood and the flash of §3d come only with a death (status bit 0x10
   their second remains stay (slip 26).
 - **The leader falls** (§3e): each dead party member stands up at its body (249 with quality = the member).
 
-The engine: a death leaves the remains as a map object with quality = the victim holding its things (as U6),
-and the actor leaves the map with its dead flag; a sleeper keeps its object and is drawn as its remains (gl_se sleep_body), a big
+The engine (as DOS since 2026-11-22, the user's choice): a death with remains leaves the actor in its slot as them,
+its things with it, its slot held; the remains are drawn as a runtime object (quality = the actor, never saved) made
+again whenever their place is loaded (a load, a level change, the 40 x 40 window moving), and S)ave writes the actor
+in its slot (its place, the remains as its object, status 0x10). L)ook names it by what it was and never searches
+it, G)et passes over it (se_look.md). A hatchling (192 and up) lying dead is gone, its slot free, once its remains
+are unloaded. A death without remains makes an object of the actor's own look at its place holding its things, and
+the actor goes to level 6 there (0xa5d:0x19bf; saved at (x, y, 6)). At Intanya's (§3e) each member lying as its
+remains stands up. Not known: whether DOS's save keeps what a dead actor was (DS:-0x4ac2); after a load the engine
+names the dead by their remains. Before: a sleeper keeps its object and is drawn as its remains (gl_se sleep_body), a big
 creature's pieces giving way to the second remains while it sleeps (se_lie) and coming back as it wakes, facing
 north, for every big creature (slip 26 as the intent; the tyrannosaurus's tail in hatch's frame 1, not DOS's
 3). The second remains of a sleeper is temporary in the engine, made again whenever it lies down.
