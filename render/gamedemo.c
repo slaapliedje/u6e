@@ -16526,6 +16526,38 @@ static int se_run_create(void)
         else q=s_==0?(q==0?4:3):s_==1?(q==2?4:5):(q==0?5:3); }
     if(ok){ g_cc_str=st[0]; g_cc_dex=st[1]; g_cc_int=st[2]; g_cc_gender=1; g_cc_done=1; }
     plat_chip_reset(mk); g_sef=0; return ok; }
+/* The Story So Far (SAVAGE.EXE 0x5d3b): palette 1, CREATE item 5's frame, then ten pages: picture k+1 (79x85) at (120,45)
+ * and paragraph k in the box x 25-293 from y 136, a page wait each; Esc leaves */
+static void se_run_story(void)
+{   plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t l5=0, sl=0;
+    const uint8_t *i5=sefe_item(2,5,&l5), *sb=sefe_item(5,0,&sl); g_sef=sefe_item(4,0,&g_sef_len); g_cr_tmp=(uint8_t*)plat_alloc_chip(64000);
+    if(i5 && sb && g_sef && g_cr_tmp && sefe_palette(1,pal)){ rdr_set_palette(pal,256);
+        for(int k=0;k<10;k++){ clear_bb(0); sefe_draw(i5,l5,0,0,0,g_cr_tmp,64000); sefe_draw(i5,l5,k+1,120,45,g_cr_tmp,64000);
+            g_tbx=25; g_tby=136; { const char*t=sefe_str(sb,sl,31+k);       /* (tb_print wraps at 306; the story's box ends at 293) */
+                while(*t){ if(*t=='\n'){ g_tbx=25; g_tby+=8; t++; continue; } if(t[0]=='%'&&t[1]=='P'){ t+=2; continue; }
+                    if(*t==' '){ g_tbx+=sef_w(' '); t++; continue; }
+                    int n=0; while(t[n]&&t[n]!=' '&&t[n]!='\n'&&!(t[n]=='%'&&t[n+1]=='P')) n++;
+                    if(g_tbx+sef_textw(t,n)>293 && g_tbx>25){ g_tbx=25; g_tby+=8; }
+                    for(int i=0;i<n;i++){ sef_glyph(g_tbx,g_tby,(unsigned char)t[i],0); g_tbx+=sef_w((unsigned char)t[i]); }
+                    t+=n; } }
+            sef_glyph(g_tbx,g_tby,0x19,1);
+            if(cr_wait()==0x1b) break; } }
+    plat_chip_reset(mk); g_sef=0; }
+/* About The Savage Empire (SAVAGE.EXE 0x4ce9): CREATE item 6's 13 credit pictures stacked at x 100, from y 197 up 4 px a
+ * frame over the menu screen, inside x 100-244, y 100-199, until the last has gone; a key stops it */
+static void se_run_about(const uint8_t *menu,int32_t ml,uint8_t *tmp)
+{   plat_mark mk=plat_chip_mark(); int32_t l6=0; const uint8_t *i6=sefe_item(2,6,&l6);
+    if(!i6){ plat_chip_reset(mk); return; }
+    int tot=0; for(int i=0;i<13;i++){ int w,h; if(u6shape_size(i6,l6,i,&w,&h)) tot+=h; }
+    { int d; while((d=plat_input_raw())){ (void)d; } }
+    for(int y0=197; y0+tot>4; y0-=4){ uint32_t t0=plat_ticks_200hz();
+        clear_bb(0); sefe_draw(menu,ml,0,0,0,tmp,64000);
+        int y=y0; for(int i=0;i<13;i++){ int w,h; if(!u6shape_size(i6,l6,i,&w,&h)||!u6shape_decode(i6,l6,i,&w,&h,tmp,64000)) continue;
+            blit_indexed_clip(tmp,w,h,100,y,100,100,245,200); y+=h; }
+        rdr_present_doubled(LH);
+        if(plat_input_raw()||fe_click_edge()) break;
+        while(plat_ticks_200hz()-t0<6) vsync_pump(); }                    /* (DOS waits a retrace a frame; 4 px each 30 ms here) */
+    plat_chip_reset(mk); }
 /* the objlist fields SAVAGE.EXE writes for a new character (0x5a7c) besides the name and stats; and the HP its load step gives */
 static void se_cc_apply(void)
 {   static const uint8_t MET[7]={2,4,5,7,8,9,23};
@@ -16569,8 +16601,11 @@ static int se_run_menu(void)
             mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000);
             if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
             rdr_set_palette(pal,256); continue; }
-        if(act==3){ sel=act; pressed=act; dirty=1; }   /* the story and About: not yet built (se_front_end.md) */
-        else if(act>=0){ sel=act; dirty=1; }
+        if(act==3){ sel=act; pressed=act; dirty=1; }
+        else if(act==0){ plat_chip_reset(mk); se_run_story(); sel=1; dirty=1;           /* after the story, Create is highlighted (0x4c91) */
+            mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000); if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
+            rdr_set_palette(pal,256); }
+        else if(act==2){ se_run_about(lib,len,tmp); sel=2; dirty=1; }
         if(!dirty) vsync_pump();
     }
 }

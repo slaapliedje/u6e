@@ -92,11 +92,19 @@ item 1 shape 0 and under its shape 1, delays 95/71/48/48/71/95 ms; then 17 frame
 answer's own picture (item 3 frame 17 + the picture number: strength 1, dexterity 2, intelligence 0), delays 57, 43,
 29, 14, 0 ms then 36 ms; then the six frames back, 83/60/36/36/60/83 ms.
 
+## The story so far (SAVAGE.EXE 0x5d3b) and About (0x4ce9)
+The story: palette 1, CREATE item 5 shape 0 (the stone frame), then ten pages: shape k+1 (79x85) at (120,45) and
+paragraph k (the table at DS:0x623) in the box x 25-293 from y 136, the arrow and a page wait; Esc leaves. Back at the
+menu, Create New Character is highlighted.
+About: the menu screen (no plates) and CREATE item 6's 13 credit pictures stacked at x 100, starting at y 197 and moving
+up 4 px a frame, clipped to x 100-244, y 100-199, until the stack's bottom is above y 4; a key stops it. DOS waits a
+retrace a frame (0x7d7:0x8); we move 4 px every 30 ms (an estimate, not yet timed against DOS).
+
 ## Strings
 The game's words are not in our source: mkworld reads them from the user's SAVAGE.EXE (DGROUP found by its
 `Turbo C++ - Copyright 1990` signature) into the CSFE block's group (5, 0): `[u8 n][n NUL-ended strings]`. Order: 0-6
 the opening (DS:0xd7c, 0xdd3, 0xe4f, 0xebc, 0xefe, 0xf68, 0xfc8); 7-30 the questions' four parts each, in question
-order, from the table at DS:0x564 (an empty string for a missing part).
+order, from the table at DS:0x564 (an empty string for a missing part); 31-40 the story's paragraphs (DS:0x623).
 
 ## The pack
 mkworld writes a CSFE block in the library tail, just before the scenes' CMID block: `"CSFE"`, SAVAGE.PAL's three
@@ -107,5 +115,5 @@ before CMID's. The engine reads one item when a screen needs it and decodes the 
 ## Status
 IN PROGRESS (TT/Falcon and graphics cards; the ST needs its 16-colour palettes): the menu and character creation
 built 2026-11-22 (the opening, the name, the three questions, the answers' pictures, the objlist fields of 0x5a7c; the
-new game starts with them). Journey Onward resumes the last slot. Not yet: the story, About, the intro, the ending,
+new game starts with them). The story and About built the same day. Journey Onward resumes the last slot. Not yet: the intro, the ending,
 the songs, the ST.
