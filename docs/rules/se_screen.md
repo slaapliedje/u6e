@@ -62,6 +62,18 @@ Two boxes inside the frame: **x 183-314, y 6-118** (top) and **x 183-314, y 126-
   figure at x 185, the name's text cell from x 208 on the row's second line (y + 8), the HP on its first
   line, its last cell ending at x 311 (Triolo's row matches DOS pixel for pixel). A click on the figure
   opens that member's inventory, on the name the portrait.
+- **The HP's colour** in the list (GAME.EXE 0xe1f5): SE palette 2 (green) when poisoned (status 0x08), else 4 (red)
+  under 10 HP, else 9 (light blue) for a member other than the Avatar whose object flags have 0x80 (Motazz's frenzy,
+  se_invoke.md), else the text's black.
+- **Status page** (the portrait button, or a click on a name; GAME.EXE 0xe384): the top box cleared, the name
+  centred on row 0 of the panel's text window (text cells 8 px square from (184,8), 17 across: column (17 - length)/2),
+  the face routine's picture at y 16, x 185 (the backdrop of §5a at (186,17), the face over it at (185,16); no stone
+  frame), and from column 10: `STR:n`, `DEX:n`, `INT:n`, `HP:` and the HP in 3 places (coloured as in the list:
+  green poisoned, red under 10), `HM:` and the maximum in 3 places, `Lev:` in 2, `Exper:`, and the experience in 4
+  places after two spaces (rows 1-8). The buttons: previous member (not for the first), party list, inventory (tile
+  0x182), next member (not for the last). The maximum HP is SE's rule, 2 x strength + 4 x level, 1 to 255
+  (0x1872a; strength as DOS reckons it, se_invoke.md). Checked against DOS: Triolo (20/26/17, 68/68, level 7,
+  3200) and the Avatar (16/20/23, 56/56, level 6, 1600) pixel for pixel but the numbers' own values.
 - **Inventory** (F1-F8 for a member, F10 back to the list): the name centred at y 9; the figure with the
   readied places as gold rings round it (x 186-, y 17-77), the 4x4 pack grid of rings to its right; the
   weights `E:0/16s` and `I:0/32s` at y 80-94; the buttons (previous member, portrait, next member) and the
@@ -139,12 +151,17 @@ no highlight on them (Look from the keyboard leaves the bar untouched).
   Triolo (portrait palette), the bot's smoke and talk segments (0 issues).
 
 ## Test hooks
-Our TT frame against the DOS screenshot (scratch pixel diff); none in `make check` yet.
+Our TT frame against the DOS screenshot (scratch pixel diff). `MOUSE.REQ` (test builds) replays a script of
+`ticks x y buttons` lines (200 Hz ticks from the first mouse read, physical screen pixels) in place of the mouse:
+the clicks of §4 and §6 were driven this way on an emulated TT (the Look icon and a map tile, a figure to the
+inventory, next member, the portrait button both ways, the combat mode box, the party button, a name to the status
+page). `make check-se-use` checks the status page's numbers (`SE load ...`).
 
 ## Status
 IN PROGRESS: §1 (SCREEN.LZC and SYSTEM.LZC's font in the pack), §2, §3, §4, §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
-§6's clicks built, not yet driven by a mouse in a test. The `name>` prompt built (message_scroll.md). The party list's length
+§6's clicks built and driven by MOUSE.REQ (2026-11-22). The status page and the list's HP colours built
+2026-11-22. The `name>` prompt built (message_scroll.md). The party list's length
 and figures built 2026-11-17. The ST path built 2026-11-17 (§7). The dream's screen built 2026-11-22 (se_rest.md
 §6a). Open: the Avatar's chosen name
 (item 9's creation); a planar map for SE on the ST.

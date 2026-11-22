@@ -131,8 +131,42 @@ void plat_mouse_hook_init(int phys_w, int phys_h)
     Supexec(mouse_hook_set); s_hooked = 1;
     atexit(plat_mouse_hook_shutdown);                     /* never leave our vector behind */
 }
+#ifndef U6E_RELEASE
+/* MOUSE.REQ (test builds): a script of "ticks x y buttons" lines (200 Hz ticks from the first read,
+ * PHYSICAL screen pixels, buttons bit0 left bit1 right) replayed in place of the mouse, so an
+ * emulator run can click */
+extern uint32_t plat_ticks_200hz(void);
+static uint16_t s_ms_t[64]; static int16_t s_ms_x[64], s_ms_y[64]; static uint8_t s_ms_b[64];
+static int s_ms_n, s_ms_i, s_ms_state; static uint32_t s_ms_t0;
+static int mouse_script(int *x, int *y, int *buttons)
+{
+    if (s_ms_state == 0) {
+        s_ms_state = -1;
+        int fd = (int)Fopen("MOUSE.REQ", 0);
+        if (fd >= 0) {
+            static char buf[2048]; long n = Fread(fd, sizeof buf - 1, buf); Fclose(fd);
+            if (n > 0) { buf[n] = 0; char *p = buf;
+                while (*p && s_ms_n < 64) {
+                    s_ms_t[s_ms_n] = (uint16_t)strtoul(p, &p, 10);
+                    s_ms_x[s_ms_n] = (int16_t)strtol(p, &p, 10);
+                    s_ms_y[s_ms_n] = (int16_t)strtol(p, &p, 10);
+                    s_ms_b[s_ms_n++] = (uint8_t)strtoul(p, &p, 10);
+                    while (*p && *p != '\n') p++;
+                    while (*p == '\n' || *p == '\r') p++; }
+                if (s_ms_n) { s_ms_state = 1; s_ms_t0 = plat_ticks_200hz(); s_ms_i = -1; } } } }
+    if (s_ms_state != 1) return 0;
+    uint32_t now = plat_ticks_200hz() - s_ms_t0;
+    while (s_ms_i + 1 < s_ms_n && now >= s_ms_t[s_ms_i + 1]) s_ms_i++;
+    if (s_ms_i < 0) { if(x)*x=0; if(y)*y=0; if(buttons)*buttons=0; return 1; }
+    if(x)*x=s_ms_x[s_ms_i]; if(y)*y=s_ms_y[s_ms_i]; if(buttons)*buttons=s_ms_b[s_ms_i];
+    return 1;
+}
+#endif
 void plat_mouse(int *x, int *y, int *buttons)
 {
+#ifndef U6E_RELEASE
+    if (mouse_script(x, y, buttons)) return;
+#endif
     if (s_hooked) { if(x)*x=s_mx; if(y)*y=s_my; if(buttons)*buttons=s_mb|s_pad_mb; return; }
     if (!__aline) { if(x)*x=0; if(y)*y=0; if(buttons)*buttons=0; return; }
     if (x)       *x = GCURX;       /* line-A graphics-cursor X (current mode px) */

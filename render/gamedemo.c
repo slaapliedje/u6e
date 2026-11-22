@@ -159,6 +159,10 @@ typedef struct GameLayer {
     uint8_t stagger8;                                           /* past 3 drinks: 1 in 2, a step one of eight ways (SE, se_use.md §5o); 0 = U6's 3 in 4, any way */
     const char *see;                                            /* L)ook's opening words (usecode_use.md, the look line) */
     int16_t ol_talk, ol_talk_hi;                                /* objlist offsets of the talk flags (0-7, 8-15); 0 = U6's (converse.md §6c) */
+    int16_t ol_cmode;                                           /* objlist offset of the combat modes; 0 = U6's 0x12f1 (formats/objlist.md §4) */
+    int16_t ol_glob;                                            /* how far the game's globals (clock, date, rest counter, drinks) sit past U6's 0x1bf1; 0 = U6 */
+    uint8_t ol_nomana;                                          /* the objlist has no magic points (SE: 0x13f1 is the combat modes) */
+    void (*load_reset)(void);                                   /* after a load or at boot, what the game's own loader does to the actors (SE's 0xdedd) */
     int  (*rest)(world_t *w);                                   /* R)est: the refusals, the camp, the meal, the sleep (rest.md) */
     void (*rest_tick)(world_t *w);                              /* a step of the night, when the game has its own (se_rest.md §5) */
     int  (*rest_key)(world_t *w,int a);                         /* its prompts' keys (se_rest.md §2) */
@@ -317,7 +321,7 @@ static uint8_t        g_rest_counter;            /* hours until resting may heal
 static int            g_rest_hr=-1;              /* the hour the rest counter last ticked at (-1 = unknown) */
 static int            g_game_over;               /* the Codex has vanished: show the ending and leave */
 static int            g_free_cast;               /* the staff's charge: cast without mana or reagents */
-static void date_from_save(const uint8_t *d, int32_t ol){ sav_get_date(d, ol, &g_day0, &g_month0, &g_year0);
+static void date_from_save(const uint8_t *d, int32_t ol){ sav_get_date(d, ol+g_gl->ol_glob, &g_day0, &g_month0, &g_year0);
     if(g_day0<1||g_day0>28) g_day0=1; if(g_month0<1||g_month0>12) g_month0=1; }
 static uint8_t        g_amaxhp[U6_MAX_ACTORS]; /* HP at load (=max), for the flee threshold (CB4) */
 static uint8_t        g_aflee[U6_MAX_ACTORS];  /* 1 = fleeing: badly-hurt actor retreats (CB4)    */
@@ -3421,9 +3425,11 @@ static int npc_base_fc(int atile,int*base)
     return fc==16?4 : fc==8?2 : 0;
 }
 
+#define OL_CMODE (g_gl->ol_cmode?g_gl->ol_cmode:0x12f1)     /* per game (formats/objlist.md §4) */
+#define OL_GLOB  (g_gl->ol_glob)
 /* what the actors carry in the save beyond their place: combat mode, worktype, alignment */
 static void actor_bytes_load(const uint8_t*ol)
-{   for(int i=0;i<U6_MAX_ACTORS;i++){ int st=ol[0x800+i]&0x60; g_cmode[i]=ol[0x12f1+i]; g_wt0[i]=ol[0x11f1+i]; g_agood[i]=(uint8_t)(st==0x40); g_achaos[i]=(uint8_t)(st==0x60); g_align_hostile[i]=(uint8_t)((st&0x20)!=0); g_hostile[i]=0; g_asleep[i]=(uint8_t)((ol[0x800+i]&4)?255:0); } }
+{   for(int i=0;i<U6_MAX_ACTORS;i++){ int st=ol[0x800+i]&0x60; g_cmode[i]=ol[OL_CMODE+i]; g_wt0[i]=ol[0x11f1+i]; g_agood[i]=(uint8_t)(st==0x40); g_achaos[i]=(uint8_t)(st==0x60); g_align_hostile[i]=(uint8_t)((st&0x20)!=0); g_hostile[i]=0; g_asleep[i]=(uint8_t)((ol[0x800+i]&4)?255:0); } }
 static int align_of_save(int i){ return (g_align_hostile[i]||g_hostile[i])?(g_achaos[i]?0x60:0x20):(g_achaos[i]?0x60:g_agood[i]?0x40:0); }
 /* one-time NPC init (after the game hour is known): resolve each actor's frame
  * layout + initial facing from its saved appearance, and seed a mutable surface
@@ -6359,7 +6365,8 @@ static void u6_wind_tick(int level)                       /* each minute (wind.m
 {   if(level>=1&&level<=4){ g_wind=WIND_CALM; return; }
     if(rng_range(&g_wind_rng,64)==0){ int v=(int)rng_range(&g_wind_rng,9)-1; g_wind=v<0?WIND_CALM:v; } }
 static void wind_from_save(const uint8_t *d, int32_t ol)
-{   int b=sav_get_wind(d,ol); g_wind=(b>7)?WIND_CALM:b; }
+{   if(g_gl->ol_glob){ g_wind=WIND_CALM; return; }               /* (no wind in the other games' saves) */
+    int b=sav_get_wind(d,ol); g_wind=(b>7)?WIND_CALM:b; }
 /* date + wind on the map window's BOTTOM frayed border (left-aligned), where U6
  * shows its date/wind line — verified against ScummVM (refshots/u6_gameplay.png).
  * Drawn after compose_map + draw_border_tiles so it sits on top of the border. */
@@ -6452,6 +6459,7 @@ static void sync_carry_in(void)
 }
 /* after a VM run: what a script did to stats / level / exp becomes real; a new level sets max HP = level x 30
  * (HP itself untouched, as the reference); a new intelligence re-derives max mana (usecode_vm.md §6c) */
+static int se_max_hp(int a); static void sync_party_hp(void);
 static void sync_stats_out(void)
 {
     for(int i=1;i<U6_MAX_ACTORS;i++){
@@ -6461,7 +6469,7 @@ static void sync_stats_out(void)
         if(g_cg.intel[i]!=g_aint[i]){ g_aint[i]=g_cg.intel[i]; chg=1; g_amaxmana[i]=(uint8_t)actor_max_mana(i); if(g_amana[i]>g_amaxmana[i]) g_amana[i]=g_amaxmana[i]; }
         if(g_cg.exp[i]!=g_aexp[i]){ g_aexp[i]=g_cg.exp[i]; chg=1; }
         { int lv=g_cg.level[i]; if(lv<1) lv=1; if(lv>8) lv=8;
-          if(lv!=g_alevel[i]){ g_alevel[i]=(int8_t)lv; int mh=lv*30; if(mh>255) mh=255; g_amaxhp[i]=(uint8_t)mh; if(g_ahp[i]>g_amaxhp[i]) g_ahp[i]=g_amaxhp[i]; chg=1; } }
+          if(lv!=g_alevel[i]){ g_alevel[i]=(int8_t)lv; int mh=g_gl->ol_nomana?se_max_hp(i):lv*30; if(mh>255) mh=255; g_amaxhp[i]=(uint8_t)mh; if(g_ahp[i]>g_amaxhp[i]) g_ahp[i]=g_amaxhp[i]; chg=1; } }
         (void)chg; }
     sync_party_hp();
 }
@@ -7514,7 +7522,17 @@ static int se_exting_tile(int tx,int ty,int n)
     msgcat(n,"Lava\nYou harden some of the lava.");
     persist_obj_new(57,f,tx,ty,0); build_blocked(); return 1; }
 /* SE's maximum HP (0x1810:0x62a): strength x 2 + level x 4, 1 to 255 */
-static int se_max_hp(int a){ int m=se_eff_str(a)*2+(g_alevel[a]>0?g_alevel[a]:1)*4; return m<1?1:m>255?255:m; }
+static int se_max_hp(int a){ int m=se_eff_str(a)*2+(g_alevel[a]>0?g_alevel[a]:0)*4; return m<1?1:m>255?255:m; }   /* GAME.EXE 0x1872a: 2 x strength + 4 x level, 1-255 */
+/* after SE's objlist is read (GAME.EXE 0xdedd, called at 0x64ef): every max HP is SE's rule; and until actor 33's talk
+ * flag has bit 0 (a game begun), actors 1-15 are made whole, the Avatar in CMND, Triolo (9) and actor 7 RANGE, the rest CLOSE */
+static void se_load_reset(void)
+{
+    for(int i=1;i<U6_MAX_ACTORS;i++) g_amaxhp[i]=(uint8_t)se_max_hp(i);
+    if(!(g_cg.talk_flags[33]&1))
+        for(int i=1;i<16;i++){ if(g_atile[i]==0xffff && i!=1) continue;
+            g_ahp[i]=g_amaxhp[i]; g_cmode[i]=(uint8_t)(i==9||i==7?4:i==1?2:8); }
+    sync_party_hp();
+}
 /* cloth strips' "On " (0x23c06, se_use.md §5p): bind a person's wounds */
 static int se_strips_on(int id,int idx,int row,int n)
 {
@@ -9458,7 +9476,10 @@ static void draw_party_roster(uint8_t col)
         if(v>=100){ hp[n++]=(char)('0'+v/100); v%=100; hp[n++]=(char)('0'+v/10); }
         else if(v>=10){ hp[n++]=(char)('0'+v/10); }
         hp[n++]=(char)('0'+v%10); hp[n]=0;
-        ui_text((se?312:PANX+PANW-4)-ui_textw(hp), se?yy:yy+4, hp, (a>=0&&a<U6_MAX_ACTORS&&g_poison[a])?10:(g_party[i].hp<10?12:col));   /* green poisoned, red hurt badly */
+        int pz=a>=0&&a<U6_MAX_ACTORS&&g_poison[a];
+        uint8_t hc=se?(pz?2:g_party[i].hp<10?4:(a>1&&a<U6_MAX_ACTORS&&g_se_wild[a])?9:C_BLACK)   /* SE (GAME.EXE 0xe1f5): green poisoned, red under 10, light blue a frenzied companion */
+                  :(pz?10:(g_party[i].hp<10?12:col));                                             /* green poisoned, red hurt badly */
+        ui_text((se?312:PANX+PANW-4)-ui_textw(hp), se?yy:yy+4, hp, hc);
     }
 }
 /* The status display's parts as DOS lays them out (equipment.md §5), in screen pixels */
@@ -9598,9 +9619,37 @@ static int portrait_for_actor(int id, uint8_t *buf)
  * gender + Str/Dex/Int + HP/MP + Lev/Exp — where the chargen gender/portrait finally show
  * in-game. Opened by clicking a roster member; Esc or another panel click returns. */
 static uint8_t g_statface[PW*PH];
+/* SE's status page (GAME.EXE 0xe384; rules/se_screen.md §4a): the name centred, the face on its backdrop
+ * (the face routine at y 16, x 185), DOS's words in the text cells from (184,8), the HP's colours as the list's */
+static void se_char_view(int a)
+{
+    char b[24]; int n;
+    #define SEFMT(pre,v,w) do{ char*e_=b; const char*p_=pre; while(*p_) *e_++=*p_++; char t_[8]; char*te_=u_num(t_,(v)); int l_=(int)(te_-t_); for(int k_=l_;k_<(w);k_++) *e_++=' '; for(int k_=0;k_<l_;k_++) *e_++=t_[k_]; *e_=0; }while(0)
+    const char*nm=g_party[member_index(a)].name; if(!nm[0]) nm="?";
+    n=0; while(nm[n]) n++;
+    ui_text(184+8*((17-n)/2),8,nm,C_BLACK);
+    se_bkg_draw(se_backdrop(a),186,17);
+    { const uint8_t *fc=se_face(a-1);
+      if(fc) for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++){ uint8_t c=fc[yy*g_sefw+xx]; if(c!=255) ui_px(185+xx,16+yy,c); } }
+    #define SECELL(c,r) (184+8*(c)),(8+8*(r))
+    SEFMT("STR:",g_astr[a],0); ui_text(SECELL(10,1),b,C_BLACK);
+    SEFMT("DEX:",g_adex[a],0); ui_text(SECELL(10,2),b,C_BLACK);
+    SEFMT("INT:",g_aint[a],0); ui_text(SECELL(10,3),b,C_BLACK);
+    ui_text(SECELL(10,4),"HP:",C_BLACK);
+    SEFMT("",g_ahp[a],3); ui_text(SECELL(13,4),b,g_poison[a]?2:g_ahp[a]<10?4:C_BLACK);
+    SEFMT("HM:",g_amaxhp[a],3); ui_text(SECELL(10,5),b,C_BLACK);
+    SEFMT("Lev:",g_alevel[a],2); ui_text(SECELL(10,6),b,C_BLACK);
+    ui_text(SECELL(10,7),"Exper:",C_BLACK);
+    SEFMT("  ",g_aexp[a],4); ui_text(SECELL(10,8),b,C_BLACK);
+    #undef SECELL
+    #undef SEFMT
+    draw_panel_buttons(0);
+    if(g_pan_focus) blit_tile(g_pan_x,g_pan_y,TILE_TARGET_CURSOR,1);
+}
 static void draw_char_view(uint8_t col)
 {
     int a=g_status_actor; if(a<1||a>=U6_MAX_ACTORS) a=1;
+    if(g_gd==&gamedef_se){ se_char_view(a); return; }
     const uint8_t *face=0;                             /* Avatar: the created montage face; else PORTRAIT.A/.B */
     if(actor_real(a)==1 && g_cc_face_ok) face=g_cc_face;             /* the created face (copied at chargen; FE art may be freed) */
     else if(portrait_for_actor(actor_real(a),g_statface)) face=g_statface;
@@ -13643,15 +13692,16 @@ static int do_save(const world_t *w)
         sav_set_actor_pos  (d, off, a, ax, ay, az);
         sav_set_actor_stats(d, off, a, g_ahp[a], g_astr[a], g_adex[a], g_aint[a]);
         sav_set_actor_exp  (d, off, a, g_aexp[a]);
-        sav_set_actor_level_mana(d, off, a, g_alevel[a], g_amana[a]);
+        if(g_gl->ol_nomana) d[off+0xff1+a]=(uint8_t)g_alevel[a];
+        else sav_set_actor_level_mana(d, off, a, g_alevel[a], g_amana[a]);
     }
     for(int i=1;i<U6_MAX_ACTORS;i++){ sav_set_actor_dead(d, off, i, g_adead[i]);   /* the dead flag; the slain parked at (0,0,0) with 0 HP */
         if(g_adead[i]){ sav_set_actor_pos(d, off, i, 0, 0, 0); sav_set_actor_stats(d, off, i, 0, g_astr[i], g_adex[i], g_aint[i]); } }
-    sav_set_alcohol(d, off, g_alcohol);
+    sav_set_alcohol(d, off+OL_GLOB, g_alcohol);
     sav_set_avatar_name(d, off, g_avatar_name[0] ? g_avatar_name : "Avatar");
     if(g_gl->ol_talk){ for(int i=0;i<256;i++){ d[off+g_gl->ol_talk+i]=g_cg.talk_flags[i]; d[off+g_gl->ol_talk_hi+i]=g_cg.talk_flags_hi[i]; } }   /* SE: its own places (converse.md §6c) */
     else sav_set_talk_state(d, off, g_cg.talk_flags, g_cg.on_quest, g_cg.knows_gargish);   /* conversation state */
-    sav_set_wind(d, off, g_wind==WIND_CALM ? 0xff : g_wind);                           /* the wind (wind.md §1) */
+    if(!OL_GLOB) sav_set_wind(d, off, g_wind==WIND_CALM ? 0xff : g_wind);              /* the wind (wind.md §1) */
     /* the horse we ride (absorbed: it is where we are) or last left somewhere new (vehicles.md §4) */
     if(g_veh_kind==431 && g_veh_horse>=0) sav_set_actor_pos(d, off, g_veh_horse, (int)w->px, (int)w->py, w->level);
     else if(g_horse_moved>=0){ int h=g_horse_moved;
@@ -13661,15 +13711,16 @@ static int do_save(const world_t *w)
             { int st=d[off+0x800+i]&~0x64; if(g_asleep[i]) st|=4; st|=align_of_save(i); d[off+0x800+i]=(uint8_t)st; } }
     for(int i=1;i<U6_MAX_ACTORS;i++){                    /* who is in the party (objlist 0x800 bit 0x80): the roster, and a fallen member still on it (g_lost) */
         int on=is_party_member(i)||i==1||g_lost[i]; if(on) d[off+0x800+i]|=0x80; else d[off+0x800+i]&=(uint8_t)~0x80; }
-    for(int i=1;i<U6_MAX_ACTORS;i++) if(g_cmode[i]) d[off+0x12f1+i]=g_cmode[i];   /* each one's combat mode (combat.md §8) */
-    { int mod=clock_minutes(w); sav_set_clock(d, off, mod%60, mod/60); }   /* game clock */
-    { int dd,mm,yy; cur_date(w,&dd,&mm,&yy); sav_set_date(d, off, dd, mm, yy); }   /* the date the clock reached (moongates.md §1) */
+    for(int i=1;i<U6_MAX_ACTORS;i++) if(g_cmode[i]) d[off+OL_CMODE+i]=g_cmode[i];   /* each one's combat mode (combat.md §8; SE's at 0x13f1) */
+    { int mod=clock_minutes(w); sav_set_clock(d, off+OL_GLOB, mod%60, mod/60); }   /* game clock */
+    { int dd,mm,yy; cur_date(w,&dd,&mm,&yy); sav_set_date(d, off+OL_GLOB, dd, mm, yy); }   /* the date the clock reached (moongates.md §1) */
+    sav_set_rest_counter(d, off+OL_GLOB, g_rest_counter);                        /* hours until resting heals again (rest.md §4) */
+    if(!OL_GLOB){                                                                /* U6's own fields */
     sav_set_keg_timer(d, off, g_keg_timer);                                      /* a burning fuse (usecode_use.md) */
     sav_set_timer(d, off, 13, g_storm);                                          /* the storm cloak's magical storm (equipment.md §8) */
     sav_set_timer(d, off, 1, g_infravision); sav_set_timer(d, off, 14, g_time_stop); sav_set_timer(d, off, 15, g_eclipse);   /* §5f */
-    sav_set_rest_counter(d, off, g_rest_counter);                                /* hours until resting heals again (rest.md §4) */
     sav_set_vanish(d, off, g_vanish_obj ? (g_vanish_obj | ((int)g_vanish_frame << 10)) : 0);   /* the vanished object: obj_n | frame<<10 (objlist.md) */
-    if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma);  /* created-avatar identity */
+    if(g_cc_done) sav_set_player(d, off, g_cg.avatar_sex, g_cc_portrait, g_cg.karma); }  /* created-avatar identity */
     { int yy, mo, dd, hh, mi; plat_date(&yy, &mo, &dd, &hh, &mi);
       sav_set_trailer_date(d, n, yy, mo, dd, hh, mi); }         /* ScummVM's load menu shows when */
     /* the FILE: every chunk minus the pooled actors' records + the party's inventory rebuilt from
@@ -14226,11 +14277,14 @@ static int load_game(world_t *w)
         g_aexp[i] = (uint16_t)(d[ol + 0xc00 + i*2] | (d[ol + 0xc00 + i*2 + 1] << 8));
         g_ahp[i]  = d[ol + 0xe00 + i]; g_amaxhp[i] = g_ahp[i];              /* boot semantics (pack load) */
         { int lv = d[ol + 0xff1 + i];                                        /* level array (Nuvie); derive if unset */
+          if(g_gl->ol_nomana){ g_alevel[i] = (int8_t)(lv > 8 ? 8 : lv); }    /* SE: the level as saved, the max HP its own rule (below) */
+          else {
           if(lv < 1 || lv > 8) lv = (g_amaxhp[i] >= 30) ? (g_amaxhp[i] / 30) : 1;
-          if(lv > 8) lv = 8; g_alevel[i] = (int8_t)lv;
-          if(d[ol + 0x800 + i] & 0x80){ int mh = lv*30; if(mh > 255) mh = 255;   /* a member's max HP is level x 30 (combat.md §3), not the HP it was saved with */
+          if(lv > 8) lv = 8; g_alevel[i] = (int8_t)lv; }
+          if(!g_gl->ol_nomana && (d[ol + 0x800 + i] & 0x80)){ int mh = lv*30; if(mh > 255) mh = 255;   /* a member's max HP is level x 30 (combat.md §3), not the HP it was saved with */
               if(mh > g_amaxhp[i]) g_amaxhp[i] = (uint8_t)mh; } }
         g_amaxmana[i] = (uint8_t)actor_max_mana(i);
+        if(g_gl->ol_nomana) g_amana[i] = 0; else
         g_amana[i] = (d[ol + 0x13f1 + i] == 0xFF) ? g_amaxmana[i] : d[ol + 0x13f1 + i];   /* current mana (0xFF = full) */
         if(g_amana[i] > g_amaxmana[i]) g_amana[i] = g_amaxmana[i]; }
 
@@ -14239,17 +14293,19 @@ static int load_game(world_t *w)
 
     /* 1) WORLD OBJECTS of the Avatar's level (map_levels.md §4b; the pooled pack is rebuilt below) */
     if(level_decode(d, n, w->level, 1) < 0){ plat_chip_reset(mk); msgcat(0,"Not enough memory to load."); return 0; }
-    g_start_min = (int)d[ol + 0x1bf4] * 60 + d[ol + 0x1bf3]; w->clock = 0;
+    g_start_min = (int)d[ol + OL_GLOB + 0x1bf4] * 60 + d[ol + OL_GLOB + 0x1bf3]; w->clock = 0;
     date_from_save(d, ol);                                                      /* day / month / year (moongates.md §1) */
-    g_keg_timer = (uint8_t)(sav_get_keg_timer(d, ol) & 0xff); g_keg_carried = 0;    /* the keg fuse */
+    g_keg_carried = 0;
+    if(!OL_GLOB){                                                               /* U6's own fields (the other games' saves keep other things there) */
+    g_keg_timer = (uint8_t)(sav_get_keg_timer(d, ol) & 0xff);                       /* the keg fuse */
     g_storm = (uint8_t)sav_get_timer(d, ol, 13);                                    /* the magical storm (timer 13) */
     g_infravision = (uint8_t)sav_get_timer(d, ol, 1); g_time_stop = (uint8_t)sav_get_timer(d, ol, 14); g_eclipse = (uint8_t)sav_get_timer(d, ol, 15);
-    g_rest_counter = (uint8_t)sav_get_rest_counter(d, ol); g_rest_hr = -1;        /* the rest counter (rest.md §4) */
-    g_alcohol = (uint8_t)sav_get_alcohol(d, ol);                                   /* drinks (usecode_use.md Food) */
-    { int v = sav_get_vanish(d, ol); g_vanish_obj = (uint16_t)(v & 1023); g_vanish_frame = (uint8_t)(v >> 10); }   /* obj_n | frame<<10 (objlist.md) */
+    { int v = sav_get_vanish(d, ol); g_vanish_obj = (uint16_t)(v & 1023); g_vanish_frame = (uint8_t)(v >> 10); } }   /* obj_n | frame<<10 (objlist.md) */
+    g_rest_counter = (uint8_t)sav_get_rest_counter(d, ol + OL_GLOB); g_rest_hr = -1;   /* the rest counter (rest.md §4; SE's 0x1cf2, hourly at 0x4c51) */
+    g_alcohol = (uint8_t)sav_get_alcohol(d, ol + OL_GLOB);                         /* drinks (usecode_use.md Food; SE's 0x1d17, hourly at 0x4c5c) */
     g_armageddon = 0;
     for(int i = 0; i < U6_MAX_ACTORS; i++) g_torch_fuel[i] = 0;                 /* relit below from the readied records */
-    g_cg.avatar_sex = d[ol + 0x1c71]; g_cg.karma = d[ol + 0x1bf9];
+    if(!OL_GLOB){ g_cg.avatar_sex = d[ol + 0x1c71]; g_cg.karma = d[ol + 0x1bf9]; }
     if(d[ol + 0xf00]){ int o = 0;                                            /* player name (0xf00, <=13 + NUL) */
         while(o < 13 && d[ol + 0xf00 + o]){ g_avatar_name[o] = (char)d[ol + 0xf00 + o]; o++; }
         g_avatar_name[o] = 0; }
@@ -14278,6 +14334,7 @@ static int load_game(world_t *w)
     if(g_magic_demo) magic_demo_seed();
     talk_state_from_save(d, ol);
     wind_from_save(d, ol); g_mp_acc = 0;
+    if(g_gl->load_reset) g_gl->load_reset();                      /* the game's own after-load step (SE's 0xdedd) */
 
     /* the loaded file is now the SAVE TEMPLATE too: the next do_save patches this state, not the
      * boot-time SAVE.000 (our own writer keeps the layout, so the sizes match) */
@@ -16215,7 +16272,7 @@ static int se_get(world_t*w,int dx,int dy)
         if(eg->made!=3 && eg->x==(uint16_t)x && eg->y==(uint16_t)y && eg->nemb && g_emb[eg->emb].obj_n==292){ eg->nemb=0; eg->active=0; eg->made=3; } }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .ol_cmode=0x13f1, .ol_glob=0x100, .ol_nomana=1, .load_reset=se_load_reset, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -16933,7 +16990,11 @@ int main(int argc, char **argv)
                talk_state_from_save(g_savetmpl, g_objlist_off);                 /* what NPCs already told us */
                wind_from_save(g_savetmpl, g_objlist_off);                       /* the wind (wind.md §1) */
                date_from_save(g_savetmpl, g_objlist_off);                       /* the game date (moongates.md §1) */
-               g_keg_timer=(uint8_t)(sav_get_keg_timer(g_savetmpl, g_objlist_off)&0xff); g_storm=(uint8_t)sav_get_timer(g_savetmpl, g_objlist_off, 13);
+               if(!OL_GLOB){ g_keg_timer=(uint8_t)(sav_get_keg_timer(g_savetmpl, g_objlist_off)&0xff); g_storm=(uint8_t)sav_get_timer(g_savetmpl, g_objlist_off, 13); }
+               else { const uint8_t*ol_=g_savetmpl+g_objlist_off;                 /* SE: levels, rest counter and drinks from the starting objlist (the pack has none) */
+                   for(int i=1;i<U6_MAX_ACTORS;i++) g_alevel[i]=(int8_t)(ol_[0xff1+i]>8?8:ol_[0xff1+i]);
+                   g_rest_counter=sav_get_rest_counter(g_savetmpl, g_objlist_off+OL_GLOB); g_alcohol=(uint8_t)sav_get_alcohol(g_savetmpl, g_objlist_off+OL_GLOB); }
+               if(g_gl->load_reset) g_gl->load_reset();
                sched_settle();
                eggs_load_level(g_savetmpl, g_savetmpl_len, 0); }                /* the surface's eggs (eggs.md) */
         /* the player's name lives in the template's objlist (0xf00) — the pack doesn't carry it;
@@ -20170,6 +20231,9 @@ int main(int argc, char **argv)
                 do_verb(&w,'G',1,0);
                 dbg_num("SE gold: pool gained=", g_cg.gold-gold0);                                /* expect 40 */
                 dbg_num("SE gold: NOT an inv stack=", (g_ow.ninv==ninv0 && objworld_count(&g_ow,69)==0)); /* expect 1 */
+                dbg_num("SE load Triolo level=", g_alevel[9]);                                       /* expect 7 (objlist 0xff1) */
+                dbg_num("SE load Triolo range=", g_cmode[9]==4);                                     /* GAME.EXE 0xdedd */
+                dbg_num("SE load max hp rule=", g_amaxhp[9]==2*g_astr[9]+4*g_alevel[9]);
                 break; } }
         }
     }

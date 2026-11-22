@@ -209,3 +209,9 @@ list once SE's seams exist.
   steps of 20 minutes with nothing coming in the night, and the level test per member with SE's dream (bear,
   jaguar, monkey: strength, dexterity, intelligence; else the highest). The dream's window and portrait and the
   border's pictures wait for item 8.
+- 2026-11-22: item 8: SE's clicks driven in a test (MOUSE.REQ), the status page as DOS (rules/se_screen.md §4: the face
+  routine's picture, STR..Exper, the list's HP colours). Item 10 begun (formats/objlist.md §4a): SE's objlist read from
+  its GAME.EXE; the combat modes (0x13f1), levels, no magic points, the globals an array later (clock, date, rest
+  counter, drinks) now load and save at SE's places, U6's own globals are left alone, and DOS's after-load step (0xdedd:
+  SE's max HP, and a new game's full HP and modes) runs. Open in item 8: the planar map on the ST (speed). Open in item
+  10: a save/load round trip in a test, the 8 slots, the leader's place (0x1cfb); Triolo's pack weighs 27 here, 24 in DOS.

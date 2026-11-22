@@ -126,6 +126,40 @@ SE/MD: same array scheme, a different `temp_actor` base and extra arrays. Every 
 objlist is the tail of its own LZDNGBLK, and a new game sets a few fields per game: see
 nuvie_save.md "A new game from the original files".
 
+### 4a. The Savage Empire (read from its GAME.EXE, 2026-11-22)
+> Provenance: SE's objlist reader (GAME.EXE image 0x6221-0x64e4: one read at offset 0, then each read follows the
+> last) and the code that uses each array. Validated by: the status page against DOS (rules/se_screen.md §4) and
+> `make check-se-use` (`SE load ...`). Confidence: confirmed for the arrays named; the unnamed ones unknown.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0x000 | 0x100 | object flags: 0x40 cursed, 0x80 frenzied (se_invoke.md) |
+| 0x100 | 0x300 | positions (as U6) |
+| 0x400 | 0x200 | appearance (as U6) |
+| 0x600 | 0x200 | not yet known (2 bytes each) |
+| 0x800 | 0x100 | status: 0x04 asleep or held (dexterity counts 1), 0x08 poisoned, 0x10 dead, 0x80 in the party, 0x60 alignment |
+| 0x900 / 0xa00 / 0xb00 | 0x100 each | strength, dexterity, intelligence |
+| 0xc00 | 0x200 | experience (u16 LE) |
+| 0xe00 | 0x100 | hit points |
+| 0xf00 | 0xe0 | the party's names, 14 bytes each |
+| 0xfe0 | 0x10 | the party's actors in order; 0xff0 their count |
+| 0xff1 | 0x100 | **level** (as U6) |
+| 0x10f1 | 0x100 | not yet known |
+| 0x11f1 | 0x100 | worktype (as U6) |
+| 0x12f1 | 0x100 | talk flags 8-15 (U6: combat mode; converse.md §6c) |
+| 0x13f1 | 0x100 | **combat mode**: 2 CMND, 4 RANGE, 6 WILD, 7 FLEE, 8 CLOSE (U6: magic points; SE has none) |
+| 0x14f1, 0x15f1 | 0x100 each | read and thrown away (both into one scratch buffer) |
+| 0x16f1 | 0x200 | not yet known (2 bytes each) |
+| 0x18f1 | 0x100 | talk flags 0-7 (U6's 0x17f1) |
+| 0x19f1, 0x1af1, 0x1bf1 | 0x100 each | not yet known |
+| 0x1cf1 | 0x82 | the globals, U6's block (0x1bf1) one array later: 0x1cf2 rest counter (counted down each hour), 0x1cf3 minute, 0x1cf4 hour, 0x1cf5 day (1-28), 0x1cf6 month (1-12), 0x1cf7 year (u16), 0x1cfb the leader's place in the party, 0x1d17 drinks (counted down each hour) |
+
+After the read DOS runs 0xdedd on the actors: every maximum HP is SE's rule (2 x strength + 4 x level), and while
+actor 33's talk flag lacks bit 0 (a game not yet begun) actors 1-15 are made whole and given their modes: the
+Avatar CMND, actors 7 and 9 (Triolo) RANGE, the rest CLOSE. U6's own globals (karma, gender, portrait, wind,
+timers, the vanished object, the keg, the moonstones) are not in SE's block: u6e leaves those bytes as they are.
+MD's layout is still to be read (checklist item 13).
+
 ## 5. Validation method
 `make npcsched` decodes the table and (with SCHEDULE) places + renders NPCs.
 
