@@ -440,4 +440,11 @@ same song, and check the §5 situations in DOSBox (dosbox-u6-rig).
 
 ## 10. Status
 IN PROGRESS — format, player rules and song choice written from GAME.EXE and checked against all 20
-songs; nothing built and nothing heard against DOS yet.
+songs. Built 2026-11-22: engine/smf.c (the sequencer of §3, 0xFE types 0-3, the 60 Hz scheduler of §3.7;
+a host run gives the durations of §3.4); the pack carries the 20 songs unpacked (CSFE group 6); MIDI OUT
+plays them as they are (controller 121 on 2-10 at the start; General MIDI through MT32_TO_GM), the PSG folds
+the melodic channels to its three voices and leaves out the rhythm channel (our choice); DMA falls back to
+the PSG until an AdLib render exists. Played: the menu and creation and the ending song 0, the scenes 14,
+15, 16, 17, 12, the places (level 3 song 3, other levels 2, combat 8, else 0 or 1 at random). Not yet: the
+combat sequence songs (6, 7, 9-12), song 4 and 5, the queue/fade calls (§4.2), the intro's 18 and 19,
+the AdLib bank render, and a listen against DOS.

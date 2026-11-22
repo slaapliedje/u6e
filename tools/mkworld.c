@@ -1743,7 +1743,8 @@ static long convert_midgame(const char *dir, uint8_t marker, FILE *out)
 /* SE's front end (docs/design/se_front_end.md): SAVAGE.PAL's three palettes (6-bit, 3 x 768) and the items of TITLE,
  * INTRO, CREATE and ENDGAME.LZC as stored (each a shape library, shapes.md; the engine decodes a picture when it shows it).
  * "CSFE" [3 x 768 palette][u8 ngroups][64 x (u8 file 0-4, u8 item, u32 len), the first ngroups used] then the items'
- * bytes in order. File 4 item 0 is SAVAGE.FNT unpacked (the WOU font); file 5 item 0 the words read from SAVAGE.EXE.
+ * bytes in order. File 4 item 0 is SAVAGE.FNT unpacked (the WOU font); file 5 item 0 the words read from SAVAGE.EXE;
+ * file 6 items 0-19 MUSIC.LZC's songs unpacked.
  * Written in the library tail just before the scenes' block, with a trailer [u32 block length]["CFEE"]. */
 static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
 {
@@ -1768,6 +1769,12 @@ static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
         if(b && u6lzc_open(&lc,b,(int32_t)fl,marker) && ng<64){ int32_t n=u6lzc_read(&lc,0,item,(int32_t)sizeof item);
             if(n>0){ fwrite(item,1,(size_t)n,out); gf[ng]=4; gi[ng]=0; gl[ng]=n; ng++; } }
         else printf("SAVAGE.FNT: missing\n");
+        free(b); }
+    {   long fl; uint8_t *b=slurp(dir,"MUSIC.LZC",&fl); u6lzc_t lc;          /* the songs, unpacked MIDI files: groups (6, 0-19) (formats/se_music.md) */
+        if(b && u6lzc_open(&lc,b,(int32_t)fl,marker)){ int ni=u6lzc_count(&lc);
+            for(int it=0;it<ni && it<20 && ng<64;it++){ int32_t n=u6lzc_read(&lc,it,item,(int32_t)sizeof item);
+                if(n>0){ fwrite(item,1,(size_t)n,out); gf[ng]=6; gi[ng]=(uint8_t)it; gl[ng]=n; ng++; } } }
+        else printf("MUSIC.LZC: missing\n");
         free(b); }
     {   long fl; uint8_t *x=slurp(dir,"SAVAGE.EXE",&fl);              /* the front end's words from the user's SAVAGE.EXE: group (5, 0) */
         long img=0, dg=-1;                                                  /* (se_front_end.md "Strings"): [u8 n][n NUL-ended strings] */

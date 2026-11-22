@@ -19,6 +19,8 @@ typedef struct {
     void (*note_on)(int ch, int note, int vel);   /* note 0..127, vel 1..127                    */
     void (*note_off)(int ch, int note);
     void (*reset)(void);                           /* silence everything (song change / stop)    */
+    void (*control)(int ch, int cc, int val);      /* controller (SE's MIDI songs); NULL = ignored */
+    void (*bend)(int ch, int lsb, int msb);        /* pitch bend (SE's MIDI songs); NULL = ignored */
 } music_backend_t;
 
 /* Per-instrument routing: index -> (MIDI channel 0..15, MIDI program 0..127). Built from

@@ -20,6 +20,7 @@
 #include "u6actor.h"
 #include "u6lzw.h"
 #include "u6shape.h"
+#include "smf.h"
 #include "u6obj.h"             /* save-load: decode the save's object super-chunks (objblk.md) */
 #include "fepack.h"           /* U6FE.PAK section ids + header layout (front-end streaming) */
 #include "objects.h"
@@ -7850,10 +7851,12 @@ static int se_scene_load(void)
            && !(g_scene_txt[0]=='*'&&g_scene_txt[1]=='E')){ g_scene_txt[sizeof g_scene_txt-1]=0; return 1; }
         g_scene_i++; g_scene_pg=0; } }      /* past the third page or at *END*: the next scene */
 static void se_scene_finish(void)
-{   g_scene=0; if(g_scene_done){ void (*d)(void)=g_scene_done; g_scene_done=0; d(); } }
+{   g_scene=0; if(!g_game_over) music_resume_area(g_cur_level);         /* the place's song comes back */ if(g_scene_done){ void (*d)(void)=g_scene_done; g_scene_done=0; d(); } }
 /* play MIDGAME`f`: n scenes, faces[k] the face over scene k (0 none); done runs after the last */
+static void music_play_song(const char *base); static void music_resume_area(int level);
 static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void))
-{   g_scene=f; g_scene_n=n; g_scene_i=0; g_scene_pg=0; g_scene_done=done;
+{   { static const char *const SONG[5]={"SE14","SE15","SE16","SE17","SE12"}; if(f>=1&&f<=5) music_play_song(SONG[f-1]); }   /* each routine's song first */
+    g_scene=f; g_scene_n=n; g_scene_i=0; g_scene_pg=0; g_scene_done=done;
     for(int k=0;k<4;k++) g_scene_face[k]=(uint8_t)(faces&&k<n?faces[k]:0);
     if(!se_scene_load()) se_scene_finish(); }
 /* a key or a click: the next page (the game's input routine, 0x5d0:0x22c8) */
@@ -14833,9 +14836,11 @@ static void mus_program (int ch,int prog){ if(g_music_gm) prog=MT32_TO_GM[prog&1
 static void mus_note_on (int ch,int n,int v){ uint8_t x[3]={(uint8_t)(0x90|(ch&15)),(uint8_t)(n&127),(uint8_t)(v&127)}; plat_midi_queue(x,3); }
 static void mus_note_off(int ch,int n){ uint8_t x[3]={(uint8_t)(0x80|(ch&15)),(uint8_t)(n&127),0}; plat_midi_queue(x,3); }
 static void mus_reset   (void){ plat_midi_all_off(); }   /* queues all-notes-off (ISR-safe) */
-static const music_backend_t g_midi_be = { mus_program, mus_note_on, mus_note_off, mus_reset };
+static void mus_control (int ch,int cc,int v){ uint8_t x[3]={(uint8_t)(0xB0|(ch&15)),(uint8_t)(cc&127),(uint8_t)(v&127)}; plat_midi_queue(x,3); }
+static void mus_bend    (int ch,int l,int m){ uint8_t x[3]={(uint8_t)(0xE0|(ch&15)),(uint8_t)(l&127),(uint8_t)(m&127)}; plat_midi_queue(x,3); }
+static const music_backend_t g_midi_be = { mus_program, mus_note_on, mus_note_off, mus_reset, mus_control, mus_bend };
 static music_seq_t g_music; static int g_music_on;
-static int g_music_be_kind;   /* which sequencer backend is live: 0 none, 1 MIDI, 2 PSG */
+static int g_music_be_kind;   /* which sequencer backend is live: 0 none, 1 MIDI, 2 PSG, 3 SE's songs on MIDI */
 
 /* PSG backend (plain ST): fold U6's 9 OPL channels into the YM2149's 3 square voices.
  * Voice allocation = reuse the channel's voice if it has one, else a free voice, else
@@ -14869,10 +14874,13 @@ static const music_backend_t g_psg_be = { psg_be_program, psg_be_note_on, psg_be
 static st_player_t g_st;        /* the ST release's tracker (docs/formats/st_music.md) */
 static int g_st_on, g_st_hz;
 static const uint8_t *g_st_song;   /* 0 = no U.PRG to take it from */
+static smf_seq_t g_smf; static int g_smf_on;     /* SE's songs (formats/se_music.md): the MIDI-file sequencer */
+static uint8_t g_smf_buf[32768];                   /* the largest of SE's 20 songs is 32080 bytes */
 static void music_isr_tick(void){
     if(g_st_on) st_tick(&g_st);
+    if(g_smf_on) smf_tick(&g_smf);
     if(g_music_on) music_seq_tick(&g_music, 1);
-    if(g_music_be_kind == 1) plat_midi_drain(52);
+    if(g_music_be_kind == 1 || g_music_be_kind == 3) plat_midi_drain(52);   /* (3: SE's songs on MIDI OUT) */
 }
 
 /* .M basename (no ext, case-insensitive) -> MIDI.DAT song order (listed 1..9,0,-,=). */
@@ -14963,12 +14971,14 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
  * holds its last note until reset. */
 static void music_stop_all(void){
     plat_timer_stop();
-    g_music_on = 0;
+    g_music_on = 0; g_smf_on = 0;
     if(g_st_on){ g_st_on = 0; plat_psg_silence(); }
     if(g_music_be_kind == 1){          /* MIDI OUT was live */
         for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
         plat_midi_all_off();
         plat_midi_flush();
+    } else if(g_music_be_kind == 3){   /* SE's songs on MIDI OUT */
+        plat_midi_all_off(); plat_midi_flush();
     } else if(g_music_be_kind == 2){   /* PSG was live */
         plat_psg_silence();
         for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
@@ -14983,6 +14993,21 @@ static void music_play_st(int tune){
     plat_timer_start(music_isr_tick, g_st_hz);
 }
 static int g_sound_off;     /* Ctrl-Z (st_music.md §5): the current song is remembered, nothing plays */
+/* SE's songs on the PSG: the melodic channels share the three voices; the rhythm channel (10) is left out (our choice:
+ * DOS has no PSG music, formats/se_music.md §8) */
+static void psg_se_on(int ch,int n,int v){ if(ch!=9) psg_be_note_on(ch,n,v); }
+static void psg_se_off(int ch,int n){ if(ch!=9) psg_be_note_off(ch,n); }
+static const music_backend_t g_psg_se_be = { psg_be_program, psg_se_on, psg_se_off, psg_be_reset, 0, 0 };
+static int sefe_read_into(int f,int it,uint8_t *buf,int32_t cap);
+/* SE's song n (MUSIC.LZC item n, carried in the pack's CSFE block as group (6, n)) through MIDI or the PSG */
+static int music_play_se(int n,int use)
+{   int32_t l=sefe_read_into(6,n,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<=0) return 0;
+    const music_backend_t *be=use==1?&g_midi_be:&g_psg_se_be;
+    if(use==1){ plat_midi_init(); if(g_music_gm){ static const uint8_t GMRESET[6]={0xF0,0x7E,0x7F,0x09,0x01,0xF7}; plat_midi_write(GMRESET,6); }
+        for(int c=1;c<=9;c++){ uint8_t x[3]={(uint8_t)(0xB0|c),121,0}; plat_midi_queue(x,3); } }   /* controller 121 on channels 2-10 at the start */
+    if(!smf_start(&g_smf,g_smf_buf,l,be)) return 0;
+    g_smf_on=1; g_music_be_kind=use==1?3:2; g_music_active=use==1?1:3;
+    plat_timer_start(music_isr_tick, 60); return 1; }
 /* play song `base` (e.g. "BRIT") through the runtime-selected backend */
 static void music_play_song(const char *base){
     music_stop_all();
@@ -15002,6 +15027,8 @@ static void music_play_song(const char *base){
         use = 5;                                     /* PCM absent (e.g. compact install) -> chiptune, not silence */
     }
     if(use==5){ if(st>=0){ music_play_st(st); return; } use = 3; }
+    if(g_music_cur[0]=='S'&&g_music_cur[1]=='E'&&g_music_cur[2]>='0'&&g_music_cur[2]<='9'){   /* SE's songs: "SEnn" */
+        (void)music_play_se((g_music_cur[2]-'0')*10+(g_music_cur[3]?g_music_cur[3]-'0':0), use==1?1:3); return; }
     if(use==1){ g_music_active=1; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_midi_be, 1, 1); }
     else       { g_music_active=3; music_name(nm, g_music_cur, ".M"); music_play_seq(nm, &g_psg_be, 2, 0); }  /* PSG */
 }
@@ -15130,6 +15157,12 @@ static const char *music_group_pick(int g){
 }
 static void music_update_area(int level){
     if(g_music_forced) return;             /* a forced song (test hook / event) owns the music */
+    if(g_gd==&gamedef_se){                 /* SE (GAME.EXE 0x27201): level 3 song 3, other levels below 2, combat 8, else 0 or 1 */
+        int g = g_combat_mode ? 8 : level==3 ? 3 : level>0 ? 2 : 100;
+        if(g != g_music_group){ g_music_group = g; char b[5]={'S','E','0','0',0};
+            if(g==100){ g_music_rng = g_music_rng*1103515245u + 12345u; g=(int)((g_music_rng>>24)&1); }
+            b[2]=(char)('0'+g/10); b[3]=(char)('0'+g%10); music_play_song(b); }
+        return; }
     int g = music_area_group(level);
     if(g != g_music_group){                /* context changed group -> pick a track + play  */
         g_music_group = g;
@@ -16422,6 +16455,17 @@ static uint8_t *sefe_item(int f,int it,int32_t *len)
             if(e[0]==f && e[1]==it){ b=(uint8_t*)plat_alloc_chip((uint32_t)l); if(b && plat_read_at(pf,data+at,b,l)!=l) b=NULL; if(b) *len=l; break; }
             at+=l; } }
     plat_fclose(pf); return b; }
+/* item (f,it) of the CSFE block read into buf (up to cap): its length, or 0 */
+static int sefe_read_into(int f,int it,uint8_t *buf,int32_t cap)
+{   if(!g_sefe_off) return 0;
+    plat_file pf=plat_fopen(PACK_NAME,0); if(pf<0) return 0;
+    uint8_t n; int32_t got=0, p=g_sefe_off+4+3*768;
+    if(plat_read_at(pf,p,&n,1)==1){ int32_t data=p+1+64*6, at=0;
+        for(int k=0;k<n;k++){ uint8_t e[6]; if(plat_read_at(pf,p+1+k*6,e,6)!=6) break;
+            int32_t l=(int32_t)(((uint32_t)e[2]<<24)|((uint32_t)e[3]<<16)|((uint32_t)e[4]<<8)|e[5]);
+            if(e[0]==f && e[1]==it){ if(l<=cap && plat_read_at(pf,data+at,buf,l)==l) got=l; break; }
+            at+=l; } }
+    plat_fclose(pf); return got; }
 /* shape `idx` of a library item at (x,y) less its hot spot, 255 left alone; tmp holds the decoded shape */
 static void sefe_draw(const uint8_t *lib,int32_t len,int idx,int x,int y,uint8_t *tmp,int32_t cap)
 {   int w,h,hx=0,hy=0; if(!lib||!u6shape_size(lib,len,idx,&w,&h)||(int32_t)w*h>cap) return;
@@ -16570,7 +16614,7 @@ static void tb2_print(const char*t)
  * companion (Aiela, talk flag 2 bit 0x20; else Tristia, 51) picks the middle part; the time taken from the date */
 static void se_ending(world_t*w)
 {   rdr_caps rc; rdr_get_caps(&rc); if(rc.colors<256) return;                 /* (the ST: its 16-colour palettes are not made yet) */
-    music_stop_all();
+    music_play_song("SE00");                                                  /* (0x5ebf) */
     plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t le=0, sl=0;
     const uint8_t *ie=sefe_item(3,0,&le), *sb=sefe_item(5,0,&sl); g_sef=sefe_item(4,0,&g_sef_len);
     uint8_t *tmp=g_W==LW?ROW(0):NULL;                                           /* in play there is no 64 KB to spare: the pictures are the whole screen, */
@@ -16616,6 +16660,7 @@ static int se_run_menu(void)
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
     rdr_set_palette(pal,256);
     for(;;){
+        fe_music("SE00");                                                  /* the menu's song (SAVAGE.EXE 0x4a82; formats/se_music.md §5.4) */
         if(dirty){ clear_bb(0); sefe_draw(lib,len,0,0,0,tmp,64000);
             for(int k=0;k<n;k++) sefe_draw(lib,len,k==sel?(pressed==k?(FR[k]-1)/2+11:FR[k]+1):FR[k],85,Y[k],tmp,64000);
             rdr_present_doubled(LH); dirty=0;
