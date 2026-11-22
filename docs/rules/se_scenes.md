@@ -19,20 +19,21 @@ Per game: SE only. U6's cutscenes are its own (ending.md); MD's are checklist it
 4k, 4k+1, 4k+2 are the scene's text pages (plain text, NUL-ended; a page that begins `*E`, the `*END*` page,
 ends the scene early) and item 4k+3 is its picture, a one-shape library (shapes.md) of 160 x 144.
 
-| File | Scenes | Faces | Song |
-|---|---|---|---|
-| 1 | 3 | 2 (Aiela), none, none | 2 (the routine starts 14 first) |
-| 2 | 3 | none | 2 (15 first) |
-| 3 | 4 | none | 7 |
-| 4 | 3 | none | 7 (17 first) |
-| 5 | 3 | none | 7 (12 first) |
+| File | Scenes | Faces | Song | Disk |
+|---|---|---|---|---|
+| 1 | 3 | 2 (Aiela), none, none | 14 | 2 |
+| 2 | 3 | none | 15 | 2 |
+| 3 | 4 | none | 16 | 7 |
+| 4 | 3 | none | 17 | 7 |
+| 5 | 3 | none | 12 | 7 |
 
-The song column is the player's table at DS:0x27c6 (by file number); each routine first starts a song of its
-own (in brackets), and the player starts the table's song before each scene and each page.
+Each routine starts its song first (formats/se_music.md). The table at DS:0x27c6 (by file number) is the disk the
+file is on: before each scene and each page the player calls 0x2a81:0x98, the "Please insert DISK n" check (corrected
+2026-11-22: this doc first read it as a song).
 
 ## 2. The player (0x29b0a)
 Arguments: the faces (one byte per scene, 0 = none), the number of scenes, the file number. It sets DS:0xa39
-(scene mode: the face routine then takes actors 0xfd-0xff as faces 0x59-0x5b), hides the pointer, and for each
+(scene mode: the face routine then takes actors 0xfd-0xff as faces 0x59-0x5b), hides the pointer (0x2abf:0x14e; 0x13d shows it), and for each
 scene in turn:
 1. a face, if the scene has one: drawn in the top box as a conversation draws it (rules/se_screen.md §5);
 2. the picture at x 8, y 16 (the map window's visible area); a picture that cannot be read ends the play;
