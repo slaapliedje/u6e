@@ -60,6 +60,29 @@ shape + 1; the one chosen shows (shape - 1)/2 + 11 for a moment. Journey Onward 
 exists (DS:0x5da = 3, else 2). Keys (0x4af3): T or S the story, C create, A about, J journey (when offered),
 Enter or Space the highlighted one, Up/Down move with wrap, Ctrl-Q or Alt-X quit to DOS.
 
+## Character creation (SAVAGE.EXE 0x50ac)
+Read so far (2026-11-22):
+- Three stats start at 16-18 each (random 0-2 + 16): DS:0x2bcc strength, 0x2bcd dexterity, 0x2bce intelligence (the
+  order the objlist writer stores them).
+- The screen: CREATE item 1 shape 2 at (0,0) (320x200), item 1 shapes 0 and 1 at (8,28) (160x145, Intanya), item 4
+  shape 2 at (175,30) through a second blitter (a shadow?) and again at (170,25) (the text box, 143x146); the text
+  window is x 177-306, y 32-162. Without an install (no `savegame\objlist`): `You must first run the INSTALL
+  program.`; with a game in progress: `A saved game is already in progress...` and back to the menu.
+- 0x54bd: Intanya's opening (the strings at DS:0xd7c-0x1021, with `%P` page waits) and the name (up to 13 letters,
+  into DS:0x5ec); Esc goes back to the menu.
+- Three rounds of questions (0x55a0, called with the round 0, 1, 2): the first question is random among 0-2. The table
+  at DS:0x564 has 12 bytes a question: up to four text parts (printed with page waits between) and the stat an answer
+  (a) or (b) raises: q0 a=2 b=0; q1 a=1 b=0; q2 a=1 b=2; q3 a=0 b=2; q4 a=0 b=1; q5 a=2 b=1 (0 strength, 1 dexterity,
+  2 intelligence). Keys A, B, Esc (Esc goes back to the menu). The answer raises its stat by 3-5 (random 0-2 + 3) and
+  shows a picture (0x5818: strength 1, dexterity 2, intelligence 0, CREATE item 2's 160x145 pictures, being read), and
+  picks the next question: after round 0, stat 0 -> q2, 1 -> q0, 2 -> q1; after rounds 1 and 2, stat 0 -> q4 when this
+  was q0 else q3, stat 1 -> q4 when this was q2 else q5, stat 2 -> q5 when this was q0 else q3.
+- 0x5a7c then writes `savegame\objlist` (the installed one, 0x1d73 bytes) with: strength 0x901, dexterity 0xa01 and
+  0x14f2, intelligence 0xb01, HP 0xe01 = 2 x strength + intelligence (GAME.EXE's load step then makes it its own
+  maximum, objlist.md §4a), the name at 0xf00 (13 letters, 0xf0d = 0), 0x1d13-0x1d18 = 0, 8, 1, 1, 0, 0 (a second date,
+  probably the start for the ending's "completed in"), 0x1d71 = 0, 0x1d72 = 1, and bit 0x01 ("met") in the talk flags
+  (0x18f1 + actor) of actors 2, 4, 5, 7, 8, 9 and 23. Journey Onward is then offered.
+
 ## The pack
 mkworld writes a CSFE block in the library tail, just before the scenes' CMID block: `"CSFE"`, SAVAGE.PAL's three
 palettes as 6-bit (3 x 768), a count, a list with room for 64 entries (file 0 TITLE, 1 INTRO, 2 CREATE,
