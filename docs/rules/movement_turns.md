@@ -87,6 +87,12 @@ Infravision, Eclipse and Negate Magic 20, Time Stop 10 and it stops the clock to
 conditions' own rolls (magic_skills.md §5b); the wind; what lies underfoot. On the hour: schedules (§8b), the drunk sobers, each magic-user
 gains mana equal to its level up to its maximum. **Nobody regains health by walking**, only by resting, potions, spells and the regeneration ring. R)est and the test hooks use `step_npcs`, a minute's worth for everyone at once.
 
+**Savage Empire** (its spend routine 0x14ebc, read 2026-11-22): actors 0-15 pay 2 less while there is no combat
+(DS:0x2860, set by 0x1810:0x12a and cleared by 0x1810:0x23b), never below 1; a step is charged by 0x16856 (5 + the
+impedance where the walker now stands) and a diagonal 5 more, as U6's. Aboard the raft actor 0 walks this way
+(se_use.md §5w). Not yet read: how many times a follower pays its 5 per step (0x14fb7; the engine charges two
+passes, as U6).
+
 ### 3c. Followers (DOS, read 2026-11-05)
 Out of combat the others take places behind the leader. Slot n (roster order, leader skipped) lies `back[n]` tiles behind it and
 `across[n]` to the side, along the leader's facing: across -1, 1, 0, -2, 2, -1, 1, -3, 3, 0; back 1, 1, 2, 2, 2, 3, 3, 3, 3, 1.

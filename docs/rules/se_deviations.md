@@ -7,7 +7,7 @@ register is deviations.md.
 > Provenance
 > - Derived from: reading SE's GAME.EXE. The rule specs named in each row cite the routines read.
 > - Validated by: `make check-se-use` checks each fix below.
-> - Last updated: 2026-11-13 (slips 22-28 taken as the intent by the user; earlier: the first rows, the vehicles' engine choices)
+> - Last updated: 2026-11-22 (the engine choices built as DOS and the save slots kept, by the user; slip 29 added)
 
 ## Fixed by the user's choice (2026-11-12; slips 22-28 2026-11-13): DOS's own slips we don't copy
 
@@ -46,27 +46,28 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 25 | The gorilla's and the raft's old facing is read as frame / 8 | se_big.md §5 | DOS reads frame / 16, so south reads as east and west as south; it matters only for a diagonal turn, which no step makes (the engine makes none) |
 | 27 | A sleeping or dead actor below 16 is named by what it was | se_look.md §2, §7 | Actors 16 and up asleep or dead are named by their saved object; those below 16 (out of the party) by the tile they show, so a sleeper reads `a body`. The engine names them all by their saved object |
 | 28 | A lit torch picked up goes into the leader's free hand | se_look.md §5, §7 | Only when the leader is the member whose inventory is shown; otherwise it is marked readied in no hand. The engine always uses the leader's first free hand |
+| 29 | A boulder spares a thing by the flags of the thing's tile | se_use.md §5c | Reads tileflags3 by the thing's place in its object list, not its tile: which things are spared depends on where they sit in memory, which the engine can't reproduce (taken as a slip, 2026-11-22) |
 
-## Engine choices, for the user to confirm
+## Built as DOS by the user's choice (2026-11-22)
+The user's rule for the rows that were engine choices: build DOS's behaviour. Each row says what the engine did before.
+
+| Was | Where | Now as DOS |
+|---|---|---|
+| A rolling boulder stopped after 64 rounds | se_use.md §5c | No limit (the roll always ends: each round moves on and the slopes end) |
+| A member other than the leader mounting or leaving a turtle didn't move the view | se_use.md §5w | The view goes to that member until the next key |
+| The raft carrying the party was saved as a map object | se_use.md §5w | Saved as actor 0 (237, frame 3, its quantity as hit points, in the party after the members), no raft object; a load boards it again |
+| A step of the raft cost 5 | se_use.md §5w, movement_turns.md §3b | A walking step's charge on actor 0 (5 + impedance), less 2 out of combat as for every actor 0-15 |
+| Eggs were looked at within 20 tiles of the party | se_eggs.md §2 | DOS's 40 x 40 window: unload measured from its centre, the scan taking the eggs inside it |
+| A hatchling took the lowest free slot of 192-254 | se_eggs.md §4 | DOS's free list: the last slot freed is taken first |
+| The ending's time taken | design/se_front_end.md "The ending" | Kept as DOS (it counts from the calendar's origin, so a new game is already "6 months, 3 days and 61 years") |
+
+Still to build (in progress): a death leaving the actor in its slot as its remains, looking at the dead as actors,
+a big creature's pieces at death, and gold as a counted thing in the pack.
+
+## Kept as ours by the user's choice (2026-11-22)
 | Difference | Where | What DOS does |
 |---|---|---|
-| A boulder that crushes things spares them by their tile's flags | se_use.md §5c | Reads the flag byte by the thing's place in its object table, not its tile |
-| A rolling boulder stops after 64 rounds | se_use.md §5c | No limit |
-| A member other than the leader mounting or leaving a turtle doesn't move the view | se_use.md §5w | Sets the party's tile to that member's, so the view jumps to it until the leader next moves |
-| The raft carrying the party stays a map object that moves with it (as U6's vessels in the engine) | se_use.md §5w | Actor 0 becomes the raft and the object is deleted; the same on screen, it matters only to the save (item 10) |
-| A step of the raft costs 5, as a vessel's in the engine | se_use.md §5w | Not read yet |
-| Eggs are looked at when the party enters a new 8 x 8 block, within 20 tiles of the party, as U6's are | se_eggs.md §2 | Its 40 x 40 window, moved in steps of 8, with the 20 measured from the window's centre |
-| A hatchling takes the lowest free slot of 192-254 | se_eggs.md §4 | The last slot freed first |
-| A dead or unloaded big creature's pieces are removed | se_big.md §7 | Deletes the pieces and leaves the second remains (§3i); only a creature with no remains is moved to level 6 |
-| A death leaves the remains as a map object holding the victim's things, and the actor leaves the map | se_combat.md §3i | The actor stays in its slot as its remains (status bit 0x10); the same on screen, it matters to the save (item 10) and to who stands up at Intanya's hut |
-
-| Looking at a dead creature names its remains object and searches it like a body | se_look.md §7 | The dead actor is looked at as an actor: named by what it was, never searched (follows from the row above) |
-| G)et of gold puts it in the party's pool, as everywhere else in the engine | se_look.md §5 | Gold (69) is a counted thing taken into the leader's pack |
-## DOS slips not yet decided (for the user)
-| Slip | Where | What DOS does | Built |
-|---|---|---|---|
-| The ending's time taken | design/se_front_end.md "The ending" | GAME.EXE passes the calendar date (day, month, year); SAVAGE.EXE prints day-1, month-1 and year-100 as days, months and years taken, so a game begun on the starting date (day 4, month 7, year 161) is already "6 months, 3 days and 61 years". SAVAGE.EXE writes a second date block (0x1d13: 0:00, 8, 1, 1, 0) at creation, which looks like the intended start, but nothing reads it | as DOS |
-| The front end's one save | design/se_front_end.md | One saved game (`savegame\\`); Create refuses while one is in progress | our 8 slots (as U6, deviations.md); Create always allowed |
+| Eight save slots; Create always allowed | design/se_front_end.md | One saved game (`savegame\\`); Create refuses while one is in progress |
 
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the

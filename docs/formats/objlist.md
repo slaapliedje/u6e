@@ -142,7 +142,7 @@ nuvie_save.md "A new game from the original files".
 | 0xc00 | 0x200 | experience (u16 LE) |
 | 0xe00 | 0x100 | hit points |
 | 0xf00 | 0xe0 | the party's names, 14 bytes each |
-| 0xfe0 | 0x10 | the party's actors in order; 0xff0 their count |
+| 0xfe0 | 0x10 | the party's actors in order; 0xff0 their count (DOS takes the party from these; aboard the raft actor 0 follows the members, se_use.md §5w). The engine's SE save writes the list, the count and the names; U6's save does not yet |
 | 0xff1 | 0x100 | **level** (as U6) |
 | 0x10f1 | 0x100 | not yet known |
 | 0x11f1 | 0x100 | worktype (as U6) |

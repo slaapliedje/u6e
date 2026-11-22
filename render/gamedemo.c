@@ -4577,15 +4577,20 @@ static int ambient_level(const world_t*w)
 /* fill light_out[VT*VT] with the per-cell light value (0..255) for the view. `inside` =
  * avatar is under a roof; only then does indoor-darkening apply (when OUTSIDE, buildings are
  * covered by drawn roofs and everything visible is exterior -> day/night ambient). */
+/* the view's centre: the party's tile (w->px, w->py) unless SE's turtle has moved it to another member until the
+ * next key (se_use.md §5w; DOS sets the party's tile, DS:0x27f4) */
+static int g_cam_dx, g_cam_dy;
+#define VPX(w) ((int32_t)(w)->px+g_cam_dx)
+#define VPY(w) ((int32_t)(w)->py+g_cam_dy)
 static void compute_light(const world_t*w, uint8_t*light_out, int inside){
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     (void)inside;
     static const int BASE[4]={0,176,224,255};                       /* globe brightness by level */
     static const int RAD [4]={0,2,3,4};                             /* globe radius by level     */
     int16_t L[VT*VT];
     { int a=ambient_level(w);                                       /* lighting.md §2: full, or a radius of light about the leader */
       for(int k=0;k<VT*VT;k++) L[k]=a>=7?255:0;
-      if(a<7) add_globe(L,VT/2,VT/2,255,a+1); }
+      if(a<7) add_globe(L,VT/2-g_cam_dx,VT/2-g_cam_dy,255,a+1); }
     for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++){              /* terrain emitter globes */
         int e=light_of(world_tile(w,left+vx,top+vy)); if(e>0) add_globe(L,vx,vy,BASE[e],RAD[e]);
     }
@@ -4641,7 +4646,7 @@ static int obj_sight_mark(int t){
 #define VP (VR+2)
 static void compute_visibility(const world_t*w, uint8_t*vis){
     if(g_xray_turns>0){ for(int i=0;i<VT*VT;i++) vis[i]=1; return; }   /* X-ray: see through walls (§5e) */
-    int32_t left=w->px-VT/2-1, top=w->py-VT/2-1;                      /* region origin: one cell round the view */
+    int32_t left=VPX(w)-VT/2-1, top=VPY(w)-VT/2-1;                      /* region origin: one cell round the view */
     uint8_t mk[VR*VR];                                                 /* object marks: bit0 clear, bit1 opaque, bit2 window */
     memset(mk,0,sizeof mk);
     { const uint16_t *ls_s=g_lsbkt_start,*ls_i=g_lsbkt_idx;   /* sparse light/sight index */
@@ -4795,7 +4800,7 @@ static void fill_tiles(const world_t*w,int32_t left,int32_t top,int cx0,int cy0,
 }
 /* full STATIC rebuild of g_tmp_map: base tiles + lower-pass (pass 0) objects */
 static void build_static(const world_t*w){
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     fill_tiles(w,left,top,0,0,VT,VT);
     draw_view_objects(g_tmp_map,TMP_T,left,top,0);
 }
@@ -4886,7 +4891,7 @@ static void mark_dyn_anim(const world_t*w,int32_t left,int32_t top){
  * full index order), all other cells rejected — so multi-tile bleed INTO the band lands and
  * nothing outside is touched. */
 static void recompose_band(const world_t*w,int cx0,int cy0,int cx1,int cy1){
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     fill_tiles(w,left,top,cx0,cy0,cx1,cy1);                     /* clear band -> base tiles */
     g_clip_x0=cx0; g_clip_y0=cy0; g_clip_x1=cx1; g_clip_y1=cy1;
     draw_view_objects(g_tmp_map,TMP_T,left,top,0);
@@ -4913,7 +4918,7 @@ static void scroll_static(const world_t*w,int dx,int dy){
 /* set g_view_has_anim for the whole view (anim_tile sets it) — the scroll path only recomposes
  * the edge, so animated tiles in the scrolled interior must still arm the per-tick refresh. */
 static void mark_view_anim(const world_t*w){
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     for(int vy=0;vy<VT;vy++)for(int vx=0;vx<VT;vx++) (void)anim_tile(world_tile(w,left+vx,top+vy));
 }
 
@@ -4986,7 +4991,7 @@ static uint32_t g_lkey; static int g_lkey_ok;
 uint32_t g_lkey_reuse;
 #endif
 static uint32_t light_key(const world_t*w){
-    int32_t left=w->px-VT/2-1, top=w->py-VT/2-1; const int R=VT+2;
+    int32_t left=VPX(w)-VT/2-1, top=VPY(w)-VT/2-1; const int R=VT+2;
     uint32_t h=2166136261u;
 #define LKMIX(v) (h^=(uint32_t)(v), h+=h<<3, h=(h<<16)|(h>>16))   /* xor, *9, swap: no 32-bit multiply (a library call on the 68000) */
     LKMIX(w->px); LKMIX(w->py); LKMIX(w->level); LKMIX(ambient_level(w)); LKMIX(g_xray_turns>0); LKMIX(g_light_force); LKMIX(g_infravision!=0);
@@ -5009,7 +5014,7 @@ static uint32_t light_key(const world_t*w){
 }
 static void compute_predim_light(const world_t*w,uint8_t*plight,uint8_t*pvis){
     KP(10);
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     int pin = tile_is_indoor((int)(w->px&(U6_SURFACE_TILES-1)),(int)(w->py&(U6_SURFACE_TILES-1)));
 #ifdef BENCH
     { extern uint32_t g_ph_clight,g_ph_cvis; uint32_t a=plat_ticks_200hz();
@@ -5062,7 +5067,7 @@ uint32_t g_ph1_actors, g_ph1_fg, g_ph1_nact;   /* ph1 split + in-view actor-draw
  * move; a walking creature changes none of this, so the ST redraws only the cells whose light changed
  * instead of rebuilding the whole static map (docs/design/performance.md, 2026-11-14). */
 static uint32_t static_sig(const world_t*w){
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     uint32_t h=2166136261u;
 #define SIGMIX(v) (h^=(uint32_t)(v), h+=h<<3, h=(h<<16)|(h>>16))   /* xor, *9, swap: no 32-bit multiply (a library call on the 68000) */
     SIGMIX(w->px); SIGMIX(w->py); SIGMIX(w->level); SIGMIX(g_anim_ctr); SIGMIX(g_xray_turns>0);
@@ -5111,7 +5116,7 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
 #endif
             }
         if((can_scroll||can_idle||can_still) && g_pd_valid){
-            int32_t left0=w->px-VT/2, top0=w->py-VT/2;
+            int32_t left0=VPX(w)-VT/2, top0=VPY(w)-VT/2;
             SUB_T();
             if(can_idle){
                 /* On an idle tick the view + objects are fixed, so WHICH cells animate is invariant — compute
@@ -5190,7 +5195,7 @@ static void predim_compose_static(const world_t*w,const uint8_t*light,int dither
             * Mirrors the ST native-planar idle path but composes chunky. Gated !g_native_planar so the ST
             * verify pass (g_native_planar=1, g_chunky_dyn=1) keeps the else full-rebuild as the INV2 gold
             * reference; the chunky idle is validated separately by chunky_idle_selftest. */
-            int32_t left=w->px-VT/2, top=w->py-VT/2;
+            int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
             SUB_T();
             if(!g_pd_anim_valid){ mark_anim_cells(w,left,top);
                 g_pd_has_anim=0; for(int i=0;i<VT*VT;i++) if(g_pd_anim[i]){ g_pd_has_anim=1; break; }
@@ -5273,7 +5278,7 @@ static void smooth_compose_static(const world_t*w,const uint8_t*light,const uint
     } else if(can_idle && g_dm_valid){
         /* IDLE (dx=dy=0): plight is cached by compose_map (view+turn fixed), so the light field is invariant
          * (lch=0) — re-dim ONLY the cells whose STATIC content animates. No dilation needed. */
-        int32_t left=w->px-VT/2, top=w->py-VT/2;
+        int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
         SUB_T();
         if(!g_pd_anim_valid){ mark_anim_cells(w,left,top);
             g_pd_has_anim=0; for(int i=0;i<VT*VT;i++) if(g_pd_anim[i]){ g_pd_has_anim=1; break; }
@@ -5362,7 +5367,7 @@ static void compose_map(const world_t*w)
     uint32_t subt;                                 /* for the SUB_T/SUB_ADD ph0-copy timer */
 #endif
     g_view_has_anim=0;                              /* set by anim_tile/obj_tile if any in view */
-    int32_t left=w->px-VT/2, top=w->py-VT/2;
+    int32_t left=VPX(w)-VT/2, top=VPY(w)-VT/2;
     /* DIM-AT-DRAW (PREDIM): compute the per-cell light FIRST, then every tile/sprite draw sources its
      * pre-dimmed variant (draw_cell -> dim_tile) — the whole composite dims for free, actors included. */
     int predim = (g_light_style==LSTY_PREDIM || g_light_style==LSTY_PREDIM_DITHER || g_light_style==LSTY_SMOOTH_PREDIM);
@@ -5506,7 +5511,7 @@ static void compose_map(const world_t*w)
       else { int aon=g_wko.avatar; at=(aon&&g_basetile)?(g_basetile[aon*2]|(g_basetile[aon*2+1]<<8)):0;
              if(at>0){ int b, tpd=npc_base_fc(at,&b);       /* his facing and gait, as npc_tile gives the others (it was always frame 0: north) */
                  if(tpd>=4) at=b+g_facing[1]*tpd+(g_amoved[1]?1+(g_walkf[1]&1):0); else if(tpd>=2) at=b+g_facing[1]*tpd+(g_walkf[1]&1); } }
-      if(at>0 && at<2048) draw_multi(tmp,T,VT/2,VT/2,at,at,-1); }
+      if(at>0 && at<2048) draw_multi(tmp,T,VT/2-g_cam_dx,VT/2-g_cam_dy,at,at,-1); }
     SUB_ADD(g_ph1_actors);
     SUB_T(); draw_view_objects(tmp,T,left,top,1); SUB_ADD(g_ph1_fg);   /* foreground (pass 1) objects */
     if(g_veh_kind==431&&!g_avatar_hide){ static const int8_t RX_[4]={0,-1,0,1}, RY_[4]={1,0,-1,0}; int rvx=VT/2+RX_[g_veh_face&3], rvy=VT/2+RY_[g_veh_face&3];   /* the horse's other half */
@@ -7348,7 +7353,7 @@ static int se_boulder(int b,int bx,int by,int depth)
     if((fl&0x10)&&on_list(SE_NOEAST,24,se_mt(di,si))){ wf=1; r=se_boulder_step(b,di,si,0,0,g,depth); di--; r=se_boulder_step(b,di,si,1,0,g,depth); di--; r=se_boulder_step(b,di,si,1,0,g,depth); }
     else if((fl&0x80)&&on_list(SE_NOSOUTH,19,se_mt(di,si))){ nf=1; r=se_boulder_step(b,di,si,0,0,g,depth); si--; r=se_boulder_step(b,di,si,1,0,g,depth); si--; r=se_boulder_step(b,di,si,1,0,g,depth); }
     else if(!(r=se_boulder_step(b,di,si,0,1,g,depth))) return 0;
-    for(int guard=0; !roll && o->quality!=1 && guard<64; guard++){   /* it rolls on (DOS has no limit) */
+    for(int guard=0; !roll && o->quality!=1 && guard<4096; guard++){   /* it rolls on as DOS does, with no limit: each round moves on and slopes end, so the guard is never reached */
         roll=1;
         if(on_list(SE_SLOPE,68,se_mt(di,si))||on_list(SE_SLOPE,68,se_mt(di-1,si))||on_list(SE_SLOPE,68,se_mt(di,si-1))||on_list(SE_SLOPE,68,se_mt(di-1,si-1))){
             e=1; if(!on_list(SE_NOEAST,24,se_mt(di+1,si))){ di++; roll=0; } if(!on_list(SE_NOSOUTH,19,se_mt(di,si+1))){ si++; roll=0; }
@@ -8987,6 +8992,9 @@ static int se_beast_new(const world_t*w,int x,int y,int on,int wt)
     g_align_hostile[s]=0; g_hostile[s]=0; g_alert[s]=0; g_agood[s]=0; g_achaos[s]=0; g_wt_force[s]=0; g_sched_st[s]=0; g_pts[s]=(int8_t)(g_adex[s]?g_adex[s]:1);
     hatched_worktype(s,wt);
     return s; }
+/* the view centred on (x,y) until the next key (0x24965 sets the party's tile there) */
+static void se_cam_to(const world_t*w,int x,int y){ int M=U6_SURFACE_TILES-1, dx=((x-(int)w->px+U6_SURFACE_TILES/2)&M)-U6_SURFACE_TILES/2, dy=((y-(int)w->py+U6_SURFACE_TILES/2)&M)-U6_SURFACE_TILES/2;
+    if(dx>=-VT/2&&dx<=VT/2&&dy>=-VT/2&&dy<=VT/2){ g_cam_dx=dx; g_cam_dy=dy; } }
 /* the turtle (0x24b00): the leader mounts it, or, riding already, the first member beside it on foot */
 static int se_turtle_mount(world_t*w,int t)
 {   int tx=g_actx[t], ty=g_acty[t], a=1, fr=npc_tile(t)-basetile(302);
@@ -8995,8 +9003,9 @@ static int se_turtle_mount(world_t*w,int t)
             if(iabs_(tx-mx)<=1&&iabs_(ty-my)<=1) a=m; }
         if(a<0){ msgcat(0,"\nYou're already on a turtle!"); return 0; } }
     g_atile[t]=0xffff; g_temp[t]=0;                            /* the turtle goes */
+    g_cam_dx=g_cam_dy=0;
     if(a==1){ w->px=(uint16_t)tx; w->py=(uint16_t)ty; }
-    else { g_actx[a]=(uint16_t)tx; g_acty[a]=(uint16_t)ty; }    /* (DOS moves the view there too) */
+    else { g_actx[a]=(uint16_t)tx; g_acty[a]=(uint16_t)ty; se_cam_to(w,tx,ty); }   /* the view goes to it, as DOS's party tile does */
     se_ride(a,fr<0||fr>7?4:fr);
     (void)g_tmpdm_invalidate(); return 1; }
 /* a rider (0x249a9): onto the first shore tile around, by column; a turtle stays where it was */
@@ -9004,7 +9013,8 @@ static int se_dismount(world_t*w,int a)
 {   int x,y; if(a==1){ x=w->px; y=w->py; } else if(!actor_pos(a,&x,&y)) return 0;
     for(int i=0;i<3;i++) for(int j=0;j<3;j++){ int M=U6_SURFACE_TILES-1, nx=(x+i-1)&M, ny=(y+j-1)&M;
         if((i==1&&j==1)||!se_shore(se_wtile(w,nx,ny))) continue;
-        if(a==1){ w->px=(uint16_t)nx; w->py=(uint16_t)ny; } else { g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; }
+        g_cam_dx=g_cam_dy=0;
+        if(a==1){ w->px=(uint16_t)nx; w->py=(uint16_t)ny; } else { g_actx[a]=(uint16_t)nx; g_acty[a]=(uint16_t)ny; se_cam_to(w,nx,ny); }
         se_unride(a);
         (void)se_turtle_new(w,x,y,0x8f);
         (void)g_tmpdm_invalidate(); return 1; }
@@ -9015,10 +9025,11 @@ static int se_paddler(int a){ for(int r=0;r<g_ow.ninv;r++) if(g_ow.inv[r].obj_n=
 static int se_raft_shore(const world_t*w,int x,int y){ for(int i=0;i<2;i++) for(int j=0;j<2;j++) if(se_shore(se_wtile(w,x-i,y-j))) return 1; return 0; }
 static int se_raft_land(world_t*w)
 {   if(!se_raft_shore(w,w->px,w->py)){ msgcat(0,"\nOnly next to land."); return 0; }
-    wobj_t*o=&g_wobj[g_veh_o[0]]; o->obj_n=233; o->tile=(uint16_t)(basetile(233)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE;
+    wobj_t*o=&g_wobj[g_veh_o[0]]; o->obj_n=233; o->tile=(uint16_t)(basetile(233)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED&&o->dirty!=WOBJ_DIRTY_NEW) o->dirty=WOBJ_DIRTY_STATE;
     veh_show_party(w,(int)w->px,(int)w->py);
     g_veh_kind=0; g_avatar_ovr=0; g_veh_o[0]=-1;
     build_blocked(); (void)g_tmpdm_invalidate(); return 1; }
+static void se_raft_board(world_t*w,int idx);
 /* the raft (0x21c98): idx = the raft on the map, or the one carrying the party */
 static int se_raft(world_t*w,int idx)
 {   if(g_solo_on){ msgcat(0,"\nNot in solo mode!"); return 0; }
@@ -9028,13 +9039,16 @@ static int se_raft(world_t*w,int idx)
     if(pad<4){ msgcat(0,"\nYou would need at least four people carrying paddles to operate the raft effectively."); return 0; }
     wobj_t*o=&g_wobj[idx]; int ex=(int)w->px-o->x, ey=(int)w->py-o->y;
     if(ex>1||ex<-2||ey>1||ey<-2){ msgcat(0,"\nOut of range!"); return 0; }
+    se_raft_board(w,idx); return 1; }
+/* the party boards the raft idx (0x130f:0x21cb): it carries them, where it lies */
+static void se_raft_board(world_t*w,int idx)
+{   wobj_t*o=&g_wobj[idx];
     moved_register(idx);
-    o->obj_n=237; o->tile=(uint16_t)(basetile(237)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE;
+    o->obj_n=237; o->tile=(uint16_t)(basetile(237)+3); if(o->dirty!=WOBJ_DIRTY_DROPPED&&o->dirty!=WOBJ_DIRTY_NEW) o->dirty=WOBJ_DIRTY_STATE;
     g_veh_kind=237; g_veh_o[0]=idx; g_veh_o[1]=g_veh_o[2]=-1; g_combat_mode=0;
     g_veh_face=2; g_veh_phase=0;
     w->px=o->x; w->py=o->y;
-    veh_hide_party(); build_blocked(); (void)g_tmpdm_invalidate();
-    return 1; }
+    veh_hide_party(); build_blocked(); (void)g_tmpdm_invalidate(); }
 /* a thing on the raft's leading edge stops it unless its tile is water or ignored; so does an actor */
 static int se_raft_blocked(const world_t*w,int x,int y)
 {   int M=U6_SURFACE_TILES-1; x&=M; y&=M;
@@ -9055,8 +9069,8 @@ static int se_raft_move(world_t*w,int dx,int dy)
     g_wobj[g_veh_o[0]].x=(uint16_t)(nx&M); g_wobj[g_veh_o[0]].y=(uint16_t)(ny&M);
     g_veh_face=veh_face_of(dx,dy); w->px=(uint16_t)(nx&M); w->py=(uint16_t)(ny&M);
     { wobj_t*o=&g_wobj[g_veh_o[0]]; o->tile=(uint16_t)se_wide_frame(basetile(237),o->tile,g_veh_face);   /* it turns and paddles (se_big.md §5) */
-      if(o->dirty!=WOBJ_DIRTY_DROPPED) o->dirty=WOBJ_DIRTY_STATE; }
-    build_blocked(); return 5; }
+      if(o->dirty!=WOBJ_DIRTY_DROPPED&&o->dirty!=WOBJ_DIRTY_NEW) o->dirty=WOBJ_DIRTY_STATE; }
+    build_blocked(); return walk_points(w,(int)w->px,(int)w->py); }   /* actor 0's ordinary step charge (0x16856): 5 + the impedance where it now is */
 /* the turtle bait (0x24783): a turtle comes up beside its holder, near water, in one part of the sea */
 static int se_bait(world_t*w,int idx,int row)
 {   int hx=w->px, hy=w->py;
@@ -10859,6 +10873,7 @@ static int wt_now(int i)
     { int t=npc_worktype(i); return t>=0?t:g_wt0[i]; } }
 static void pay(int i,int p)
 {   if(g_on.horse&&((i==1&&g_veh_kind==g_on.horse)||actor_objn(i)==g_on.horse)) p>>=1;
+    if(g_gd==&gamedef_se && i<16 && !g_combat_mode) p-=2;          /* SE's spend (0x14ebc): actors 0-15 pay 2 less out of combat (DS:0x2860) */
     if(p<1) p=1;
     { int v=g_pts[i]-p; g_pts[i]=(int8_t)(v<-128?-128:v); } }
 /* may i aim at j at all? */
@@ -11686,9 +11701,18 @@ static void u6_eggs_update(const world_t *w, int teleport)
 static uint8_t g_se_orc[U6_MAX_ACTORS], g_se_odir[U6_MAX_ACTORS];   /* an orchid root's heads; a head's root and direction (se_eggs.md §4) */
 static int     g_se_egg_made;                                        /* last check: pieces made (test hooks) */
 static void obj_destroy(int idx);
-static int se_slot_alloc(void){ g_view_ct++;                         /* 192-254, lowest first (se_eggs.md §4, §7) */
-    for(int i=192;i<=254;i++) if(g_atile[i]==0xffff){ g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
-            for(int k=0;k<U6_MAX_ACTORS;k++) if(g_last_striker[k]==i) g_last_striker[k]=0; g_last_striker[i]=0; g_se_orc[i]=g_se_odir[i]=0; return i; }
+/* DOS's free list of slots 192-254 (0xde79, 0xdedd, 0xbc0c): built in ascending order on a load, the head taken, a slot
+ * freed put back at the head. The engine frees actors in many places, so frees are noticed at the next taking, and
+ * those found together go back in ascending order (as DOS's unload loop pushes them) */
+static uint8_t g_se_fnext[U6_MAX_ACTORS], g_se_held[U6_MAX_ACTORS]; static int g_se_fhead=-1, g_se_free_ok;
+static int se_slot_take(void)
+{   if(!g_se_free_ok){ g_se_fhead=-1; for(int i=254;i>=192;i--){ g_se_held[i]=g_atile[i]!=0xffff; if(!g_se_held[i]){ g_se_fnext[i]=(uint8_t)(g_se_fhead<0?0:g_se_fhead); g_se_fhead=i; } } g_se_free_ok=1; }
+    for(int i=192;i<=254;i++) if(g_se_held[i] && g_atile[i]==0xffff){ g_se_held[i]=0; g_se_fnext[i]=(uint8_t)(g_se_fhead<0?0:g_se_fhead); g_se_fhead=i; }
+    while(g_se_fhead>=192){ int s=g_se_fhead, nx=g_se_fnext[s]; g_se_fhead=nx>=192?nx:-1; g_se_held[s]=1; if(g_atile[s]==0xffff) return s; }
+    g_se_fhead=-1; return -1; }
+static int se_slot_alloc(void){ g_view_ct++;                         /* 192-254, from DOS's free list (se_eggs.md §4, §7) */
+    { int i=se_slot_take(); if(i>=0){ g_nkit[i-160]=0; for(int sl=0;sl<EQ_NSLOTS;sl++) g_aready[i][sl]=0;
+            for(int k=0;k<U6_MAX_ACTORS;k++) if(g_last_striker[k]==i) g_last_striker[k]=0; g_last_striker[i]=0; g_se_orc[i]=g_se_odir[i]=0; return i; } }
     return -1; }
 /* a new creature (0x267cd): the table's stats rolled, or 10/10/10 and 30; its kit; the orchid's four heads */
 static int se_hatch_creature(const world_t*w,int x,int y,int on)
@@ -11767,13 +11791,14 @@ static void se_eggs_update(const world_t *w, int teleport)
     if(!teleport && bx==g_egg_blk_x && by==g_egg_blk_y && bz==g_egg_blk_z) return;
     g_egg_blk_x=bx; g_egg_blk_y=by; g_egg_blk_z=bz;
     g_egg_checked=0; g_egg_hatched=0; g_egg_nofree=0; g_se_egg_made=0;
-    int span=(w->level==0)?U6_SURFACE_TILES:256, heard=0;
-    for(int i=192;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff &&                  /* the unload (0xbcf7) */
-        (wrap_dist(g_actx[i],w->px,span)>20 || wrap_dist(g_acty[i],w->py,span)>20 || (int)g_actz[i]!=w->level)){ se_big_drop(i); g_atile[i]=0xffff; g_temp[i]=0; }
-    temp_purge(w);
+    int span=(w->level==0)?U6_SURFACE_TILES:256, heard=0, M=span-1;
+    int wx=((int)w->px-16)&M&~7, wy=((int)w->py-16)&M&~7, cx=(wx+20)&M, cy=(wy+20)&M;   /* DOS's 40 x 40 window (0x8faa) and its centre */
+    for(int i=192;i<U6_MAX_ACTORS;i++) if(g_temp[i] && g_atile[i]!=0xffff &&                  /* the unload (0xbcf7): far from the window's centre */
+        (wrap_dist(g_actx[i],cx,span)>20 || wrap_dist(g_acty[i],cy,span)>20 || (int)g_actz[i]!=w->level)){ se_big_drop(i); g_atile[i]=0xffff; g_temp[i]=0; }
+    for(int i=g_nfields-1;i>=0;i--) if(wrap_dist(g_fields[i].x,cx,span)>20||wrap_dist(g_fields[i].y,cy,span)>20) field_remove(i);   /* temporary fires too */
     for(int e=0;e<g_neggs;e++) if(g_eggs[e].made==1) g_eggs[e].made=2;                       /* last time's bulb eggs may go now */
     for(int i=0;i<(int)g_ow.nobjs;i++){ wobj_t*o=&g_wobj[i]; if(!o->alive || o->parent!=WOBJ_PARENT_NONE) continue;
-        if(wrap_dist(o->x,w->px,span)<=20 && wrap_dist(o->y,w->py,span)<=20) continue;
+        if(wrap_dist(o->x,cx,span)<=20 && wrap_dist(o->y,cy,span)<=20) continue;
         if(o->obj_n==78){ if(g_neggs<EGG_MAX && g_nemb<EMB_MAX){ egg_t*eg=&g_eggs[g_neggs++];      /* a bulb becomes an orchid's egg */
                 eg->x=o->x; eg->y=o->y; eg->quality=0; eg->chance=201; eg->active=0; eg->temp=0; eg->made=1; eg->nemb=1; eg->emb=(uint16_t)g_nemb; eg->rec=0xffff;
                 g_emb[g_nemb].obj_n=292; g_emb[g_nemb].qty=1; g_emb[g_nemb].quality=0; g_emb[g_nemb].status=0x08; g_nemb++; }
@@ -11781,7 +11806,8 @@ static void se_eggs_update(const world_t *w, int teleport)
         else if(g_wtemp[i>>3]&(1u<<(i&7))) obj_destroy(i); }                                 /* any other temporary goes */
     for(int e=0;e<g_neggs;e++){ egg_t*eg=&g_eggs[e]; if(eg->made==3) continue;
         int dx=wrap_dist(eg->x,w->px,span), dy=wrap_dist(eg->y,w->py,span);
-        if(dx>20||dy>20){ eg->active=0; if(eg->made==2){ eg->made=3; eg->nemb=0; } continue; }   /* re-armed; a far bulb egg is gone */
+        if(wrap_dist(eg->x,cx,span)>20||wrap_dist(eg->y,cy,span)>20){ eg->active=0; if(eg->made==2){ eg->made=3; eg->nemb=0; } continue; }   /* re-armed; a far bulb egg is gone */
+        if(((eg->x-wx)&M)>=40||((eg->y-wy)&M)>=40) continue;                                 /* the scan (0x26f50) takes the window's eggs */
         if(teleport==2 || (dx<=8 && dy<=8 && !teleport)) continue;                           /* a start or load hatches nothing (DS:0x2362) */
         se_egg_hatch(w,eg,teleport,&heard); }
     build_blocked(); }
@@ -13777,7 +13803,11 @@ static int do_save(const world_t *w)
     /* OBJECT-WORLD + readied-gear state FIRST: this level's changes into the template (save_load.md §5).
      * A destroyed record SHRINKS the template (cannons.md §4), so its length and the objlist offset are
      * read only after the reconcile. */
+    /* SE aboard the raft: DOS's save has actor 0 as the raft and no raft object (se_use.md §5w, save) */
+    int raft=(g_veh_kind==237 && g_veh_o[0]>=0) ? g_veh_o[0] : -1, rq=1, rx=0, ry=0;
+    if(raft>=0){ wobj_t*o=&g_wobj[raft]; rq=o->qty?o->qty:1; rx=o->x; ry=o->y; o->alive=0; o->dirty=WOBJ_DIRTY_DESTROYED; }
     (void)objects_reconcile(w);
+    if(raft>=0){ wobj_t*o=&g_wobj[raft]; o->alive=1; o->dirty=WOBJ_DIRTY_NEW; }   /* it sails on; landed, the next save writes it */
     uint8_t *d=g_savetmpl; int32_t off=g_objlist_off, n=g_savetmpl_len;
     int aboard=veh_aboard();
     /* FULL objlist state: every party member's position (+ map level) + HP/Str/Dex/Int + experience.
@@ -13810,6 +13840,17 @@ static int do_save(const world_t *w)
             { int st=d[off+0x800+i]&~0x64; if(g_asleep[i]) st|=4; st|=align_of_save(i); d[off+0x800+i]=(uint8_t)st; } }
     for(int i=1;i<U6_MAX_ACTORS;i++){                    /* who is in the party (objlist 0x800 bit 0x80): the roster, and a fallen member still on it (g_lost) */
         int on=is_party_member(i)||i==1||g_lost[i]; if(on) d[off+0x800+i]|=0x80; else d[off+0x800+i]&=(uint8_t)~0x80; }
+    if(OL_GLOB){ int c=0;                                 /* SE: the party in order (0xfe0, 0xff0 the count) and its names (0xf00, 14 each) */
+        for(int p=0;p<g_nparty&&c<16;p++){ int a=g_party[p].actor; d[off+0xfe0+c]=(uint8_t)a;
+            if(p>0){ int k=0; for(;k<13&&g_party[p].name[k];k++) d[off+0xf00+14*c+k]=(uint8_t)g_party[p].name[k]; for(;k<14;k++) d[off+0xf00+14*c+k]=0; }
+            c++; }
+        d[off+0xff0]=(uint8_t)c;
+        if(raft>=0){                                      /* actor 0 the raft (0x130f:0x21cb): 237 frame 3 where it is, its quantity as HP, in the party (worktype 2), after the members */
+            sav_set_actor_pos(d,off,0,rx,ry,w->level);
+            d[off+0x400]=237&0xff; d[off+0x401]=(uint8_t)((237>>8)|(3<<2));
+            d[off+0xe00]=(uint8_t)rq; d[off+0x800]=(uint8_t)((d[off+0x800]&0x9f)|0xc0); d[off]&=(uint8_t)~0x22; d[off+0x11f1]=2;
+            if(c<16){ d[off+0xfe0+c]=0; for(int k=0;k<14;k++) d[off+0xf00+14*c+k]=d[off+0xf00+k]; } }
+        else if((d[off+0x400]|((d[off+0x401]&3)<<8))==237) d[off+0x400]=d[off+0x401]=0; }   /* landed: no raft actor */
     for(int i=1;i<U6_MAX_ACTORS;i++) if(g_cmode[i]) d[off+OL_CMODE+i]=g_cmode[i];   /* each one's combat mode (combat.md §8; SE's at 0x13f1) */
     { int mod=clock_minutes(w); sav_set_clock(d, off+OL_GLOB, mod%60, mod/60); }   /* game clock */
     { int dd,mm,yy; cur_date(w,&dd,&mm,&yy); sav_set_date(d, off+OL_GLOB, dd, mm, yy); }   /* the date the clock reached (moongates.md §1) */
@@ -14404,6 +14445,7 @@ static int load_game(world_t *w)
     g_show_inv = 0; g_show_status = 0; g_pending_verb = 0;
     g_veh_kind = 0; g_veh_horse = -1; g_avatar_hide = 0; g_avatar_ovr = 0;   /* re-boarded below if the save says so */
     memset(g_se_rider,0,sizeof g_se_rider);                       /* SE's riders stand as the save has them */
+    g_se_free_ok=0;                                               /* SE's free list is built again from the loaded actors */
     g_nmoved = 0; g_horse_moved = -1;                                        /* every record is at its saved position again */
     for(int i = 0; i < U6_MAX_ACTORS; i++) g_temp[i] = 0;                    /* hatched creatures are not saved */
 
@@ -14496,7 +14538,12 @@ static int load_game(world_t *w)
             wt_apply(i, b); }
     /* 5) VEHICLE state (vehicles.md §6): the party saved on a boat's tile is aboard it; saved on a
      * horse's tile (the absorbed mount travels with the rider) it is mounted */
-    if(tile_is_water(w, w->px, w->py)){
+    int se_raft_actor = 0;
+    if(g_gd==&gamedef_se && g_savetmpl && g_objlist_off>=0){ const uint8_t*q=g_savetmpl+g_objlist_off;   /* SE: actor 0 the raft carries the party (se_use.md §5w) */
+        if((q[0x400]|((q[0x401]&3)<<8))==237 && (q[0x800]&0x80)){ int x=q[0x100]|((q[0x101]&3)<<8), y=(q[0x101]>>2)|((q[0x102]&0xf)<<6);
+            int r=persist_obj_new(233,3,x,y,0); if(r>=0){ g_wobj[r].qty=q[0xe00]?q[0xe00]:1; se_raft_board(w,r); se_raft_actor=1; } g_atile[0]=0xffff; } }   /* actor 0 is the raft object again, not drawn as an actor */
+    if(se_raft_actor) ;
+    else if(tile_is_water(w, w->px, w->py)){
         int bi = wobj_boat_at(414, w->px, w->py); if(bi < 0) bi = wobj_boat_at(412, w->px, w->py);
         if(bi < 0) bi = wobj_boat_at(415, w->px, w->py);
         if(bi >= 0) (void)use_boat(w, bi); }
@@ -20291,6 +20338,13 @@ int main(int argc, char **argv)
                   dbg_num("SE raft no diagonal=", !player_step(&w,-1,-1) && w.px==rx);
                   dbg_num("SE raft west=", player_step(&w,-1,0) && w.px==rx-1 && g_wobj[ri].x==rx-1);
                   dbg_num("SE raft east=", player_step(&w,1,0) && w.px==rx && g_wobj[ri].x==rx);
+                  { int sv=do_save(&w); const uint8_t*q=g_savetmpl+g_objlist_off; int c=q[0xff0];   /* DOS's save: actor 0 the raft, after the members (se_use.md §5w) */
+                    dbg_num("SE raft saved as actor 0=", sv && (q[0x400]|((q[0x401]&3)<<8))==237 && (q[0x401]>>2)==3 && (q[0x800]&0x80) && c==4 && q[0xfe0+c]==0 && q[0xfe0]==1);
+                    int ld=load_game(&w), r2=-1; for(int j=0;j<g_ow.nobjs;j++) if(g_wobj[j].alive&&g_wobj[j].obj_n==237&&g_wobj[j].x==rx&&g_wobj[j].y==ry) r2=j;
+                    dbg_num("SE raft loaded aboard=", ld && g_veh_kind==237 && r2>=0 && g_veh_o[0]==r2 && w.px==rx && g_atile[0]==0xffff && g_nparty==4);
+                    if(r2>=0) ri=r2; }
+                  { int8_t p0=g_pts[1]; int cm=g_combat_mode; g_combat_mode=0; pay(1,5); int out=p0-g_pts[1]; g_pts[1]=p0; g_combat_mode=1; pay(1,5); int in=p0-g_pts[1]; g_pts[1]=p0; g_combat_mode=cm;
+                    dbg_num("SE spend out of combat=", out); dbg_num("SE spend in combat=", in); }   /* 0x14ebc: 3 and 5 */
                   g_wobj[ri].x=(uint16_t)(rx+1); w.px=(uint16_t)(rx+1);                          /* beside the shore now */
                   g_msg[0]=0; do_verb(&w,'U',0,0); dbg_num("SE raft landed=", g_veh_kind==0 && g_wobj[ri].obj_n==233 && se_frame(ri)==3 && !g_avatar_hide && g_actz[2]==g_cur_level);
                   vm_del(1,12,-1,1); for(int k=0;k<3;k++) vm_del(M4[k],12,-1,1); obj_destroy(ri); build_blocked(); g_nparty=1; }
@@ -20298,6 +20352,7 @@ int main(int argc, char **argv)
                   int t=se_turtle_new(&w,ux,uy,0); g_msg[0]=0; do_verb(&w,'U',dx_,dy_);
                   dbg_num("SE turtle ridden=", g_se_rider[1] && w.px==ux && w.py==uy && g_atile[t]==0xffff && actor_objn(1)==307);
                   int t2=se_turtle_new(&w,tx,ty,0); g_msg[0]=0; do_verb(&w,'U',-dx_,-dy_);
+                  { int ox=w.px, oy=w.py; se_cam_to(&w,ox+2,oy-1); dbg_num("SE turtle view moves=", g_cam_dx==2 && g_cam_dy==-1 && VPX(&w)==ox+2); g_cam_dx=g_cam_dy=0; }
                   dbg_num("SE turtle already=", strstr(g_msg,"already on a turtle")!=0 && g_atile[t2]!=0xffff); g_atile[t2]=0xffff; g_temp[t2]=0;
                   dbg_num("SE rider swims=", player_step(&w,dx_,dy_) && w.px==ux+dx_ && w.py==uy+dy_);
                   dbg_num("SE rider back=", player_step(&w,-dx_,-dy_) && w.px==ux);
@@ -21795,6 +21850,7 @@ int main(int argc, char **argv)
         if (key && g_bot){ int sc=(key>>8)&0xFF;                 /* bot dumps (F2..F5): no game effect */
             if(sc==0x3C){ bot_dump_actors(&w); key=0; } else if(sc==0x3D){ bot_dump_objects(&w); key=0; }
             else if(sc==0x3E){ bot_dump_pass(&w); key=0; } else if(sc==0x3F) key=0; }
+        if (key && (g_cam_dx||g_cam_dy)){ g_cam_dx=g_cam_dy=0; compose_map(&w); redraw=1; }   /* the view goes back to the leader (se_use.md §5w) */
         if (key && g_peer_on){ g_peer_on=0; compose_map(&w); draw_border_tiles(); redraw=1; key=0; }   /* any key closes the gem's view */
         if (key && ((g_resting && !g_mantra) || g_gw)) key=0;       /* the camp and the moongate walk take no input (but SE's dream, se_rest.md §6) */
         if (key) {

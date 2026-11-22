@@ -107,7 +107,8 @@ on picture 0, 3-4 on picture 1, then with Aiela (`LA`) pages 5-7 on picture 2, o
 picture 3, or neither; pages 10-13 on picture 4; page 14 on picture 1 is `CONGRATULATIONS. You have completed THE
 SAVAGE EMPIRE in ` followed by the time and page 15. The time (0x6266): D = days (DS:0x2bb8), B = months (0x2b2e), Y =
 years (0x2bca), read from the arguments `Dnn Bnn Ynn` (the digits after the letter; GAME.EXE writes day+99,
-month+99, year+100 and puts the letter over the first digit, so these are day-1, month-1, year-100); each written
+month+99, year+100 and puts the letter over the first digit, so these are day-1, month-1, year-100: the calendar date, not the time taken, so a new game already reads "6 months, 3 days and
+61 years"; kept as DOS by the user, 2026-11-22); each written
 `one <word>` or `<n> <word>s`: all three as "months,\n days and years"; otherwise months, then "\nand" days, then
 "\nand" years for those not 0; then `.\n` (or `. ` after an "and"). After the last wait DOS quits. In u6e the game
 ends there too (the ST waits for its palettes).

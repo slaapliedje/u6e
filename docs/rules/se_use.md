@@ -212,8 +212,8 @@ tile one east of the (new) column is no-south (DOS tests x+1 here too). Then:
 - else pushed north onto a no-south tile: three steps north, the same way;
 - else one forced step to the new place; if it fails, that's all.
 
-**The roll** repeats until the boulder's quality is 1 (DOS has no other limit; the engine stops after 64
-rounds):
+**The roll** repeats until the boulder's quality is 1, with no other limit (the engine as DOS; it always ends: each round
+moves on, east or south down a slope or by a forced step, and the slopes end):
 
 1. if any of its four tiles is a slope tile, it rolls downhill: east unless the tile east is no-east,
    south unless the tile south is no-south; if it can go neither way it stops; else one step;
@@ -230,7 +230,7 @@ tree), or a tree (260-266) or waterfall (150, 151) object at (x-1, y-1), (x-1, y
 290 293-295 297 298 303-306, whose quality is its actor), is crushed on a step that may push actors,
 else moved to the first free tile around (column by column) and hurt 1-30, crushed if none is free;
 other things are destroyed, except 249, 280 and those whose tileflags3 has bit 0x20 (DOS reads that
-byte by the thing's index in its object table, not its tile: a slip; the engine reads the tile). Then
+byte by the thing's index in its object list, not its tile: a slip, se_deviations.md 29; the engine reads the tile). Then
 the boulder moves, and:
 
 - **the waterfall:** a waterfall (150) at (x, y+2) means it has fallen onto the ledge above it. Its
@@ -629,12 +629,21 @@ object of an actor kind with a quality names that actor). In order:
 6. The raft more than a tile from the party: `Out of range!`.
 7. The party boards (0x130f:0x21cb): actor 0 becomes the raft (237, frame 3) where the raft lay, with
    the raft's quantity, in the party; the members go inside it; the raft object goes; the party is
-   where the raft is. No words.
+   where the raft is. No words. In detail (0x152bb): actor 0's object flags lose 0x22, its status gets 0x40 and
+   0x80 (bits 0x60 cleared first), its object word is 237 in frame 3, its hit points (objlist 0xe00) the raft's
+   quantity, its worktype 2; each member goes into it (0xa5d:0x1edb, mode 0x10); actor 0 is put at the end of the
+   party list (0xfe0 + count, the name row copied from row 0) and becomes the one who moves (DS:0x27f2 = count).
+   **The save** (the engine): aboard, S)ave writes actor 0 that way (object, place, hit points, status, worktype,
+   the list entry) and leaves the raft object out; landed, actor 0's object is cleared. A load that finds actor 0
+   as 237 in the party makes the raft again where it is and boards it. How DOS writes the members inside actor 0
+   is not read (its container code); the engine saves them at the raft's tile.
 
 **Landing** (0x130f:0x2343): a raft (233, frame 3) is made on the party's tile with actor 0's
 quantity; actor 0 goes; the party stands on that tile again (0x8cb:0x754). No words.
 
-**The raft moves** (0x130f:0x265, the movement routine, with actor 0 as the raft):
+**The raft moves** (0x130f:0x265, the movement routine, with actor 0 as the raft). A step costs what a walking step
+costs (0x16856 on actor 0, the leader then): 5 + the impedance where it now is, a diagonal 5 more, and actors 0-15
+pay 2 less out of combat (0x14ebc); nobody follows while aboard (0x14fb7 returns at once). Then:
 - only N, E, S or W; a diagonal fails;
 - the two tiles of its leading edge must be water (tile flags 1 bit 0x01): moving E they are (x+1, y)
   and (x+1, y-1), W (x-2, y) and (x-2, y-1), N (x, y-2) and (x-1, y-2), S (x, y+1) and (x-1, y+1);
@@ -647,7 +656,9 @@ quantity; actor 0 goes; the party stands on that tile again (0x8cb:0x754). No wo
 mounts it. When the leader rides already, the first member (in party order) within a tile of the turtle
 who isn't a rider mounts it; nobody: `You're already on a turtle!`. Mounting: the turtle goes, the
 member moves onto its tile and becomes 307 with the turtle's frame (0x24965), and the party's tile
-becomes that tile. No words.
+becomes that tile (0x24965 sets DS:0x27f4/6 and redraws the view there). No words. The engine: a member other than
+the leader mounting or dismounting moves the view to it (`g_cam_dx/dy`) until the next key; DOS's view goes back
+when the leader next moves, and with any other command it uses the moved party tile too.
 
 **A rider (307; 0x249a9)** dismounts onto the first shore tile around it (x-1 to x+1 by column, then y,
 its own tile skipped; nothing else is tested): it moves there and is itself again (its own obj_n and a
@@ -678,5 +689,5 @@ before that counts as "near water".
   black?) are not read; DOS running would show them.
 - What status bit 0x20 means for the things SE's object maker makes (§5f).
 - What SE's save keeps for actor 0 aboard and for a rider (item 10); the engine's load forgets who rides.
-- How the party gathers after landing (0x8cb:0x754) and what a vehicle step costs: not read; the engine
-  uses its own gathering and the walking cost.
+- How the party gathers after landing (0x8cb:0x754): not read; the engine uses its own gathering.
+- How DOS's save writes the members inside actor 0 aboard the raft (0xa5d:0x1edb, mode 0x10).

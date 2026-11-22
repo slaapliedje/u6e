@@ -24,8 +24,9 @@ periods and no alignment digit). Its contents are the embryos: obj_n and a quant
 
 ## 2. When eggs are looked at
 
-DOS holds a 40 x 40 window of the map, moved in steps of 8 tiles as the party walks, and on every
-move (and on a level change or a teleport):
+DOS holds a 40 x 40 window of the map (0x8faa): its corner is (party x - 16, party y - 16) rounded down to a
+multiple of 8, its centre the corner + 20. Whenever the corner or the level changes (so each time the party
+crosses a line of 8 tiles), and on a level change or a teleport:
 1. **Unload.** Everything farther than 20 tiles from the window's centre on either axis, or on another
    level, is dealt with:
    - a temporary hatchling (actors 192-255 with status 0x20) is deleted;
@@ -36,7 +37,7 @@ move (and on a level change or a teleport):
    - any other temporary object is deleted;
    - an egg marked hatched (0x40) is re-armed;
    - object 247 has its quality cleared.
-2. **Scan.** Each egg in the window, on the party's level, farther than 8 tiles from the party on
+2. **Scan** (0x26f50, called only from the rebuild). Each egg in the window, on the party's level, farther than 8 tiles from the party on
    either axis (or any distance after a level change or teleport), hatches (§3).
 
 Nothing hatches while a game is being started or loaded (DS:0x2362).
@@ -75,8 +76,10 @@ Northwest: from the party towards the egg), with a sound (item 9).
 
 ## 4. A new creature (0x267cd)
 
-The actor goes into the first free slot of 192-254 (DOS's free list starts at 192 and takes back the
-last one freed first). It stands at the given tile with its obj_n, status 0x20 (temporary), worktype 8.
+The actor goes into the slot at the head of DOS's free list of 192-254 (0xa5d:0x12b4): the list is built in
+ascending order (0xde79 at a new game, 0xdedd taking out the slots a load finds in use), the head is taken, and a
+slot freed goes back at the head (0xbc0c), so the last freed is taken first. The engine notices a freed slot at
+the next taking; slots freed together go back in ascending order, as DOS's unload loop frees them. It stands at the given tile with its obj_n, status 0x20 (temporary), worktype 8.
 
 With a row in the creature table (se_combat.md §4): strength, dexterity, intelligence and hit points are
 each `b - t + rand(0..t) + rand(0..t)`, `t = b / 2` (b itself when t is 0); level 0; its alignment status
@@ -144,9 +147,8 @@ the one whose creature-table damage is higher.
 - Slip 14: a refused tile for an object embryo makes nothing (DOS reuses the last thing it made).
 - Slip 15: an orchid head's wound gives no experience unless the root dies (DOS gives a register's leftover).
 - Slip 16: a head's random reach never goes back on itself (DOS: never straight on; the user's choice, 2026-11-12).
-- Engine: eggs are looked at when the party enters a new 8 x 8 block or teleports, within 20 tiles of
-  the party (DOS: its 40 x 40 window, moved by 8), as U6's are.
-- Engine: free slots are taken lowest first, not last freed first.
+- DOS's window and free list are built as §2 and §4 say (the user's choice, 2026-11-22; until then the engine
+  measured from the party and took the lowest free slot).
 - Engine: a game start or load looks at no eggs, as DOS; the first block change does.
 
 ## 8. Test hook
