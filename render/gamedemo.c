@@ -19,6 +19,7 @@
 #include "converse_vm.h"
 #include "u6actor.h"
 #include "u6lzw.h"
+#include "u6shape.h"
 #include "u6obj.h"             /* save-load: decode the save's object super-chunks (objblk.md) */
 #include "fepack.h"           /* U6FE.PAK section ids + header layout (front-end streaming) */
 #include "objects.h"
@@ -246,7 +247,7 @@ static const uint8_t *g_sebk_data; static int32_t g_sebk_foff; static uint8_t *g
 static char g_se_dream_txt[400]; static int g_se_dream_a=-1;
 /* SE's scenes in play (rules/se_scenes.md): the file playing (1-5, 0 none), its faces, scene and page, what follows */
 static int g_scene, g_scene_n, g_scene_i, g_scene_pg, g_scene_pw, g_scene_ph; static uint8_t g_scene_face[4];
-static void (*g_scene_done)(void); static char g_scene_txt[256]; static uint8_t *g_scene_pic; static int32_t g_cmid_off;
+static void (*g_scene_done)(void); static char g_scene_txt[256]; static uint8_t *g_scene_pic; static int32_t g_cmid_off, g_sefe_off;
 static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void)); static void se_scene_key(void); static void se_aiela_after(void);
 static void se_actor_xy(int a,int*x,int*y); static int se_actor_z(int a);
 static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap); struct world; static void se_eggs_update(const struct world *w, int teleport);   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
@@ -16399,8 +16400,69 @@ static void clib_find(int32_t sz)
             uint8_t ct[8];                                       /* the scenes' block, last in the tail: [u32 length]["CMDE"] (rules/se_scenes.md §4) */
             if(sz>16 && plat_read_at(pf,sz-16,ct,8)==8 && ct[4]=='C'&&ct[5]=='M'&&ct[6]=='D'&&ct[7]=='E'){
                 int32_t L=(int32_t)(((uint32_t)ct[0]<<24)|((uint32_t)ct[1]<<16)|((uint32_t)ct[2]<<8)|ct[3]);
-                if(L>0 && sz-16-L>o){ g_cmid_off=sz-16-L; g_clib_len=g_cmid_off-o; } } } }
+                if(L>0 && sz-16-L>o){ g_cmid_off=sz-16-L; g_clib_len=g_cmid_off-o;
+                    if(plat_read_at(pf,g_cmid_off-8,ct,8)==8 && ct[4]=='C'&&ct[5]=='F'&&ct[6]=='E'&&ct[7]=='E'){   /* the front end's art before it: [u32 length]["CFEE"] */
+                        int32_t L2=(int32_t)(((uint32_t)ct[0]<<24)|((uint32_t)ct[1]<<16)|((uint32_t)ct[2]<<8)|ct[3]);
+                        if(L2>0 && g_cmid_off-8-L2>o){ g_sefe_off=g_cmid_off-8-L2; g_clib_len=g_sefe_off-o; } } } } } }
     plat_fclose(pf); }
+/* SE's front end (docs/design/se_front_end.md): palette k (0-2) of SAVAGE.PAL, and item `it` of file f (0 TITLE, 1 INTRO,
+ * 2 CREATE, 3 ENDGAME) read from the pack's CSFE block into a chip buffer (freed by the caller's mark/reset) */
+static int sefe_palette(int k,uint8_t pal[768])
+{   if(!g_sefe_off||k<0||k>2) return 0;
+    plat_file pf=plat_fopen(PACK_NAME,0); if(pf<0) return 0;
+    int ok=plat_read_at(pf,g_sefe_off+4+(int32_t)k*768,pal,768)==768; plat_fclose(pf); return ok; }
+static uint8_t *sefe_item(int f,int it,int32_t *len)
+{   if(!g_sefe_off) return NULL;
+    plat_file pf=plat_fopen(PACK_NAME,0); if(pf<0) return NULL;
+    uint8_t n; uint8_t *b=NULL; int32_t p=g_sefe_off+4+3*768;
+    if(plat_read_at(pf,p,&n,1)==1){ int32_t data=p+1+64*6, at=0;   /* (the list has room for 64) */
+        for(int k=0;k<n;k++){ uint8_t e[6]; if(plat_read_at(pf,p+1+k*6,e,6)!=6) break;
+            int32_t l=(int32_t)(((uint32_t)e[2]<<24)|((uint32_t)e[3]<<16)|((uint32_t)e[4]<<8)|e[5]);
+            if(e[0]==f && e[1]==it){ b=(uint8_t*)plat_alloc_chip((uint32_t)l); if(b && plat_read_at(pf,data+at,b,l)!=l) b=NULL; if(b) *len=l; break; }
+            at+=l; } }
+    plat_fclose(pf); return b; }
+/* shape `idx` of a library item at (x,y) less its hot spot, 255 left alone; tmp holds the decoded shape */
+static void sefe_draw(const uint8_t *lib,int32_t len,int idx,int x,int y,uint8_t *tmp,int32_t cap)
+{   int w,h,hx=0,hy=0; if(!lib||!u6shape_size(lib,len,idx,&w,&h)||(int32_t)w*h>cap) return;
+    if(!u6shape_decode(lib,len,idx,&w,&h,tmp,cap)) return;
+    u6shape_hotspot(lib,len,idx,&hx,&hy);
+    blit_indexed(tmp,w,h,x-hx,y-hy); }
+/* SE's menu (SAVAGE.EXE 0x4a37; se_front_end.md §menu): the screen (CREATE.LZC item 0, shape 0) and four plates at x 85,
+ * y 116 + 18k: The Story So Far (shape 5), Create New Character (1), About (9), Journey Onward (3, only with a save);
+ * the highlighted plate is shape + 1, the chosen one (shape - 1)/2 + 11 for a moment. 1 = create, 3 = journey. */
+static int se_run_menu(void)
+{
+    static const uint8_t FR[4]={5,1,9,3}; static const int Y[4]={116,134,152,170};
+    plat_mark mk=plat_chip_mark(); int32_t len=0; uint8_t pal[768];
+    uint8_t *lib=sefe_item(2,0,&len), *tmp=(uint8_t*)plat_alloc_chip(64000);
+    if(!lib||!tmp||!sefe_palette(0,pal)){ plat_chip_reset(mk); return 1; }
+    int last=0; for(int k=0;k<SAVE_SLOTS;k++) if(save_exists(k,0)) last=3;
+    int n=last?4:3, sel=0, dirty=1, pressed=-1;
+    { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
+    rdr_set_palette(pal,256);
+    for(;;){
+        if(dirty){ clear_bb(0); sefe_draw(lib,len,0,0,0,tmp,64000);
+            for(int k=0;k<n;k++) sefe_draw(lib,len,k==sel?(pressed==k?(FR[k]-1)/2+11:FR[k]+1):FR[k],85,Y[k],tmp,64000);
+            rdr_present_doubled(LH); dirty=0;
+            if(pressed>=0){ uint32_t t0=plat_ticks_200hz(); while(plat_ticks_200hz()-t0<20) vsync_pump();   /* the chosen plate, a moment */
+                plat_chip_reset(mk); return pressed==1?1:3; } }
+        int mux,muy,mclick,over=-1; fe_mouse(&mux,&muy,&mclick);
+        for(int k=0;k<n;k++){ int w,h; if(u6shape_size(lib,len,FR[k],&w,&h) && mux>=85 && mux<85+w && muy>=Y[k] && muy<Y[k]+h) over=k; }
+        if(over>=0 && over!=sel){ sel=over; dirty=1; }
+        int act=(mclick&&over>=0)?over:-1, key=plat_input_raw();
+        if(key){ int a=key&0xFF, sc=(key>>8)&0xFF;
+            if(sc==0x48){ sel=sel>0?sel-1:n-1; dirty=1; }
+            else if(sc==0x50){ sel=sel<n-1?sel+1:0; dirty=1; }
+            else if(a=='t'||a=='T'||a=='s'||a=='S') act=0;
+            else if(a=='c'||a=='C') act=1;
+            else if(a=='a'||a=='A') act=2;
+            else if((a=='j'||a=='J') && n==4) act=3;
+            else if(a==0x0d||a==' ') act=sel; }
+        if(act==1 || act==3){ sel=act; pressed=act; dirty=1; }   /* the story and About: not yet built (se_front_end.md) */
+        else if(act>=0){ sel=act; dirty=1; }
+        if(!dirty) vsync_pump();
+    }
+}
 /* item `it` of MIDGAME`f` (1-5) from the pack: its kind (1 text, 2 picture), size and bytes into buf (up to cap); 0 = none */
 static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap)
 {   if(!g_cmid_off || f<1 || f>5) return 0;
@@ -16646,6 +16708,10 @@ int main(int argc, char **argv)
         fe_group_free(0);                               /* streamed: FREE the front-end region before the core loads */
         if(!g_fe_res){ g_font=NULL; g_fset=NULL; g_basepal=NULL; }   /* header pointers stay valid (static), but the core re-sets these */
     } else if (sz_fe>0) Cconws("  U6FE.PAK is not a v2 pack (rebuild: make world) - front-end skipped\r\n");
+    else if (g_sefe_off){ int32_t ml=0; rdr_caps rc; rdr_get_caps(&rc);        /* SE: its own front end from the pack (se_front_end.md) */
+        if(rc.colors>=256 && plat_load_file("MENU.REQ",1,&ml)){ g_menu_ran=1;
+            if(se_run_menu()==3) g_menu_journey=1;
+            fe_leave_black(); } }
     /* (no console line here: the video mode is up — text would scribble on the game screen) */
     uint8_t *pak=g_clib_off?(uint8_t*)load_prefix(PACK_NAME,g_clib_off,1):(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
     if(!pak) pak=g_clib_off?(uint8_t*)load_prefix(PACK_NAME,g_clib_off,0):(uint8_t*)plat_load_file(PACK_NAME,0,&n);

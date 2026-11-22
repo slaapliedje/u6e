@@ -1740,6 +1740,39 @@ static long convert_midgame(const char *dir, uint8_t marker, FILE *out)
     return L;
 }
 
+/* SE's front end (docs/design/se_front_end.md): SAVAGE.PAL's three palettes (6-bit, 3 x 768) and the items of TITLE,
+ * INTRO, CREATE and ENDGAME.LZC as stored (each a shape library, shapes.md; the engine decodes a picture when it shows it).
+ * "CSFE" [3 x 768 palette][u8 ngroups][64 x (u8 file 0-3, u8 item, u32 len), the first ngroups used] then the items'
+ * bytes in order.
+ * Written in the library tail just before the scenes' block, with a trailer [u32 block length]["CFEE"]. */
+static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
+{
+    static const char *FN[4]={"TITLE.LZC","INTRO.LZC","CREATE.LZC","ENDGAME.LZC"};
+    static uint8_t item[230000]; uint8_t pal[3*768]; long start=ftell(out);   /* (the largest, INTRO 1, is 223844) */
+    memset(pal,0,sizeof pal);
+    {   long fl; uint8_t *b=slurp(dir,"SAVAGE.PAL",&fl); u6lzc_t lc;
+        if(b && u6lzc_open(&lc,b,(int32_t)fl,marker)){ int32_t n=u6lzc_read(&lc,0,item,(int32_t)sizeof item);
+            for(int i=0;i<3*768 && i<n;i++) pal[i]=(uint8_t)(item[i]>>2); }
+        else printf("SAVAGE.PAL: missing\n");
+        free(b); }
+    fwrite("CSFE",1,4,out); fwrite(pal,1,sizeof pal,out);
+    int ng=0; uint8_t gf[64], gi[64]; int32_t gl[64]; long cnt=ftell(out); fputc(0,out);
+    long hdr=ftell(out); for(int k=0;k<64*6;k++) fputc(0,out);       /* room for the list; filled in below */
+    for(int f=0;f<4;f++){ long fl; uint8_t *b=slurp(dir,FN[f],&fl); u6lzc_t lc;
+        if(!b || !u6lzc_open(&lc,b,(int32_t)fl,marker)){ printf("%s: missing\n",FN[f]); free(b); continue; }
+        int ni=u6lzc_count(&lc);
+        for(int it=0;it<ni && ng<64;it++){ int32_t n=u6lzc_read(&lc,it,item,(int32_t)sizeof item); if(n<=0) continue;
+            fwrite(item,1,(size_t)n,out); gf[ng]=(uint8_t)f; gi[ng]=(uint8_t)it; gl[ng]=n; ng++; }
+        free(b); }
+    long end=ftell(out);
+    fseek(out,cnt,SEEK_SET); fputc(ng,out);
+    for(int k=0;k<ng;k++){ fputc(gf[k],out); fputc(gi[k],out); be32(out,(unsigned long)gl[k]); }
+    fseek(out,end,SEEK_SET);
+    long L=end-start; be32(out,(unsigned long)L); fwrite("CFEE",1,4,out);
+    printf("  +CSFE: SAVAGE.PAL + TITLE/INTRO/CREATE/ENDGAME.LZC -> %d items (%ld B)\n",ng,L);
+    (void)hdr; return L;
+}
+
 /* Decode the SE/MD portrait library (`FACES.LZC` / `MDFACES.LZC`) and stream a
  * "CFAC" section to `out`: [4 "CFAC"][u16 nface][u16 w][u16 h][nface x w*h indices].
  * Each .LZC item IS a U6 shape file (docs/formats/shapes.md) — byte0 = size, an
@@ -2954,7 +2987,8 @@ int main(int argc, char **argv)
              cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
              if(marker==U6LZC_COMP_SE) convert_bkgrnd(dir, marker, f);
              cv_step("Conversation art"); if(gp->talk){ convert_talk(dir, gp->talk, marker, f); if(marker==U6LZC_COMP_SE) convert_talk_scripts(dir, gp->talk, marker, f); }   /* MD scripts: item 13 */
-             if(marker==U6LZC_COMP_SE) convert_midgame(dir, marker, f);   /* last: never read with the tail (rules/se_scenes.md §4) */
+             if(marker==U6LZC_COMP_SE){ convert_sefe(dir, marker, f);        /* the front end's art, then the scenes': never read with the tail */
+                 convert_midgame(dir, marker, f); }   /* (rules/se_scenes.md §4) */
              be32(f,(unsigned long)tail); fwrite("CLIB",1,4,f); }   /* footer: [u32 tail offset]["CLIB"] */
     fclose(f);
 

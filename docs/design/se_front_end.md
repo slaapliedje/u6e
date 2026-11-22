@@ -53,5 +53,20 @@ DS:0x1e3e-0x1fe2).
 6. The ending (from the moonstone's scene; the date arguments, the companion).
 7. The songs, once formats/se_music.md exists.
 
+## The menu (SAVAGE.EXE 0x4a37, drawn by 0x4978)
+CREATE.LZC item 0's shape 0 at (0,0) under palette 0, then a plate per item at x 85, y 116, 134, 152, 170: The Story
+So Far (shape 5), Create New Character (1), About The Savage Empire (9), Journey Onward (3). The highlighted plate is
+shape + 1; the one chosen shows (shape - 1)/2 + 11 for a moment. Journey Onward is offered only when a saved game
+exists (DS:0x5da = 3, else 2). Keys (0x4af3): T or S the story, C create, A about, J journey (when offered),
+Enter or Space the highlighted one, Up/Down move with wrap, Ctrl-Q or Alt-X quit to DOS.
+
+## The pack
+mkworld writes a CSFE block in the library tail, just before the scenes' CMID block: `"CSFE"`, SAVAGE.PAL's three
+palettes as 6-bit (3 x 768), a count, a list with room for 64 entries (file 0 TITLE, 1 INTRO, 2 CREATE,
+3 ENDGAME; item; length), then the items as stored (shape libraries). Its trailer `[u32 length]["CFEE"]` sits just
+before CMID's. The engine reads one item when a screen needs it and decodes the shapes then.
+
 ## Status
-IN PROGRESS: files and flow surveyed; nothing built.
+IN PROGRESS: the menu built (2026-11-22; TT/Falcon and graphics cards; the ST needs its 16-colour palettes): the
+story and About are not built yet, and Create New Character starts a new game with the starting objlist (no
+questions yet). Journey Onward resumes the last slot.
