@@ -252,7 +252,7 @@ static void (*g_scene_done)(void); static char g_scene_txt[256]; static uint8_t 
 static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void)); struct world; static void se_ending(struct world*w); static void se_scene_key(void); static void se_aiela_after(void);
 static void se_actor_xy(int a,int*x,int*y); static int se_actor_z(int a);
 static void se_song_now(int n); static void se_song_then(int n,int next); static void se_song_queue(int n,int back); static int se_place_song(int level,int fixed1); static int g_se_cur; static int g_music_group;
-static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap); struct world; static void se_eggs_update(const struct world *w, int teleport);   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
+static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap); struct world; static int se_level_change(struct world*w,int idx); static void se_eggs_update(const struct world *w, int teleport);   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
 static const uint8_t *se_face(int fi); static void se_bkg_draw(int i,int x,int y); static int se_backdrop(int a); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
 static void *load_prefix(const char *path,int32_t len,bool fast); static void *load_prefix_at(const char *path,int32_t off,int32_t len);
 static void clib_open(int resident);
@@ -7873,6 +7873,13 @@ static void se_aiela_after(void)
     g_cg.talk_flags[16]|=0x80;
     if(g_wp) se_eggs_update(g_wp,0);
     g_cg.talk_flags[1]|=1; build_blocked(); }
+/* after the drum's play (0x1e1ac): talk flag 1 gets 0x08, the party goes to (243,204) on level 1, the hole in the ceiling there
+ * turns a frame on (not built: DOS also lends tile 268 the picture of an object 21 the acting member carries) */
+static int se_level_go(world_t*w,int x,int y,int z);
+static void se_drum_after(void)
+{   g_cg.talk_flags[1]|=8;
+    if(g_wp && se_level_go((world_t*)g_wp,243,204,1)){ int h=obj_idx_at(243,204,22);
+        if(h>=0){ g_wobj[h].tile=(uint16_t)(g_wobj[h].tile+1); if(!g_wobj[h].dirty) g_wobj[h].dirty=WOBJ_DIRTY_STATE; build_blocked(); } } }
 /* the first time (talk flag 1, bit 2): the clock runs on to noon, and a trap door opens at (192,460) */
 static void se_gem_scene(void){
     if(g_minutes%60) se_time_pass(60-g_minutes%60);    /* to the hour, then on to noon; DOS skips it all on the hour (se_deviations.md 1) */
@@ -8055,6 +8062,16 @@ static int se_use_object(int idx)
     if(o>=86&&o<=88) return se_totem(o,0);
     if(o==43){ g_se_on=SEON_BELL; g_se_on_actor=use_actor(); g_se_on_idx=idx; g_se_on_row=-1; g_next_verb='X'; return 0; }   /* the bell asks "On " (se_use.md §5i) */                         /* a totem on the ground: only a leading Triolo (se_use.md §5n) */
     if(o==234||o==161||o==275) return se_use_door(idx);
+    if(o==20){ if(g_solo_on){ msgcat(0,"\nNot in solo mode!"); return 0; } return se_level_change((world_t*)g_wp,idx); }   /* the rope (se_levels.md) */
+    if(o==148){ int lead=g_nparty?g_party[0].actor:1;                  /* the jungle drum (0x2542b; se_use.md §5r) */
+        if(!pack_count(lead,91)){ msgcat(0,"\nYou have nothing with which to play the drum."); return 0; }
+        static const uint8_t TRIBE[11]={16,17,19,20,27,29,32,34,40,48,53}; int all=1;
+        for(int k=0;k<11;k++) if(!(g_cg.talk_flags[TRIBE[k]]&0x80)) all=0;
+        if(!(g_cg.talk_flags[1]&8) && all) se_scene_start(4,0,3,se_drum_after);
+        return 1; }
+    if(o==22){ int fr=se_frame(idx);                                     /* the hole in the ceiling */
+        if(fr==1 && !g_solo_on) return se_level_change((world_t*)g_wp,idx);
+        msgcat(0,fr==0?"\nYou need a rope dropped from above.":"\nNot in solo mode!"); return 0; }
     if(o==173||o==242||o==254||o==257){ g_se_on=SEON_FIRE; g_next_verb='X'; return 0; }   /* the oven and the fires ask "On " */
     if(o==188){                                      /* the crate: a shut one (frame 1) opens, else "Not possible."; then the search (0x1ec8a) */
         int fr=se_frame(idx), n=0;
@@ -14311,6 +14328,48 @@ static void shamino_names(const world_t*w,int q)
 {   static const char*const N[20]={"Deceit","Despise","Destard","Wrong","Covetous","Shame","Hythloth","GSA","Control","Passion","Diligence","Tomb of Kings","Ant Mound","Swamp Cave","Spider Cave","Cyclops Cave","Heftimus Cave","Heroes' Hole","Pirate Cave","Buccaneer's Cave"};
     if(q<1||q>20||!shamino_near(w)) return;
     int n=msgcat(0,"Shamino says, \"This is the "); if(q<8) n=msgcat(n,"dungeon "); else if(q>8&&q<12) n=msgcat(n,"shrine of "); n=msgcat(n,N[q-1]); msgcat(n,".\""); }
+/* SE's level changes (GAME.EXE 0x8cb:0x855; rules/se_levels.md): where each object leads, by its quality, through the
+ * coordinate list DOS keeps at DS:0x38c (a cave 227 going up, quality 101-120), 0x3dc (a cave 163 going down), 0x4d4
+ * (a hole in the ceiling 22 going up) and 0x4f8 (a rope 20, to level 1); the list itself starts at DS:0x4d4 */
+static const int16_t SE_LINK[59][2]={
+    {-1,-1},{396,68},{600,223},{138,457},{139,509},{368,336},{633,464},{666,689},{234,61},{353,633},{139,11},{218,27},
+    {19,83},{11,203},{98,83},{235,84},{227,179},{243,204},{51,243},{291,69},{272,69},{497,77},{905,749},{821,349},{986,413},
+    {140,590},{124,598},{108,606},{845,654},{877,654},{861,662},{893,662},{685,374},{709,397},{725,414},{733,414},{701,342},
+    {956,236},{929,845},{45,130},{25,131},{81,147},{209,91},{149,236},{74,195},{244,172},{228,180},{212,188},{141,60},
+    {173,60},{157,68},{189,68},{13,244},{181,228},{197,244},{205,244},{237,244},{20,218},{177,131} };
+static int se_link(int base,int q,int*x,int*y){ int k=(base-0x4d4)/4+q; if(k<0||k>=59||SE_LINK[k][0]<0) return 0; *x=SE_LINK[k][0]; *y=SE_LINK[k][1]; return 1; }
+static int se_level_go(world_t*w,int x,int y,int z)
+{   if(veh_aboard() || !g_savetmpl) return 0;
+    int lv0=w->level; uint16_t px0=w->px, py0=w->py;
+    if(g_combat_mode) g_combat_mode=0;                                   /* (0x1810:0x23b: combat ends) */
+    (void)objects_reconcile(w);
+    w->level=(uint8_t)z; w->px=(uint16_t)x; w->py=(uint16_t)y;
+    if(level_decode(g_savetmpl, g_savetmpl_len, w->level, 0) < 0){
+        w->level=(uint8_t)lv0; w->px=px0; w->py=py0; (void)level_decode(g_savetmpl, g_savetmpl_len, lv0, 0);
+        msgcat(0,"Not enough memory to change level."); return 1; }
+    g_cur_level=w->level; build_blocked(); teleport_party(w, w->px, w->py);
+    g_show_inv=0; (void)g_tmpdm_invalidate(); music_resume_area(w->level);
+    return 1; }
+/* the change for object idx (0x9505): 1 = it happened */
+static int se_level_change(world_t*w,int idx)
+{   int on=g_wobj[idx].obj_n, q=g_wobj[idx].quality, x=0, y=0, z=0, rope=0;
+    if(on==20){ if(!se_link(0x4f8,q,&x,&y)) return 0; z=1; rope=1; }
+    else if(on==163){ if(!se_link(0x3dc,q,&x,&y)) return 0; z=2; }
+    else if(on==22){ if(!se_link(0x4d4,q,&x,&y)) return 0; z=q==8?2:0; }
+    else if(on==227){ if(!se_link(0x38c,q,&x,&y)) return 0; z=0; }
+    else if(on==259){ x=192; y=460; z=0; }
+    else if(on==160){ x=157; y=137; z=3; }
+    else return 0;
+    if(!se_level_go(w,x,y,z)) return 0;
+    if(rope){                                                            /* the hole above shows the rope: frame + 1, or one made (0x971f) */
+        int h=obj_idx_at(x,y,22);
+        if(h>=0 && g_wobj[h].quality==q){ g_wobj[h].tile=(uint16_t)(basetile(22)+1); if(!g_wobj[h].dirty) g_wobj[h].dirty=WOBJ_DIRTY_STATE; }
+        else { if(h>=0) obj_destroy(h); (void)persist_obj_new(22,1,x,y,q); }
+        build_blocked(); }
+    if(on==259 && (g_cg.talk_flags[1]&4)){                               /* the way up seals behind the party once the panel is broken */
+        int n=msg_tail(); n=msgcat(n,"\nThe mechanism supporting the trap door fails just as you"); n=msgcat(n," and your companions leave the stairwell, sealing the entrance"); msgcat(n," to the underground city.\n");
+        int t=obj_idx_at(192,460,160); if(t>=0){ obj_destroy(t); build_blocked(); } }
+    return 1; }
 static int step_triggers(world_t *w)
 {
     eggs_update(w,0);                                              /* a new 8x8 block? (eggs.md §2) */
@@ -14318,6 +14377,7 @@ static int step_triggers(world_t *w)
     int idx=objworld_at(&g_ow, w->px, w->py); if(idx<0) return 0;
     int on=g_wobj[idx].obj_n;
     if(on_in(g_on.moongate,2,on)) return enter_moongate(w,idx);   /* a moongate (moongates.md §2/§3) */
+    if(g_gd==&gamedef_se && (on==163||on==227||on==259||on==160)){ if(g_solo_on) return 0; return se_level_change(w,idx); }   /* walked into (0x1553a), not in solo */
     if((on==g_on.cave||on==g_on.hole)&&on){ int r, q=g_wobj[idx].quality;
         shamino_names(w,q); g_msg_append=g_msg[0]!=0;
         r=do_transition(w, on==g_on.cave?WL_DOWN:WL_HOLE, q); g_msg_append=0; return r; }
@@ -20652,6 +20712,18 @@ int main(int argc, char **argv)
                   se_scene_start(1,0,3,0); starts=g_scene==1 && strncmp(g_scene_txt,"You move",8)==0 && g_scene_pw==160 && g_scene_ph==144;
                   while(g_scene && pages<20){ pages++; se_scene_key(); }
                   dbg_num("SE scene first page=", starts); dbg_num("SE scene pages=", pages); }
+                { int lv0=w.level; uint16_t x0=w.px, y0=w.py; int ok1=0, ok2=0;      /* SE's level changes (rules/se_levels.md) */
+                  int c=obj_idx_at(293,67,163); if(c>=0 && se_level_change(&w,c)) ok1=w.level==2 && w.px==45 && w.py==130;
+                  int u=ok1?obj_idx_at(45,131,227):-1; if(u>=0 && se_level_change(&w,u)) ok2=w.level==0 && w.px==291 && w.py==69;
+                  dbg_num("SE level cave down=", ok1); dbg_num("SE level cave up=", ok2);
+                  { static const uint8_t TR[11]={16,17,19,20,27,29,32,34,40,48,53}; uint8_t sv[11], f1=g_cg.talk_flags[1];   /* the drum (se_use.md §5r) */
+                    for(int k=0;k<11;k++){ sv[k]=g_cg.talk_flags[TR[k]]; g_cg.talk_flags[TR[k]]|=0x80; }
+                    int lead=g_nparty?g_party[0].actor:1, dr=persist_obj_new(148,0,(int)w.px+1,(int)w.py,0);
+                    inv_add_objn(91,1); if(g_ow.ninv) g_ow.inv[g_ow.ninv-1].owner=(uint16_t)lead;
+                    int r=dr>=0?se_use_object(dr):0, pg=0; while(g_scene && pg<20){ se_scene_key(); pg++; }
+                    dbg_num("SE level drum=", r && w.level==1 && w.px==243 && w.py==204 && (g_cg.talk_flags[1]&8));
+                    for(int k=0;k<11;k++) g_cg.talk_flags[TR[k]]=sv[k]; g_cg.talk_flags[1]=f1; }
+                  if(w.level!=lv0) (void)se_level_go(&w,x0,y0,lv0); else teleport_party(&w,x0,y0); }
                 dbg_num("SE load Triolo level=", g_alevel[9]);                                       /* expect 7 (objlist 0xff1) */
                 dbg_num("SE load Triolo range=", g_cmode[9]==4);                                     /* GAME.EXE 0xdedd */
                 dbg_num("SE load max hp rule=", g_amaxhp[9]==2*g_astr[9]+4*g_alevel[9]);

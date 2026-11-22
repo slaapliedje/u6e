@@ -65,8 +65,8 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 188 crate | shut (frame 1): it opens (frame 0); else `Not possible.`; then the search (0x1ec8a): an open crate within a tile of the leader spills what it holds, `Searching here, you find A, B and C.` (or `nothing.`); any other frame, nothing more | in the switch, 0x1ec8a | yes |
 | 6 giant gem | set on the gem stand: noon and the trap door, §5d | 0x24302 | yes |
 | 10 magnesium ribbon | burn one: a flash; wakes the giant stone head, §5e | 0x24f6b | yes |
-| 20 rope | in solo mode `Not in solo mode!`; else climb (0x8cb:0x855, SE's level changes: item 11) | in the switch | item 11 |
-| 22 hole in the ceiling | frame 1 and not solo: climb (as the rope); frame 0: `You need a rope dropped from above.`; else `Not in solo mode!` | 0x8cb:0x855 | item 11 |
+| 20 rope | in solo mode `Not in solo mode!`; else climb (0x8cb:0x855, rules/se_levels.md) | in the switch | yes |
+| 22 hole in the ceiling | frame 1 and not solo: climb (as the rope); frame 0: `You need a rope dropped from above.`; else `Not in solo mode!` | 0x8cb:0x855 | yes |
 | 25 44 52 obsidian knife, knives, scissors | `On `: cloth into strips; meat, a skin or feathers from a body, §5f | 0x22488 | yes |
 | 29 119 rock hammer, metal hammer | `On `: a blue stone off the blue boulder, charcoal from burnt logs, §5g | 0x21436 | yes |
 | 42 vine | `On ` a hole: it becomes a rope down, §5h | 0x24fde | yes |
@@ -88,7 +88,7 @@ record keeps the high byte of its quantity in the quality byte (objblk.md §2).
 | 136 metal bucket | tar or water into it; tar poured sets fires, water puts them out, §5q | 0x235a9 | yes, but the fire's harm (item 6) |
 | 137 240 grenades, devices | light, §5b | 0x21671 | yes, but trees |
 | 143 machine | a gem in, a fruit out, §5r | 0x25b44 | yes |
-| 148 jungle drum | with the drumsticks and the tribes united, the scene underground, §5r | 0x2542b | item 11 |
+| 148 jungle drum | with the drumsticks and the tribes united, the scene underground, §5r | 0x2542b | yes |
 | 165 loom | `On ` flax: cloth, §5r | 0x23f9e | yes |
 | 173 242 254 257 oven, fire, fire pit | the fire's `On ` (§5) | 0x2215f | yes |
 | 177 wire screen | sulfur from a sulphur pit, §5r | 0x23b10 | yes |
@@ -533,7 +533,7 @@ tile. None: `You don't have any gems.` DOS plays sound 0x20.
 (0x1e1ac): song 17, the message area cleared, the blue eyes, talk flag 1 gets 0x08, the party goes to
 (243,204) on level 1, the hole in the ceiling (22) there turns frame + 1, and if the acting member
 carries object 21 its picture is lent to tile 268; then the view and the place's song. Otherwise
-nothing happens. The move between levels is item 11, so the drum comes with it.
+nothing happens. Built 2026-11-22 with SE's level changes (rules/se_levels.md).
 
 **The loom (165)** asks `On ` for the leader (range from the leader): on flax (210), `You wove cloth from
 the flax.`, one flax goes, and one cloth (180) goes to the leader if the flax was carried (else at their

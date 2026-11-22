@@ -219,3 +219,12 @@ list once SE's seams exist.
   rest counter, drinks, talk flags 8-15, the clock; the max HP after the load). The slots are ours, as U6's (DOS SE keeps
   one save, `savegame\\`; the 8 slots are listed in deviations.md). The leader's place (0x1cfb) is not written: as in U6, a
   load ends solo play.
+- 2026-11-22: item 9 largely built: the scenes in play (rules/se_scenes.md), the front end from the pack (menu, character
+  creation, the story, About, the ending; design/se_front_end.md), SE's music on MIDI out and the PSG with the song
+  queue and situations (formats/se_music.md). Left in item 9: the intro film (Origin FX opening 0x636:0xc6d with song 19's
+  cues, then 0x41de: Lord British presents, Worlds of Ultima, the title, the credits pan), the AdLib render for DMA
+  sound, the ST's 16-colour palettes for the front end. Item 11 next (it matters more to play), then 12, then these.
+- 2026-11-22: item 11 built (rules/se_levels.md): the caves 163 and 227, the stairs 259 and the trap door 160 walked into,
+  the rope and the hole in the ceiling used, the destinations from DOS's coordinate list by quality, the rope showing in
+  the hole above, the sealing of the stairs after the panel's scene, the drum's scene and its move. Left: DOS's walk/fade
+  around the move, the picture lent from object 21, a check against DOS on screen.
