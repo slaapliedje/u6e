@@ -215,3 +215,7 @@ list once SE's seams exist.
   counter, drinks) now load and save at SE's places, U6's own globals are left alone, and DOS's after-load step (0xdedd:
   SE's max HP, and a new game's full HP and modes) runs. Open in item 8: the planar map on the ST (speed). Open in item
   10: a save/load round trip in a test, the 8 slots, the leader's place (0x1cfb). (Triolo's pack weight fixed the same day: SE's weight rules, se_screen.md §4.)
+- 2026-11-22: item 10 done. A save/load round trip through SE's places in `make check-se-use` (combat mode, level,
+  rest counter, drinks, talk flags 8-15, the clock; the max HP after the load). The slots are ours, as U6's (DOS SE keeps
+  one save, `savegame\\`; the 8 slots are listed in deviations.md). The leader's place (0x1cfb) is not written: as in U6, a
+  load ends solo play.

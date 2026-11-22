@@ -20251,6 +20251,15 @@ int main(int argc, char **argv)
                 dbg_num("SE load Triolo level=", g_alevel[9]);                                       /* expect 7 (objlist 0xff1) */
                 dbg_num("SE load Triolo range=", g_cmode[9]==4);                                     /* GAME.EXE 0xdedd */
                 dbg_num("SE load max hp rule=", g_amaxhp[9]==2*g_astr[9]+4*g_alevel[9]);
+                { uint8_t cm=g_cmode[9], rc=g_rest_counter, al=g_alcohol, th=g_cg.talk_flags_hi[5], t33=g_cg.talk_flags[33]; int8_t lv=g_alevel[9];
+                  int mod0=clock_minutes(&w);                                                            /* a round trip through SE's places (formats/objlist.md §4a) */
+                  g_cmode[9]=7; g_alevel[9]=5; g_rest_counter=9; g_alcohol=2; g_cg.talk_flags_hi[5]=0x40; g_cg.talk_flags[33]|=1;
+                  int sv=do_save(&w);
+                  g_cmode[9]=4; g_alevel[9]=7; g_rest_counter=0; g_alcohol=0; g_cg.talk_flags_hi[5]=0;
+                  int ld=load_game(&w);
+                  dbg_num("SE save round trip=", sv && ld && g_cmode[9]==7 && g_alevel[9]==5 && g_rest_counter==9 && g_alcohol==2 && g_cg.talk_flags_hi[5]==0x40 && clock_minutes(&w)==mod0);
+                  dbg_num("SE save max hp=", g_amaxhp[9]==2*g_astr[9]+4*5);
+                  g_cmode[9]=cm; g_alevel[9]=lv; g_rest_counter=rc; g_alcohol=al; g_cg.talk_flags_hi[5]=th; g_cg.talk_flags[33]=t33; g_amaxhp[9]=(uint8_t)se_max_hp(9); }
                 break; } }
         }
     }

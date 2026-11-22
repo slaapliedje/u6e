@@ -158,7 +158,8 @@ After the read DOS runs 0xdedd on the actors: every maximum HP is SE's rule (2 x
 actor 33's talk flag lacks bit 0 (a game not yet begun) actors 1-15 are made whole and given their modes: the
 Avatar CMND, actors 7 and 9 (Triolo) RANGE, the rest CLOSE. U6's own globals (karma, gender, portrait, wind,
 timers, the vanished object, the keg, the moonstones) are not in SE's block: u6e leaves those bytes as they are.
-MD's layout is still to be read (checklist item 13).
+MD's layout is still to be read (checklist item 13). Checked by a save/load round trip in `make check-se-use`
+(`SE save round trip`).
 
 ## 5. Validation method
 `make npcsched` decodes the table and (with SCHEDULE) places + renders NPCs.
