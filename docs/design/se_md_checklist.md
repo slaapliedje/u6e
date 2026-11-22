@@ -214,4 +214,4 @@ list once SE's seams exist.
   its GAME.EXE; the combat modes (0x13f1), levels, no magic points, the globals an array later (clock, date, rest
   counter, drinks) now load and save at SE's places, U6's own globals are left alone, and DOS's after-load step (0xdedd:
   SE's max HP, and a new game's full HP and modes) runs. Open in item 8: the planar map on the ST (speed). Open in item
-  10: a save/load round trip in a test, the 8 slots, the leader's place (0x1cfb); Triolo's pack weighs 27 here, 24 in DOS.
+  10: a save/load round trip in a test, the 8 slots, the leader's place (0x1cfb). (Triolo's pack weight fixed the same day: SE's weight rules, se_screen.md §4.)

@@ -6439,10 +6439,15 @@ static void sync_party_in(void)
 }
 /* CANCARRY's room for a party member (usecode_vm.md §6c): the whole party's strength x 2 stones less
  * the pooled pack, the gold and everything readied, in 0.1 stone; refreshed after every VM turn */
+/* SE weighs these per ten (GAME.EXE DS:0x8df, read by 0xe6af) */
+static const uint16_t SE_TENTH[17]={41,54,55,56,71,64,73,74,123,129,130,134,191,69,120,72,48};
+static int per_ten(int on)
+{   if(g_gd==&gamedef_se){ for(int k=0;k<17;k++) if(SE_TENTH[k]==on) return 1; return 0; }
+    return on_in(g_on.tenth,2,on)||(g_on.tenth_n&&on>=g_on.tenth_first&&on<g_on.tenth_first+g_on.tenth_n); }
 static int obj_weight10(int on, int qty)
 {
     if(!g_weights || on<0 || on>=1024) return 0;
-    int32_t w=(int32_t)g_weights[on]*(qty?qty:1); if(on_in(g_on.tenth,2,on)||(g_on.tenth_n&&on>=g_on.tenth_first&&on<g_on.tenth_first+g_on.tenth_n)) w/=10;
+    int32_t w=(int32_t)g_weights[on]*(qty?qty:1); if(per_ten(on)) w/=10;
 
     return w>32767?32767:(int)w; }
 static void sync_carry_in(void)
@@ -6733,7 +6738,6 @@ static void se_event(int n)
     default: break;
     }
 }
-static int se_per_ten(int on){ return on_in(g_on.tenth,2,on)||(g_on.tenth_n&&on>=g_on.tenth_first&&on<g_on.tenth_first+g_on.tenth_n); }
 
 /* SE: talk to actor `id` (converse.md §6c): who answers, then its TALK script on the VM in SE's
  * dialect, with its own face (PORTRAIT may change it). */
@@ -6781,7 +6785,7 @@ static void se_talk_open(int id)
     if(got<=0){
         if(!g_setsc_off){ se_talk_plain(id); g_talking=1; g_await_input=0; g_inlen=0; g_inbuf[0]=0; return; }
         msgcat(0,"No response."); return; }
-    g_cg.dialect=CVM_DIALECT_SE; g_cg.event=se_event; g_cg.per_ten=se_per_ten; g_cg.portrait_npc=-1;
+    g_cg.dialect=CVM_DIALECT_SE; g_cg.event=se_event; g_cg.per_ten=per_ten; g_cg.portrait_npc=-1;
     cvm_status st=talk_vm(id,got,1);
     if(g_cg.portrait_npc>=0) g_talk_face=g_cg.portrait_npc;
     g_talking=1;
@@ -9530,8 +9534,20 @@ static int32_t row_weight(int r)
 {   const invitem_t*it=&g_ow.inv[r]; int32_t w=obj_weight10(it->obj_n,look_counted(it->obj_n)?it->qty:1);
     if(it->id) for(int i=0;i<g_ow.ninv;i++) if(g_ow.inv[i].in==it->id) w+=row_weight(i);
     return w; }
+/* SE's sum (GAME.EXE 0xe7a2): a readied thing its table weight alone (no count, not per ten); a thing in the pack its
+ * weight by count, and what it holds one level in (0xe767), not deeper */
+static int32_t se_ready_weight(int on){ return (g_weights&&on>0&&on<1024)?g_weights[on]:0; }
 static int32_t actor_carried(int a)
-{   int32_t w=0; for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]) w+=obj_weight10(g_aready[a][sl],1);
+{   int32_t w=0;
+    if(g_gd==&gamedef_se){
+        for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]) w+=se_ready_weight(g_aready[a][sl]);
+        for(int i=0;i<g_ow.ninv;i++){ const invitem_t*it=&g_ow.inv[i]; if((it->owner?it->owner:1)!=a) continue;
+            int top=!it->in, kid=0;
+            if(!top) for(int j=0;j<g_ow.ninv;j++) if(g_ow.inv[j].id==it->in){ kid=!g_ow.inv[j].in; break; }
+            if(top||kid) w+=obj_weight10(it->obj_n,look_counted(it->obj_n)?it->qty:1); }
+        if(actor_real(a)==1&&g_gl->gold_pool&&g_wko.gold) w+=obj_weight10(g_wko.gold,g_cg.gold>0?(int)(g_cg.gold>30000?30000:g_cg.gold):0);
+        return w; }
+    for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]) w+=obj_weight10(g_aready[a][sl],1);
     for(int i=0;i<g_ow.ninv;i++) if((g_ow.inv[i].owner?g_ow.inv[i].owner:1)==a) w+=obj_weight10(g_ow.inv[i].obj_n,look_counted(g_ow.inv[i].obj_n)?g_ow.inv[i].qty:1);
     if(actor_real(a)==1&&g_gl->gold_pool&&g_wko.gold) w+=obj_weight10(g_wko.gold,g_cg.gold>0?(int)(g_cg.gold>30000?30000:g_cg.gold):0);
     return w; }
@@ -9559,7 +9575,8 @@ static void draw_panel_buttons(int inv)
         blit_tile(0xf0,IVB_Y,0x187,1);
         ui_text(0x100+(56-ui_textw(cm[m-2]))/2,PTXT_Y(11),cm[m-2],C_BLACK); } }
 static void iv_weight(int x,int y,int w10,int cap)
-{   char b[16]; char*e=u_num(b,(w10+5)/10); *e++='/'; e=u_num(e,cap); *e++='s'; *e=0; ui_text(x,y,b,C_BLACK); }
+{   char b[16]; int st=(w10+5)/10; if(g_gd==&gamedef_se && w10>0 && w10<10) st=1;   /* SE: anything under a stone shows 1 (GAME.EXE 0xec93) */
+    char*e=u_num(b,st); *e++='/'; e=u_num(e,cap); *e++='s'; *e=0; ui_text(x,y,b,C_BLACK); }
 /* the figure and what is readied on it; the things keep their places relative to the figure */
 static void draw_doll(int a,int fx,int fy)
 {   int dt=0x170;
@@ -9593,7 +9610,7 @@ static void draw_inventory(uint8_t col)
       if(g_inv_first+per<total) { char c[2]={0x19,0}; ui_text(PTXT_X(8)-8,PTXT_Y(8),c,C_BLACK); } }
     /* E: readied / what this one can have readied; I: all it carries / what it can carry */
     { int32_t eq=0, all=0;
-      for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]) eq+=obj_weight10(g_aready[a][sl],1);
+      for(int sl=0;sl<EQ_NSLOTS;sl++) if(g_aready[a][sl]) eq+=g_gd==&gamedef_se?se_ready_weight(g_aready[a][sl]):obj_weight10(g_aready[a][sl],1);
       all=actor_carried(a);
       if(g_gd==&gamedef_se){ ui_text(185,80,"E:",C_BLACK); iv_weight(185+16,80,(int)eq,g_astr[a]);    /* SE: one above the other */
           ui_text(185,88,"I:",C_BLACK); iv_weight(185+16,88,(int)all,(int)g_astr[a]*2); }

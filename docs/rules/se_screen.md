@@ -65,6 +65,11 @@ Two boxes inside the frame: **x 183-314, y 6-118** (top) and **x 183-314, y 126-
 - **The HP's colour** in the list (GAME.EXE 0xe1f5): SE palette 2 (green) when poisoned (status 0x08), else 4 (red)
   under 10 HP, else 9 (light blue) for a member other than the Avatar whose object flags have 0x80 (Motazz's frenzy,
   se_invoke.md), else the text's black.
+- **The weights** `E:` and `I:` (GAME.EXE 0xe7a2, shown by 0xec93): E is the readied things, each its weight table entry
+  alone (no count, not per ten); I is E plus the pack, each thing by its count (the 48 stackables) and, for the 17
+  kinds SE weighs per ten (DS:0x8df: 41, 54, 55, 56, 71, 64, 73, 74, 123, 129, 130, 134, 191, 69, 120, 72, 48), a tenth
+  of that; a container adds what it holds one level in, not deeper. Shown in stones: the tenths rounded half up,
+  but anything from 0.1 to 0.9 shows 1. The talk's WEIGHT uses the same per-ten list. Checked: Triolo's 24/40 as DOS.
 - **Status page** (the portrait button, or a click on a name; GAME.EXE 0xe384): the top box cleared, the name
   centred on row 0 of the panel's text window (text cells 8 px square from (184,8), 17 across: column (17 - length)/2),
   the face routine's picture at y 16, x 185 (the backdrop of §5a at (186,17), the face over it at (185,16); no stone
