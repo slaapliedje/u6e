@@ -248,7 +248,7 @@ static char g_se_dream_txt[400]; static int g_se_dream_a=-1;
 /* SE's scenes in play (rules/se_scenes.md): the file playing (1-5, 0 none), its faces, scene and page, what follows */
 static int g_scene, g_scene_n, g_scene_i, g_scene_pg, g_scene_pw, g_scene_ph; static uint8_t g_scene_face[4];
 static void (*g_scene_done)(void); static char g_scene_txt[256]; static uint8_t *g_scene_pic; static int32_t g_cmid_off, g_sefe_off;
-static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void)); static void se_scene_key(void); static void se_aiela_after(void);
+static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void)); struct world; static void se_ending(struct world*w); static void se_scene_key(void); static void se_aiela_after(void);
 static void se_actor_xy(int a,int*x,int*y); static int se_actor_z(int a);
 static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap); struct world; static void se_eggs_update(const struct world *w, int teleport);   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
 static const uint8_t *se_face(int fi); static void se_bkg_draw(int i,int x,int y); static int se_backdrop(int a); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
@@ -16349,7 +16349,7 @@ static int se_get(world_t*w,int dx,int dy)
         if(eg->made!=3 && eg->x==(uint16_t)x && eg->y==(uint16_t)y && eg->nemb && g_emb[eg->emb].obj_n==292){ eg->nemb=0; eg->active=0; eg->made=3; } }
     return 1; }
 static const GameLayer gl_se = {
-    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .ol_cmode=0x13f1, .ol_glob=0x100, .ol_nomana=1, .load_reset=se_load_reset, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
+    .on=&objs_se, .talk=se_talk, .use=se_use_object, .usable=se_usable, .bot_door=se_bot_door, .use_at=se_use_at, .use_ground=se_use_ground, .use_pack=se_use_pack, .rides=se_rides, .veh_move=se_raft_move, .lead_step=se_lead_step, .can_enter=se_can_enter, .burn_tick=se_fuse_tick, .touch=se_creature_touch, .ready_ok=se_ready_ok, .ready_on=se_ready_on, .unreadied=se_unreadied, .ready_fr=se_ready_fr, .atk_check=se_atk_check, .hit_rule=se_hit_rule, .blow=se_blow, .wound_to=se_wound_to, .shot_spend=se_shot_spend, .no_scatter=1, .death_words=se_death_words, .dying=se_dying, .kill_exp=se_kill_exp, .wound_own=se_orchid_own, .wt_act=se_wt_act, .cmode_name=SE_CMODE, .cmode_next=se_cmode_next, .status_tick=se_status_tick, .big_step=se_big_step, .actor_tile=se_actor_tile, .sleep_body=se_sleep_body, .wake_odds=21, .look=se_look, .look_pack=se_look_pack, .get=se_get, .counted=se_counted, .hazard=se_hazard_hit, .hazard_obj_first=1, .eggs=se_eggs_update, .exp_cap=9999, .avatar_death=se_avatar_death, .push_select=se_push_select, .push_to=se_push_to, .move_to=se_move_to, .move_into=se_move_into, .store=se_store, .drop_ok=se_drop_ok, .dropped=se_dropped, .notposs="Not possible.", .asks_count=1, .stagger8=1, .nothing="nothing!", .unusable="\nNot possible.", .see="You see ", .gold_pool=1, .ending=se_ending, .ol_talk=0x18f1, .ol_talk_hi=0x12f1, .ol_cmode=0x13f1, .ol_glob=0x100, .ol_nomana=1, .load_reset=se_load_reset, .rest=se_rest, .rest_tick=se_rest_tick, .rest_key=se_rest_key,
 };
 static const GameLayer gl_md = {
     .on=&objs_none, .talk=md_talk, .see="You see ", .gold_pool=1,
@@ -16558,6 +16558,43 @@ static void se_run_about(const uint8_t *menu,int32_t ml,uint8_t *tmp)
         if(plat_input_raw()||fe_click_edge()) break;
         while(plat_ticks_200hz()-t0<6) vsync_pump(); }                    /* (DOS waits a retrace a frame; 4 px each 30 ms here) */
     plat_chip_reset(mk); }
+/* the box x 25-293 from y 136 (the story's and the ending's), wrapped */
+static void tb2_print(const char*t)
+{   while(t && *t){ if(*t=='\n'){ g_tbx=25; g_tby+=8; t++; continue; } if(t[0]=='%'&&t[1]=='P'){ t+=2; continue; }
+        if(*t==' '){ g_tbx+=sef_w(' '); t++; continue; }
+        int n=0; while(t[n]&&t[n]!=' '&&t[n]!='\n'&&!(t[n]=='%'&&t[n+1]=='P')) n++;
+        if(g_tbx+sef_textw(t,n)>293 && g_tbx>25){ g_tbx=25; g_tby+=8; }
+        for(int i=0;i<n;i++){ sef_glyph(g_tbx,g_tby,(unsigned char)t[i],0); g_tbx+=sef_w((unsigned char)t[i]); }
+        t+=n; } }
+/* SE's ending (SAVAGE.EXE 0x5e82; se_front_end.md "The ending"): palette 1, ENDGAME's pictures with their pages; the
+ * companion (Aiela, talk flag 2 bit 0x20; else Tristia, 51) picks the middle part; the time taken from the date */
+static void se_ending(world_t*w)
+{   rdr_caps rc; rdr_get_caps(&rc); if(rc.colors<256) return;                 /* (the ST: its 16-colour palettes are not made yet) */
+    music_stop_all();
+    plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t le=0, sl=0;
+    const uint8_t *ie=sefe_item(3,0,&le), *sb=sefe_item(5,0,&sl); g_sef=sefe_item(4,0,&g_sef_len);
+    uint8_t *tmp=g_W==LW?ROW(0):NULL;                                           /* in play there is no 64 KB to spare: the pictures are the whole screen, */
+    if(ie && sb && g_sef && tmp && sefe_palette(1,pal)){                       /* so they decode straight into the backbuffer */
+        int comp=(g_cg.talk_flags[2]&0x20)?1:(g_cg.talk_flags[51]&0x20)?-1:0;
+        static const int8_t PIC[16]={0,0,0,1,1,2,2,2,3,3,4,4,4,4,1,-1};       /* the picture for each page of the table at DS:0x637 */
+        rdr_set_palette(pal,256); { int d; while((d=plat_input_raw())){ (void)d; } }
+        for(int k=0;k<15;k++){
+            if((k>=5&&k<=7&&comp<=0) || (k>=8&&k<=9&&comp>=0)) continue;
+            { int w_,h_; if(!u6shape_decode(ie,le,PIC[k],&w_,&h_,tmp,(int32_t)LW*LH)) clear_bb(0); }
+            g_tbx=25; g_tby=136; tb2_print(sefe_str(sb,sl,41+k));
+            if(k==14){ int dd,mm,yy; cur_date(w,&dd,&mm,&yy);                  /* D/B/Y: GAME.EXE passes day+99, month+99, year+100 with the letter */
+                int D=(dd+99)%100, B=(mm+99)%100, Y=(yy+100)%100, si=0;         /* over the first digit; SAVAGE.EXE reads what is left */
+                const char *one=sefe_str(sb,sl,69), *many=sefe_str(sb,sl,70); char b[40];
+                #define SE_TW(v,wd) do{ const char*f_=(v)==1?one:many; int o_=0; for(const char*q=f_;*q&&o_<38;q++){ if(q[0]=='%'&&q[1]=='d'){ char t_[8]; char*e_=u_num(t_,(v)); for(char*z=t_;z<e_&&o_<38;z++) b[o_++]=*z; q++; } else if(q[0]=='%'&&q[1]=='s'){ for(const char*z=(wd);*z&&o_<38;z++) b[o_++]=*z; q++; } else b[o_++]=*q; } b[o_]=0; tb2_print(b); }while(0)
+                if(B&&D&&Y){ SE_TW(B,sefe_str(sb,sl,57)); tb2_print(sefe_str(sb,sl,58)); SE_TW(D,sefe_str(sb,sl,59)); tb2_print(sefe_str(sb,sl,60)); SE_TW(Y,sefe_str(sb,sl,61)); }
+                else { if(B){ SE_TW(B,sefe_str(sb,sl,62)); si=1; }
+                    if(D){ if(si==1){ tb2_print(sefe_str(sb,sl,63)); si=2; } SE_TW(D,sefe_str(sb,sl,64)); if(si<2) si=1; }
+                    if(Y){ if(si==1){ tb2_print(sefe_str(sb,sl,65)); si=2; } SE_TW(Y,sefe_str(sb,sl,66)); } }
+                tb2_print(sefe_str(sb,sl,si==2?68:67)); tb2_print(sefe_str(sb,sl,56));
+                #undef SE_TW
+            }
+            sef_glyph(g_tbx,g_tby,0x19,1); cr_wait(); } }
+    plat_chip_reset(mk); g_sef=0; }
 /* the objlist fields SAVAGE.EXE writes for a new character (0x5a7c) besides the name and stats; and the HP its load step gives */
 static void se_cc_apply(void)
 {   static const uint8_t MET[7]={2,4,5,7,8,9,23};
@@ -18076,6 +18113,8 @@ int main(int argc, char **argv)
             dbg_num("DE lord british x=", g_actx[5]); dbg_num("DE lord british y=", g_acty[5]);
         } }
     /* SEDREAM.REQ (SE, test builds): the Avatar dreams at once, to see the dream's screen (rules/se_rest.md §6) */
+    {   int32_t el_=0; const uint8_t*eq_=(const uint8_t*)TEST_REQ("SEEND.REQ",&el_);   /* test: SE's ending at boot; 'A' Aiela, 'T' Tristia */
+        if(g_gd==&gamedef_se && eq_ && el_>0){ if(eq_[0]=='A') g_cg.talk_flags[2]|=0x20; if(eq_[0]=='T') g_cg.talk_flags[51]|=0x20; g_game_over=1; } }
     {   int32_t sl_=0; const uint8_t*sq_=(const uint8_t*)TEST_REQ("SCENE.REQ",&sl_);   /* test: play MIDGAME1-5 at boot (rules/se_scenes.md) */
         if(g_gd==&gamedef_se && sq_ && sl_>0 && sq_[0]>='1' && sq_[0]<='5'){ static const uint8_t N[5]={3,3,4,3,3}, F1[3]={2,0,0}; int f=sq_[0]-'0';
             se_scene_start(f,f==1?F1:0,N[f-1],0); } }

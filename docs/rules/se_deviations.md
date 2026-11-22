@@ -62,8 +62,14 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 
 | Looking at a dead creature names its remains object and searches it like a body | se_look.md §7 | The dead actor is looked at as an actor: named by what it was, never searched (follows from the row above) |
 | G)et of gold puts it in the party's pool, as everywhere else in the engine | se_look.md §5 | Gold (69) is a counted thing taken into the leader's pack |
+## DOS slips not yet decided (for the user)
+| Slip | Where | What DOS does | Built |
+|---|---|---|---|
+| The ending's time taken | design/se_front_end.md "The ending" | GAME.EXE passes the calendar date (day, month, year); SAVAGE.EXE prints day-1, month-1 and year-100 as days, months and years taken, so a game begun on the starting date (day 4, month 7, year 161) is already "6 months, 3 days and 61 years". SAVAGE.EXE writes a second date block (0x1d13: 0:00, 8, 1, 1, 0) at creation, which looks like the intended start, but nothing reads it | as DOS |
+| The front end's one save | design/se_front_end.md | One saved game (`savegame\\`); Create refuses while one is in progress | our 8 slots (as U6, deviations.md); Create always allowed |
+
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the
 ceiling, the trap doors, the drum's scene), combat (item 6: the totems, the bell, fire's harm, a
-SE's creature table for the turtle's other numbers), SE's music and sounds (item 9),
-the border (item 8).
+SE's creature table for the turtle's other numbers), SE's music and sounds (item 9, formats/se_music.md),
+the front end's intro film (item 9).

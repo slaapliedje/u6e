@@ -1775,10 +1775,13 @@ static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
             for(long i=img;i+30<fl;i++) if(!memcmp(x+i,"Turbo C++ - Copyright 1990",26)){ dg=i-4; break; } }
         if(dg>0 && ng<64){
             static const uint16_t OPEN[7]={0xd7c,0xdd3,0xe4f,0xebc,0xefe,0xf68,0xfc8};
-            uint16_t at[64]; int na=0;
+            uint16_t at[96]; int na=0;
             for(int k=0;k<7;k++) at[na++]=OPEN[k];
             for(int q=0;q<6;q++) for(int k=0;k<4;k++){ long o=dg+0x564+q*12+k*2; at[na++]=(uint16_t)(x[o]|(x[o+1]<<8)); }   /* the questions (DS:0x564) */
             for(int k=0;k<10;k++){ long o=dg+0x623+k*2; at[na++]=(uint16_t)(x[o]|(x[o+1]<<8)); }   /* the story so far (DS:0x623) */
+            for(int k=0;k<16;k++){ long o=dg+0x637+k*2; at[na++]=(uint16_t)(x[o]|(x[o+1]<<8)); }   /* the ending (DS:0x637) */
+            { uint16_t t=0x1dff; for(int k=0;k<12;k++){ at[na++]=t; t=(uint16_t)(t+strlen((const char*)x+dg+t)+1); } }   /* its date words (DS:0x1dff) */
+            at[na++]=0x15d2; at[na++]=0x15d9;                                                    /* "one %s", "%d %ss" */
             long n0=ftell(out); fputc(na,out);
             for(int k=0;k<na;k++){ if(at[k]) { const char*t=(const char*)x+dg+at[k]; fwrite(t,1,strlen(t),out); } fputc(0,out); }
             gf[ng]=5; gi[ng]=0; gl[ng]=(int32_t)(ftell(out)-n0); ng++; }

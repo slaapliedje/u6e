@@ -286,7 +286,7 @@ It also:
 - kills an actor on another level without remains;
 - puts Johann beside the Avatar if Yunapotli is not on the current level.
 
-The moonstone ends play (the game is over). Item 9 adds the ending itself.
+The moonstone ends play (the game is over); after its scene the ending plays (design/se_front_end.md, built 2026-11-22).
 
 ### 3h. Harmful tiles (0x359:0xda8; who is checked, 0x45a4)
 
