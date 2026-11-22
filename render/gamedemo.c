@@ -16449,6 +16449,7 @@ int main(int argc, char **argv)
         Cconws("\r\n*** Renderer init failed (could not set the video mode / allocate buffers).\r\n");
         Crawcin(); return 1; }
     plat_input_init();                              /* fast key auto-repeat for smooth movement */
+    plat_pad_init(caps.machine==MACHINE_STE || caps.machine==MACHINE_FALCON);   /* a Jaguar pad in the enhanced ports */
     g_bb=rdr_backbuffer(); g_W=rdr_width();
     video_diag_log(&caps);                          /* DIAG.REQ present -> write VIDEO.LOG (real-HW triage) */
 

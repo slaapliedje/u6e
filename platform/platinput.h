@@ -42,4 +42,10 @@ void         plat_mouse(int *x, int *y, int *buttons);
 void         plat_mouse_hook_init(int phys_w, int phys_h);
 void         plat_mouse_hook_shutdown(void);
 
+/* Jaguar pad (docs/design/jagpad.md): on a 1040 STE or a Falcon (has_ports, from the _MCH cookie)
+ * read the enhanced joystick ports from the VBL; the pad's keys come out of plat_input_raw and its
+ * pointer and buttons out of plat_mouse. Test builds replay PAD.REQ instead when it is there. */
+void         plat_pad_init(int has_ports);
+int          plat_pad_active(void);
+
 #endif

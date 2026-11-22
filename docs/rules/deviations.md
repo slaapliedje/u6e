@@ -5,7 +5,7 @@ register is empty. What's left is listed by why it's left.
 
 > Provenance
 > - Derived from: reading GAME.EXE 4.5. The rule specs listed name the routines read.
-> - Last updated: 2026-11-18 (the pack pickers removed, as DOS); 2026-11-08 (the user keeps the foes' "casts" line as an addition); 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
+> - Last updated: 2026-11-21 (the Jaguar pad, an addition); 2026-11-18 (the pack pickers removed, as DOS); 2026-11-08 (the user keeps the foes' "casts" line as an addition); 2026-11-07 (conversation page waits found and built; the user fixes both DOS faults; stat limits settled); 2026-11-05 (turn order and worktypes, carried containers, deaths, spells, rest, M)ove, lighting; the user kept the additions and accepted the machine rows; the three open questions settled in DOS; the cast effect found and built)
 
 ## Found, not yet built
 (The pack pickers, found 2026-11-18, were removed the same day at the user's call: a carried thing is picked in the
@@ -30,6 +30,7 @@ rand(0..spell) < 16): it matches combat.md §7b.
 | Create and Transfer don't refuse a game in progress | transfer_saves.md §4 |
 | The DOS sound effects are a setting (Ctrl-X, on by default); the ST original has none | sound_effects.md |
 | A foe's spell prints "<creature> casts <spell>."; GAME.EXE shows only the effect (kept 2026-11-08) | combat.md §7b |
+| A Jaguar pad plays beside the keyboard on a 1040 STE or a Falcon (asked for by the user, 2026-11-21) | design/jagpad.md |
 
 ## The machine (accepted by the user, 2026-11-05)
 | Difference | Where |

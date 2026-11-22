@@ -32,6 +32,17 @@ PLAY
   it. Esc cancels. With nothing to cancel it asks whether to quit. The
   mouse works on the command bar, the party roster and the map.
 
+JAGUAR PAD (1040 STE AND FALCON)
+  A Jaguar pad in either enhanced joystick port plays beside the keyboard
+  (the Mega STE and TT have no such ports). The pad walks and steers the
+  crosshair as the arrow keys do. C is Return, B is Tab. Hold A and the
+  pad moves the mouse pointer instead, with C and B as the left and right
+  buttons; Option swaps the two. The keypad's 1 to 9 and 0 are the
+  command bar's icons in order: 1 Attack, 2 Cast, 3 Talk, 4 Look, 5 Get,
+  6 Drop, 7 Move, 8 Use, 9 Rest, 0 combat mode. * is Esc, # passes a
+  turn (Space), and Pause opens the save page. Conversations still need
+  the keyboard to type what you say.
+
 TRANSFER A CHARACTER
   The title menu can bring your Avatar over from Ultima IV or Ultima V,
   ST or DOS. Press a drive letter to search that disk, or Return to use
