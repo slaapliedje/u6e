@@ -118,7 +118,7 @@ class Game:
         answered with Space (converse.md 6d), the whole reply is in the report anyway"""
         st = self.press(code, timeout, shift, ctrl)
         got = self.got
-        while st.get('cwait'): st = self.press('space', timeout); got += self.got
+        while st.get('cwait') or st.get('scene'): st = self.press('space', timeout); got += self.got   # a scene's pages too (rules/se_scenes.md)
         self.got = got
         return st
 

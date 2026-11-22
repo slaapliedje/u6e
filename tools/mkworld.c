@@ -1709,6 +1709,37 @@ static int convert_bkgrnd(const char *dir, uint8_t marker, FILE *out)
     free(b); return ni;
 }
 
+/* SE's scenes in play (rules/se_scenes.md): MIDGAME1-5.LZC, four items a scene (three text pages, then a one-shape
+ * picture). "CMID" [u8 nfiles] then per file [u8 nitems][nitems x (u8 kind 0 none/1 text/2 picture, u16 w, u16 h,
+ * u32 len)], then every item's bytes in order (texts as stored, NUL-ended; pictures decoded to w*h indices).
+ * Written last in the library tail with a trailer [u32 block length]["CMDE"], so the tail's resident read stops
+ * short of it and the engine reads a scene from the disk when it plays. */
+static long convert_midgame(const char *dir, uint8_t marker, FILE *out)
+{
+    static uint8_t px[160*144], item[65536]; int nit[5]; long tot=0, start=ftell(out);
+    u6lzc_t lc[5]; uint8_t *buf[5];
+    for(int f=0;f<5;f++){ char nm[16]; long fl; snprintf(nm,sizeof nm,"MIDGAME%d.LZC",f+1); nit[f]=0;
+        buf[f]=slurp(dir,nm,&fl);
+        if(!buf[f] || !u6lzc_open(&lc[f],buf[f],(int32_t)fl,marker)){ printf("%s: missing\n",nm); free(buf[f]); buf[f]=NULL; continue; }
+        nit[f]=u6lzc_count(&lc[f]); if(nit[f]>16) nit[f]=16; }
+    fwrite("CMID",1,4,out); fputc(5,out);
+    long hdr[5];
+    for(int f=0;f<5;f++){ fputc(nit[f],out); hdr[f]=ftell(out); for(int k=0;k<nit[f]*9;k++) fputc(0,out); }   /* filled in below */
+    static uint8_t ent[5][16][9];
+    for(int f=0;f<5;f++) for(int it=0;it<nit[f];it++){
+        int32_t sz=u6lzc_read(&lc[f],it,item,(int32_t)sizeof item), n=0; int k=0, w=0, h=0;
+        if(sz>0 && (it&3)==3){ if(u6shape_decode(item,sz,0,&w,&h,px,(int32_t)sizeof px)){ k=2; n=(int32_t)w*h; fwrite(px,1,(size_t)n,out); } else w=h=0; }
+        else if(sz>0){ while(n<sz && item[n]) n++; fwrite(item,1,(size_t)n,out); fputc(0,out); n++; k=1; }
+        uint8_t *e=ent[f][it]; e[0]=(uint8_t)k; e[1]=(uint8_t)(w>>8); e[2]=(uint8_t)w; e[3]=(uint8_t)(h>>8); e[4]=(uint8_t)h;
+        e[5]=(uint8_t)(n>>24); e[6]=(uint8_t)(n>>16); e[7]=(uint8_t)(n>>8); e[8]=(uint8_t)n; tot+=n; }
+    long end=ftell(out);
+    for(int f=0;f<5;f++){ fseek(out,hdr[f],SEEK_SET); fwrite(ent[f],9,(size_t)nit[f],out); free(buf[f]); }
+    fseek(out,end,SEEK_SET);
+    long L=end-start; be32(out,(unsigned long)L); fwrite("CMDE",1,4,out);
+    printf("  +CMID: MIDGAME1-5.LZC -> %d+%d+%d+%d+%d items (%ld B)\n",nit[0],nit[1],nit[2],nit[3],nit[4],tot);
+    return L;
+}
+
 /* Decode the SE/MD portrait library (`FACES.LZC` / `MDFACES.LZC`) and stream a
  * "CFAC" section to `out`: [4 "CFAC"][u16 nface][u16 w][u16 h][nface x w*h indices].
  * Each .LZC item IS a U6 shape file (docs/formats/shapes.md) — byte0 = size, an
@@ -2923,6 +2954,7 @@ int main(int argc, char **argv)
              cv_step("Portraits"); if(gp->faces) convert_faces(dir, gp->faces, marker, f);
              if(marker==U6LZC_COMP_SE) convert_bkgrnd(dir, marker, f);
              cv_step("Conversation art"); if(gp->talk){ convert_talk(dir, gp->talk, marker, f); if(marker==U6LZC_COMP_SE) convert_talk_scripts(dir, gp->talk, marker, f); }   /* MD scripts: item 13 */
+             if(marker==U6LZC_COMP_SE) convert_midgame(dir, marker, f);   /* last: never read with the tail (rules/se_scenes.md §4) */
              be32(f,(unsigned long)tail); fwrite("CLIB",1,4,f); }   /* footer: [u32 tail offset]["CLIB"] */
     fclose(f);
 

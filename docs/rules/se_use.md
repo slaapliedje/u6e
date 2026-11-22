@@ -143,10 +143,10 @@ door is removed. Otherwise `You can't budge it!`. The conversation's EVENT does 
 (converse.md §6c).
 
 **275, the swinging door (0x246a8).** Frame 1 opens to frame 3; frame 3 shuts to frame 1; other
-frames do nothing. It doesn't move. Opening it with Aiela (actor 2) within 2 tiles east and south
-(the test is signed, so any distance west or north passes) on the same level, while the Avatar's
-talk flag 0 is clear, starts a cutscene (0x1dbfe: music 14, its own screen). The cutscene is item 9;
-until it is built, the door just opens.
+frames do nothing. It doesn't move. Opening it with Aiela (actor 2) no more than 2 tiles west and north of
+it (door minus Aiela at most 2 on each axis; the test is signed, so any distance east or south passes; corrected
+2026-11-22, this said the reverse) on the same level, while bit 0x01 of the Avatar's talk flag (1) is clear, starts
+Aiela's scene (0x1dbfe; rules/se_scenes.md §3).
 
 ## 5. "On ": the second thing (0x5d0:0x22c8)
 

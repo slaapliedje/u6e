@@ -131,7 +131,8 @@ DOS slip: on the map's very edge (x or y 0 or 1023) no box holds the speaker and
 register held; we give the last box's 2.
 
 The face: BKGRND item 0 at (183,6), the backdrop at (211,8), the face (79x85, its transparent pixels showing
-the backdrop) at (210,7), the name centred on x 249 at y 104.
+the backdrop) at (210,7), the name at y 104 in text cells from x 184, column (14 - length)/2 + 1 (GAME.EXE 0x1eaa4;
+before 2026-11-22 we centred it on x 249, up to 5 px off).
 
 ### 5b. The talk's colours
 Seen in DOS (DOSBox captures) and read in GAME.EXE: the text is the window's colour 0 (DS:0x24e6 = 0, black); a

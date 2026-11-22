@@ -243,10 +243,18 @@ static uint8_t       *g_seface_buf; static int g_seface_cur=-1;
 #define SEBK_MAX 16
 static int            g_sebk_n; static uint16_t g_sebk_w[SEBK_MAX], g_sebk_h[SEBK_MAX]; static int32_t g_sebk_at[SEBK_MAX];
 static const uint8_t *g_sebk_data; static int32_t g_sebk_foff; static uint8_t *g_sebk_buf;
-static char g_se_dream_txt[400]; static int g_se_dream_a=-1;   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
+static char g_se_dream_txt[400]; static int g_se_dream_a=-1;
+/* SE's scenes in play (rules/se_scenes.md): the file playing (1-5, 0 none), its faces, scene and page, what follows */
+static int g_scene, g_scene_n, g_scene_i, g_scene_pg, g_scene_pw, g_scene_ph; static uint8_t g_scene_face[4];
+static void (*g_scene_done)(void); static char g_scene_txt[256]; static uint8_t *g_scene_pic; static int32_t g_cmid_off;
+static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void)); static void se_scene_key(void); static void se_aiela_after(void);
+static void se_actor_xy(int a,int*x,int*y); static int se_actor_z(int a);
+static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap); struct world; static void se_eggs_update(const struct world *w, int teleport);   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
 static const uint8_t *se_face(int fi); static void se_bkg_draw(int i,int x,int y); static int se_backdrop(int a); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
 static void *load_prefix(const char *path,int32_t len,bool fast); static void *load_prefix_at(const char *path,int32_t off,int32_t len);
 static void clib_open(int resident);
+/* SE's name plate under a face: text cells from x 184, column (14 - length)/2 + 1 (GAME.EXE 0x1eaa4; se_screen.md §5) */
+static int se_plate_x(const char*nm){ int n=0; while(nm[n]) n++; if(n>14) n=14; return 184+8*((14-n)/2+1); }
 /* name/description for SE/MD actor `a`, or NULL if none. */
 static const char *se_npc_str(int a, int want_desc){
     if(!g_setalk_off || a<0 || a>=g_setalk_nact) return 0;
@@ -5586,7 +5594,7 @@ static void compose_map(const world_t*w)
     }
     PH_END(2);
     PH_BEGIN();
-    if((g_talking||g_se_dream_a>0) && g_gd==&gamedef_se){ g_predim=0; PH_END(3); return; }   /* SE's talk text (and the dream's) holds the map window (rules/se_screen.md §5) */
+    if((g_talking||g_se_dream_a>0||g_scene) && g_gd==&gamedef_se){ g_predim=0; PH_END(3); return; }   /* SE's talk text (and the dream's) holds the map window (rules/se_screen.md §5) */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
 #ifdef HAVE_RDR_ST
         if(g_native_planar) rdr_pframe_end();       /* Blitter: drain this frame's queued dynamic tile blits into g_ptmp */
@@ -5779,7 +5787,7 @@ static void draw_border_tiles(void)
             else if(t>359 && t<1081){ for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x17b,1); blit_tile(MAPX+((1080-t)/34)*8,MAPY,0x171,1); }
             else { int d=(t+721)%1440; for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x179,1); blit_tile(MAPX+((1080-d)/34)*8,MAPY,0x172,1); }
             for(i=0;i<VT;i++) if(i!=4&&i!=5) blit_tile(MAPX+i*16,MAPY,(uint16_t)(0x160+i),1);
-            int e=(g_talking||g_se_dream_a>0)?0x175:g_combat_mode?0x177:actor_objn(1)==249?0x164:0x173;
+            int e=(g_talking||g_se_dream_a>0||g_scene)?0x175:g_combat_mode?0x177:actor_objn(1)==249?0x164:0x173;
             blit_tile(MAPX+64,MAPY,(uint16_t)e,1); blit_tile(MAPX+80,MAPY,(uint16_t)(e+1),1); }
         for(int y=MAPY+16;y<MAPY+VT*16;y++){ const uint8_t*src=g_paper+(int32_t)y*LW+MAPX; uint8_t*row=ROW(y)+MAPX;
             if(y<SE_MAPY0||y>SE_MAPY1) memcpy(row,src,VT*16);
@@ -6286,6 +6294,18 @@ static void draw_conversation(uint8_t col)
     } else if(g_casting){                          /* C)ast: the spellbook page (magic_skills.md §6) */
         draw_spell_page(col);
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
+    } else if(g_scene){                            /* SE's scene in play (rules/se_scenes.md §2): a face or the party, the picture, the page */
+        int fa=g_scene_i<4?g_scene_face[g_scene_i]:0;
+        if(fa){ char kb[32]; const char*nm=(g_cg.talk_flags[fa]&1)?se_npc_str(fa,0):0;   /* the name once met, else its kind (0x1ea85) */
+            if(!nm){ kb[0]=0; if(fa<U6_MAX_ACTORS && g_atile[fa]!=0xffff) obj_name(g_atile[fa],kb,sizeof kb); nm=kb; }
+            se_bkg_draw(0,183,6); se_bkg_draw(se_backdrop(fa),211,8);
+            { const uint8_t *fc=se_face(fa-1);
+              if(fc) for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++){ uint8_t c=fc[yy*g_sefw+xx]; if(c!=255) ui_px(210+xx,7+yy,c); } }
+            ui_text(se_plate_x(nm), 104, nm, col); }
+        else draw_party_roster(col);
+        if(g_scene_pic) for(int y=0;y<g_scene_ph && SE_MAPY0+y<=SE_MAPY1;y++){ int w_=g_scene_pw; if(SE_MAPX0+w_>SE_MAPX1+1) w_=SE_MAPX1+1-SE_MAPX0;
+            memcpy(ROW(SE_MAPY0+y)+SE_MAPX0, g_scene_pic+(int32_t)y*g_scene_pw, (size_t)w_); }
+        ui_text_wrap(MSG_X, MSG_Y, MSG_W, g_scene_txt, MSG_ROWS, C_BLACK);
     } else if((g_talking||g_se_dream_a>0) && g_gd==&gamedef_se){   /* SE: the face in its stone frame, the talk in the map window (rules/se_screen.md §5);
                                                      * the dream the same way, the dreamer's face (GAME.EXE 0x29f78 opens the talk window 0xb656) */
         int fa=g_se_dream_a>0?g_se_dream_a:g_talk_face;
@@ -6294,7 +6314,7 @@ static void draw_conversation(uint8_t col)
         se_bkg_draw(se_backdrop(fa),211,8);
         { const uint8_t *fc=se_face(fa-1);
           if(fc) for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++){ uint8_t c=fc[yy*g_sefw+xx]; if(c!=255) ui_px(210+xx,7+yy,c); } }
-        ui_text(249-ui_textw(nm)/2, 104, nm, col);
+        ui_text(se_plate_x(nm), 104, nm, col);
         for(int y=SE_MAPY0;y<=SE_MAPY1;y++) memcpy(ROW(y)+SE_MAPX0, g_paper+(int32_t)y*LW+SE_MAPX0, SE_MAPX1+1-SE_MAPX0);
         talk_draw(16, 24, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
@@ -7202,8 +7222,11 @@ static int se_use_door(int idx)
             msgcat(0,"\nYunapotli closes its eyes and appears to concentrate.  There is a grinding noise froom the direction of the doors...  and they slide open!");
             se_door_vanish(idx); return 1; }
         msgcat(0,"You can't budge it!"); return 0; }
-    if(on==275){                                            /* the swinging door; Aiela's scene waits for item 9 */
-        if(fr==1){ g_wobj[idx].tile=(uint16_t)(basetile(on)+3); build_blocked(); return 1; }
+    if(on==275){                                            /* the swinging door (0x246a8); Aiela's scene (rules/se_scenes.md §3) */
+        if(fr==1){ g_wobj[idx].tile=(uint16_t)(basetile(on)+3); build_blocked();
+            int ax,ay; se_actor_xy(2,&ax,&ay);
+            if(x-ax<=2 && y-ay<=2 && se_actor_z(2)==g_cur_level && !(g_cg.talk_flags[1]&1)){ static const uint8_t F[3]={2,0,0}; se_scene_start(1,F,3,se_aiela_after); }
+            return 1; }
         if(fr==3){ g_wobj[idx].tile=(uint16_t)(basetile(on)+1); build_blocked(); return 1; }
         return 0; }
     return 0;
@@ -7812,13 +7835,46 @@ static void se_time_pass(int n){
     w->clock+=(uint32_t)n; g_hour=clock_hour(w); g_minutes=clock_minutes(w);
     if(g_se_fuse>0){ if(g_se_fuse>n) g_se_fuse-=n; else { g_se_fuse=0; se_detonate(); } }
     sched_pass(w); }
+/* SE's scene player (GAME.EXE 0x29b0a; rules/se_scenes.md §2): the scene's picture and its page, read from the pack */
+static int se_scene_load(void)
+{   for(;;){
+        if(g_scene_i>=g_scene_n) return 0;
+        if(g_scene_pg==0){ int w=0,h=0;
+            if(!g_scene_pic) g_scene_pic=(uint8_t*)plat_alloc_fast(160*144);
+            if(!g_scene_pic || cmid_item(g_scene,g_scene_i*4+3,&w,&h,g_scene_pic,160*144)!=2) return 0;   /* no picture: the play ends */
+            g_scene_pw=w; g_scene_ph=h; }
+        int w=0,h=0;
+        if(g_scene_pg<3 && cmid_item(g_scene,g_scene_i*4+g_scene_pg,&w,&h,(uint8_t*)g_scene_txt,(int32_t)sizeof g_scene_txt-1)==1
+           && !(g_scene_txt[0]=='*'&&g_scene_txt[1]=='E')){ g_scene_txt[sizeof g_scene_txt-1]=0; return 1; }
+        g_scene_i++; g_scene_pg=0; } }      /* past the third page or at *END*: the next scene */
+static void se_scene_finish(void)
+{   g_scene=0; if(g_scene_done){ void (*d)(void)=g_scene_done; g_scene_done=0; d(); } }
+/* play MIDGAME`f`: n scenes, faces[k] the face over scene k (0 none); done runs after the last */
+static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void))
+{   g_scene=f; g_scene_n=n; g_scene_i=0; g_scene_pg=0; g_scene_done=done;
+    for(int k=0;k<4;k++) g_scene_face[k]=(uint8_t)(faces&&k<n?faces[k]:0);
+    if(!se_scene_load()) se_scene_finish(); }
+/* a key or a click: the next page (the game's input routine, 0x5d0:0x22c8) */
+static void se_scene_key(void)
+{   if(!g_scene) return;
+    g_scene_pg++; if(!se_scene_load()) se_scene_finish(); }
+static int se_actor_z(int a){ return (a==1||is_party_member(a))?g_cur_level:(a>0&&a<U6_MAX_ACTORS?g_actz[a]:0); }
+/* after Aiela's play (0x1dbfe; rules/se_scenes.md §3): she joins, actor 23 stands at (115,168), the flags, an egg scan */
+static void se_aiela_after(void)
+{   g_cg.talk_flags_hi[2]&=0x7f; se_join(2);
+    g_actx[23]=115; g_acty[23]=168; g_actz[23]=(uint8_t)g_cur_level; g_amoved[23]=1;
+    g_cg.talk_flags_hi[23]&=0x7f; g_cg.talk_flags[23]|=1; wt_apply(23,8);
+    g_cg.talk_flags[16]|=0x80;
+    if(g_wp) se_eggs_update(g_wp,0);
+    g_cg.talk_flags[1]|=1; build_blocked(); }
 /* the first time (talk flag 1, bit 2): the clock runs on to noon, and a trap door opens at (192,460) */
 static void se_gem_scene(void){
     if(g_minutes%60) se_time_pass(60-g_minutes%60);    /* to the hour, then on to noon; DOS skips it all on the hour (se_deviations.md 1) */
     while(g_hour!=12) se_time_pass(60);
     { int t=persist_obj_new(160,1,192,460,0); (void)t; }
     g_cg.talk_flags[1]|=2; build_blocked();
-    g_msg[0]=0; }                                        /* the scene wipes the message area */
+    g_msg[0]=0;                                          /* the scene wipes the message area */
+    se_scene_start(2,0,3,0); }                           /* MIDGAME2 (0x1dd70) */
 /* set the gem on a gem stand (66) within a tile of whoever holds it (the actor acting, for one on the
  * ground); it goes one tile up and left of the stand. 1 = placed. */
 static int se_gem(int idx,int row,int a){
@@ -15416,7 +15472,7 @@ static void bot_report(const world_t*w)
     n=bot_kv(n,"mantra",g_mantra); n=bot_kv(n,"inv",g_show_inv); n=bot_kv(n,"stat",g_show_status); n=bot_kv(n,"sa",g_status_actor); n=bot_kv(n,"pf",g_pan_focus); n=bot_kv(n,"pfx",g_pan_x); n=bot_kv(n,"pfy",g_pan_y); n=bot_kv(n,"ifst",g_inv_first); n=bot_kv(n,"ir",IVG_ROWS);
     { plat_mem_info_t mi_; plat_mem_get_info(&mi_); n=bot_kv(n,"cfree",(int)(((long)mi_.chip_size-(long)mi_.chip_used)/1024)); }
     n=bot_kv(n,"peer",g_peer_on); n=bot_kv(n,"more",g_msg_more); n=bot_kv(n,"cwait",g_talking?talk_waiting():0); n=bot_kv(n,"combat",g_combat_mode); n=bot_kv(n,"veh",g_veh_kind);
-    n=bot_kv(n,"over",g_game_over); n=bot_kv(n,"gold",gold_total()); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
+    n=bot_kv(n,"over",g_game_over); if(g_scene) n=bot_kv(n,"scene",g_scene);   /* (only while one plays: the line has a fixed length) */ n=bot_kv(n,"gold",gold_total()); n=bot_kv(n,"karma",g_cg.karma); n=bot_kv(n,"rest",g_rest_stage);
     n=bot_put(n," askc="); n=bot_put(n,(g_await_input&&g_cv.askc[0])?g_cv.askc:"-"); n=bot_kv(n,"num",g_await_input&&g_cv.input_num);
     { int foes=0; for(int i=2;i<U6_MAX_ACTORS;i++){ int ax,ay; if(!actor_pos(i,&ax,&ay)||!g_ahp[i]||!actor_hostile(i)) continue;
           int dx=ax-(int)w->px, dy=ay-(int)w->py; if(dx<0)dx=-dx; if(dy<0)dy=-dy; if(dx<=8&&dy<=8) foes++; }
@@ -16107,7 +16163,8 @@ static void se_panel_scene(world_t*w)
     for(int e=0;e<g_neggs;e++){ egg_t*eg=&g_eggs[e]; int on=eg->nemb?g_emb[eg->emb].obj_n:0;     /* the robots' eggs go: silenced, which the save keeps */
         if(on==297||on==301){ eg->chance=0; eg->nemb=0; } }
     build_blocked();
-    g_msg[0]=0; }                                        /* the scene wipes the message area */
+    g_msg[0]=0;                                          /* the scene wipes the message area */
+    se_scene_start(3,0,4,0); }                           /* MIDGAME3 (0x1ded4) */
 /* the control panel breaks (0x1a99b; se_combat.md §3g): a burst on the 3x3 around it hurts each it reaches 1-30, the panel
  * goes, the large crystals go dark (256 to 223), and the first time (talk flag 1, bit 4) the scene */
 static void se_panel_break(world_t*w,int oi)
@@ -16127,7 +16184,8 @@ static void se_moonstone_break(world_t*w,int oi)
     for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
     for(int r=0;r<3;r++) for(int t=0;t<2;t++) (void)rays_from(w,x,y,9,ex,ey,T[r],0,ids,16);
     obj_destroy(oi); build_blocked();
-    g_msg[0]=0; g_game_over=1; }
+    g_msg[0]=0; g_game_over=1;
+    se_scene_start(5,0,3,0); }                           /* MIDGAME5 (0x1e34e); the ending waits for it */
 /* the leader falls (0x17a33, 0x27566, 0x8cb:0xc73; se_combat.md §3e): a week later the party wakes in Intanya's
  * hut, healed and good, with three quarters of its experience */
 static void draw_status(const world_t*w,uint8_t col);
@@ -16337,8 +16395,27 @@ static void clib_find(int32_t sz)
     if(pf<0) return;
     if(sz>8 && plat_read_at(pf,sz-8,ft,8)==8 && ft[4]=='C'&&ft[5]=='L'&&ft[6]=='I'&&ft[7]=='B'){
         int32_t o=(int32_t)(((uint32_t)ft[0]<<24)|((uint32_t)ft[1]<<16)|((uint32_t)ft[2]<<8)|ft[3]);
-        if(o>0 && o<sz-8){ g_clib_off=o; g_clib_len=sz-8-o; } }
+        if(o>0 && o<sz-8){ g_clib_off=o; g_clib_len=sz-8-o;
+            uint8_t ct[8];                                       /* the scenes' block, last in the tail: [u32 length]["CMDE"] (rules/se_scenes.md §4) */
+            if(sz>16 && plat_read_at(pf,sz-16,ct,8)==8 && ct[4]=='C'&&ct[5]=='M'&&ct[6]=='D'&&ct[7]=='E'){
+                int32_t L=(int32_t)(((uint32_t)ct[0]<<24)|((uint32_t)ct[1]<<16)|((uint32_t)ct[2]<<8)|ct[3]);
+                if(L>0 && sz-16-L>o){ g_cmid_off=sz-16-L; g_clib_len=g_cmid_off-o; } } } }
     plat_fclose(pf); }
+/* item `it` of MIDGAME`f` (1-5) from the pack: its kind (1 text, 2 picture), size and bytes into buf (up to cap); 0 = none */
+static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap)
+{   if(!g_cmid_off || f<1 || f>5) return 0;
+    plat_file pf=plat_fopen(PACK_NAME,0); if(pf<0) return 0;
+    uint8_t hd[5]; int kind=0; int32_t p=g_cmid_off, data=0, at=-1, len=0;
+    if(plat_read_at(pf,p,hd,5)==5 && hd[0]=='C'&&hd[1]=='M'&&hd[2]=='I'&&hd[3]=='D'){ int nf=hd[4]; p+=5;
+        int32_t sum=0;
+        for(int k=0;k<nf;k++){ uint8_t c; if(plat_read_at(pf,p,&c,1)!=1) break; p++;
+            for(int i=0;i<c;i++){ uint8_t e[9]; if(plat_read_at(pf,p,e,9)!=9) break; p+=9;
+                int32_t l=(int32_t)(((uint32_t)e[5]<<24)|((uint32_t)e[6]<<16)|((uint32_t)e[7]<<8)|e[8]);
+                if(k==f-1 && i==it){ kind=e[0]; *w=(e[1]<<8)|e[2]; *h=(e[3]<<8)|e[4]; at=sum; len=l; }
+                sum+=l; } }
+        data=p; }
+    if(at<0 || !kind || len>cap || plat_read_at(pf,data+at,buf,len)!=len) kind=0;
+    plat_fclose(pf); return kind; }
 /* the first len bytes of a file into a pool (fast = Alt-RAM preferred) */
 static void *load_prefix(const char *path,int32_t len,bool fast)
 {   plat_file pf=plat_fopen(path,0); if(pf<0) return NULL;
@@ -16904,7 +16981,8 @@ int main(int argc, char **argv)
         g_libs_ok=1; for(int i=0;i<LIB_N;i++) if(!lib_open(&g_lib[i], g_libs_resident)) g_libs_ok=0;
         g_libs_resident = g_libs_ok && g_lib[LIB_CONVA].data && g_lib[LIB_CONVB].data && g_lib[LIB_PORTA].data && g_lib[LIB_PORTB].data;
         g_countA=g_lib[LIB_CONVA].count;
-        if(g_clib_off) clib_open(free_now >= (long)g_clib_len + 384L*1024L); }
+        if(g_clib_off) clib_open(free_now >= (long)g_clib_len + 384L*1024L);
+        if(g_cmid_off && !g_scene_pic) g_scene_pic=(uint8_t*)plat_alloc_fast(160*144); }   /* the scenes' picture buffer, while there is room (rules/se_scenes.md §4) */
 
     if(_meminfo){ plat_mem_get_info(&_mi);
         dbg_num("MEM chip(ST-RAM)_used KB=", (int)(_mi.chip_used/1024));
@@ -17786,6 +17864,9 @@ int main(int argc, char **argv)
             dbg_num("DE lord british x=", g_actx[5]); dbg_num("DE lord british y=", g_acty[5]);
         } }
     /* SEDREAM.REQ (SE, test builds): the Avatar dreams at once, to see the dream's screen (rules/se_rest.md §6) */
+    {   int32_t sl_=0; const uint8_t*sq_=(const uint8_t*)TEST_REQ("SCENE.REQ",&sl_);   /* test: play MIDGAME1-5 at boot (rules/se_scenes.md) */
+        if(g_gd==&gamedef_se && sq_ && sl_>0 && sq_[0]>='1' && sq_[0]<='5'){ static const uint8_t N[5]={3,3,4,3,3}, F1[3]={2,0,0}; int f=sq_[0]-'0';
+            se_scene_start(f,f==1?F1:0,N[f-1],0); } }
     {   int32_t dl_=0; if(g_gd==&gamedef_se && TEST_REQ("SEDREAM.REQ",&dl_) && dl_>0){ g_alevel[1]=1; if(g_aexp[1]<100) g_aexp[1]=100; (void)se_dream(1); } }
     /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
     {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)TEST_REQ("REST.REQ",&rl2_);
@@ -20248,6 +20329,11 @@ int main(int argc, char **argv)
                 do_verb(&w,'G',1,0);
                 dbg_num("SE gold: pool gained=", g_cg.gold-gold0);                                /* expect 40 */
                 dbg_num("SE gold: NOT an inv stack=", (g_ow.ninv==ninv0 && objworld_count(&g_ow,69)==0)); /* expect 1 */
+                { int pages=0, starts=0;                                                              /* the scene player (rules/se_scenes.md) */
+                  dbg_num("SE scene block=", g_cmid_off>0);
+                  se_scene_start(1,0,3,0); starts=g_scene==1 && strncmp(g_scene_txt,"You move",8)==0 && g_scene_pw==160 && g_scene_ph==144;
+                  while(g_scene && pages<20){ pages++; se_scene_key(); }
+                  dbg_num("SE scene first page=", starts); dbg_num("SE scene pages=", pages); }
                 dbg_num("SE load Triolo level=", g_alevel[9]);                                       /* expect 7 (objlist 0xff1) */
                 dbg_num("SE load Triolo range=", g_cmode[9]==4);                                     /* GAME.EXE 0xdedd */
                 dbg_num("SE load max hp rule=", g_amaxhp[9]==2*g_astr[9]+4*g_alevel[9]);
@@ -21302,6 +21388,7 @@ int main(int argc, char **argv)
         int rclick=(mbtn&2)&&!(prev_btn&2);          /* right: sets or runs the default command */
         prev_btn=mbtn; g_mx=mlx; g_my=mly;
         if (click && g_talking && talk_waiting()){ (void)talk_page_key(0x8f); click=0; draw_conversation(ink); present_frame(); }   /* a click is the wait's fourth key */
+        if (click && g_scene){ se_scene_key(); click=0; if(!g_scene){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } draw_conversation(ink); present_frame(); }   /* a scene's page too */
         int anim_redraw=0;                           /* set when the animation tick fires */
         int moved=0;                                 /* set on a clean walk (map-only present) */
 
@@ -21327,7 +21414,9 @@ int main(int argc, char **argv)
             kp_key=key;
 #endif
             g_travel_active=0;                       /* any key press cancels click-to-travel */
-            if (g_talking && talk_waiting()) {       /* a page wait takes the key (converse.md §6d) */
+            if (g_scene) {                           /* SE's scene in play: any key, the next page (rules/se_scenes.md §2) */
+                se_scene_key(); if(!g_scene){ compose_map(&w); draw_border_tiles(); draw_status(&w,ink); } redraw=1;
+            } else if (g_talking && talk_waiting()) {       /* a page wait takes the key (converse.md §6d) */
                 (void)talk_page_key(a); redraw=1;
             } else if (g_await_input && g_cv.askc[0]) {     /* a y/n-style prompt: ONE of its listed keys, no Enter (usecode_vm.md §6c) */
                 if (a==0x1b) { end_talk(); redraw=1; }
@@ -21655,7 +21744,7 @@ int main(int argc, char **argv)
          * (map-only present, or idle) rely on the explicit Vsync here. */
         if (g_bot){ int b=bot_is_busy();                 /* report once the keys are handled and nothing runs on its own */
             if(!b && (g_bot_keys!=g_bot_rep || g_bot_busy)){ bot_report(&w); g_bot_rep=g_bot_keys; } g_bot_busy=b; }
-        if (g_game_over){ if(g_gl->ending) g_gl->ending(&w); break; }   /* the Codex has vanished: the ending (docs/design/ending.md) */
+        if (g_game_over && !g_scene){ if(g_gl->ending) g_gl->ending(&w); break; }   /* (SE's moonstone: after its scene) */   /* the Codex has vanished: the ending (docs/design/ending.md) */
 
         if (redraw){ if(g_peer_on) draw_peer(&w); present_frame(); }   /* full present (Vsyncs internally); the gem's view over the map */
         else { if (moved||anim_redraw) present_map();           /* map window (walk / tile anim) */
