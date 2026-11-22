@@ -251,6 +251,7 @@ static int g_scene, g_scene_n, g_scene_i, g_scene_pg, g_scene_pw, g_scene_ph; st
 static void (*g_scene_done)(void); static char g_scene_txt[256]; static uint8_t *g_scene_pic; static int32_t g_cmid_off, g_sefe_off;
 static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void)); struct world; static void se_ending(struct world*w); static void se_scene_key(void); static void se_aiela_after(void);
 static void se_actor_xy(int a,int*x,int*y); static int se_actor_z(int a);
+static void se_song_now(int n); static void se_song_then(int n,int next); static void se_song_queue(int n,int back); static int se_place_song(int level,int fixed1); static int g_se_cur; static int g_music_group;
 static int cmid_item(int f,int it,int *w,int *h,uint8_t *buf,int32_t cap); struct world; static void se_eggs_update(const struct world *w, int teleport);   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
 static const uint8_t *se_face(int fi); static void se_bkg_draw(int i,int x,int y); static int se_backdrop(int a); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
 static void *load_prefix(const char *path,int32_t len,bool fast); static void *load_prefix_at(const char *path,int32_t off,int32_t len);
@@ -7855,7 +7856,7 @@ static void se_scene_finish(void)
 /* play MIDGAME`f`: n scenes, faces[k] the face over scene k (0 none); done runs after the last */
 static void music_play_song(const char *base); static void music_resume_area(int level);
 static void se_scene_start(int f,const uint8_t *faces,int n,void (*done)(void))
-{   { static const char *const SONG[5]={"SE14","SE15","SE16","SE17","SE12"}; if(f>=1&&f<=5) music_play_song(SONG[f-1]); }   /* each routine's song first */
+{   { static const uint8_t SONG[5]={14,15,16,17,12}; if(f>=1&&f<=5) se_song_now(SONG[f-1]); }   /* each routine's song first */
     g_scene=f; g_scene_n=n; g_scene_i=0; g_scene_pg=0; g_scene_done=done;
     for(int k=0;k<4;k++) g_scene_face[k]=(uint8_t)(faces&&k<n?faces[k]:0);
     if(!se_scene_load()) se_scene_finish(); }
@@ -11742,7 +11743,8 @@ static void se_egg_hatch(const world_t*w,egg_t*eg,int teleport,int*heard)
     if(loud && !*heard){ static const char*D[8]={"North","Northeast","East","Southeast","South","Southwest","West","Northwest"};
         int span=M+1, ex=wrap_sub(eg->x,w->px,span), ey=wrap_sub(eg->y,w->py,span), ax=iabs_(ex), ay=iabs_(ey);
         int sx=ax*2<ay?0:ex<0?-1:1, sy=ay*2<ax?0:ey<0?-1:1, d=sy<0?(sx<0?7:sx>0?1:0):sy>0?(sx<0?5:sx>0?3:4):(sx<0?6:2);
-        int nn=msg_tail(); nn=msgcat(nn,"You hear something to the "); nn=msgcat(nn,D[d]); msgcat(nn,"!"); *heard=1; } }
+        int nn=msg_tail(); nn=msgcat(nn,"You hear something to the "); nn=msgcat(nn,D[d]); msgcat(nn,"!"); *heard=1;
+        if(!g_combat_mode && g_se_cur>=0 && g_se_cur<=4) se_song_queue(5,1); } }   /* the interlude (0x274b7; formats/se_music.md §5.3) */
 static void se_eggs_update(const world_t *w, int teleport)
 {   int bx=w->px>>3, by=w->py>>3, bz=w->level;
     if(!teleport && bx==g_egg_blk_x && by==g_egg_blk_y && bz==g_egg_blk_z) return;
@@ -13479,7 +13481,9 @@ static void se_rest_finish(world_t*w)
         if(a==1) g_avatar_ovr=0; else { g_abase[a]=g_rest_base[p]; g_atpd[a]=g_rest_tpd[p]; g_atile[a]=g_abase[a]; }
         if(b>=0 && b<g_ow.nobjs && g_wobj[b].obj_n==246) g_wobj[b].alive=0;
         g_se_blanket[p]=-1; g_pts[a]=(int8_t)g_adex[a]; }
-    g_resting=0; g_rest_turns=0; build_blocked(); music_resume_area(w->level);
+    g_resting=0; g_rest_turns=0; build_blocked();
+    if(g_hour>=5 && g_hour<=11 && w->level==0){ se_song_then(4,1); g_music_group=100; }   /* the morning wake-up (0x2724f): 4, then 1 */
+    else music_resume_area(w->level);
 }
 /* §6: the level test; a level up asks the dream's question */
 static int se_dream(int a)
@@ -14922,7 +14926,7 @@ static int  g_music_pref;       /* MIDI.CFG: 0 auto, 1 MIDI (MT-32), 2 DMA, 3 PS
 static int  g_music_dma_ok;     /* 8-bit DMA sound present (STE/MegaSTE/TT/Falcon) */
 static int  g_music_active;     /* backend chosen for the current song: 1 MIDI 2 DMA 3 PSG 5 ST */
 static char g_music_cur[16];    /* current song base name ("" = none)             */
-static int      g_music_group = -1;  /* current context music group (-1 = none); see music_area_group */
+static int      g_music_group = -1;  /* current context music group (-1 = none); see music_area_group (declared early for SE's rest) */
 static uint32_t g_music_rng;         /* LCG state for the random wandering-track pick  */
 
 /* build "BASE.EXT" (8.3) into dst */
@@ -15155,13 +15159,29 @@ static const char *music_group_pick(int g){
         return MUS_WANDER[(g_music_rng >> 24) & 3];
     }
 }
+/* SE's song changes (formats/se_music.md §4.2, §5.3): now, then a follow-on at the current song's exit point or end, with
+ * an interlude returning to the song it cut. (DOS fades over 15-120 ticks between them; we cut.) */
+static int g_se_cur=-1, g_se_next=-1, g_se_ret=-1, g_se_tide;
+static void se_song_now(int n){ char b[5]={'S','E',(char)('0'+n/10),(char)('0'+n%10),0}; g_se_next=g_se_ret=-1; g_se_cur=n; music_play_song(b); }
+static void se_song_then(int n,int next){ se_song_now(n); g_smf.ending=1; g_se_next=next; }
+static void se_song_queue(int n,int back){ if(!g_smf_on||!g_smf.playing){ se_song_now(n); return; } g_se_ret=back?g_se_cur:-1; g_se_next=n; g_smf.ending=1; }
+static void se_song_poll(void)
+{   if(g_se_next<0 || (g_smf_on && g_smf.playing)) return;
+    int n=g_se_next, r=g_se_ret; se_song_now(n); if(r>=0){ g_se_next=r; g_smf.ending=1; } }
+/* the place's song: level 3 song 3, below 2, else 0 or 1 at random (or 1, after a fall: 0x27566) */
+static int se_place_song(int level,int fixed1)
+{   if(level==3) return 3; if(level>0) return 2; if(fixed1) return 1;
+    g_music_rng = g_music_rng*1103515245u + 12345u; return (int)((g_music_rng>>24)&1); }
 static void music_update_area(int level){
     if(g_music_forced) return;             /* a forced song (test hook / event) owns the music */
     if(g_gd==&gamedef_se){                 /* SE (GAME.EXE 0x27201): level 3 song 3, other levels below 2, combat 8, else 0 or 1 */
         int g = g_combat_mode ? 8 : level==3 ? 3 : level>0 ? 2 : 100;
-        if(g != g_music_group){ g_music_group = g; char b[5]={'S','E','0','0',0};
-            if(g==100){ g_music_rng = g_music_rng*1103515245u + 12345u; g=(int)((g_music_rng>>24)&1); }
-            b[2]=(char)('0'+g/10); b[3]=(char)('0'+g%10); music_play_song(b); }
+        if(g != g_music_group){ int was=g_music_group; g_music_group = g;
+            if(g==8 && was>=0){ g_se_tide=0; se_song_then(6,8); }            /* combat begun (0x1822a): 6, then 8 */
+            else if(was==8 && g_se_tide){ se_song_then(g_se_tide<0?11:12,se_place_song(level,0)); g_se_tide=0; }   /* combat over (0x1833b) */
+            else se_song_now(g==100?se_place_song(level,0):g); }
+        if(g==8 && (g_se_tide==1||g_se_tide==-1)){ if(g_se_cur==8) se_song_queue(g_se_tide<0?9:10,1); g_se_tide*=2; }   /* the tide turns (0x2746e) */
+        se_song_poll();
         return; }
     int g = music_area_group(level);
     if(g != g_music_group){                /* context changed group -> pick a track + play  */
@@ -15750,6 +15770,8 @@ static void se_piece(int on,int fr,int x,int y,int id,int temp)
 static int se_dying(int id,int temp)
 {   world_t*w=(world_t*)g_wp; int fr=0;
     se_big_drop(id); g_se_lying[id]=0;                              /* its pieces go with it (se_big.md §7) */
+    if(g_combat_mode){                                              /* the tide of a fight (0x1a715): a member down -1; a foe +1 if still 0 */
+        if(id==1||is_party_member(id)) g_se_tide=-1; else if((g_align_hostile[id]||g_hostile[id]) && !g_se_tide) g_se_tide=1; }
     if(id==23) g_cg.talk_flags[53]|=0x20;
     if(id==180) g_cg.talk_flags[48]|=0x80;
     if(g_se_rider[id] && (!w || !se_dismount(w,id))) return 1;    /* in open water a rider leaves nothing */
@@ -16227,7 +16249,7 @@ static void draw_status(const world_t*w,uint8_t col);
 static void present_frame(void);
 static void se_avatar_death(world_t*w)
 {
-    music_stop_all();
+    music_stop_all();                                                         /* (0x27566): the music fades; 11 below, then the place's song (the surface's 1) */
     if(g_se_rider[1]) (void)se_dismount(w,1);                     /* off the turtle where it fell, when there is shore */
     msgcat(0,"\nOvercome by your wounds, you fall unconscious..... "); draw_status(w,C_BLACK); present_frame();
     view_dissolve(w,1);
@@ -16240,7 +16262,7 @@ static void se_avatar_death(world_t*w)
     g_combat_mode=0; g_pending_verb=0; g_show_inv=0; if(g_talking) end_talk();
     memset(g_dragged,0,sizeof g_dragged);
     { int n=msg_tail(); msgcat(n,"\n....You awaken in Intanya's hut, feeling restored."); }
-    sync_party_hp(); build_blocked(); music_resume_area(w->level); }
+    sync_party_hp(); build_blocked(); se_song_then(11,se_place_song(w->level,1)); g_music_group=w->level==3?3:w->level>0?2:100; }
 /* what a shot uses up or leaves where it ended (0x19b5a) */
 static void se_shot_spend(const world_t*w,int att,int wobj,int sx,int sy,int lx,int ly,int id)
 {   int am=weapon_ammo(wobj), pack=(se_party_side(att)||!kit_actor(att)); (void)sx; (void)sy;

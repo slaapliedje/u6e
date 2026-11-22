@@ -445,6 +445,10 @@ a host run gives the durations of §3.4); the pack carries the 20 songs unpacked
 plays them as they are (controller 121 on 2-10 at the start; General MIDI through MT32_TO_GM), the PSG folds
 the melodic channels to its three voices and leaves out the rhythm channel (our choice); DMA falls back to
 the PSG until an AdLib render exists. Played: the menu and creation and the ending song 0, the scenes 14,
-15, 16, 17, 12, the places (level 3 song 3, other levels 2, combat 8, else 0 or 1 at random). Not yet: the
-combat sequence songs (6, 7, 9-12), song 4 and 5, the queue/fade calls (§4.2), the intro's 18 and 19,
-the AdLib bank render, and a listen against DOS.
+15, 16, 17, 12, the places (level 3 song 3, other levels 2, combat 8, else 0 or 1 at random). The same day: the queue
+(the current song ends at its next exit point or its end, then the next; an interlude returns to the song it
+cut), combat begun 6 then 8, the tide's 9 / 10 (only over 8), combat over 11 / 12 then the place's song,
+falling unconscious 11 then 1, the morning wake-up 4 then 1, the "You hear something" interlude 5. Our
+choices: no fades (DOS fades 15-120 ticks); combat is only begun by the player in u6e, so song 7 (combat forced
+by a hostile's blow) is not played. Not yet: the intro's 18 and 19, the AdLib bank render, a listen against
+DOS.
