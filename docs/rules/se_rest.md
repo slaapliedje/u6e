@@ -88,8 +88,17 @@ by one and the member dreams. The text (with `He`, or `She` for actor 2, as the 
 letter decides: `B`/`b` the bear, strength; `J`/`j` the jaguar, dexterity; `M`/`m` the monkey, intelligence; else
 the member's highest of the three (strength when it is more than both others; else dexterity when it is more
 than intelligence; else intelligence). The stat rises by 1 unless it is already 30. HP don't change (the maximum
-rises with the level, §4). DOS shows the dream in a text window over the map with the dreamer's portrait in
-the panel, and the deaths of a scene are silent meanwhile (DS:0xa39).
+rises with the level, §4). The deaths of a scene are silent meanwhile (DS:0xa39).
+
+### 6a. The dream's screen
+The dream is shown as a conversation is (se_screen.md §5): GAME.EXE draws the dreamer's face with the face
+routine the talk uses (0x1dbd:0xd8f), selects the talk's text window DS:0xb656 (character cells 2-19 across,
+3-18 down: x 16, y 24, 18 columns, 16 rows over the map; made at 0x329e by 0x5d0:0x2562) with the same flags
+(0x10, 0x20 at window+8), and draws the border's eyes blue (0x175/0x176 at x 64 and 80). The text pages as a
+conversation's does (converse.md §6d): the window waits with the arrow when it is full. `Your choice:` is
+printed in another colour (DS:0x24f0, then back to 0x24e6) and the answer read on that line, 12 characters. After
+the answer the previous window comes back, the eyes are drawn shut (0x164/0x165, the party lying) and the view
+is drawn again (0x9da:0x327).
 
 ## 7. Waking
 Each member takes its own object back, its blanket on its tile goes, and its movement points become its
@@ -98,13 +107,13 @@ dexterity. The party's place becomes the leader's tile and the view is drawn aga
 ## 8. Test hook
 SEUSE self-test: `SE rest foes`, `SE rest noise`, `SE rest turtle`, `SE rest sunrise`, `SE rest hours`,
 `SE rest short`, `SE rest meal`, `SE rest counter`, `SE rest blanket`, `SE rest dream`, `SE rest dream default`,
-`SE rest wake`.
+`SE rest wake`. SEDREAM.REQ (test builds): the Avatar dreams at boot, to see the dream's screen.
 
 ## 9. The engine
-- The dream is printed in the message scroll and its answer typed on the prompt line; the window over the map
-  and the portrait are item 8's (the panel and screens).
-- The pictures at the top of the border that DOS changes as the party lies down, dreams and wakes (tiles
-  0x164-0x165, 0x175-0x176, 0x173-0x174 drawn at x 64 and 80; probable) are item 8's.
+- The dream goes through the conversation's pager and drawing (`talk_draw`, the face and backdrop of the
+  dreamer, the keywords red, the input row `Your choice:` + the answer in blue: se_screen.md §5b).
+- The eyes follow the border's rule (se_screen.md §3): blue while the dream is up, shut while the Avatar lies as
+  its remains, which is how DOS draws them around the dream.
 - A step of the night takes 1/8 s, as U6's.
 - Esc at the dream's prompt counts as an empty line (the highest stat).
 

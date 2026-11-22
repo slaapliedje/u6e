@@ -116,6 +116,13 @@ register held; we give the last box's 2.
 The face: BKGRND item 0 at (183,6), the backdrop at (211,8), the face (79x85, its transparent pixels showing
 the backdrop) at (210,7), the name centred on x 249 at y 104.
 
+### 5b. The talk's colours
+Seen in DOS (DOSBox captures) and read in GAME.EXE: the text is the window's colour 0 (DS:0x24e6 = 0, black); a
+keyword is red, SE palette index 4 (the palette's first 16 are the EGA colours: SEPAL); the input line is the
+window's colour 1 (DS:0x24f0 = 1, blue): `You say:` and the word typed after it, then a blank row and the answer.
+SE has no help switch for the keywords: they are always red. The dream's `Your choice:` is drawn the same way
+(se_rest.md §6a).
+
 ## 6. The command bar
 Nine icons in SCREEN.LZC, each in an 18-px cell from x 8, y 178-196: move, get, drop, use, talk, look,
 attack, rest, combat (`x = 8 + 18k`); a click in a cell (not on its 1-px divider) picks that command. DOS draws
@@ -138,5 +145,6 @@ Our TT frame against the DOS screenshot (scratch pixel diff); none in `make chec
 IN PROGRESS: §1 (SCREEN.LZC and SYSTEM.LZC's font in the pack), §2, §3, §4, §5 (the pack's CBKG
 section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles and sky are not drawn on SE.
 §6's clicks built, not yet driven by a mouse in a test. The `name>` prompt built (message_scroll.md). The party list's length
-and figures built 2026-11-17. The ST path built 2026-11-17 (§7). Open: the Avatar's chosen name
+and figures built 2026-11-17. The ST path built 2026-11-17 (§7). The dream's screen built 2026-11-22 (se_rest.md
+§6a). Open: the Avatar's chosen name
 (item 9's creation); a planar map for SE on the ST.

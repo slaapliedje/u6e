@@ -26,7 +26,7 @@ K = dict(ctrl=0x1d, ret=0x1c, esc=0x01, bksp=0x0e, tab=0x0f, up=0x48, down=0x50,
 DIRS = {(0, -1): 'up', (0, 1): 'down', (-1, 0): 'left', (1, 0): 'right'}
 
 def parse_state(line):
-    body = line[3:].replace('\x01', '')
+    body = line[3:].replace('\x01', '').replace('\x02', '')   # (the talk's colour marks)
     tail = {}
     for tag in (' typed=', ' conv=', ' msg='):            # free-text fields come last, in this order
         i = body.rfind(tag)

@@ -239,6 +239,7 @@ static uint8_t       *g_seface_buf; static int g_seface_cur=-1;
 #define SEBK_MAX 16
 static int            g_sebk_n; static uint16_t g_sebk_w[SEBK_MAX], g_sebk_h[SEBK_MAX]; static int32_t g_sebk_at[SEBK_MAX];
 static const uint8_t *g_sebk_data; static int32_t g_sebk_foff; static uint8_t *g_sebk_buf;
+static char g_se_dream_txt[400]; static int g_se_dream_a=-1;   /* SE's dream (rules/se_rest.md §6): its text, the dreamer awaiting an answer */
 static const uint8_t *se_face(int fi); static void se_bkg_draw(int i,int x,int y); static int se_backdrop(int a); static void clib_parse(const uint8_t *ap,const uint8_t *end); static void clib_find(int32_t sz);
 static void *load_prefix(const char *path,int32_t len,bool fast); static void *load_prefix_at(const char *path,int32_t off,int32_t len);
 static void clib_open(int resident);
@@ -5579,7 +5580,7 @@ static void compose_map(const world_t*w)
     }
     PH_END(2);
     PH_BEGIN();
-    if(g_talking && g_gd==&gamedef_se){ g_predim=0; PH_END(3); return; }   /* SE's talk text holds the map window (rules/se_screen.md §5) */
+    if((g_talking||g_se_dream_a>0) && g_gd==&gamedef_se){ g_predim=0; PH_END(3); return; }   /* SE's talk text (and the dream's) holds the map window (rules/se_screen.md §5) */
     if(predim){                                     /* DIM-AT-DRAW: tmp is already dimmed + fully composited */
 #ifdef HAVE_RDR_ST
         if(g_native_planar) rdr_pframe_end();       /* Blitter: drain this frame's queued dynamic tile blits into g_ptmp */
@@ -5772,7 +5773,7 @@ static void draw_border_tiles(void)
             else if(t>359 && t<1081){ for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x17b,1); blit_tile(MAPX+((1080-t)/34)*8,MAPY,0x171,1); }
             else { int d=(t+721)%1440; for(i=0;i<VT;i++) blit_tile(MAPX+i*16,MAPY,0x179,1); blit_tile(MAPX+((1080-d)/34)*8,MAPY,0x172,1); }
             for(i=0;i<VT;i++) if(i!=4&&i!=5) blit_tile(MAPX+i*16,MAPY,(uint16_t)(0x160+i),1);
-            int e=g_talking?0x175:g_combat_mode?0x177:actor_objn(1)==249?0x164:0x173;
+            int e=(g_talking||g_se_dream_a>0)?0x175:g_combat_mode?0x177:actor_objn(1)==249?0x164:0x173;
             blit_tile(MAPX+64,MAPY,(uint16_t)e,1); blit_tile(MAPX+80,MAPY,(uint16_t)(e+1),1); }
         for(int y=MAPY+16;y<MAPY+VT*16;y++){ const uint8_t*src=g_paper+(int32_t)y*LW+MAPX; uint8_t*row=ROW(y)+MAPX;
             if(y<SE_MAPY0||y>SE_MAPY1) memcpy(row,src,VT*16);
@@ -5789,11 +5790,14 @@ static void draw_border_tiles(void)
 }
 
 /* one wrapped row: a keyword (byte 1 before it) in red, as HELP has it */
+/* A row of talk text. Byte 1 marks a keyword: U6 draws it red (12) with Ctrl-H's help on; SE always, in its red
+ * (EGA 4). Byte 2 starts SE's input line, drawn in the window's colour 1 (blue) to the row's end: `You say:` and the
+ * word, the dream's `Your choice:` (GAME.EXE DS:0x24f0; rules/se_screen.md §5b). */
 static void ui_text_row(int x,int y,const char*s,int t,uint8_t col)
-{   int cx=x, red=0; char one[2]={0,0};
-    for(int k=0;k<t;k++){ if(s[k]==1){ red=1; continue; }
+{   int cx=x, red=0, blue=0, se=g_gd==&gamedef_se; char one[2]={0,0};
+    for(int k=0;k<t;k++){ if(s[k]==1){ red=1; continue; } if(s[k]==2){ blue=1; continue; }
         if(red && !((s[k]>='a'&&s[k]<='z')||(s[k]>='A'&&s[k]<='Z'))) red=0;
-        one[0]=s[k]; ui_text(cx,y,one,(red&&g_help_on)?12:col); cx+=8; } }
+        one[0]=s[k]; ui_text(cx,y,one,blue?1:red?(se?4:g_help_on?12:col):col); cx+=8; } }
 
 /* The text cursor of a wait (converse.md §6d): DOS draws glyph base+frame where the text stops, base 1
  * (an arrow: wait for a key) or 5 (typing); the frame steps while it waits. -1 = none on screen. */
@@ -5860,7 +5864,7 @@ static void talk_advance(void)
 {
     g_twait=0;
     for(;;){
-        int input=g_trow==g_tnr && g_await_input && !g_tcounted;   /* the typing row comes out like a line */
+        int input=g_trow==g_tnr && (g_await_input||g_se_dream_a>0) && !g_tcounted;   /* the typing row comes out like a line (SE's dream's too) */
         if(g_trow>=g_tnr && !input){
             if(g_tsn<g_tns){ g_tsn++; g_twait=2; }                  /* a `*` after the last line */
             return; }
@@ -5884,9 +5888,10 @@ static void talk_page_sync(void)
     while(g_tdisp[i] && g_tnr<TMAXR){
         while(g_tdisp[i]==' ') i++;
         if(!g_tdisp[i]) break;
-        int k=0, last=-1;
-        for(;g_tdisp[i+k] && g_tdisp[i+k]!='\n';k++){ if(g_tdisp[i+k]==' ') last=k; if(k>=cols) break; }
-        int take=(k<cols)?k:(last>=0?last:cols);
+        int k=0, last=-1, v=0, full=0;          /* v: columns (the colour marks 1 and 2 take none) */
+        for(;g_tdisp[i+k] && g_tdisp[i+k]!='\n';k++){ unsigned char ch=(unsigned char)g_tdisp[i+k]; if(ch<3) continue;
+            if(ch==' ') last=k; if(v>=cols){ full=1; break; } v++; }
+        int take=full?(last>=0?last:k):k;
         g_trs[g_tnr]=(int16_t)i; g_tre[g_tnr]=(int16_t)(i+take); g_tnr++;
         i+=take; if(g_tdisp[i]=='\n') i++;
     }
@@ -5901,17 +5906,18 @@ static int talk_page_key(int a)                /* a key during a wait: 1 = it wa
     else g_tcnt=TROWS;                         /* a key read starts the count again */
     talk_advance(); return 1;
 }
+static int tvis(int at,int n){ int v=0; for(int k=0;k<n;k++) if((unsigned char)g_tdisp[at+k]>=3) v++; return v; }   /* columns, less the colour marks */
 static void talk_draw(int x,int y,uint8_t col)
 {
     talk_page_sync();
     int cols=TCOLS, last=g_trow-1, cx=-1, cy=-1;            /* rows out: 0..last, row g_trow up to g_tpos once counted */
     int part=(g_trow<g_tnr && g_tcounted)?g_tpos-g_trs[g_trow]:-1;
     if(part>=0) last=g_trow;
-    int inrow=(g_trow==g_tnr && g_await_input && g_tcounted && !g_twait)?g_tnr:-1;
+    int inrow=(g_trow==g_tnr && (g_await_input||g_se_dream_a>0) && g_tcounted && !g_twait)?g_tnr:-1;
     if(inrow>=0) last=inrow;
     if(g_twait==1){ cx=0; cy=last+1; }                             /* the arrow where the next row goes */
-    else if(g_twait==2){ if(part>=0){ cx=part; cy=g_trow; } else { cx=g_tnr?g_tre[g_tnr-1]-g_trs[g_tnr-1]:0; cy=g_tnr-1; }
-        if(TALK_SCROLL && part==0 && g_trow>0){ cy=g_trow-1; cx=g_tre[cy]-g_trs[cy]; }   /* a `*` just after a line break: DOS has not moved down yet */
+    else if(g_twait==2){ if(part>=0){ cx=tvis(g_trs[g_trow],part); cy=g_trow; } else { cx=g_tnr?tvis(g_trs[g_tnr-1],g_tre[g_tnr-1]-g_trs[g_tnr-1]):0; cy=g_tnr-1; }
+        if(TALK_SCROLL && part==0 && g_trow>0){ cy=g_trow-1; cx=tvis(g_trs[cy],g_tre[cy]-g_trs[cy]); }   /* a `*` just after a line break: DOS has not moved down yet */
         if(cy<0){ cy=0; cx=0; } if(cx>=cols){ cx=0; cy++; } }
     int occ=(cy>last?cy:last)+1, first=occ>TVIS?occ-TVIS:0;
     if(TALK_SCROLL && occ<TVIS && g_mhist_n){                     /* U6: the scroll's older rows above the talk */
@@ -5919,10 +5925,12 @@ static void talk_draw(int x,int y,uint8_t col)
         for(int k=(hr>room?hr-room:0);k<hr;k++){ ui_text_row(x,y,hs[k%MR],hl[k%MR],col); y+=TPITCH; } }
     for(int r=first;r<=last;r++){
         int yy=y+(r-first)*TPITCH;
-        if(r==inrow){                                              /* the input row: "you say:typed" (U6; SE "> typed") and the cursor */
-            char line[32]; int t=0; const char*pf=TALK_SCROLL?"you say:":"> "; while(*pf) line[t++]=*pf++;
-            for(int k=0;k<g_inlen && t<29;k++) line[t++]=g_inbuf[k];
-            line[t]=0; ui_text(x,yy,line,col); tcur_set(x+t*8,yy,5,col); continue; }
+        if(r==inrow){                                              /* the input row: "you say:typed" (U6; SE "You say:typed" in blue) and the cursor */
+            char line[40]; int t=0, se=g_gd==&gamedef_se; const char*pf=g_se_dream_a>0?"Your choice:":TALK_SCROLL?"you say:":se?"You say:":"> ";   /* (SE's dream asks on its own line) */
+            if(se) line[t++]=2;
+            while(*pf) line[t++]=*pf++;
+            for(int k=0;k<g_inlen && t<37;k++) line[t++]=g_inbuf[k];
+            line[t]=0; ui_text_row(x,yy,line,t,col); tcur_set(x+(t-se)*8,yy,5,se?1:col); continue; }
         int n=(r==g_trow)?part:g_tre[r]-g_trs[r];
         char line[48]; int t=n<47?n:47; for(int k=0;k<t;k++) line[k]=g_tdisp[g_trs[r]+k];
         ui_text_row(x,yy,line,t,col);
@@ -6234,8 +6242,9 @@ static void talk_scroll_keep(void)                /* the words out so far join t
 static int msg_rows(const char*t,int cols,const char**st,int*ln,int max)
 {   int r=0;
     while(*t){ while(*t==' ') t++; if(!*t) break;
-        int n=0,last=-1; for(const char*q=t;*q&&*q!='\n';q++,n++){ if(*q==' ') last=n; if(n>=cols) break; }
-        int take=(n<cols)?n:(last>=0?last:cols); st[r%max]=t; ln[r%max]=take; r++;      /* a ring: the newest max rows */
+        int n=0,last=-1,v=0,full=0; for(const char*q=t;*q&&*q!='\n';q++,n++){ if((unsigned char)*q<3) continue;   /* (the colour marks 1, 2 take no column) */
+            if(*q==' ') last=n; if(v>=cols){ full=1; break; } v++; }
+        int take=full?(last>=0?last:n):n; st[r%max]=t; ln[r%max]=take; r++;      /* a ring: the newest max rows */
         t+=take; if(*t=='\n'){ t++; if(!*t){ st[r%max]=t; ln[r%max]=0; r++; } } }   /* a closing newline: the next row is empty */
     return r; }
 static void msg_box(uint8_t col)
@@ -6271,12 +6280,15 @@ static void draw_conversation(uint8_t col)
     } else if(g_casting){                          /* C)ast: the spellbook page (magic_skills.md §6) */
         draw_spell_page(col);
         if(g_msg[0]) ui_text_wrap(PANX+6, 116, PANW-12, g_msg, 5, col);
-    } else if(g_talking && g_gd==&gamedef_se){     /* SE: the face in its stone frame, the talk in the map window (rules/se_screen.md §5) */
+    } else if((g_talking||g_se_dream_a>0) && g_gd==&gamedef_se){   /* SE: the face in its stone frame, the talk in the map window (rules/se_screen.md §5);
+                                                     * the dream the same way, the dreamer's face (GAME.EXE 0x29f78 opens the talk window 0xb656) */
+        int fa=g_se_dream_a>0?g_se_dream_a:g_talk_face;
+        const char*nm=g_se_dream_a>0?g_party[member_index(g_se_dream_a)].name:g_talk_name;
         se_bkg_draw(0,183,6);
-        se_bkg_draw(se_backdrop(g_talk_face),211,8);
-        { const uint8_t *fc=se_face(g_talk_face-1);
+        se_bkg_draw(se_backdrop(fa),211,8);
+        { const uint8_t *fc=se_face(fa-1);
           if(fc) for(int yy=0;yy<g_sefh;yy++) for(int xx=0;xx<g_sefw;xx++){ uint8_t c=fc[yy*g_sefw+xx]; if(c!=255) ui_px(210+xx,7+yy,c); } }
-        ui_text(249-ui_textw(g_talk_name)/2, 104, g_talk_name, col);
+        ui_text(249-ui_textw(nm)/2, 104, nm, col);
         for(int y=SE_MAPY0;y<=SE_MAPY1;y++) memcpy(ROW(y)+SE_MAPX0, g_paper+(int32_t)y*LW+SE_MAPX0, SE_MAPX1+1-SE_MAPX0);
         talk_draw(16, 24, col);
     } else if(g_talking){                          /* NPC portrait replaces the roster */
@@ -6859,6 +6871,7 @@ static void submit_input(void)
     cvm_status st=cvm_run(&g_cv);
     int tl=0;
     if(TALK_SCROLL){ talk_scroll_keep(); tl=tappend(tl,"you say:"); tl=tappend(tl,g_inbuf); tl=tappend(tl,"\n\n"); }   /* U6: DOS's words, the last exchange kept above */
+    else if(g_gd==&gamedef_se){ tl=tappend(tl,"\002You say:"); tl=tappend(tl,g_inbuf); tl=tappend(tl,"\n\n"); }   /* SE as DOS: the line in blue, a blank row, the answer */
     else { tl=tappend(tl,"> "); tl=tappend(tl,g_inbuf); tl=tappend(tl,"  "); }
     tappend(tl,cvm_text(&g_cv));
     g_inlen=0; g_inbuf[0]=0;
@@ -8553,7 +8566,6 @@ static void entry_submit(world_t*w){ if(g_mantra==6){ se_dream_submit(w); return
     else if(g_mantra==5){ g_mantra=0; (void)do_verb_count(w); }
     else { int st=g_mantra; g_mantra=0; ball_submit(w,st); } }
 static int entry_cap(void){ return g_mantra==6?12:g_mantra==1?CVM_INPUT-1:g_mantra==2?8:3; }
-static char g_se_dream_txt[400];
 static const char*entry_prompt(void){ return g_mantra==6?g_se_dream_txt:g_mantra==1?"Mantra: ":g_mantra==2?"Wish for: ":g_mantra==3?"At latitude=":g_mantra==5?"How many? ":"longitude="; }
 /* what U)se does alike on the map and in the pack (usecode_use.md); -1 = not one of these */
 static int g_tscope_x, g_tscope_y;
@@ -13281,7 +13293,7 @@ static int u6_rest(world_t *w)
     return 1;
 }
 /* ---- SE's R)est (docs/rules/se_rest.md): no fire and no guard; a meal that heals; the dream ------------- */
-static int  g_se_dream_ok, g_se_dream_a=-1;           /* hours x 3 > the party (§5); the dreamer awaiting its answer */
+static int  g_se_dream_ok;                            /* hours x 3 > the party (§5) */
 static int  g_se_blanket[8];                          /* each member's blanket (246), -1 = none */
 static int  se_rest_msg(const char*s){ int n=0; while(g_msg[n]) n++; return msgcat(n,s); }
 /* §1: the reason the party can't rest, or 0 */
@@ -13349,14 +13361,16 @@ static int se_dream(int a)
     if(lv<0||lv>8||NEED[lv]>g_aexp[a]) return 0;
     g_alevel[a]=(int8_t)(lv+1);
     { int n=0; const char*part[9]={nm," has a dream...\n\n",a==2?"She":"He"," chases three animals through the jungle: a bear, a jaguar and a monkey.\n\n",
-          "The path branches, each animal going a separate way.\n\nDoes ",nm," follow the @bear, the @jaguar or the @monkey?\n","Your choice: ",0};
+          "The path branches, each animal going a separate way.\n\nDoes ",nm," follow the @bear, the @jaguar or the @monkey?\n",0};
       for(int k=0;part[k];k++) for(const char*c=part[k];*c&&n<(int)sizeof g_se_dream_txt-1;c++) g_se_dream_txt[n++]=*c;
       g_se_dream_txt[n]=0; }
-    g_se_dream_a=a; g_mantra=6; g_inlen=0; g_inbuf[0]=0; msgcat(0,g_se_dream_txt);
+    g_se_dream_a=a; g_mantra=6; g_inlen=0; g_inbuf[0]=0;               /* shown in the talk window, paged as a talk (converse.md §6d) */
+    { int n=0; char t[400]; for(const char*c=g_se_dream_txt;*c && n<(int)sizeof t-1;c++) t[n++]=*c=='@'?'\001':*c;   /* (@ marks a keyword: red) */
+      t[n]=0; g_thead=0; tappend(0,t); }
     return 1; }
 static void se_dream_submit(world_t*w)
 {   int a=g_se_dream_a; char c=g_inbuf[0]; uint8_t *st;
-    g_mantra=0; g_se_dream_a=-1; g_inlen=0; g_inbuf[0]=0; g_msg[0]=0;
+    g_mantra=0; g_se_dream_a=-1; g_inlen=0; g_inbuf[0]=0; g_msg[0]=0; g_transcript[0]=0; g_tgen++;
     if(a<1||a>=U6_MAX_ACTORS) return;
     if(c=='B'||c=='b') st=&g_astr[a]; else if(c=='J'||c=='j') st=&g_adex[a]; else if(c=='M'||c=='m') st=&g_aint[a];
     else st = g_astr[a]>g_adex[a] ? (g_astr[a]>g_aint[a]?&g_astr[a]:&g_aint[a]) : (g_adex[a]>g_aint[a]?&g_adex[a]:&g_aint[a]);   /* the highest */
@@ -17693,6 +17707,8 @@ int main(int argc, char **argv)
             dbg_num("DE avatar exp (1000 at karma 50)=", g_aexp[1]); dbg_num("DE combat mode=", g_combat_mode); DE_READY();
             dbg_num("DE lord british x=", g_actx[5]); dbg_num("DE lord british y=", g_acty[5]);
         } }
+    /* SEDREAM.REQ (SE, test builds): the Avatar dreams at once, to see the dream's screen (rules/se_rest.md §6) */
+    {   int32_t dl_=0; if(g_gd==&gamedef_se && TEST_REQ("SEDREAM.REQ",&dl_) && dl_>0){ g_alevel[1]=1; if(g_aexp[1]<100) g_aexp[1]=100; (void)se_dream(1); } }
     /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
     {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)TEST_REQ("REST.REQ",&rl2_);
         if(rr && rl2_>0){ int mode=rr[0], M=U6_SURFACE_TILES-1; rng_seed(&g_crng,0x7e57u);
@@ -19569,7 +19585,7 @@ int main(int argc, char **argv)
                 dbg_num("SE rest counter=", ok && g_ahp[1]==hpb && strstr(g_msg," has food.")!=0);
                 for(k=0;k<200&&g_resting;k++) se_rest_tick(&w); pack_take(1,103,objworld_count(&g_ow,103)-m0); }
               /* the dream: the jaguar, then an empty answer for the highest; and one in the night */
-              g_alevel[1]=1; g_aexp[1]=150; g_adex[1]=12; g_msg[0]=0; ok=se_dream(1) && g_alevel[1]==2 && g_mantra==6 && strstr(g_msg,"has a dream...")!=0 && strstr(g_msg,"Your choice: ")!=0;
+              g_alevel[1]=1; g_aexp[1]=150; g_adex[1]=12; g_msg[0]=0; ok=se_dream(1) && g_alevel[1]==2 && g_mantra==6 && g_se_dream_a==1 && strstr(g_se_dream_txt,"has a dream...")!=0 && strstr(g_transcript,"follow the \001bear,")!=0 && !strstr(g_msg,"dream");
              
               strcpy(g_inbuf,"jaguar"); g_inlen=6; entry_submit(&w); dbg_num("SE rest dream=", ok && g_adex[1]==13 && !g_mantra);
               g_astr[1]=10; g_adex[1]=12; g_aint[1]=12; g_aexp[1]=250; (void)se_dream(1); g_inbuf[0]=0; g_inlen=0; entry_submit(&w);
@@ -21236,11 +21252,12 @@ int main(int argc, char **argv)
                     g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0; redraw=1;
                 }
             } else if (g_mantra) {                   /* typing an answer: a rune's mantra, a wish, the crystal ball (usecode_use.md) */
-                if      (a==0x0d) { entry_submit(&w); compose_map(&w); draw_border_tiles(); redraw=1; }
-                else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } { int n=msgcat(0,entry_prompt()); msgcat(n,g_inbuf); } redraw=1; }
-                else if (a==0x1b) { if(g_mantra==6){ g_inlen=0; g_inbuf[0]=0; entry_submit(&w); } else { g_mantra=0; g_msg[0]=0; } redraw=1; }   /* (SE's dream: an empty answer, se_rest.md §9) */
+                if      (g_mantra==6 && talk_waiting()){ (void)talk_page_key(a); redraw=1; }   /* SE's dream pages as a talk (converse.md §6d) */
+                else if (a==0x0d) { entry_submit(&w); compose_map(&w); draw_border_tiles(); redraw=1; }
+                else if (a==0x08) { if(g_inlen){ g_inbuf[--g_inlen]=0; } if(g_mantra!=6){ int n=msgcat(0,entry_prompt()); msgcat(n,g_inbuf); } redraw=1; }
+                else if (a==0x1b) { if(g_mantra==6){ g_inlen=0; g_inbuf[0]=0; entry_submit(&w); compose_map(&w); draw_border_tiles(); } else { g_mantra=0; g_msg[0]=0; } redraw=1; }   /* (SE's dream: an empty answer, se_rest.md §9) */
                 else if (a>=0x20 && a<0x7f && g_inlen<entry_cap()) { g_inbuf[g_inlen++]=(char)a; g_inbuf[g_inlen]=0;
-                    { int n=msgcat(0,entry_prompt()); msgcat(n,g_inbuf); } redraw=1; }
+                    if(g_mantra!=6){ int n=msgcat(0,entry_prompt()); msgcat(n,g_inbuf); } redraw=1; }
             } else if (g_save_menu) {                /* the slot page (save_load.md §2b) */
                 int sc=(key>>8)&0xFF, act=0;
                 if      (a==0x0d) act=1;
@@ -21523,7 +21540,7 @@ int main(int argc, char **argv)
             draw_border_tiles(); draw_status(&w,ink); anim_redraw=1; }
 
         /* a wait's cursor steps (converse.md §6d): only its cell is drawn and shown */
-        if (g_tcur_x>=0 && ((g_talking && (talk_waiting()||g_await_input)) || g_msg_more || g_tcur_idle) && (uint32_t)(now - last_tcur) >= 33){
+        if (g_tcur_x>=0 && (((g_talking||g_se_dream_a>0) && (talk_waiting()||g_await_input)) || g_msg_more || g_tcur_idle) && (uint32_t)(now - last_tcur) >= 33){
             last_tcur = now; g_tcur_frame++; tcur_glyph(); if(!redraw) present_panel_rect(g_tcur_x,g_tcur_y,8,8); }
 
         /* colour cycling: rotate the CLUT — no recompose/present needed, the shifter shows the

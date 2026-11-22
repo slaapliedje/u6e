@@ -63,7 +63,7 @@ After `bye` the talk stays in the scroll and the next prompt follows it.
   Drop- as well). A carried thing is picked in the inventory display (equipment.md §5); the pack pickers that
   stepped through the pack on the verb's letter were removed 2026-11-18 at the user's call.
 - U6 conversations: §2b, all of it (the scroll, `you say:`, the unframed face, the member's figure, the
-  stranger's kind, rows 8 px apart). The bot reads `you say:word` where SE keeps `> word`.
+  stranger's kind, rows 8 px apart). The bot reads `you say:word`, SE's `You say:word` (se_screen.md §5b).
 
 ## 4. Open
 - SE's answer to a letter at the crosshair was not tried in DOS SE (ours: as U6).

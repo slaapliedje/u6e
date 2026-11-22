@@ -229,7 +229,7 @@ class Player:
             st = self.say(w) if (self.g.state.get('askc') and len(w) == 1) else self.g.type(w)
             self.check('say %r to %d' % (w, aid))
             reply = st['conv']
-            echo = ('you say:' if 'you say:' in reply else '> ') + w    # U6 echoes as DOS ("you say:"), SE "> "
+            echo = ('you say:' if 'you say:' in reply else 'You say:') + w    # U6 echoes "you say:", SE "You say:" (both as DOS)
             if echo not in reply: self.issue('talk', '%d %s: no reply to %r' % (aid, name, w), shot=False)
             elif not reply.split(echo, 1)[1].strip(): self.issue('talk', '%d %s: empty reply to %r' % (aid, name, w), shot=False)
             out.append((w, reply))

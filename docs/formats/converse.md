@@ -234,7 +234,9 @@ In u6e (render/gamedemo.c `talk_page_sync`/`talk_advance`/`talk_draw`): the coun
 row counting as a line. U6 shows the talk in the message box (10 rows, the older scroll above it; the first
 page's count starts at 6, `Talk-name` and a blank row having taken two: message_scroll.md §2b); SE shows the
 newest 16 rows in the map window. The `*`s
-stay in the transcript (the bot and the tests read it whole) and are not drawn.
+stay in the transcript (the bot and the tests read it whole) and are not drawn. The colour marks (byte 1 before a keyword, byte
+2 starting SE's blue input line) take no column when a row is wrapped (fixed 2026-11-22: they took one, so a row
+with a keyword wrapped a column early).
 
 ## 7. Status
 Savage Empire (2026-11-07): its scripts run on the same VM in SE's dialect (§6c), in the game and on
