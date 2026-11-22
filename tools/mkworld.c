@@ -1742,8 +1742,8 @@ static long convert_midgame(const char *dir, uint8_t marker, FILE *out)
 
 /* SE's front end (docs/design/se_front_end.md): SAVAGE.PAL's three palettes (6-bit, 3 x 768) and the items of TITLE,
  * INTRO, CREATE and ENDGAME.LZC as stored (each a shape library, shapes.md; the engine decodes a picture when it shows it).
- * "CSFE" [3 x 768 palette][u8 ngroups][64 x (u8 file 0-3, u8 item, u32 len), the first ngroups used] then the items'
- * bytes in order.
+ * "CSFE" [3 x 768 palette][u8 ngroups][64 x (u8 file 0-4, u8 item, u32 len), the first ngroups used] then the items'
+ * bytes in order. File 4 item 0 is SAVAGE.FNT unpacked (the WOU font); file 5 item 0 the words read from SAVAGE.EXE.
  * Written in the library tail just before the scenes' block, with a trailer [u32 block length]["CFEE"]. */
 static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
 {
@@ -1764,6 +1764,25 @@ static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
         for(int it=0;it<ni && ng<64;it++){ int32_t n=u6lzc_read(&lc,it,item,(int32_t)sizeof item); if(n<=0) continue;
             fwrite(item,1,(size_t)n,out); gf[ng]=(uint8_t)f; gi[ng]=(uint8_t)it; gl[ng]=n; ng++; }
         free(b); }
+    {   long fl; uint8_t *b=slurp(dir,"SAVAGE.FNT",&fl); u6lzc_t lc;   /* the cutscene font (fonts.md, WOU), unpacked: group (4, 0) */
+        if(b && u6lzc_open(&lc,b,(int32_t)fl,marker) && ng<64){ int32_t n=u6lzc_read(&lc,0,item,(int32_t)sizeof item);
+            if(n>0){ fwrite(item,1,(size_t)n,out); gf[ng]=4; gi[ng]=0; gl[ng]=n; ng++; } }
+        else printf("SAVAGE.FNT: missing\n");
+        free(b); }
+    {   long fl; uint8_t *x=slurp(dir,"SAVAGE.EXE",&fl);              /* the front end's words from the user's SAVAGE.EXE: group (5, 0) */
+        long img=0, dg=-1;                                                  /* (se_front_end.md "Strings"): [u8 n][n NUL-ended strings] */
+        if(x && fl>0x40 && x[0]=='M' && x[1]=='Z'){ img=(long)(x[8]|(x[9]<<8))*16;
+            for(long i=img;i+30<fl;i++) if(!memcmp(x+i,"Turbo C++ - Copyright 1990",26)){ dg=i-4; break; } }
+        if(dg>0 && ng<64){
+            static const uint16_t OPEN[7]={0xd7c,0xdd3,0xe4f,0xebc,0xefe,0xf68,0xfc8};
+            uint16_t at[64]; int na=0;
+            for(int k=0;k<7;k++) at[na++]=OPEN[k];
+            for(int q=0;q<6;q++) for(int k=0;k<4;k++){ long o=dg+0x564+q*12+k*2; at[na++]=(uint16_t)(x[o]|(x[o+1]<<8)); }   /* the questions (DS:0x564) */
+            long n0=ftell(out); fputc(na,out);
+            for(int k=0;k<na;k++){ if(at[k]) { const char*t=(const char*)x+dg+at[k]; fwrite(t,1,strlen(t),out); } fputc(0,out); }
+            gf[ng]=5; gi[ng]=0; gl[ng]=(int32_t)(ftell(out)-n0); ng++; }
+        else printf("SAVAGE.EXE: missing or not the one read (front end words)\n");
+        free(x); }
     long end=ftell(out);
     fseek(out,cnt,SEEK_SET); fputc(ng,out);
     for(int k=0;k<ng;k++){ fputc(gf[k],out); fputc(gi[k],out); be32(out,(unsigned long)gl[k]); }

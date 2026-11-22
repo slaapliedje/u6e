@@ -83,6 +83,21 @@ Read so far (2026-11-22):
   probably the start for the ending's "completed in"), 0x1d71 = 0, 0x1d72 = 1, and bit 0x01 ("met") in the talk flags
   (0x18f1 + actor) of actors 2, 4, 5, 7, 8, 9 and 23. Journey Onward is then offered.
 
+What the text box shows (seen in DOS, 2026-11-22): each string ends in `\n%P`; `\n` is a new line, `%P` draws nothing; a
+page ends with the page wait's arrow (SAVAGE.FNT glyph 0x19, blue: palette 1 index 1) at the cursor. The opening is three
+pages (DS:0xd7c+0xdd3, 0xe4f+0xebc, 0xefe+0xf68), then 0xfc8 and the name typed on the next line. A question: part 0,
+then part 1 on a new line; with part 3 too, a page wait, a new page with parts 2 and 3; else part 2 on a new line.
+The screen uses palette 1. The answer's pictures (0x5818): six frames of CREATE item 2 (Intanya's arm, the potion) over
+item 1 shape 0 and under its shape 1, delays 95/71/48/48/71/95 ms; then 17 frames of item 3 over item 2 frame 5 and the
+answer's own picture (item 3 frame 17 + the picture number: strength 1, dexterity 2, intelligence 0), delays 57, 43,
+29, 14, 0 ms then 36 ms; then the six frames back, 83/60/36/36/60/83 ms.
+
+## Strings
+The game's words are not in our source: mkworld reads them from the user's SAVAGE.EXE (DGROUP found by its
+`Turbo C++ - Copyright 1990` signature) into the CSFE block's group (5, 0): `[u8 n][n NUL-ended strings]`. Order: 0-6
+the opening (DS:0xd7c, 0xdd3, 0xe4f, 0xebc, 0xefe, 0xf68, 0xfc8); 7-30 the questions' four parts each, in question
+order, from the table at DS:0x564 (an empty string for a missing part).
+
 ## The pack
 mkworld writes a CSFE block in the library tail, just before the scenes' CMID block: `"CSFE"`, SAVAGE.PAL's three
 palettes as 6-bit (3 x 768), a count, a list with room for 64 entries (file 0 TITLE, 1 INTRO, 2 CREATE,
@@ -90,6 +105,7 @@ palettes as 6-bit (3 x 768), a count, a list with room for 64 entries (file 0 TI
 before CMID's. The engine reads one item when a screen needs it and decodes the shapes then.
 
 ## Status
-IN PROGRESS: the menu built (2026-11-22; TT/Falcon and graphics cards; the ST needs its 16-colour palettes): the
-story and About are not built yet, and Create New Character starts a new game with the starting objlist (no
-questions yet). Journey Onward resumes the last slot.
+IN PROGRESS (TT/Falcon and graphics cards; the ST needs its 16-colour palettes): the menu and character creation
+built 2026-11-22 (the opening, the name, the three questions, the answers' pictures, the objlist fields of 0x5a7c; the
+new game starts with them). Journey Onward resumes the last slot. Not yet: the story, About, the intro, the ending,
+the songs, the ST.

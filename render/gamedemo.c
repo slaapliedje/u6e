@@ -3021,7 +3021,7 @@ static void chargen_capture(int which)
  * party {Avatar,Dupre,Shamino,Iolo} from the original SAVEGAME/OBJLIST), and character creation
  * OVERLAYS just six fields onto the Avatar: name, gender, portrait, Str, Dex, Int. No-op unless
  * character creation actually ran (a plain "Journey Onward" keeps the shipped default Avatar). */
-static void sync_party_hp(void);
+static void sync_party_hp(void); static void se_cc_apply(void);
 static void apply_chargen(void)
 {
     if(!g_cc_done) return;
@@ -3046,6 +3046,7 @@ static void apply_chargen(void)
      * gender variant — nuvie's U6Actor derives it from base_obj_n alone. Gender shows in the
      * portrait/status view + this honorific, not the map figure.) */
     g_avatar_title = g_cc_gender ? "milord" : "milady";
+    if(g_gd==&gamedef_se) se_cc_apply();
 }
 
 /* U6 MAIN MENU (docs/formats/shapes.md front-end). Shows the "Ultima VI" title +
@@ -16427,6 +16428,111 @@ static void sefe_draw(const uint8_t *lib,int32_t len,int idx,int x,int y,uint8_t
     if(!u6shape_decode(lib,len,idx,&w,&h,tmp,cap)) return;
     u6shape_hotspot(lib,len,idx,&hx,&hy);
     blit_indexed(tmp,w,h,x-hx,y-hy); }
+/* ---- SE's character creation (SAVAGE.EXE 0x50ac; se_front_end.md "Character creation") ---- */
+static const uint8_t *g_sef; static int32_t g_sef_len;          /* SAVAGE.FNT unpacked (WOU font, fonts.md) */
+static int sef_w(unsigned char c){ return g_sef?g_sef[4+c]:0; }
+static int sef_textw(const char*t,int n){ int w=0; for(int i=0;i<n&&t[i];i++) w+=sef_w((unsigned char)t[i]); return w; }
+static void sef_glyph(int x,int y,unsigned char c,uint8_t col)
+{   if(!g_sef) return; int w=g_sef[4+c], h=g_sef[0]; int32_t g=g_sef[260+c]|(g_sef[516+c]<<8); uint8_t tr=g_sef[3];
+    for(int r=0;r<h;r++) for(int k=0;k<w;k++){ int32_t o=g+(int32_t)r*w+k;
+        if(o<g_sef_len && g_sef[o]!=tr && x+k>=0 && x+k<LW && y+r>=0 && y+r<LH) ROW(y+r)[x+k]=col; } }
+/* the text box: x 177-306 from y 32, 8 px a line, words wrapped (0x78e:0x252) */
+static int g_tbx, g_tby;
+static const uint8_t *g_cr_box; static int32_t g_cr_box_len; static uint8_t *g_cr_tmp;
+static void tb_clear(void){ sefe_draw(g_cr_box,g_cr_box_len,2,170,25,g_cr_tmp,64000); g_tbx=177; g_tby=32; }
+static void tb_print(const char*t)
+{   while(t && *t){
+        if(*t=='\n'){ g_tbx=177; g_tby+=8; t++; continue; }
+        if(t[0]=='%' && t[1]=='P'){ t+=2; continue; }                   /* (the printer's own mark: nothing drawn) */
+        if(*t==' '){ g_tbx+=sef_w(' '); t++; continue; }
+        int n=0; while(t[n] && t[n]!=' ' && t[n]!='\n' && !(t[n]=='%'&&t[n+1]=='P')) n++;
+        if(g_tbx+sef_textw(t,n)>306 && g_tbx>177){ g_tbx=177; g_tby+=8; }
+        for(int i=0;i<n;i++){ sef_glyph(g_tbx,g_tby,(unsigned char)t[i],0); g_tbx+=sef_w((unsigned char)t[i]); }
+        t+=n; } }
+/* a key or a click; Esc as 0x1b */
+static int cr_wait(void)
+{   rdr_present_doubled(LH); { int d; while((d=plat_input_raw())){ (void)d; } }
+    for(;;){ int k=plat_input_raw(); if(k) return k&0xFF?k&0xFF:k; if(fe_click_edge()) return 0x0d; vsync_pump(); } }
+static void cr_sleep_us(int32_t us){ uint32_t t0=plat_ticks_200hz(), n=(uint32_t)(us/5000); while(plat_ticks_200hz()-t0<n) vsync_pump(); }
+static const uint8_t *g_cr_i1, *g_cr_i2, *g_cr_i3; static int32_t g_cr_l1, g_cr_l2, g_cr_l3;
+/* decoded once: Intanya's two layers and the six potion frames (the animation redraws them every frame) */
+static uint8_t *g_cr_dec[8]; static int g_cr_dw[8], g_cr_dh[8];
+static void cr_cache(void)
+{   for(int k=0;k<8;k++){ const uint8_t*lib=k<2?g_cr_i1:g_cr_i2; int32_t l=k<2?g_cr_l1:g_cr_l2; int i=k<2?k:k-2, w,h;
+        g_cr_dec[k]=0; if(!u6shape_size(lib,l,i,&w,&h)) continue;
+        g_cr_dec[k]=(uint8_t*)plat_alloc_chip((uint32_t)w*h);
+        if(g_cr_dec[k] && u6shape_decode(lib,l,i,&w,&h,g_cr_dec[k],(int32_t)w*h)){ g_cr_dw[k]=w; g_cr_dh[k]=h; } else g_cr_dec[k]=0; } }
+static void cr_blit(int k){ if(g_cr_dec[k]) blit_indexed(g_cr_dec[k],g_cr_dw[k],g_cr_dh[k],8,28); }
+/* Intanya's picture with an overlay between its two layers (0x5818) */
+static void cr_frame(const uint8_t *ov,int32_t ol,int of,const uint8_t *ov2,int32_t ol2,int of2)
+{   cr_blit(0);
+    if(ov==g_cr_i2) cr_blit(2+of); else if(ov) sefe_draw(ov,ol,of,8,28,g_cr_tmp,64000);
+    if(ov2) sefe_draw(ov2,ol2,of2,8,28,g_cr_tmp,64000);
+    cr_blit(1);
+    rdr_present_rect_doubled(8,28,160,145,LH); }
+/* an answer's picture (0x5818): the potion forward, the animal (pic 0-2), the potion back */
+static void cr_answer_anim(int pic)
+{   static const int32_t D1[6]={95320,71490,47660,47660,71490,95320}, D3[6]={83405,59575,35745,35745,59575,83405};
+    for(int i=0;i<6;i++){ cr_frame(g_cr_i2,g_cr_l2,i,0,0,0); cr_sleep_us(D1[i]); }
+    for(int i=0;i<17;i++){ cr_blit(0); cr_blit(7); sefe_draw(g_cr_i3,g_cr_l3,pic+17,8,28,g_cr_tmp,64000); sefe_draw(g_cr_i3,g_cr_l3,i,8,28,g_cr_tmp,64000);
+        cr_blit(1); rdr_present_rect_doubled(8,28,160,145,LH);
+        cr_sleep_us(i<5?(int32_t)(24-6*i)*2383:35745); }
+    for(int i=5;i>=0;i--){ cr_frame(g_cr_i2,g_cr_l2,i,0,0,0); cr_sleep_us(D3[i]); } }
+static const char *sefe_str(const uint8_t *sb,int32_t sl,int k)
+{   if(!sb||sl<1||k>=sb[0]) return ""; const char*p=(const char*)sb+1;
+    for(int i=0;i<k;i++){ while(*p) p++; p++; if(p>=(const char*)sb+sl) return ""; } return p; }
+/* 1 = a character made (g_cc_*), 0 = back to the menu */
+static int se_run_create(void)
+{
+    plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t sl=0, l4=0;
+    g_cr_i1=sefe_item(2,1,&g_cr_l1); g_cr_i2=sefe_item(2,2,&g_cr_l2); g_cr_i3=sefe_item(2,3,&g_cr_l3); g_cr_box=sefe_item(2,4,&l4); g_cr_box_len=l4;
+    g_sef=sefe_item(4,0,&g_sef_len); const uint8_t *sb=sefe_item(5,0,&sl); g_cr_tmp=(uint8_t*)plat_alloc_chip(64000);
+    if(!g_cr_i1||!g_cr_i2||!g_cr_i3||!g_cr_box||!g_sef||!sb||!g_cr_tmp||!sefe_palette(1,pal)){ plat_chip_reset(mk); g_sef=0; return 0; }
+    cr_cache();
+    rng_seed(&g_crng, plat_ticks_200hz());                                   /* (the game seeds its own again at play start) */
+    int st[3]; for(int k=0;k<3;k++) st[k]=16+(int)rng_range(&g_crng,3);
+    rdr_set_palette(pal,256);
+    clear_bb(0); sefe_draw(g_cr_i1,g_cr_l1,2,0,0,g_cr_tmp,64000);
+    sefe_draw(g_cr_i1,g_cr_l1,0,8,28,g_cr_tmp,64000); sefe_draw(g_cr_i1,g_cr_l1,1,8,28,g_cr_tmp,64000);
+    { int w,h; if(u6shape_decode(g_cr_box,l4,2,&w,&h,g_cr_tmp,64000))             /* the box's shadow (0x3534), then the box */
+        for(int y=0;y<h;y++) for(int x=0;x<w;x++) if(g_cr_tmp[y*w+x]!=FE_TRANSP && 175+x<LW && 30+y<LH) ROW(30+y)[175+x]=0; }
+    int ok=1;
+    for(int pg=0;pg<3 && ok;pg++){ tb_clear(); tb_print(sefe_str(sb,sl,pg*2)); tb_print(sefe_str(sb,sl,pg*2+1));
+        sef_glyph(g_tbx,g_tby,0x19,1);                                     /* the page wait's arrow, blue (0x4fb6) */
+        if(cr_wait()==0x1b) ok=0; }
+    if(ok){ int n=0; g_cc_name[0]=0;                                         /* the name (0x539c): letters, digits, space . - ' ; 13 at most */
+        for(;;){ tb_clear(); tb_print(sefe_str(sb,sl,6)); int x=g_tbx;
+            for(int i=0;i<n;i++){ sef_glyph(x,g_tby,(unsigned char)g_cc_name[i],0); x+=sef_w((unsigned char)g_cc_name[i]); }
+            int k=cr_wait();
+            if(k==0x1b){ ok=0; break; }
+            if(k==0x0d){ if(n) break; ok=0; break; }                        /* an empty name: back to the menu */
+            if((k==0x08 || k==(0x4b<<8)) && n>0){ g_cc_name[--n]=0; continue; }
+            if(n<13 && ((k>='a'&&k<='z')||(k>='A'&&k<='Z')||(k>='0'&&k<='9')||k==' '||k=='.'||k=='-'||k=='\'')){ g_cc_name[n++]=(char)k; g_cc_name[n]=0; } } }
+    static const uint8_t ANS[6][2]={{2,0},{1,0},{1,2},{0,2},{0,1},{2,1}};
+    int q=(int)rng_range(&g_crng,3);
+    for(int round=0;round<3 && ok;round++){                                 /* 0x55a0 */
+        const char *t0=sefe_str(sb,sl,7+q*4), *t1=sefe_str(sb,sl,8+q*4), *t2=sefe_str(sb,sl,9+q*4), *t3=sefe_str(sb,sl,10+q*4);
+        tb_clear(); tb_print(t0);
+        if(t1[0]){ tb_print("\n"); tb_print(t1);
+            if(t3[0]){ if(cr_wait()==0x1b){ ok=0; break; } tb_clear(); tb_print(t2); tb_print("\n"); tb_print(t3); }
+            else { tb_print("\n"); tb_print(t2); } }
+        else { tb_print("\n"); tb_print(t2); if(t3[0]){ tb_print("\n"); tb_print(t3); } }
+        tb_print("\n");
+        int k; do { k=cr_wait(); if(k>='a'&&k<='z') k-=32; } while(k!=0x1b && k!='A' && k!='B');
+        if(k==0x1b){ ok=0; break; }
+        int s_=ANS[q][k=='B']; st[s_]+=3+(int)rng_range(&g_crng,3);
+        cr_answer_anim(s_==0?1:s_==1?2:0);
+        if(round==0) q=s_==0?2:s_==1?0:1;
+        else q=s_==0?(q==0?4:3):s_==1?(q==2?4:5):(q==0?5:3); }
+    if(ok){ g_cc_str=st[0]; g_cc_dex=st[1]; g_cc_int=st[2]; g_cc_gender=1; g_cc_done=1; }
+    plat_chip_reset(mk); g_sef=0; return ok; }
+/* the objlist fields SAVAGE.EXE writes for a new character (0x5a7c) besides the name and stats; and the HP its load step gives */
+static void se_cc_apply(void)
+{   static const uint8_t MET[7]={2,4,5,7,8,9,23};
+    for(int k=0;k<7;k++) g_cg.talk_flags[MET[k]]|=1;
+    if(g_savetmpl && g_objlist_off>=0){ uint8_t*d=g_savetmpl+g_objlist_off; static const uint8_t T[6]={0,8,1,1,0,0};
+        d[0x14f2]=(uint8_t)g_cc_dex; for(int k=0;k<6;k++) d[0x1d13+k]=T[k]; d[0x1d71]=0; d[0x1d72]=1; }
+    if(g_gl->load_reset) g_gl->load_reset(); }
 /* SE's menu (SAVAGE.EXE 0x4a37; se_front_end.md §menu): the screen (CREATE.LZC item 0, shape 0) and four plates at x 85,
  * y 116 + 18k: The Story So Far (shape 5), Create New Character (1), About (9), Journey Onward (3, only with a save);
  * the highlighted plate is shape + 1, the chosen one (shape - 1)/2 + 11 for a moment. 1 = create, 3 = journey. */
@@ -16458,7 +16564,12 @@ static int se_run_menu(void)
             else if(a=='a'||a=='A') act=2;
             else if((a=='j'||a=='J') && n==4) act=3;
             else if(a==0x0d||a==' ') act=sel; }
-        if(act==1 || act==3){ sel=act; pressed=act; dirty=1; }   /* the story and About: not yet built (se_front_end.md) */
+        if(act==1){ sel=1; pressed=-1; dirty=1;                 /* Create New Character (0x50ac) */
+            plat_chip_reset(mk); if(se_run_create()) return 1;
+            mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000);
+            if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
+            rdr_set_palette(pal,256); continue; }
+        if(act==3){ sel=act; pressed=act; dirty=1; }   /* the story and About: not yet built (se_front_end.md) */
         else if(act>=0){ sel=act; dirty=1; }
         if(!dirty) vsync_pump();
     }
