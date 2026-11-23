@@ -234,3 +234,9 @@ list once SE's seams exist.
   free list, the dead lie in their slots as their remains, gold is carried; slip 29 (the boulder's flags) taken as
   the intent. What is left in the register: the user's slips (built as the intent, each restorable) and the slots.
   Found on the way: U6's save doesn't write the party list (0xfe0); SE's follower charge per step (0x14fb7) unread.
+- 2026-11-23: item 9: the intro built (design/se_front_end.md "The intro", design/se_origin_fx.md): the Origin FX opening
+  (the orchestra tuning, the conductor's taps, the zoom, the logo rising past the globe, the fireworks, on song 19's cues)
+  and the film (Lord British presents, Worlds of Ultima, the title rising with its shine, the dissolve, the three-layer pan
+  with the credits on song 18), DOS's fades and dissolve, the menu dissolving in after it with song 18 going on (the menu
+  starts no song in DOS). Slip 30: a step every 73 ms (DOS's pace is the machine's). Left in item 9: the opening's sound
+  effects, the AdLib render for DMA sound, the ST's 16-colour palettes for the front end.

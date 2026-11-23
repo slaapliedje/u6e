@@ -16845,24 +16845,266 @@ static void se_cc_apply(void)
     if(g_savetmpl && g_objlist_off>=0){ uint8_t*d=g_savetmpl+g_objlist_off; static const uint8_t T[6]={0,8,1,1,0,0};
         d[0x14f2]=(uint8_t)g_cc_dex; for(int k=0;k<6;k++) d[0x1d13+k]=T[k]; d[0x1d71]=0; d[0x1d72]=1; }
     if(g_gl->load_reset) g_gl->load_reset(); }
+/* ---- SE's intro (SAVAGE.EXE 0x4140-0x41d8; se_front_end.md "The intro") ---- */
+/* the song's cue (formats/se_music.md §5.4: the 0xFE type-3 number DS:0x20ce), or -1 when no song is playing that we can follow */
+static int se_song_cue(void){ return (g_smf_on && g_smf.playing) ? g_smf.now : -1; }
+static int fi_abort(void){ int k=plat_input_raw(); if(k) return 1; return fe_click_edge(); }
+/* wait until the song reaches cue n; without a song DOS waits ms instead (0x42f6, 0x4360); 0 = a key (skip) */
+static int fi_wait_cue(int n,int ms)
+{   uint32_t t0=plat_ticks_200hz();
+    for(;;){ int c=se_song_cue(); if(c>=0){ if(c>=n) return 1; } else if((int32_t)(plat_ticks_200hz()-t0)*5>=ms) return 1;
+        if(fi_abort()) return 0; vsync_pump(); } }
+/* the palette from `a` to `b`, linearly, one 6-bit step a retrace (70 Hz) for the largest difference (0x8afa) */
+static int fi_fade(const uint8_t *a,const uint8_t *b)
+{   int steps=0; for(int i=0;i<768;i++){ int d=a[i]-b[i]; if(d<0) d=-d; if(d>steps) steps=d; }
+    uint8_t p[768]; uint32_t t0=plat_ticks_200hz(); int k=0, last=-1;
+    while(k<steps){ k=(int)((plat_ticks_200hz()-t0)*70/200); if(k>steps) k=steps;
+        if(k!=last){ for(int i=0;i<768;i++) p[i]=(uint8_t)(a[i]+((b[i]-a[i])*k)/steps);
+            rdr_set_palette(p,256); if(rdr_palette_deferred()) rdr_present_doubled(LH); last=k; }   /* (Falcon truecolor: shown at a present) */
+        if(fi_abort()) return 0; vsync_pump(); }
+    return 1; }
+static const uint8_t g_black768[768];
+/* 0x3cb8: the back buffer shown from black up to pal (0x8ca6) */
+static int fi_fade_in(const uint8_t *pal){ rdr_set_palette(g_black768,256); rdr_present_doubled(LH); return fi_fade(g_black768,pal); }
+/* 0x3c84: down to black (0x8964), the screen cleared, the palette back */
+static int fi_fade_out(const uint8_t *pal){ int ok=fi_fade(pal,g_black768); clear_bb(0); rdr_set_palette(pal,256); rdr_present_doubled(LH); return ok; }
+/* the VGA driver's dissolve (TM.DRV item 0, entry +0x2c, called with speed 0): the new frame's pixels replace the old in a
+ * pseudo-random order (a linear feedback shift register). Its speed 0 waits one retrace for the whole screen, so the time is
+ * the machine's; ours takes 1/3 s in 8 steps. `old` holds the previous screen; the back buffer holds the new one. */
+static void fi_dissolve(uint8_t *old)
+{   for(int y=0;y<LH;y++){ uint8_t *r=ROW(y), *o=old+(int32_t)y*LW; for(int x=0;x<LW;x++){ uint8_t t=r[x]; r[x]=o[x]; o[x]=t; } }
+    uint32_t s=1; int32_t done=0; const int32_t N=(int32_t)LW*LH;
+    for(int step=1;step<=8;step++){ uint32_t t0=plat_ticks_200hz(); int32_t upto=N*step/8;
+        while(done<upto){ s=(s>>1)^(-(s&1u)&0x12000u);                     /* 17 bits, maximal: every value 1..131071 once */
+            if(s<=(uint32_t)N){ int32_t i=(int32_t)s-1; ROW(i/LW)[i%LW]=old[i]; done++; } }
+        rdr_present_doubled(LH); while(plat_ticks_200hz()-t0<8) vsync_pump(); } }
+/* a shape held as runs of its drawn pixels, a row at a time, so a layer that moves is a few memcpy a row (the pan draws eight
+ * layers a frame); 255 is left out */
+typedef struct { int16_t w,h,hx,hy; uint8_t *d; } fi_layer;
+static int fi_layer_make(fi_layer *L,const uint8_t *lib,int32_t len,int idx,uint8_t *tmp)
+{   int w,h,hx=0,hy=0; L->d=0; if(!lib||!u6shape_decode(lib,len,idx,&w,&h,tmp,64000)) return 0;
+    u6shape_hotspot(lib,len,idx,&hx,&hy);
+    int32_t n=0; for(int y=0;y<h;y++){ const uint8_t *r=tmp+(int32_t)y*w; int x=0;     /* the size: per row, (skip,len,pixels)... then (0,0) */
+        while(x<w){ while(x<w&&r[x]==FE_TRANSP) x++; if(x>=w) break; int b=x; while(x<w&&r[x]!=FE_TRANSP) x++; n+=4+(x-b); } n+=4; }
+    uint8_t *d=(uint8_t*)plat_alloc_chip((uint32_t)n); if(!d) return 0;
+    uint8_t *p=d; for(int y=0;y<h;y++){ const uint8_t *r=tmp+(int32_t)y*w; int x=0, last=0;
+        while(x<w){ while(x<w&&r[x]==FE_TRANSP) x++; if(x>=w) break; int b=x; while(x<w&&r[x]!=FE_TRANSP) x++;
+            int sk=b-last, ln=x-b; p[0]=(uint8_t)(sk>>8); p[1]=(uint8_t)sk; p[2]=(uint8_t)(ln>>8); p[3]=(uint8_t)ln; memcpy(p+4,r+b,(size_t)ln); p+=4+ln; last=x; }
+        p[0]=p[1]=p[2]=p[3]=0; p+=4; }
+    L->w=(int16_t)w; L->h=(int16_t)h; L->hx=(int16_t)hx; L->hy=(int16_t)hy; L->d=d; return 1; }
+static void fi_layer_draw(const fi_layer *L,int x,int y)
+{   if(!L->d) return; const uint8_t *p=L->d; x-=L->hx; y-=L->hy;
+    for(int r=0;r<L->h;r++){ int py=y+r, cx=x; int vis=(unsigned)py<(unsigned)LH; uint8_t *row=vis?ROW(py):0;
+        for(;;){ int sk=(p[0]<<8)|p[1], ln=(p[2]<<8)|p[3]; p+=4; if(!ln) break;
+            cx+=sk; if(vis){ int a=cx, b=cx+ln; if(a<0) a=0; if(b>LW) b=LW; if(b>a) memcpy(row+a,p+(a-cx),(size_t)(b-a)); }
+            p+=ln; cx+=ln; } } }
+/* a film step every 73 ms (14.6 ticks of 200 Hz): DOS draws a step a frame as fast as the machine allows, so its pace is the
+ * machine's; at this pace the pan fills song 18's "Melody, horn, flute" (cue 3 to 4, 15.5 s), as its credits are timed to be
+ * read (rules: se_front_end.md, slip "the film's pace"). 1 = draw this step, 0 = behind: skip it */
+static int fi_due(uint32_t t0,int i){ return (int32_t)(plat_ticks_200hz()-t0) <= (int32_t)((i+1)*146/10); }
+static void fi_until(uint32_t t0,int i){ while((int32_t)(plat_ticks_200hz()-t0) < (int32_t)((i+1)*146/10)) vsync_pump(); }
+/* ---- the Origin FX opening (0x6fcd; se_front_end.md "The Origin FX opening"): TITLE.LZC under palette 2, song 19 ----
+ * DOS draws it in a 320x128 frame shown on screen rows 24-151; coordinates here are the frame's, and the frame is the
+ * back buffer's rows 24-151 (the rest stays black). */
+#define OFX_Y 24
+static const uint8_t *g_ofx[13]; static int32_t g_ofxl[13]; static uint8_t *g_ofx_tmp, *g_ofx_sky, *g_ofx_globe;
+static int g_ofx_gw, g_ofx_gh, g_ofx_ghx;
+/* shape (it,fr) at (x,y) scaled by sc/256 (SUPERTM.DRV's rotozoom with angle 0; 256 = TM.DRV's plain draw), its hot spot
+ * scaled with it, clipped to the frame; nearest pixel */
+static void ofx_zoom(int it,int fr,int x,int y,int sc)
+{   int w,h,hx=0,hy=0; if(!g_ofx[it]||sc<=0||!u6shape_decode(g_ofx[it],g_ofxl[it],fr,&w,&h,g_ofx_tmp,64000)) return;
+    u6shape_hotspot(g_ofx[it],g_ofxl[it],fr,&hx,&hy);
+    int ow=(int)((int32_t)w*sc/256), oh=(int)((int32_t)h*sc/256), ox=x-(int)((int32_t)hx*sc/256), oy=y-(int)((int32_t)hy*sc/256);
+    int c0=ox<0?-ox:0, c1=ox+ow>LW?LW-ox:ow;
+    for(int r=0;r<oh;r++){ int py=oy+r; if(py<0||py>=128) continue;
+        const uint8_t *s=g_ofx_tmp+(int32_t)(r*256/sc)*w; uint8_t *d=ROW(OFX_Y+py)+ox;
+        if(sc==256){ for(int c=c0;c<c1;c++){ uint8_t v=s[c]; if(v!=FE_TRANSP) d[c]=v; } }
+        else for(int c=c0;c<c1;c++){ uint8_t v=s[(int32_t)c*256/sc]; if(v!=FE_TRANSP) d[c]=v; } } }
+/* the box it would cover (SUPERTM.DRV +6), inclusive */
+static void ofx_box(int it,int fr,int x,int y,int sc,int *x0,int *y0,int *x1,int *y1)
+{   int w=0,h=0,hx=0,hy=0; u6shape_size(g_ofx[it],g_ofxl[it],fr,&w,&h); u6shape_hotspot(g_ofx[it],g_ofxl[it],fr,&hx,&hy);
+    *x0=x-(int)((int32_t)hx*sc/256); *y0=y-(int)((int32_t)hy*sc/256); *x1=*x0+(int)((int32_t)w*sc/256)-1; *y1=*y0+(int)((int32_t)h*sc/256)-1; }
+static void ofx_sky(void){ if(g_ofx_sky) for(int y=0;y<128;y++) memcpy(ROW(OFX_Y+y),g_ofx_sky+(int32_t)y*LW,LW); }
+static void ofx_globe(int y)
+{   if(!g_ofx_globe) return; int x0=160-g_ofx_ghx;
+    for(int r=0;r<g_ofx_gh;r++){ int py=y+r; if(py<0||py>=128) continue; const uint8_t *s=g_ofx_globe+(int32_t)r*g_ofx_gw; uint8_t *d=ROW(OFX_Y+py);
+        for(int c=0;c<g_ofx_gw;c++){ int px=x0+c; if(px>=0&&px<LW&&s[c]!=FE_TRANSP) d[px]=s[c]; } } }
+static void ofx_backdrop(void){ ofx_sky(); ofx_globe(24); }                   /* 0x6379 */
+/* the logo (0x68c4): IGIN centred on x 162, OR and FX against its edges */
+static void ofx_logo(int y,int sc)
+{   int x0,y0,x1,y1; ofx_box(0,2,162,y,sc,&x0,&y0,&x1,&y1);
+    ofx_zoom(0,1,x0,y,sc); ofx_zoom(0,2,162,y,sc); ofx_zoom(0,3,x1,y,sc); }
+/* the layout (DS:0x1e69): x, y, dx, dy of items 1-10; the scripts (DS:0x1e55), frame = letter - 'a' */
+static const int16_t OFX_POS[10][4]={{58,94,-1,1},{186,94,0,1},{278,94,1,1},{58,102,-3,2},{186,102,0,2},{278,102,3,2},
+                                     {58,110,-5,3},{186,110,0,3},{278,110,5,3},{158,74,0,4}};
+static const char *const OFX_SCR[10]={"abcdefghijkaakkkkaaaalllllllmmll","aaaaaaaabcddeeddccffgghhgghhiiih","aaaaaaaaaabbccbbaaccccccccccaccc",
+    "aaaabbbcccddeeddccffggaaggffcaaa","aabbbaacccddddddccddeeeeeeddccca","aaaaaabbbaaabbaaaabbbbaabbbbaccc","aabbcdbbbeaaaaaaeeaaaaaaaaaabaaa",
+    "abbbaacccdeeaaeeddaaaaaaaaaadacc","aaaaaaaaabbbccbbbbccddddddccaaaa","abccdefgghiijjiihhkkllmmllkkhnnn"};
+static const char OFX_TAP[]="opoqopoqopoqopoqqrstrq";                        /* DS:0x1e3e */
+static int ofx_abort(void){ return fi_abort(); }
+static void ofx_tap(int on){ if(g_music_be_kind==3){ uint8_t m[3]={0x99,37,(uint8_t)(on?96:0)}; plat_midi_queue(m,3); } }   /* MT-32 rim shot */
+static int g_ofx_slot[30][4];                                                /* sparks: frame (-1 free), x, y, type */
+static int ofx_sparks(int n)                                                 /* 0x71e6: the free ones */
+{   int fr=0; for(int s=n-1;s>=0;s--){ int *k=g_ofx_slot[s]; if(k[0]<0){ fr++; continue; }
+        ofx_zoom(11,k[3]*8+k[0],k[1],k[2],256); k[0]=k[0]==7?-1:k[0]+1; } return fr; }
+static void ofx_spawn(int s){ int *k=g_ofx_slot[s]; k[0]=0; k[1]=(int)rng_range(&g_crng,320); k[2]=(int)rng_range(&g_crng,128); k[3]=(int)rng_range(&g_crng,3); }
+static void se_origin_fx(void)
+{   plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int ok=1;
+    g_ofx_tmp=(uint8_t*)plat_alloc_chip(64000); g_ofx_sky=(uint8_t*)plat_alloc_chip((uint32_t)LW*128);
+    for(int i=0;i<13;i++){ g_ofx[i]=sefe_item(0,i,&g_ofxl[i]); if(!g_ofx[i]) ok=0; }
+    if(!ok||!g_ofx_tmp||!g_ofx_sky||!sefe_palette(2,pal)){ plat_chip_reset(mk); return; }
+    { int w,h; if(!u6shape_decode(g_ofx[0],g_ofxl[0],0,&w,&h,g_ofx_sky,(int32_t)LW*128)||w!=LW) memset(g_ofx_sky,0,(size_t)LW*128); }
+    { int w,h,hy; if(u6shape_size(g_ofx[12],g_ofxl[12],0,&w,&h) && (g_ofx_globe=(uint8_t*)plat_alloc_chip((uint32_t)w*h))
+          && u6shape_decode(g_ofx[12],g_ofxl[12],0,&w,&h,g_ofx_globe,(int32_t)w*h)){ g_ofx_gw=w; g_ofx_gh=h; u6shape_hotspot(g_ofx[12],g_ofxl[12],0,&g_ofx_ghx,&hy); }
+      else g_ofx_globe=0; }
+    rng_seed(&g_crng, plat_ticks_200hz());
+    { int d; while((d=plat_input_raw())){ (void)d; } }
+    clear_bb(0); rdr_set_palette(g_black768,256); rdr_present_doubled(LH);
+    music_play_song("SE19");                                                 /* song 19, before the fade (0x705f) */
+    int synced=se_song_cue()>=0;                                             /* (DOS: music on, Roland or AdLib) */
+    /* 1: the orchestra at frame 0 over the globe, faded in (0x63b1) */
+    ofx_backdrop(); for(int r=0;r<10;r++) ofx_zoom(r+1,0,OFX_POS[r][0],OFX_POS[r][1],256);
+    if(!fi_fade(g_black768,pal)) goto end;
+    {   uint32_t t0=plat_ticks_200hz(); int i=0, start=0, steps=0, done=0;  /* 2: tuning, back and forth until cue 1 (0x640c) */
+        while(!done){
+            for(int dir=0;dir<2 && !done;dir++){
+                int a=dir?31:start, b=dir?start:31;
+                for(int j=a; dir?j>=b:j<=b; j+=dir?-1:1){
+                    if(fi_due(t0,i)){ ofx_backdrop(); for(int r=0;r<10;r++) ofx_zoom(r+1,OFX_SCR[r][j]-'a',OFX_POS[r][0],OFX_POS[r][1],256);
+                        rdr_present_doubled(LH); fi_until(t0,i); }
+                    i++; steps++;
+                    if(ofx_abort()) goto end;
+                    if(se_song_cue()>=1){ done=1; break; } }
+                if(!dir) start=9+(int)rng_range(&g_crng,14); }
+            if(!synced && steps>30) done=1; } }
+    {   uint32_t t0=plat_ticks_200hz();                                      /* 3: the conductor taps the stand (0x65b5) */
+        for(int k=0;k<20;k++){ char c=OFX_TAP[k];
+            if(c=='p') ofx_tap(1); else if(c=='q') ofx_tap(0);
+            ofx_backdrop(); for(int r=0;r<9;r++) ofx_zoom(r+1,OFX_SCR[r][31]-'a',OFX_POS[r][0],OFX_POS[r][1],256);
+            ofx_zoom(10,c-'a',158,74,256); rdr_present_doubled(LH); fi_until(t0,k);
+            if(ofx_abort()) goto end; }
+        if(synced){ ofx_backdrop(); for(int r=0;r<9;r++) ofx_zoom(r+1,OFX_SCR[r][31]-'a',OFX_POS[r][0],OFX_POS[r][1],256);
+            ofx_zoom(10,'r'-'a',158,74,256);
+            if(!fi_wait_cue(2,0)) goto end;                                  /* "Start Piano intro" */
+            rdr_present_doubled(LH); } }
+    {   uint32_t t0=plat_ticks_200hz(); int i=0;                             /* 4: the orchestra comes forward out of the frame (0x695a) */
+        for(int n=1;n<120;n+=n/4+1,i++){
+            if(fi_due(t0,i)){ ofx_backdrop();
+                for(int r=0;r<9;r++) ofx_zoom(r+1,OFX_SCR[r][31]-'a',OFX_POS[r][0]+OFX_POS[r][2]*n,OFX_POS[r][1]+OFX_POS[r][3]*n,256+4*n*OFX_POS[r][3]);
+                ofx_zoom(10,'q'-'a',158,74+4*n,256+16*n); rdr_present_doubled(LH); fi_until(t0,i); }
+            if(ofx_abort()) goto end; } }
+    int ly=59;
+    {   uint32_t t0=plat_ticks_200hz(); int i=0, yc=0, scn=0, front=0, gy=24, sc=256;   /* 5: the logo from behind the globe (0x6ac4) */
+        for(int t=5000;t>=1000;t--,yc--,scn--){ int ch=0;
+            if(yc==0){ gy=120000/t; yc=200; ch=1; }
+            if(scn==0){ sc=256000/t; ly+=t>3000?-2:2; scn=100; ch=1; }
+            if(ch){ if(fi_due(t0,i)){ int x0,y0,x1,y1; ofx_sky(); ofx_box(0,2,162,ly,sc,&x0,&y0,&x1,&y1); if(y1<gy) front=1;
+                    if(!front){ ofx_logo(ly,sc); ofx_globe(gy); } else { ofx_globe(gy); ofx_logo(ly,sc); }
+                    rdr_present_doubled(LH); fi_until(t0,i); }
+                i++; if(ofx_abort()) goto end; } }
+        ofx_sky(); ofx_logo(ly,256); rdr_present_doubled(LH); fi_until(t0,i); }
+    if(synced && !fi_wait_cue(3,0)) goto end;                                 /* "Start fireworks" */
+    {   uint32_t t0=plat_ticks_200hz(); int i=0, spawning=1, it=0;          /* 6: fireworks behind the logo (0x6c80) */
+        for(int s=0;s<30;s++) g_ofx_slot[s][0]=-1;
+        for(;;){ int sp=0;
+            if(spawning) sp=synced?(se_song_cue()>=4 || rng_range(&g_crng,6)==0):1;
+            if(sp) for(int s=0;s<5;s++) if(g_ofx_slot[s][0]<0){ ofx_spawn(s); break; }
+            ofx_sky(); int fr=ofx_sparks(5); ofx_logo(ly,256); rdr_present_doubled(LH); fi_until(t0,i++); it++;
+            if(!spawning && fr==5) break;
+            if(synced?se_song_cue()>=5:it>10) spawning=0;
+            if(ofx_abort()) goto end; }
+        for(int s=0;s<29;s++) ofx_spawn(s);                                  /* the finale: 30 at once */
+        for(int j=0,fr=0; fr!=30; ){ j++; if(j==4) ofx_spawn(29);
+            ofx_sky(); fr=ofx_sparks(30); ofx_logo(ly,256); rdr_present_doubled(LH); fi_until(t0,i++);
+            if(ofx_abort()) goto end; } }
+end:
+    music_stop_all();                                                        /* cut at once (0x7155) */
+    { int d; while((d=plat_input_raw())){ (void)d; } }
+    fi_fade(pal,g_black768); clear_bb(0); rdr_present_doubled(LH);
+    plat_chip_reset(mk); }
+/* the film (0x41de): Lord British presents, Worlds of Ultima, the title rising over the dusk jungle, the pan with the credits.
+ * 1 = it ran to the end (the menu then dissolves in over its last frame), 0 = a key skipped it */
+static int se_film(void)
+{   plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t l0=0,l1=0,l2=0; int ok=0;
+    uint8_t *tmp=(uint8_t*)plat_alloc_chip(64000);
+    const uint8_t *i0=sefe_item(1,0,&l0), *i1=sefe_item(1,1,&l1), *i2=sefe_item(1,2,&l2);
+    if(!tmp||!i0||!i1||!i2||!sefe_palette(0,pal)){ plat_chip_reset(mk); return 0; }
+    { int d; while((d=plat_input_raw())){ (void)d; } }
+    clear_bb(0); rdr_present_doubled(LH);
+    rdr_set_palette(pal,256);
+    sefe_draw(i0,l0,0,0,0,tmp,64000);                                        /* Lord British presents (INTRO 0.0) */
+    music_play_song("SE18");                                                 /* song 18 (0x429a) */
+    if(!fi_fade_in(pal)) goto out;
+    if(!fi_wait_cue(1,1000)) goto out;                                        /* "Second title screen" */
+    if(!fi_fade_out(pal)) goto out;
+    sefe_draw(i0,l0,1,0,0,tmp,64000);                                        /* Worlds of Ultima (DOS draws it behind at 0x42ba; our */
+    if(!fi_fade_in(pal)) goto out;                                           /* back buffer is the one shown, so after the fade) */
+    fi_layer L[8], T, C[8], S[5]; memset(L,0,sizeof L); memset(C,0,sizeof C); memset(S,0,sizeof S);
+    for(int k=0;k<8;k++) fi_layer_make(&L[k],i1,l1,k,tmp);                   /* the pan: sky 0-1, middle 2-4, front 5-7 */
+    for(int k=0;k<5;k++) fi_layer_make(&S[k],i1,l1,8+k,tmp);                 /* the title's shine */
+    fi_layer_make(&T,i2,l2,0,tmp);                                           /* THE SAVAGE EMPIRE */
+    for(int k=1;k<8;k++) fi_layer_make(&C[k],i2,l2,k,tmp);                   /* the credits (7 is empty) */
+    if(!fi_wait_cue(2,1000)) goto out;                                        /* "dinosaur screen" */
+    if(!fi_fade_out(pal)) goto out;
+    fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&L[5],0,0);
+    if(!fi_fade_in(pal)) goto out;
+    {   uint32_t t0=plat_ticks_200hz(); int i=0;                             /* the title rises 4 px a step from y 200 (0x4724) */
+        for(int y=200;y>=0;y-=4,i++){
+            if(fi_due(t0,i)){ fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&T,0,y); fi_layer_draw(&L[5],0,0);
+                rdr_present_doubled(LH); fi_until(t0,i); }
+            if(se_song_cue()>=3) y-=4;                                       /* the melody has begun: twice as fast */
+            if(fi_abort()) goto out; }
+        for(int k=0;k<10;k++,i++){ int s=k<5?k:9-k;                          /* its shine, 0-4 and back */
+            if(fi_due(t0,i)){ fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&T,0,0); fi_layer_draw(&L[5],0,0); fi_layer_draw(&S[s],0,0);
+                rdr_present_doubled(LH); fi_until(t0,i); }
+            if(fi_abort()) goto out; }
+        for(int k=0;k<7;k++){ int c=se_song_cue(); if(c>=3) break;          /* up to 7 x 200 ms for "Melody, horn, flute" */
+            uint32_t t1=plat_ticks_200hz(); while(plat_ticks_200hz()-t1<40){ if(fi_abort()) goto out; vsync_pump(); } } }
+    {   uint8_t *old=(uint8_t*)plat_alloc_chip(64000);                      /* the title dissolves away (0x444b) */
+        if(old) for(int y=0;y<LH;y++) memcpy(old+(int32_t)y*LW,ROW(y),LW);
+        fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&L[5],0,0);
+        if(old) fi_dissolve(old); else rdr_present_doubled(LH); }
+    {   uint32_t t0=plat_ticks_200hz(); int si;                             /* the pan: 1, 2 and 3 px a step, 213 steps (0x4452) */
+        for(si=0;si>-213;si--){ int i=-si;
+            if(fi_due(t0,i)){ fi_layer_draw(&L[0],si,0); fi_layer_draw(&L[1],si+320,0);
+                fi_layer_draw(&L[2],2*si,0); fi_layer_draw(&L[3],2*si+320,0); fi_layer_draw(&L[4],2*si+640,0);
+                fi_layer_draw(&L[5],3*si,0); fi_layer_draw(&L[6],3*si+320,0); fi_layer_draw(&L[7],3*si+640,0);
+                if(i%35<15) fi_layer_draw(&C[i/35+1],0,0);                   /* credit n for 15 steps of each 35 */
+                rdr_present_doubled(LH); fi_until(t0,i); }
+            if(fi_abort()) goto out; }
+        si++;                                                                /* the last step again, no credit (0x45de) */
+        fi_layer_draw(&L[0],si,0); fi_layer_draw(&L[1],si+320,0);
+        fi_layer_draw(&L[2],2*si,0); fi_layer_draw(&L[3],2*si+320,0); fi_layer_draw(&L[4],2*si+640,0);
+        fi_layer_draw(&T,6*si,0);                                            /* (the title, 1266 px off to the left: not seen) */
+        fi_layer_draw(&L[5],3*si,0); fi_layer_draw(&L[6],3*si+320,0); fi_layer_draw(&L[7],3*si+640,0);
+        rdr_present_doubled(LH); }
+    ok=1;
+out:
+    plat_chip_reset(mk);
+    if(!ok){ music_stop_all(); clear_bb(0); rdr_present_doubled(LH); }        /* a key: DOS fades the song out over 200 ticks (0x3c0d) */
+    { int d; while((d=plat_input_raw())){ (void)d; } }
+    return ok; }
 /* SE's menu (SAVAGE.EXE 0x4a37; se_front_end.md §menu): the screen (CREATE.LZC item 0, shape 0) and four plates at x 85,
  * y 116 + 18k: The Story So Far (shape 5), Create New Character (1), About (9), Journey Onward (3, only with a save);
  * the highlighted plate is shape + 1, the chosen one (shape - 1)/2 + 11 for a moment. 1 = create, 3 = journey. */
-static int se_run_menu(void)
+static int se_run_menu(int from_intro)
 {
     static const uint8_t FR[4]={5,1,9,3}; static const int Y[4]={116,134,152,170};
     plat_mark mk=plat_chip_mark(); int32_t len=0; uint8_t pal[768];
-    uint8_t *lib=sefe_item(2,0,&len), *tmp=(uint8_t*)plat_alloc_chip(64000);
+    uint8_t *lib=sefe_item(2,0,&len), *tmp=(uint8_t*)plat_alloc_chip(64000), *old=(uint8_t*)plat_alloc_chip(64000);
     if(!lib||!tmp||!sefe_palette(0,pal)){ plat_chip_reset(mk); return 1; }
+    int dis=from_intro;                                                    /* over the film's last frame: dissolved in (0x4ad5) */
     int last=0; for(int k=0;k<SAVE_SLOTS;k++) if(save_exists(k,0)) last=3;
     int n=last?4:3, sel=0, dirty=1, pressed=-1;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
     rdr_set_palette(pal,256);
     for(;;){
-        fe_music("SE00");                                                  /* the menu's song (SAVAGE.EXE 0x4a82; formats/se_music.md §5.4) */
-        if(dirty){ clear_bb(0); sefe_draw(lib,len,0,0,0,tmp,64000);
+        /* (no song of its own: song 18 goes on from the film; 0x4a82 starts song 0 only when DS:0x353e is 0xffff, which
+         * nothing sets, formats/se_music.md §5.4) */
+        if(dirty){ if(dis && old) for(int y=0;y<LH;y++) memcpy(old+(int32_t)y*LW,ROW(y),LW);
+            clear_bb(0); sefe_draw(lib,len,0,0,0,tmp,64000);
             for(int k=0;k<n;k++) sefe_draw(lib,len,k==sel?(pressed==k?(FR[k]-1)/2+11:FR[k]+1):FR[k],85,Y[k],tmp,64000);
-            rdr_present_doubled(LH); dirty=0;
+            if(dis && old) fi_dissolve(old); else rdr_present_doubled(LH); dirty=0; dis=0;
             if(pressed>=0){ uint32_t t0=plat_ticks_200hz(); while(plat_ticks_200hz()-t0<20) vsync_pump();   /* the chosen plate, a moment */
                 plat_chip_reset(mk); return pressed==1?1:3; } }
         int mux,muy,mclick,over=-1; fe_mouse(&mux,&muy,&mclick);
@@ -16879,14 +17121,14 @@ static int se_run_menu(void)
             else if(a==0x0d||a==' ') act=sel; }
         if(act==1){ sel=1; pressed=-1; dirty=1;                 /* Create New Character (0x50ac) */
             plat_chip_reset(mk); if(se_run_create()) return 1;
-            mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000);
+            mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000); old=(uint8_t*)plat_alloc_chip(64000);
             if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
             rdr_set_palette(pal,256); continue; }
         if(act==3){ sel=act; pressed=act; dirty=1; }
         else if(act==0){ plat_chip_reset(mk); se_run_story(); sel=1; dirty=1;           /* after the story, Create is highlighted (0x4c91) */
-            mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000); if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
+            mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000); old=(uint8_t*)plat_alloc_chip(64000); if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
             rdr_set_palette(pal,256); }
-        else if(act==2){ se_run_about(lib,len,tmp); sel=2; dirty=1; }
+        else if(act==2){ se_run_about(lib,len,tmp); sel=2; dirty=1; dis=1; }       /* back from About: dissolved in (0x4cc9) */
         if(!dirty) vsync_pump();
     }
 }
@@ -17137,7 +17379,9 @@ int main(int argc, char **argv)
     } else if (sz_fe>0) Cconws("  U6FE.PAK is not a v2 pack (rebuild: make world) - front-end skipped\r\n");
     else if (g_sefe_off){ int32_t ml=0; rdr_caps rc; rdr_get_caps(&rc);        /* SE: its own front end from the pack (se_front_end.md) */
         if(rc.colors>=256 && plat_load_file("MENU.REQ",1,&ml)){ g_menu_ran=1;
-            if(se_run_menu()==3) g_menu_journey=1;
+            se_origin_fx();                                                    /* the intro first (0x4161): Origin FX, then the film */
+            int full=se_film();
+            if(se_run_menu(full)==3) g_menu_journey=1;
             fe_leave_black(); } }
     /* (no console line here: the video mode is up — text would scribble on the game screen) */
     uint8_t *pak=g_clib_off?(uint8_t*)load_prefix(PACK_NAME,g_clib_off,1):(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */

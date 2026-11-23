@@ -49,9 +49,39 @@ DS:0x1e3e-0x1fe2).
 2. The menu (static, then its animations) and "Journey Onward" into the game.
 3. Character creation: name, the six questions and what they set (stats; DOS writes `savegame\objlist`), the face.
 4. The story so far; About.
-5. The intro film.
+5. The intro film (done 2026-11-23).
 6. The ending (from the moonstone's scene; the date arguments, the companion).
 7. The songs, once formats/se_music.md exists.
+
+## The intro (SAVAGE.EXE 0x4140-0x41d8)
+Without the skip flag (DS:0x2b9c): palette 2 and the **Origin FX opening** (0x6fcd with song 19; its own spec:
+design/se_origin_fx.md), palette 1, the **film** (0x41de), then the menu called with 1 (it dissolves in over the film's
+last frame). A key during the opening ends only the opening; a key during the film fades song 18 out over 200 ticks
+(0x8e4:0x1478) and goes to the menu called with 0 (cleared, palette 0, faded in).
+
+Helpers: 0x3b79(k) sets palette k; 0x3cb8 shows the back buffer fading in from black (0x8ca6); 0x3c84 fades to black
+(0x8964, a retrace a step), clears the screen and sets the palette again; 0x3b22(ms) waits, a key ending the intro.
+A fade moves every colour together (0x8afa): as many steps as the largest 6-bit difference, one retrace each. The
+dissolve (DS:0x34fe, the VGA driver TM.DRV item 0, entry +0x2c) copies the back buffer to the screen pixel by pixel
+in the order of a linear feedback shift register; at speed 0 it waits one retrace for the whole screen.
+
+**The film (0x41de)**, INTRO.LZC under palette 0, song 18 (formats/se_music.md: its cues 1 "Second title screen",
+2 "dinosaur screen", 3 "Melody, horn, flute"):
+1. Lord British presents (item 0 shape 0) fades in; song 18 starts. Wait for cue 1 (without music 1000 ms).
+2. Fade out; Worlds of Ultima (item 0 shape 1) fades in. Wait for cue 2 (without music 1000 ms). Fade out.
+3. Item 1 shapes 0, 2, 5 (sky, the far jungle and its dinosaurs, the raptors in front) fade in.
+4. The title (0x4724): item 2 shape 0 at (0, y), drawn between shapes 2 and 5, y from 200 to 0 by 4 a step (by 8
+   once the song is at cue 3); then item 1 shapes 8-12 over it at (0,0) (its shine) 0-4 and back; then up to 7 x
+   200 ms until cue 3.
+5. Shapes 0, 2, 5 without the title dissolve in (speed 0).
+6. The pan, 213 steps (si = 0 down to -212): shape 0 at si and 1 at si+320 (sky), 2/3/4 at 2si, 2si+320, 2si+640,
+   5/6/7 at 3si, 3si+320, 3si+640; credit item 2 shape |si|/35+1 at (0,0) when |si| mod 35 < 15 (shape 7 is empty).
+   Then the last step again without a credit (and the title at 6si, far off screen).
+7. The menu dissolves in; song 18 goes on (the menu starts no song: 0x4a82 would play song 0 only when DS:0x353e is
+   0xffff, which nothing sets).
+DOS draws a step per frame with a retrace's wait (slow machines skip every other: DS:0x2ba2), so its pace is the
+machine's; u6e takes a step every 73 ms (rules/se_deviations.md slip 30). About returns to the menu by the dissolve
+too (0x4cc9).
 
 ## The menu (SAVAGE.EXE 0x4a37, drawn by 0x4978)
 CREATE.LZC item 0's shape 0 at (0,0) under palette 0, then a plate per item at x 85, y 116, 134, 152, 170: The Story
@@ -129,5 +159,5 @@ before CMID's. The engine reads one item when a screen needs it and decodes the 
 ## Status
 IN PROGRESS (TT/Falcon and graphics cards; the ST needs its 16-colour palettes): the menu and character creation
 built 2026-11-22 (the opening, the name, the three questions, the answers' pictures, the objlist fields of 0x5a7c; the
-new game starts with them). The story and About built the same day. Journey Onward resumes the last slot. The ending built the same day. Not yet: the intro,
-the songs, the ST.
+new game starts with them). The story and About built the same day. Journey Onward resumes the last slot. The ending built the same day. The intro (the Origin FX opening and the film) built 2026-11-23. Not yet: the ST,
+the opening's sound effects.

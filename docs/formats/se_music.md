@@ -274,9 +274,10 @@ on/off).
 
 ### 5.4 SAVAGE.EXE (front end)
 It contains the same player (the 0xFE dispatcher's bytes recur at savage image 0x9d25) and loads
-MUSIC.LZC items **18, 0 and 19** (0x3a84-0x3abe). It plays 18 at the title/introduction (0x429a), 0 at
-two later front-end screens (0x4a82, 0x5ebf; probably character creation and the story; guessed), and
-passes 19 to its animation player (0x419e). Songs 18 and 19 carry type-3 numbers 0-6 at the cue
+MUSIC.LZC items **18, 0 and 19** (0x3a84-0x3abe). It plays 18 at the introduction's film (0x429a; it goes on into the menu), passes 19 to the Origin FX
+opening (0x419e; design/se_origin_fx.md), and plays 0 at the ending (0x5ebf). The menu's call for song 0 (0x4a82)
+is reached only when DS:0x353e (music on, 0 or 1) is 0xffff, so it never plays (read 2026-11-23). DS:0x20ce holds the
+last FE type-3 number passed (0 at a song's start), not a count. Songs 18 and 19 carry type-3 numbers 0-6 at the cue
 points the composer named in meta-6 texts (18: first title screen 0, second title screen 1, dinosaur
 screen 2, melody 3 ...; 19: start tuning 0 ... start fireworks 3 ...), which is how the front end keeps
 its pictures in step with the music.
@@ -432,7 +433,8 @@ same song, and check the §5 situations in DOSBox (dosbox-u6-rig).
 - [ ] Song 5 queued over a looping place's song (0-3) never reaches an exit point, so as read it would
       not play until the song changes. Is that what DOS does? Observe in DOSBox (dosbox-u6-rig).
 - [ ] Song 13 has no caller found; check SAVAGE.EXE's other screens and the ending.
-- [ ] Which SAVAGE.EXE screens play songs 0 and 19 (§5.4), and how its pictures follow the type-3 cues.
+- [x] Which SAVAGE.EXE screens play songs 0 and 19 (§5.4), and how its pictures follow the type-3 cues (2026-11-23:
+  design/se_front_end.md "The intro", design/se_origin_fx.md).
 - [ ] FM record bytes 0x0F-0x23 (vibrato / pitch envelope) and the timer routine (+8) that runs them.
 - [ ] DS:0x27f2 = 0x10 skipping the death music; DS:0x2810 vs DS:0xd4 in every path.
 - [ ] AdLib channel volume curve (DS:0x1a2[ch] from controller 7) in detail.
