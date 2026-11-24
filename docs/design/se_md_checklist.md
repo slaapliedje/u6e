@@ -240,3 +240,7 @@ list once SE's seams exist.
   with the credits on song 18), DOS's fades and dissolve, the menu dissolving in after it with song 18 going on (the menu
   starts no song in DOS). Slip 30: a step every 73 ms (DOS's pace is the machine's). Left in item 9: the opening's sound
   effects, the AdLib render for DMA sound, the ST's 16-colour palettes for the front end.
+- 2026-11-23: item 9: the front end on the ST (design/se_front_end.md "The ST"): a 16 per screen from the player's art
+  (CSFE group 7), the fades and dissolves in 16 colours, flip-buffered intro; menu, About, story, creation and the ending
+  checked on a 4 MB plain ST. The sequencer's last cue now stays after a song ends (the ST reached the fireworks after
+  song 19 ended and waited forever). Left in item 9: the opening's sound effects, the AdLib render for DMA sound.

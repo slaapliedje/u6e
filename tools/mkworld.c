@@ -1219,6 +1219,7 @@ static void build_scene_lc_x(const uint8_t *pal6, const uint8_t *pix, int npix, 
 { build_scene_lc_r(pal6,pix,npix,xs,nx,0,0,lc); }
 static void build_scene_lc(const uint8_t *pal6, const uint8_t *pix, int npix, uint8_t lc[48+256])
 { build_scene_lc_x(pal6,pix,npix,NULL,0,lc); }
+static void build_lc_freq(const uint8_t *pal6, const long *freq, int ramp_lo, int ramp_n, uint8_t lc[48+256]);
 static void build_scene_lc_r(const uint8_t *pal6, const uint8_t *pix, int npix, const scene_extra_t *xs, int nx, int ramp_lo, int ramp_n, uint8_t lc[48+256])
 {
     static long freq[256]; for (int i=0;i<256;i++) freq[i]=0;
@@ -1228,6 +1229,11 @@ static void build_scene_lc_r(const uint8_t *pal6, const uint8_t *pix, int npix, 
     for (int k=0;k<nx;k++){ static long xf[256]; for (int i=0;i<256;i++) xf[i]=0;
         if(xs[k].pix) cv_hist(xs[k].pix,(int)xs[k].n,xf); xf[U6SHAPE_TRANSPARENT]=0;
         for (int i=0;i<256;i++) freq[i]+=xf[i]*xs[k].w16/16; }
+    build_lc_freq(pal6,freq,ramp_lo,ramp_n,lc);
+}
+/* the quantising half: a palette (6-bit), its colours' weights (freq[0] = the background), an optional ramp -> lc */
+static void build_lc_freq(const uint8_t *pal6, const long *freq, int ramp_lo, int ramp_n, uint8_t lc[48+256])
+{
     CCol rr[4]; int nr=0;                        /* the ramp's own slots */
     if (ramp_n > 0) { CCol rc[16]; int n=ramp_n>16?16:ramp_n;
         for (int j=0;j<n;j++){ int i=ramp_lo+j; rc[j].r=RGB6TO8(pal6[i*3]); rc[j].g=RGB6TO8(pal6[i*3+1]); rc[j].b=RGB6TO8(pal6[i*3+2]); rc[j].w=1; }
@@ -1794,6 +1800,39 @@ static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
             gf[ng]=5; gi[ng]=0; gl[ng]=(int32_t)(ftell(out)-n0); ng++; }
         else printf("SAVAGE.EXE: missing or not the one read (front end words)\n");
         free(x); }
+    {   /* the ST's 16 colours for each screen (design/se_front_end.md "The ST"): group (7, k) = [16 x {r,g,b} 3-bit][256 lut],
+         * quantised from what the screen shows under its palette, as U6's scenes are (palette_lowcolor.md) */
+        typedef struct { int8_t f, it, lo, hi, w16, bg; } part_t;
+        typedef struct { int pal; part_t p[6]; int blue; } scr_t;
+        static const scr_t SCR[13]={
+            {2,{{0,0,0,0,16,1},{0,12,0,0,16,0},{0,1,0,12,8,0},{0,2,0,15,8,0},{0,0,1,3,32,0},{0,11,0,23,16,0}},0},  /* 0 Origin FX (items 3-10 below) */
+            {0,{{1,0,0,0,16,1}},0},                                                                             /* 1 Lord British presents */
+            {0,{{1,0,1,1,16,1}},0},                                                                             /* 2 Worlds of Ultima */
+            {0,{{1,1,0,0,16,1},{1,1,2,2,16,0},{1,1,5,5,16,0},{1,2,0,0,32,0},{1,1,8,12,8,0}},0},                 /* 3 the title over the dusk jungle */
+            {0,{{1,1,0,0,16,1},{1,1,1,7,16,0},{1,2,1,6,32,0}},0},                                               /* 4 the pan and its credits */
+            {0,{{2,0,0,0,16,1},{2,0,1,15,32,0},{2,6,0,12,16,0}},0},                                             /* 5 the menu (and About) */
+            {1,{{2,1,2,2,16,1},{2,1,0,1,16,0},{2,4,2,2,16,0},{2,2,0,5,8,0},{2,3,0,19,4,0}},1},                  /* 6 character creation */
+            {1,{{2,5,0,0,16,1},{2,5,1,10,16,0}},1},                                                             /* 7 the story so far */
+            {1,{{3,0,0,0,16,1}},1},{1,{{3,0,1,1,16,1}},1},{1,{{3,0,2,2,16,1}},1},{1,{{3,0,3,3,16,1}},1},{1,{{3,0,4,4,16,1}},1} };  /* 8-12 the ending */
+        static long fq[256]; static uint8_t px[64000];
+        for(int k=0;k<13 && ng<64;k++){ memset(fq,0,sizeof fq);
+            for(int pi=0;pi<6+8;pi++){ part_t q;
+                if(pi<6) q=SCR[k].p[pi]; else if(k==0){ q.f=0; q.it=(int8_t)(3+pi-6); q.lo=0; q.hi=20; q.w16=8; q.bg=0; } else break;   /* (TITLE 3-10) */
+                if(!q.w16) continue;
+                long fl; uint8_t *bf=slurp(dir,FN[(int)q.f],&fl); u6lzc_t lc; int32_t n=0;
+                if(bf && u6lzc_open(&lc,bf,(int32_t)fl,marker)) n=u6lzc_read(&lc,q.it,item,(int32_t)sizeof item);
+                free(bf); if(n<=0) continue;
+                int cntsh=u6shape_count(item,n);
+                for(int sh=q.lo; sh<=q.hi && sh<cntsh; sh++){ int w,h; if(!u6shape_decode(item,n,sh,&w,&h,px,(int32_t)sizeof px)) continue;
+                    for(long i=0;i<(long)w*h;i++){ int c=px[i]; if(c==U6SHAPE_TRANSPARENT){ if(q.bg) fq[0]+=q.w16; } else fq[c]+=q.w16; } } }
+            { long t=0; for(int i=0;i<256;i++) t+=fq[i];
+              if(SCR[k].blue) fq[1]+=t/40;                                  /* the text box's arrow (colour 1) keeps a slot */
+              fq[0]+=t/100+1; }                                             /* colour 0 (the cleared screen, the border) kept exact */
+            uint8_t lcb[48+256]; build_lc_freq(pal+SCR[k].pal*768,fq,0,0,lcb);
+            {   int z=lcb[48];                                              /* and in register 0: the ST's border is colour 0 */
+                if(z){ for(int c=0;c<3;c++){ uint8_t t=lcb[z*3+c]; lcb[z*3+c]=lcb[c]; lcb[c]=t; }
+                    for(int i=0;i<256;i++){ if(lcb[48+i]==z) lcb[48+i]=0; else if(lcb[48+i]==0) lcb[48+i]=(uint8_t)z; } } }
+            fwrite(lcb,1,sizeof lcb,out); gf[ng]=7; gi[ng]=(uint8_t)k; gl[ng]=(int32_t)sizeof lcb; ng++; } }
     long end=ftell(out);
     fseek(out,cnt,SEEK_SET); fputc(ng,out);
     for(int k=0;k<ng;k++){ fputc(gf[k],out); fputc(gi[k],out); be32(out,(unsigned long)gl[k]); }

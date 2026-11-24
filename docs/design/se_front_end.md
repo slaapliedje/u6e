@@ -143,6 +143,36 @@ month+99, year+100 and puts the letter over the first digit, so these are day-1,
 "\nand" years for those not 0; then `.\n` (or `. ` after an "and"). After the last wait DOS quits. In u6e the game
 ends there too (the ST waits for its palettes).
 
+## The ST (2026-11-23)
+The 16-colour shifter shows each screen in 16 colours of its own, chosen on the host from the screen's own pictures
+(palette_lowcolor.md's method: a weighted median cut of the colours used, snapped to the ST's 3-bit levels, colour 0
+kept exact; weights up for saturation). mkworld writes them as CSFE group (7, k), 48 + 256 bytes each (16 x {r,g,b}
+levels, then the 256 -> 16 table):
+
+| k | screen | palette | counted (weight per pixel) |
+|---|---|---|---|
+| 0 | Origin FX | 2 | the starfield (x16, its uncovered pixels as colour 0), the globe x16, the logo x32, the orchestra and conductor (every frame) x8, the sparks x16 |
+| 1 | Lord British presents | 0 | INTRO 0.0 |
+| 2 | Worlds of Ultima | 0 | INTRO 0.1 |
+| 3 | the title | 0 | INTRO 1.0, 1.2, 1.5 x16, the title x32, its shine x8 |
+| 4 | the pan | 0 | INTRO 1.0-1.7 x16, the credits x32 |
+| 5 | the menu and About | 0 | CREATE 0.0 x16, the plates x32, About's credits x16 |
+| 6 | character creation | 1 | CREATE 1.0-1.2, the box x16, the potion frames x8, the answers' frames x4, colour 1 (the page arrow) as 1/40 of the rest |
+| 7 | the story | 1 | CREATE 5 (frame and faces), colour 1 as above |
+| 8-12 | the ending's pictures | 1 | ENDGAME 0.k, colour 1 as above |
+
+Every screen also counts colour 0 (the cleared screen) at 1/100 of the rest, so it is kept exact, and its slot is
+moved to register 0: the ST's border is register 0 (an ending picture that never uses colour 0 had a green border).
+
+The engine loads a screen's 16 as it opens (black while it is drawn where DOS fades in); the fades move the 16 levels
+as the 256-colour fades move the palette. Where the film dissolves into the pan and the pan into the menu, the next
+screen's 16 comes in halfway through the dissolve: the picture is drawn to the hidden screen and flipped, and the
+colours are set for the same frame (XBIOS Setscreen (5) and Setpalette (6) both act at the next vertical blank), so no
+frame shows one picture in the other's colours. The opening and the film present through the flip buffer throughout,
+so no half-drawn frame is seen. The front end now runs on the ST too (it needs the pack's group 7).
+An 8 MHz ST draws the pan's eight layers well below its 13.7 steps a second, so steps it falls behind on are not drawn:
+the film keeps its length and the music's timing but moves in jumps there.
+
 ## Strings
 The game's words are not in our source: mkworld reads them from the user's SAVAGE.EXE (DGROUP found by its
 `Turbo C++ - Copyright 1990` signature) into the CSFE block's group (5, 0): `[u8 n][n NUL-ended strings]`. Order: 0-6
@@ -157,7 +187,6 @@ palettes as 6-bit (3 x 768), a count, a list with room for 64 entries (file 0 TI
 before CMID's. The engine reads one item when a screen needs it and decodes the shapes then.
 
 ## Status
-IN PROGRESS (TT/Falcon and graphics cards; the ST needs its 16-colour palettes): the menu and character creation
+IN PROGRESS (TT/Falcon, graphics cards and the ST): the menu and character creation
 built 2026-11-22 (the opening, the name, the three questions, the answers' pictures, the objlist fields of 0x5a7c; the
-new game starts with them). The story and About built the same day. Journey Onward resumes the last slot. The ending built the same day. The intro (the Origin FX opening and the film) built 2026-11-23. Not yet: the ST,
-the opening's sound effects.
+new game starts with them). The story and About built the same day. Journey Onward resumes the last slot. The ending built the same day. The intro (the Origin FX opening and the film) built 2026-11-23. The ST's 16-colour screens built 2026-11-23. Not yet: the opening's sound effects.

@@ -16671,6 +16671,19 @@ static void sefe_draw(const uint8_t *lib,int32_t len,int idx,int x,int y,uint8_t
     if(!u6shape_decode(lib,len,idx,&w,&h,tmp,cap)) return;
     u6shape_hotspot(lib,len,idx,&hx,&hy);
     blit_indexed(tmp,w,h,x-hx,y-hy); }
+/* the ST: the screen's own 16 (pack group (7, k), design/se_front_end.md "The ST"): 0 Origin FX, 1 Lord British presents,
+ * 2 Worlds of Ultima, 3 the title, 4 the pan, 5 the menu, 6 creation, 7 the story, 8-12 the ending's pictures */
+static uint8_t g_fi_lc[48+256]; static int g_fi_lc_on;
+static void se_lc_show(void){ if(g_fi_lc_on) rdr_set_lowcolor(g_fi_lc,NULL); }
+static int se_lc_have(void){ uint8_t t[48+256]; return sefe_read_into(7,5,t,(int32_t)sizeof t)==(int32_t)sizeof t; }
+static int se_lc_load(int k)                                                /* the 16 read, not yet shown */
+{   rdr_caps rc; rdr_get_caps(&rc); if(rc.colors>=256) return 0;
+    if(sefe_read_into(7,k,g_fi_lc,(int32_t)sizeof g_fi_lc)!=(int32_t)sizeof g_fi_lc) return 0;
+    g_fi_lc_on=1; return 1; }
+static void se_lc(int k,int black)
+{   rdr_caps rc; rdr_get_caps(&rc); if(rc.colors>=256) return;
+    if(sefe_read_into(7,k,g_fi_lc,(int32_t)sizeof g_fi_lc)!=(int32_t)sizeof g_fi_lc) return;
+    g_fi_lc_on=1; rdr_set_lowcolor(black?g_black16:g_fi_lc,g_fi_lc+48); }
 /* ---- SE's character creation (SAVAGE.EXE 0x50ac; se_front_end.md "Character creation") ---- */
 static const uint8_t *g_sef; static int32_t g_sef_len;          /* SAVAGE.FNT unpacked (WOU font, fonts.md) */
 static int sef_w(unsigned char c){ return g_sef?g_sef[4+c]:0; }
@@ -16694,7 +16707,7 @@ static void tb_print(const char*t)
         t+=n; } }
 /* a key or a click; Esc as 0x1b */
 static int cr_wait(void)
-{   rdr_present_doubled(LH); { int d; while((d=plat_input_raw())){ (void)d; } }
+{   rdr_present_doubled(LH); se_lc_show(); { int d; while((d=plat_input_raw())){ (void)d; } }
     for(;;){ int k=plat_input_raw(); if(k) return k&0xFF?k&0xFF:k; if(fe_click_edge()) return 0x0d; vsync_pump(); } }
 static void cr_sleep_us(int32_t us){ uint32_t t0=plat_ticks_200hz(), n=(uint32_t)(us/5000); while(plat_ticks_200hz()-t0<n) vsync_pump(); }
 static const uint8_t *g_cr_i1, *g_cr_i2, *g_cr_i3; static int32_t g_cr_l1, g_cr_l2, g_cr_l3;
@@ -16734,7 +16747,7 @@ static int se_run_create(void)
     cr_cache();
     rng_seed(&g_crng, plat_ticks_200hz());                                   /* (the game seeds its own again at play start) */
     int st[3]; for(int k=0;k<3;k++) st[k]=16+(int)rng_range(&g_crng,3);
-    rdr_set_palette(pal,256);
+    rdr_set_palette(pal,256); se_lc(6,1);
     clear_bb(0); sefe_draw(g_cr_i1,g_cr_l1,2,0,0,g_cr_tmp,64000);
     sefe_draw(g_cr_i1,g_cr_l1,0,8,28,g_cr_tmp,64000); sefe_draw(g_cr_i1,g_cr_l1,1,8,28,g_cr_tmp,64000);
     { int w,h; if(u6shape_decode(g_cr_box,l4,2,&w,&h,g_cr_tmp,64000))             /* the box's shadow (0x3534), then the box */
@@ -16774,7 +16787,7 @@ static int se_run_create(void)
 static void se_run_story(void)
 {   plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t l5=0, sl=0;
     const uint8_t *i5=sefe_item(2,5,&l5), *sb=sefe_item(5,0,&sl); g_sef=sefe_item(4,0,&g_sef_len); g_cr_tmp=(uint8_t*)plat_alloc_chip(64000);
-    if(i5 && sb && g_sef && g_cr_tmp && sefe_palette(1,pal)){ rdr_set_palette(pal,256);
+    if(i5 && sb && g_sef && g_cr_tmp && sefe_palette(1,pal)){ rdr_set_palette(pal,256); se_lc(7,1);
         for(int k=0;k<10;k++){ clear_bb(0); sefe_draw(i5,l5,0,0,0,g_cr_tmp,64000); sefe_draw(i5,l5,k+1,120,45,g_cr_tmp,64000);
             g_tbx=25; g_tby=136; { const char*t=sefe_str(sb,sl,31+k);       /* (tb_print wraps at 306; the story's box ends at 293) */
                 while(*t){ if(*t=='\n'){ g_tbx=25; g_tby+=8; t++; continue; } if(t[0]=='%'&&t[1]=='P'){ t+=2; continue; }
@@ -16812,7 +16825,7 @@ static void tb2_print(const char*t)
 /* SE's ending (SAVAGE.EXE 0x5e82; se_front_end.md "The ending"): palette 1, ENDGAME's pictures with their pages; the
  * companion (Aiela, talk flag 2 bit 0x20; else Tristia, 51) picks the middle part; the time taken from the date */
 static void se_ending(world_t*w)
-{   rdr_caps rc; rdr_get_caps(&rc); if(rc.colors<256) return;                 /* (the ST: its 16-colour palettes are not made yet) */
+{   rdr_caps rc; rdr_get_caps(&rc); if(rc.colors<256 && !se_lc_have()) return;  /* (the ST: each picture's own 16) */
     music_play_song("SE00");                                                  /* (0x5ebf) */
     plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int32_t le=0, sl=0;
     const uint8_t *ie=sefe_item(3,0,&le), *sb=sefe_item(5,0,&sl); g_sef=sefe_item(4,0,&g_sef_len);
@@ -16836,7 +16849,7 @@ static void se_ending(world_t*w)
                 tb2_print(sefe_str(sb,sl,si==2?68:67)); tb2_print(sefe_str(sb,sl,56));
                 #undef SE_TW
             }
-            sef_glyph(g_tbx,g_tby,0x19,1); cr_wait(); } }
+            sef_glyph(g_tbx,g_tby,0x19,1); se_lc(8+(PIC[k]<0?1:PIC[k]),0); cr_wait(); } }
     plat_chip_reset(mk); g_sef=0; }
 /* the objlist fields SAVAGE.EXE writes for a new character (0x5a7c) besides the name and stats; and the HP its load step gives */
 static void se_cc_apply(void)
@@ -16847,37 +16860,47 @@ static void se_cc_apply(void)
     if(g_gl->load_reset) g_gl->load_reset(); }
 /* ---- SE's intro (SAVAGE.EXE 0x4140-0x41d8; se_front_end.md "The intro") ---- */
 /* the song's cue (formats/se_music.md §5.4: the 0xFE type-3 number DS:0x20ce), or -1 when no song is playing that we can follow */
-static int se_song_cue(void){ return (g_smf_on && g_smf.playing) ? g_smf.now : -1; }
+static int se_song_cue(void){ return g_smf_on ? g_smf.now : -1; }   /* (after the song's end its last cue stays, as DS:0x20ce does) */
 static int fi_abort(void){ int k=plat_input_raw(); if(k) return 1; return fe_click_edge(); }
 /* wait until the song reaches cue n; without a song DOS waits ms instead (0x42f6, 0x4360); 0 = a key (skip) */
 static int fi_wait_cue(int n,int ms)
 {   uint32_t t0=plat_ticks_200hz();
     for(;;){ int c=se_song_cue(); if(c>=0){ if(c>=n) return 1; } else if((int32_t)(plat_ticks_200hz()-t0)*5>=ms) return 1;
         if(fi_abort()) return 0; vsync_pump(); } }
-/* the palette from `a` to `b`, linearly, one 6-bit step a retrace (70 Hz) for the largest difference (0x8afa) */
+static const uint8_t g_black768[768];
+/* the palette from `a` to `b`, linearly, one 6-bit step a retrace (70 Hz) for the largest difference (0x8afa); on the ST the
+ * screen's 16 move the same way between black and their levels */
 static int fi_fade(const uint8_t *a,const uint8_t *b)
 {   int steps=0; for(int i=0;i<768;i++){ int d=a[i]-b[i]; if(d<0) d=-d; if(d>steps) steps=d; }
     uint8_t p[768]; uint32_t t0=plat_ticks_200hz(); int k=0, last=-1;
     while(k<steps){ k=(int)((plat_ticks_200hz()-t0)*70/200); if(k>steps) k=steps;
         if(k!=last){ for(int i=0;i<768;i++) p[i]=(uint8_t)(a[i]+((b[i]-a[i])*k)/steps);
-            rdr_set_palette(p,256); if(rdr_palette_deferred()) rdr_present_doubled(LH); last=k; }   /* (Falcon truecolor: shown at a present) */
+            rdr_set_palette(p,256); if(rdr_palette_deferred()) rdr_present_doubled(LH); last=k;    /* (Falcon truecolor: shown at a present) */
+            if(g_fi_lc_on){ uint8_t lv[48]; int fa=a!=g_black768, fb=b!=g_black768;
+                for(int i=0;i<48;i++){ int va=fa?g_fi_lc[i]:0, vb=fb?g_fi_lc[i]:0; lv[i]=(uint8_t)(va+((vb-va)*k+steps/2)/steps); }
+                rdr_set_lowcolor(lv,NULL); } }
         if(fi_abort()) return 0; vsync_pump(); }
     return 1; }
-static const uint8_t g_black768[768];
 /* 0x3cb8: the back buffer shown from black up to pal (0x8ca6) */
-static int fi_fade_in(const uint8_t *pal){ rdr_set_palette(g_black768,256); rdr_present_doubled(LH); return fi_fade(g_black768,pal); }
+static int fi_fade_in(const uint8_t *pal){ rdr_set_palette(g_black768,256); if(g_fi_lc_on) rdr_set_lowcolor(g_black16,NULL); rdr_present_doubled(LH); return fi_fade(g_black768,pal); }
 /* 0x3c84: down to black (0x8964), the screen cleared, the palette back */
 static int fi_fade_out(const uint8_t *pal){ int ok=fi_fade(pal,g_black768); clear_bb(0); rdr_set_palette(pal,256); rdr_present_doubled(LH); return ok; }
 /* the VGA driver's dissolve (TM.DRV item 0, entry +0x2c, called with speed 0): the new frame's pixels replace the old in a
  * pseudo-random order (a linear feedback shift register). Its speed 0 waits one retrace for the whole screen, so the time is
  * the machine's; ours takes 1/3 s in 8 steps. `old` holds the previous screen; the back buffer holds the new one. */
-static void fi_dissolve(uint8_t *old)
+static int g_fi_flip;                                                       /* the intro presents to a hidden screen and flips (no tearing) */
+static void fi_dissolve(uint8_t *old,const uint8_t *lc_mid)
 {   for(int y=0;y<LH;y++){ uint8_t *r=ROW(y), *o=old+(int32_t)y*LW; for(int x=0;x<LW;x++){ uint8_t t=r[x]; r[x]=o[x]; o[x]=t; } }
-    uint32_t s=1; int32_t done=0; const int32_t N=(int32_t)LW*LH;
+    uint16_t s=1; int32_t done=0; const int32_t N=(int32_t)LW*LH;            /* a 16-bit register: every value 1..65535 once */
     for(int step=1;step<=8;step++){ uint32_t t0=plat_ticks_200hz(); int32_t upto=N*step/8;
-        while(done<upto){ s=(s>>1)^(-(s&1u)&0x12000u);                     /* 17 bits, maximal: every value 1..131071 once */
-            if(s<=(uint32_t)N){ int32_t i=(int32_t)s-1; ROW(i/LW)[i%LW]=old[i]; done++; } }
-        rdr_present_doubled(LH); while(plat_ticks_200hz()-t0<8) vsync_pump(); } }
+        while(done<upto){ s=(uint16_t)((s>>1)^(-(s&1u)&0xB400u));
+            if(s<=(uint16_t)N){ uint16_t i=(uint16_t)(s-1), q=(uint16_t)(i>>6), y=(uint16_t)(((uint32_t)q*13108u)>>16);   /* y = i/320 without a divide */
+                ROW(y)[i-y*320u]=old[i]; done++; } }
+        if(step==4 && lc_mid){                                               /* the ST: the new screen's 16 from halfway, the picture */
+            if(!g_fi_flip) rdr_flip_begin(); rdr_set_lowcolor(NULL,lc_mid+48); rdr_present_doubled(LH);   /* drawn behind and flipped, the colours */
+            rdr_set_lowcolor(lc_mid,NULL); if(!g_fi_flip) rdr_flip_end(); }                 /* set for the same frame (Setscreen and Setpalette act at the VBL) */
+        else rdr_present_doubled(LH);
+        while(plat_ticks_200hz()-t0<8) vsync_pump(); } }
 /* a shape held as runs of its drawn pixels, a row at a time, so a layer that moves is a few memcpy a row (the pan draws eight
  * layers a frame); 255 is left out */
 typedef struct { int16_t w,h,hx,hy; uint8_t *d; } fi_layer;
@@ -16959,8 +16982,9 @@ static void se_origin_fx(void)
       else g_ofx_globe=0; }
     rng_seed(&g_crng, plat_ticks_200hz());
     { int d; while((d=plat_input_raw())){ (void)d; } }
-    clear_bb(0); rdr_set_palette(g_black768,256); rdr_present_doubled(LH);
+    se_lc(0,1); clear_bb(0); rdr_set_palette(g_black768,256); rdr_present_doubled(LH);
     music_play_song("SE19");                                                 /* song 19, before the fade (0x705f) */
+    rdr_flip_begin(); g_fi_flip=1;
     int synced=se_song_cue()>=0;                                             /* (DOS: music on, Roland or AdLib) */
     /* 1: the orchestra at frame 0 over the globe, faded in (0x63b1) */
     ofx_backdrop(); for(int r=0;r<10;r++) ofx_zoom(r+1,0,OFX_POS[r][0],OFX_POS[r][1],256);
@@ -17021,6 +17045,7 @@ end:
     music_stop_all();                                                        /* cut at once (0x7155) */
     { int d; while((d=plat_input_raw())){ (void)d; } }
     fi_fade(pal,g_black768); clear_bb(0); rdr_present_doubled(LH);
+    rdr_flip_end(); g_fi_flip=0;
     plat_chip_reset(mk); }
 /* the film (0x41de): Lord British presents, Worlds of Ultima, the title rising over the dusk jungle, the pan with the credits.
  * 1 = it ran to the end (the menu then dissolves in over its last frame), 0 = a key skipped it */
@@ -17030,14 +17055,15 @@ static int se_film(void)
     const uint8_t *i0=sefe_item(1,0,&l0), *i1=sefe_item(1,1,&l1), *i2=sefe_item(1,2,&l2);
     if(!tmp||!i0||!i1||!i2||!sefe_palette(0,pal)){ plat_chip_reset(mk); return 0; }
     { int d; while((d=plat_input_raw())){ (void)d; } }
-    clear_bb(0); rdr_present_doubled(LH);
+    se_lc(1,1); clear_bb(0); rdr_present_doubled(LH);
     rdr_set_palette(pal,256);
     sefe_draw(i0,l0,0,0,0,tmp,64000);                                        /* Lord British presents (INTRO 0.0) */
     music_play_song("SE18");                                                 /* song 18 (0x429a) */
+    rdr_flip_begin(); g_fi_flip=1;
     if(!fi_fade_in(pal)) goto out;
     if(!fi_wait_cue(1,1000)) goto out;                                        /* "Second title screen" */
     if(!fi_fade_out(pal)) goto out;
-    sefe_draw(i0,l0,1,0,0,tmp,64000);                                        /* Worlds of Ultima (DOS draws it behind at 0x42ba; our */
+    se_lc(2,1); sefe_draw(i0,l0,1,0,0,tmp,64000);                                        /* Worlds of Ultima (DOS draws it behind at 0x42ba; our */
     if(!fi_fade_in(pal)) goto out;                                           /* back buffer is the one shown, so after the fade) */
     fi_layer L[8], T, C[8], S[5]; memset(L,0,sizeof L); memset(C,0,sizeof C); memset(S,0,sizeof S);
     for(int k=0;k<8;k++) fi_layer_make(&L[k],i1,l1,k,tmp);                   /* the pan: sky 0-1, middle 2-4, front 5-7 */
@@ -17046,7 +17072,7 @@ static int se_film(void)
     for(int k=1;k<8;k++) fi_layer_make(&C[k],i2,l2,k,tmp);                   /* the credits (7 is empty) */
     if(!fi_wait_cue(2,1000)) goto out;                                        /* "dinosaur screen" */
     if(!fi_fade_out(pal)) goto out;
-    fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&L[5],0,0);
+    se_lc(3,1); fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&L[5],0,0);
     if(!fi_fade_in(pal)) goto out;
     {   uint32_t t0=plat_ticks_200hz(); int i=0;                             /* the title rises 4 px a step from y 200 (0x4724) */
         for(int y=200;y>=0;y-=4,i++){
@@ -17063,7 +17089,7 @@ static int se_film(void)
     {   uint8_t *old=(uint8_t*)plat_alloc_chip(64000);                      /* the title dissolves away (0x444b) */
         if(old) for(int y=0;y<LH;y++) memcpy(old+(int32_t)y*LW,ROW(y),LW);
         fi_layer_draw(&L[0],0,0); fi_layer_draw(&L[2],0,0); fi_layer_draw(&L[5],0,0);
-        if(old) fi_dissolve(old); else rdr_present_doubled(LH); }
+        if(old){ se_lc_load(4); fi_dissolve(old,g_fi_lc_on?g_fi_lc:0); } else { se_lc(4,0); rdr_present_doubled(LH); } }
     {   uint32_t t0=plat_ticks_200hz(); int si;                             /* the pan: 1, 2 and 3 px a step, 213 steps (0x4452) */
         for(si=0;si>-213;si--){ int i=-si;
             if(fi_due(t0,i)){ fi_layer_draw(&L[0],si,0); fi_layer_draw(&L[1],si+320,0);
@@ -17080,6 +17106,7 @@ static int se_film(void)
         rdr_present_doubled(LH); }
     ok=1;
 out:
+    rdr_flip_end(); g_fi_flip=0;
     plat_chip_reset(mk);
     if(!ok){ music_stop_all(); clear_bb(0); rdr_present_doubled(LH); }        /* a key: DOS fades the song out over 200 ticks (0x3c0d) */
     { int d; while((d=plat_input_raw())){ (void)d; } }
@@ -17094,6 +17121,7 @@ static int se_run_menu(int from_intro)
     uint8_t *lib=sefe_item(2,0,&len), *tmp=(uint8_t*)plat_alloc_chip(64000), *old=(uint8_t*)plat_alloc_chip(64000);
     if(!lib||!tmp||!sefe_palette(0,pal)){ plat_chip_reset(mk); return 1; }
     int dis=from_intro;                                                    /* over the film's last frame: dissolved in (0x4ad5) */
+    if(dis) se_lc_load(5); else se_lc(5,1);
     int last=0; for(int k=0;k<SAVE_SLOTS;k++) if(save_exists(k,0)) last=3;
     int n=last?4:3, sel=0, dirty=1, pressed=-1;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
@@ -17104,7 +17132,7 @@ static int se_run_menu(int from_intro)
         if(dirty){ if(dis && old) for(int y=0;y<LH;y++) memcpy(old+(int32_t)y*LW,ROW(y),LW);
             clear_bb(0); sefe_draw(lib,len,0,0,0,tmp,64000);
             for(int k=0;k<n;k++) sefe_draw(lib,len,k==sel?(pressed==k?(FR[k]-1)/2+11:FR[k]+1):FR[k],85,Y[k],tmp,64000);
-            if(dis && old) fi_dissolve(old); else rdr_present_doubled(LH); dirty=0; dis=0;
+            if(dis && old) fi_dissolve(old,g_fi_lc_on?g_fi_lc:0); else rdr_present_doubled(LH); se_lc_show(); dirty=0; dis=0;
             if(pressed>=0){ uint32_t t0=plat_ticks_200hz(); while(plat_ticks_200hz()-t0<20) vsync_pump();   /* the chosen plate, a moment */
                 plat_chip_reset(mk); return pressed==1?1:3; } }
         int mux,muy,mclick,over=-1; fe_mouse(&mux,&muy,&mclick);
@@ -17123,11 +17151,11 @@ static int se_run_menu(int from_intro)
             plat_chip_reset(mk); if(se_run_create()) return 1;
             mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000); old=(uint8_t*)plat_alloc_chip(64000);
             if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
-            rdr_set_palette(pal,256); continue; }
+            rdr_set_palette(pal,256); se_lc(5,1); continue; }
         if(act==3){ sel=act; pressed=act; dirty=1; }
         else if(act==0){ plat_chip_reset(mk); se_run_story(); sel=1; dirty=1;           /* after the story, Create is highlighted (0x4c91) */
             mk=plat_chip_mark(); lib=sefe_item(2,0,&len); tmp=(uint8_t*)plat_alloc_chip(64000); old=(uint8_t*)plat_alloc_chip(64000); if(!lib||!tmp){ plat_chip_reset(mk); return 1; }
-            rdr_set_palette(pal,256); }
+            rdr_set_palette(pal,256); se_lc(5,1); }
         else if(act==2){ se_run_about(lib,len,tmp); sel=2; dirty=1; dis=1; }       /* back from About: dissolved in (0x4cc9) */
         if(!dirty) vsync_pump();
     }
@@ -17378,10 +17406,11 @@ int main(int argc, char **argv)
         if(!g_fe_res){ g_font=NULL; g_fset=NULL; g_basepal=NULL; }   /* header pointers stay valid (static), but the core re-sets these */
     } else if (sz_fe>0) Cconws("  U6FE.PAK is not a v2 pack (rebuild: make world) - front-end skipped\r\n");
     else if (g_sefe_off){ int32_t ml=0; rdr_caps rc; rdr_get_caps(&rc);        /* SE: its own front end from the pack (se_front_end.md) */
-        if(rc.colors>=256 && plat_load_file("MENU.REQ",1,&ml)){ g_menu_ran=1;
+        if((rc.colors>=256 || se_lc_have()) && plat_load_file("MENU.REQ",1,&ml)){ g_menu_ran=1;
             se_origin_fx();                                                    /* the intro first (0x4161): Origin FX, then the film */
             int full=se_film();
             if(se_run_menu(full)==3) g_menu_journey=1;
+            if(g_fi_lc_on){ rdr_set_lowcolor(g_black16,NULL); g_fi_lc_on=0; }
             fe_leave_black(); } }
     /* (no console line here: the video mode is up — text would scribble on the game screen) */
     uint8_t *pak=g_clib_off?(uint8_t*)load_prefix(PACK_NAME,g_clib_off,1):(uint8_t*)plat_load_file(PACK_NAME,1,&n);   /* 8.3 name (real-TOS safe); prefer FAST (TT/Falcon) RAM */
