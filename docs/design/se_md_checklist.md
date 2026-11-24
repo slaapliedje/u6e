@@ -258,3 +258,6 @@ list once SE's seams exist.
   control panel is broken, 1 chance in d/4+2 near the trap door (157,137), 4 frames of the view shaken a pixel with
   effect 1 sounding in each; tremors can follow on. Rolled once per turn spent (DOS: each view refresh). Checked in
   Hatari (TREMOR.REQ). Item 9 is done but for the AdLib effects beside DMA music.
+- 2026-11-24: item 9 DONE: the AdLib's effects with DMA music (rules/se_sound_effects.md §7a): host-rendered into
+  SEFX.PCM by se2pcm, mixed into the DMA ring by the 240 Hz interrupt at each song's balance. Checked in Hatari
+  (Falcon) by matching the recorded sound against the renderings. Not yet heard by ear.

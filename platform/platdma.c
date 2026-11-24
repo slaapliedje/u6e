@@ -77,6 +77,7 @@ static int       g_fresh;          /* first pump after start (distrust a stale c
 static int32_t   g_hw_prev;        /* last ring offset plat_dma_music_elapsed saw            */
 static uint32_t  g_elapsed;        /* frames played since the start (loops included)         */
 static int32_t   g_play_rate;      /* the song's rate (frames a second)                      */
+static int32_t   g_mix_to;         /* (the effect mixer's, below) */
 
 /* ---- resident song cache (platdma.h) ------------------------------------------------------
  * One arena, songs placed by a ring allocator (head advances; wrapping evicts whatever the new
@@ -102,9 +103,15 @@ static long dma_hw_start(void){
     r[0x01] = 0x03;                                   /* enable + repeat (loop)      */
     return 0;
 }
+/* The frame counter is three byte registers read one after another; the effect mixer's interrupt (plat_dma_fx_isr)
+ * reads them too, and one landing between these reads garbled the position (a ring of music skipped, 2026-11-24
+ * in Hatari). So the three reads run with interrupts masked (IPL 7 in the status register; we are in supervisor
+ * mode under Supexec). */
 static long dma_hw_pos(void){
     volatile uint8_t *r = (volatile uint8_t *)0xFFFF8900UL;
+    uint16_t sr; __asm__ volatile("move.w %%sr,%0\n\tori.w #0x0700,%%sr" : "=d"(sr) :: "memory");
     uint32_t cur = ((uint32_t)r[0x09]<<16) | ((uint32_t)r[0x0B]<<8) | r[0x0D];
+    __asm__ volatile("move.w %0,%%sr" :: "d"(sr) : "memory");
     int32_t off = (int32_t)(cur - (uint32_t)g_ring);
     if(off < 0 || off >= (int32_t)g_ring_size) off = 0;
     g_cur_off = off;
@@ -264,6 +271,7 @@ int plat_dma_music_start(const char *path){
         (void)Supexec(dma_hw_start);                          /* STE/TT: raw frame registers       */
     }
     (void)Vsync();                                            /* BUG84: counter valid after a DMA cycle */
+    g_mix_to = -1;
     g_playing = 1; g_fresh = 1; g_hw_prev = 0; g_elapsed = 0;
     return 1;
 }
@@ -305,7 +313,107 @@ uint32_t plat_dma_music_elapsed(void){
     return g_elapsed; }
 int32_t plat_dma_music_rate(void){ return g_play_rate; }
 
+/* ---- sound effects mixed into the ring (platdma.h) ---- */
+#define FXV 8                       /* voices */
+#define FX_FADE 1024                /* a stop's fade, samples (~80 ms at 12517 Hz, standing in for the AdLib's release): >>10 */
+typedef struct { const int8_t *p; int32_t n, i; int16_t handle, fade; uint16_t age; } fxv_t;
+static volatile fxv_t g_fxv[FXV];
+static uint8_t *g_fxbank;  static int32_t g_fxn, g_fxsongs;  static const uint8_t *g_fxdir, *g_fxscale;  static const int8_t *g_fxdata;
+static int8_t   g_fxlut[256];       /* sample -> sample at the playing song's balance (plat_dma_fx_song) */
+static int32_t g_mix_to = -1;       /* ring offset the mixing has reached (-1 = restart at the play position) */
+static uint16_t g_fx_age;
+
+static uint32_t be32(const uint8_t *b){ return ((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|((uint32_t)b[2]<<8)|b[3]; }
+int plat_dma_fx_load(const char *path)
+{
+    if(g_fxbank) return 1;
+    if(!g_avail) return 0;
+    plat_file f = plat_fopen(path, PLAT_RDONLY); if(f == PLAT_BADFILE) return 0;
+    uint8_t h[16]; int32_t len = 0;
+    if(plat_fread(f, h, 16) == 16 && h[0]=='U'&&h[1]=='6'&&h[2]=='F'&&h[3]=='X'){
+        int32_t n = (int32_t)be32(h+8), ns = (int32_t)be32(h+12);
+        len = plat_fsize(f);
+        if(n <= 0 || n > 64 || ns < 0 || ns > 64 || len < 16 + n*8 + ns*2) len = 0;
+        else { g_fxn = n; g_fxsongs = ns; } }
+    if(len <= 0){ plat_fclose(f); return 0; }
+    uint8_t *m = 0; uint32_t need = ((uint32_t)len + 15u) & ~15u;
+    if(g_cache && g_cache_size >= need + 1024u*1024u){        /* from the song arena's end: evict what lies there */
+        uint32_t at = g_cache_size - need;
+        for(int i=0;i<CACHE_MAX;i++){ cache_ent_t *e=&g_cent[i]; if(e->used && e->off + e->len > at){ if(e==g_ent){ g_ent=0; g_from_cache=0; } e->used=0; g_cache_used-=e->len; } }
+        g_cache_size = at; if(g_cache_head >= at) g_cache_head = 0;
+        m = g_cache + at; }
+    else { plat_mem_info_t mi; plat_mem_get_info(&mi);         /* a block of its own, leaving half a megabyte */
+        long ff = mi.have_altram ? (long)mi.fast_size - (long)mi.fast_used : 0, cf = (long)mi.chip_size - (long)mi.chip_used;
+        if((ff > cf ? ff : cf) > (long)need + 512L*1024L) m = (uint8_t *)plat_alloc_fast(need); }
+    if(!m){ plat_fclose(f); g_fxn = 0; return 0; }
+    plat_fseek(f, 0, PLAT_SEEK_SET);
+    if(plat_fread(f, m, len) != len){ plat_fclose(f); g_fxn = 0; return 0; }
+    plat_fclose(f);
+    g_fxbank = m; g_fxdir = m + 16; g_fxscale = g_fxdir + g_fxn*8; g_fxdata = (const int8_t *)(g_fxscale + g_fxsongs*2);
+    for(int v=0;v<FXV;v++) g_fxv[v].p = 0;
+    plat_dma_fx_song(-1);
+    return 1;
+}
+void plat_dma_fx_song(int n)
+{
+    int sc = 256;
+    if(g_fxbank && n >= 0 && n < g_fxsongs) sc = (g_fxscale[n*2] << 8) | g_fxscale[n*2+1];
+    for(int i=0;i<256;i++){ int v = ((i - 128) * sc) >> 8; g_fxlut[i] = (int8_t)(v > 127 ? 127 : v < -128 ? -128 : v); }
+}
+int plat_dma_fx_count(void){ return g_fxbank ? (int)g_fxn : 0; }
+int plat_dma_fx_sounding(void){ for(int v=0;v<FXV;v++) if(g_fxv[v].p) return 1; return 0; }
+
+/* the main program starts and stops voices while the interrupt mixes: a voice is taken out (p = 0) before its
+ * fields change and put back by its pointer last (a 32-bit store, atomic on the 68000) */
+void plat_dma_fx_play(int n, int handle)
+{
+    if(!g_fxbank || n < 0 || n >= g_fxn) return;
+    int32_t off = (int32_t)be32(g_fxdir + n*8), len = (int32_t)be32(g_fxdir + n*8 + 4);
+    if(len <= 0) return;
+    int v = -1;
+    for(int k=0;k<FXV;k++) if(g_fxv[k].p && g_fxv[k].handle == handle){ v = k; break; }
+    if(v < 0) for(int k=0;k<FXV;k++) if(!g_fxv[k].p){ v = k; break; }
+    if(v < 0){ uint16_t best = 0; for(int k=0;k<FXV;k++){ uint16_t a = (uint16_t)(g_fx_age - g_fxv[k].age); if(a >= best){ best = a; v = k; } } }
+    g_fxv[v].p = 0;
+    g_fxv[v].n = len; g_fxv[v].i = 0; g_fxv[v].handle = (int16_t)handle; g_fxv[v].fade = 0; g_fxv[v].age = g_fx_age++;
+    g_fxv[v].p = g_fxdata + off;
+}
+void plat_dma_fx_stop(int handle)
+{
+    for(int k=0;k<FXV;k++) if(g_fxv[k].p && (handle < 0 || g_fxv[k].handle == handle) && !g_fxv[k].fade) g_fxv[k].fade = FX_FADE;
+}
+
+/* mix ahead of the DMA: up to LEAD samples past the play position (~25 ms; the interrupt comes every ~4 ms) */
+void plat_dma_fx_isr(void)
+{
+    if(!g_playing || !g_fxbank) return;
+    volatile uint8_t *r = (volatile uint8_t *)0xFFFF8900UL;
+    uint32_t a = ((uint32_t)r[0x09]<<16) | ((uint32_t)r[0x0B]<<8) | r[0x0D];
+    int32_t cur = (int32_t)(a - (uint32_t)g_ring), RS = (int32_t)g_ring_size;
+    if(cur < 0 || cur >= RS) return;
+    int32_t lead = g_play_rate / 40;
+    int32_t ahead = g_mix_to < 0 ? -1 : g_mix_to - cur; if(ahead < 0 && g_mix_to >= 0) ahead += RS;
+    if(g_mix_to < 0 || ahead > RS/2){ g_mix_to = cur; ahead = 0; }     /* (re)start, or the play position overtook us */
+    int32_t cnt = lead - ahead; if(cnt <= 0) return;
+    for(int k=0;k<FXV;k++){
+        volatile fxv_t *vp = &g_fxv[k]; const int8_t *p = vp->p; if(!p) continue;
+        int32_t i = vp->i, n = vp->n, pos = g_mix_to, left = cnt; int fade = vp->fade;
+        while(left > 0 && i < n){
+            int32_t run = RS - pos; if(run > left) run = left; if(run > n - i) run = n - i;
+            int8_t *d = (int8_t *)g_ring + pos; const int8_t *s = p + i;
+            const int8_t *L = g_fxlut + 128;
+            if(fade){ for(int32_t j=0;j<run && fade>0;j++){ int x = d[j] + ((L[s[j]]*fade)>>10); d[j] = (int8_t)(x>127?127:x<-128?-128:x); fade--; }
+                      if(fade <= 0){ i = n; break; } }
+            else for(int32_t j=0;j<run;j++){ int x = d[j] + L[s[j]]; d[j] = (int8_t)(x>127?127:x<-128?-128:x); }
+            i += run; pos += run; if(pos >= RS) pos = 0; left -= run; }
+        if(vp->p == p){ if(i >= n) vp->p = 0; else { vp->i = i; if(vp->fade) vp->fade = (int16_t)fade; } }
+    }
+    g_mix_to += cnt; if(g_mix_to >= RS) g_mix_to -= RS;
+}
+
 void plat_dma_music_stop(void){
+    for(int k=0;k<FXV;k++) g_fxv[k].p = 0;
+    g_mix_to = -1;
     if(g_playing){
         if(g_is_falcon){
             (void)Buffoper(0);                                /* stop play + repeat                */

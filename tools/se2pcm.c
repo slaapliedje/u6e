@@ -12,7 +12,10 @@
  * (render/gamedemo.c music_play_se), so the two stay in step tick for tick.
  *
  * Clean-room: reads the user's own files; ships nothing (the PCM goes to build/, gitignored).
- * Usage: se2pcm SE_DIR OUT_DIR [rate]      (writes OUT_DIR/SE00.PCM .. SE19.PCM)
+ * Then the sound effects, each alone through the effect engine (engine/sesfx.c) into the same model: OUT_DIR/SEFX.PCM
+ * (U6FX: "U6FX", rate, count, songs, count x (offset, length) from the data's start, songs x the effects' scale while
+ * that song plays (8.8: the song's gain over the effects', capped at 2), the data; all big-endian, signed 8-bit).
+ * Usage: se2pcm SE_DIR OUT_DIR [rate]      (writes OUT_DIR/SE00.PCM .. SE19.PCM, SEFX.PCM)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,11 +24,13 @@
 #include "u6lzc.h"
 #include "../engine/smf.h"
 #include "../engine/oplsynth.h"
+#include "../engine/sesfx.h"
 
 static uint8_t *slurp(const char *dir, const char *name, long *n)
 {   char p[1024]; snprintf(p,sizeof p,"%s/%s",dir,name); FILE *f=fopen(p,"rb"); if(!f) return NULL;
     fseek(f,0,SEEK_END); *n=ftell(f); fseek(f,0,SEEK_SET); uint8_t *b=malloc((size_t)*n);
     if(b && fread(b,1,(size_t)*n,f)!=(size_t)*n){ free(b); b=NULL; } fclose(f); return b; }
+static double g_gain[20];   /* each song's gain (the effects take the median) */
 static void put_be32(FILE *f, uint32_t v){ uint8_t b[4]={(uint8_t)(v>>24),(uint8_t)(v>>16),(uint8_t)(v>>8),(uint8_t)v}; fwrite(b,1,4,f); }
 
 /* ---- the bank (se_adlib.md §10, se_music.md §7.3) ---- */
@@ -198,13 +203,51 @@ int main(int argc,char **argv)
         else { long sil=rate/2; if(off+sil>cap) off=cap-sil; for(long i=0;i<sil;i++) pcm16[off+i]=0; loop=off; total=off+sil; }
         int16_t *src=pcm16+first;
         long peak=1; for(long i=0;i<total;i++){ int a=src[i]; if(a<0) a=-a; if(a>peak) peak=a; }
-        double gain=120.0*256.0/(double)peak; if(gain>64.0) gain=64.0; if(gain<1.0) gain=1.0;
+        double gain=120.0*256.0/(double)peak; if(gain>64.0) gain=64.0; if(gain<1.0) gain=1.0; g_gain[n]=gain;
         for(long i=0;i<total;i++){ int v=(int)(src[i]*gain/256.0); if(v>127) v=127; if(v<-128) v=-128; pcm8[i]=(int8_t)v; }
         char op[1024]; snprintf(op,sizeof op,"%s/SE%02d.PCM",argv[2],n);
         FILE *o=fopen(op,"wb"); if(!o){ perror(op); return 3; }
         fwrite("U6PC",1,4,o); put_be32(o,(uint32_t)rate); put_be32(o,(uint32_t)total); put_be32(o,(uint32_t)loop);
         fwrite(pcm8,1,(size_t)total,o); fclose(o);
-        printf("SE%02d: %.1f s, %s at %.1f s\n",n,(double)total/rate,j2>0?(whole?"loops whole (warmed pass)":"loops"):"ends, silence looped",(double)loop/rate);
+        printf("SE%02d: gain %.1f, %.1f s, %s at %.1f s\n",n,gain,(double)total/rate,j2>0?(whole?"loops whole (warmed pass)":"loops"):"ends, silence looped",(double)loop/rate);
     }
+    /* the sound effects (rules/se_sound_effects.md §7a): GAME.EXE's 34 and the opening's spark, each through the effect
+     * engine (engine/sesfx.c) into the same AdLib model, alone (no song: DOS's effect would take a voice from the music,
+     * which a pre-rendered song cannot give up), until it ends and its release dies away (at most 1 s more, faded).
+     * The ten GAME.EXE never plays (9, 17, 19-26) are left empty. One gain for
+     * all of them: the median of the songs', so they sit against the music about as they did on the one OPL. */
+    {   double gs[20]; int ng=0; for(int i=0;i<20;i++) if(g_gain[i]>0) gs[ng++]=g_gain[i];
+        for(int i=0;i<ng;i++) for(int j=i+1;j<ng;j++) if(gs[j]<gs[i]){ double t=gs[i]; gs[i]=gs[j]; gs[j]=t; }
+        double gain=ng?gs[ng/2]:16.0;
+        enum { NFX=SESFX_N+1 };
+        static int8_t bank[12517*4*NFX]; long boff[NFX], blen[NFX], used=0, bcap=(long)sizeof bank;
+        for(int id=0;id<NFX;id++){
+            const sesfx_desc_t *d=id<SESFX_N?&SESFX_GAME[id]:&SESFX_SPARK;
+            if(id==9 || id==17 || (id>=19 && id<=26)){ boff[id]=used; blen[id]=0; continue; }   /* no caller in GAME.EXE (§5) */
+            opl_raw_begin(rate,OS); drv_init(); sesfx_init(&BE,&BE);
+            sesfx_play(d,127,63,0,id<SESFX_N?2:1);
+            long off=0, endat=-1, quiet=0; int32_t rem=0;
+            while(off<cap && off<rate*6L){
+                drv_timer(); sesfx_tick();
+                if(!sesfx_sounding() && endat<0) endat=off;
+                int32_t num=rate+rem, k=num/60; rem=num-k*60;
+                opl_raw_render(pcm16+off,k);
+                for(int32_t q=0;q<k;q++){ int a=pcm16[off+q]; if(a<0) a=-a; if((int)(a*gain/256.0)>=3) quiet=0; else quiet++; }
+                off+=k;
+                if(endat>=0 && (quiet>=rate/20 || off-endat>=rate)) break; }
+            long n=off-quiet; if(n<0) n=0;                            /* the quiet tail trimmed; a release cut at 1 s */
+            if(used+n>bcap) n=bcap-used;
+            long fade=quiet>=rate/20?0:rate/5;                       /* (a cut release fades over its last 0.2 s) */
+            for(long i=0;i<n;i++){ double g=gain; if(fade && i>n-fade) g=gain*(double)(n-i)/(double)fade;
+                int v=(int)(pcm16[i]*g/256.0); if(v>127) v=127; if(v<-128) v=-128; bank[used+i]=(int8_t)v; }
+            boff[id]=used; blen[id]=n; used+=n; }
+        char op[1024]; snprintf(op,sizeof op,"%s/SEFX.PCM",argv[2]);
+        FILE *o=fopen(op,"wb"); if(!o){ perror(op); return 3; }
+        fwrite("U6FX",1,4,o); put_be32(o,(uint32_t)rate); put_be32(o,(uint32_t)NFX); put_be32(o,20u);
+        for(int id=0;id<NFX;id++){ put_be32(o,(uint32_t)boff[id]); put_be32(o,(uint32_t)blen[id]); }
+        for(int sn=0;sn<20;sn++){ double rt=g_gain[sn]>0?g_gain[sn]/gain:1.0; if(rt>2.0) rt=2.0;   /* each song's balance (8.8), capped */
+            int v=(int)(rt*256.0+0.5); fputc(v>>8,o); fputc(v&255,o); }
+        fwrite(bank,1,(size_t)used,o); fclose(o);
+        printf("SEFX: %d effects, %.1f s in all, gain %.1f\n",(int)NFX,(double)used/rate,gain); }
     free(b); free(pcm16); free(pcm8); return 0;
 }

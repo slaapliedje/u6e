@@ -340,7 +340,7 @@ m2pcm: $(BUILD)/m2pcm
 
 # SE's songs for DMA sound (the AdLib sound, docs/formats/se_adlib.md): host-rendered from the user's MUSIC.LZC and
 # SAVAGE.TIM into build/music/SE00-19.PCM (U6PC format, gitignored); copy them beside the SE pack.
-$(BUILD)/se2pcm: tools/se2pcm.c engine/smf.c engine/oplsynth.c dataformats/u6lzc.c dataformats/u6lzw.c
+$(BUILD)/se2pcm: tools/se2pcm.c engine/smf.c engine/oplsynth.c engine/sesfx.c dataformats/u6lzc.c dataformats/u6lzw.c
 	@mkdir -p $(BUILD)
 	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
 # SE's sound effects (docs/rules/se_sound_effects.md): the channel rules on a recorded stream; with the user's SAVAGE.TIM

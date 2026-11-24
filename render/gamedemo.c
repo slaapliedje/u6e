@@ -3759,6 +3759,7 @@ static const world_t *g_wp;                                 /* the live world, f
 static int g_sfx_on=1, g_sound_off;
 static int g_sefx_live;            /* SE: the effect engine is fed by the timer (an SE song or its DMA shadow is set up) */
 static void se_sfx(int id);         /* SE's sound effects (rules/se_sound_effects.md), defined with the music */
+static int g_se_dmafx;                /* the effects are mixed into the DMA music (the AdLib's, SEFX.PCM) */
 static void se_sfx_stop_all(void);
 /* the PSG's registers answer in supervisor mode only: XBIOS 38 Supexec, a call at a time */
 static int g_sfx_rr,g_sfx_rv;
@@ -15183,6 +15184,7 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
 static void music_stop_all(void){
     plat_timer_stop();
     g_music_on = 0; g_smf_on = 0; g_se_shadow = 0;
+    g_se_dmafx=0;
     if(g_sefx_live){ g_sefx_live=0; sesfx_forget(); sespk_be.reset(); if(g_psg_fx){ g_psg_fx=0; plat_psg_silence(); } }
     if(g_st_on){ g_st_on = 0; plat_psg_silence(); }
     if(g_music_be_kind == 1){          /* MIDI OUT was live */
@@ -15222,7 +15224,8 @@ static void se_fx_out(void)
         plat_psg_tone(2, f?(int)(125000L/f):0, 13); }   /* (2 MHz / 16 / f) */
     else if(g_psg_fx){ plat_psg_tone(2,0,0); g_psg_fx=0; } }
 static void se_isr_tick(void)
-{   sespk_run(32); se_fx_out();
+{   if(g_se_dmafx) plat_dma_fx_isr();   /* (240 Hz: ~4 ms of mixing ahead each time) */
+    else { sespk_run(32); se_fx_out(); }
     if(++g_se_isr_n>=4){ g_se_isr_n=0;
         if(g_smf_on && !g_se_shadow) smf_tick(&g_smf);
         sesfx_tick(); }
@@ -15253,8 +15256,9 @@ static void se_mt32_upload(void)
 /* the play call (0x2701:0x648): effect id, nothing with sound off, one at a time (handle 0) */
 static void se_sfx(int id)
 {   if(!g_sfx_on || g_sound_off || g_bot || !g_sefx_live || id<0 || id>=SESFX_N) return;
+    if(g_se_dmafx){ plat_dma_fx_play(id,0); return; }
     sesfx_play(&SESFX_GAME[id],127,63,0,2); }
-static void se_sfx_stop_all(void){ if(g_sefx_live) sesfx_stop_all(); }
+static void se_sfx_stop_all(void){ if(g_sefx_live){ if(g_se_dmafx) plat_dma_fx_stop(-1); else sesfx_stop_all(); } }
 /* the tremor (rules/se_sound_effects.md §5a, GAME.EXE 0x28cf7): n frames of the map view shaken by up to m pixels,
  * each frame with effect 1 sounding and a stop-all after it, so n short bursts; then the view is put back. DOS shows
  * the frames back to back (a period VGA copy of the view took about a display frame); each is held 20 ms here. */
@@ -15306,7 +15310,9 @@ static int music_play_se_dma(int n)
     if(!plat_dma_music_start(nm)) return 0;
     if(!smf_start(&g_smf,g_smf_buf,l,&g_null_be)){ plat_dma_music_stop(); return 0; }
     g_smf_on=1; g_se_shadow=1; g_se_shadow_ticks=0; g_music_be_kind=0; g_music_active=2;
-    se_spk_load(); sesfx_init(&g_null_be,&sespk_be);          /* the effects on the PSG, its sound the speaker's (the DMA plays the AdLib song) */
+    g_se_dmafx=plat_dma_fx_count()>0;                         /* the AdLib's effects mixed into the stream (SEFX.PCM, loaded at boot) */
+    if(g_se_dmafx) plat_dma_fx_song(n);                       /* at DOS's balance against this song (§7a) */
+    se_spk_load(); sesfx_init(&g_null_be,&sespk_be);          /* else on the PSG, their sound the speaker's */
     g_se_isr_n=0; g_sefx_live=1; plat_timer_start(se_isr_tick, 240); return 1; }
 static void se_shadow_pump(void)
 {   if(!g_se_shadow || !g_smf_on) return;
@@ -17109,7 +17115,8 @@ static int ofx_sparks(int n)                                                 /* 
 {   int fr=0; for(int s=n-1;s>=0;s--){ int *k=g_ofx_slot[s]; if(k[0]<0){ fr++; continue; }
         ofx_zoom(11,k[3]*8+k[0],k[1],k[2],256);
         if(g_sefx_live && g_sfx_on && !g_sound_off){                         /* its sound (se_sound_effects.md §6): from the first frame, panned by x */
-            if(k[0]==0) sesfx_play(&SESFX_SPARK,127,127-127*k[1]/319,s,1); else if(k[0]==7) sesfx_stop_handle(s); }
+            if(g_se_dmafx){ if(k[0]==0) plat_dma_fx_play(SESFX_N,s); else if(k[0]==7) plat_dma_fx_stop(s); }   /* (mono: no pan) */
+            else if(k[0]==0) sesfx_play(&SESFX_SPARK,127,127-127*k[1]/319,s,1); else if(k[0]==7) sesfx_stop_handle(s); }
         k[0]=k[0]==7?-1:k[0]+1; } return fr; }
 static void ofx_spawn(int s){ int *k=g_ofx_slot[s]; k[0]=0; k[1]=(int)rng_range(&g_crng,320); k[2]=(int)rng_range(&g_crng,128); k[3]=(int)rng_range(&g_crng,3); }
 static void se_origin_fx(void)
@@ -18019,7 +18026,9 @@ int main(int argc, char **argv)
         int use_fast = mi.have_altram && fast_free>chip_free;
         long avail=(use_fast?fast_free:chip_free)-RESERVE;
         if(avail>=1024L*1024L){ if(avail>CAP) avail=CAP; plat_dma_music_cache_init((uint32_t)avail, use_fast); }
-        if(_meminfo) dbg_num("MEM music_cache KB=", (int)(plat_dma_music_cache_size()/1024)); }
+        if(_meminfo) dbg_num("MEM music_cache KB=", (int)(plat_dma_music_cache_size()/1024));
+        if(g_gd==&gamedef_se){ char nm_[20]; music_name(nm_,"SEFX",".PCM");   /* SE's effects for DMA music (rules/se_sound_effects.md §7a) */
+            int ok_=plat_dma_fx_load(nm_); dbg_num("MEM SE effects bank=", ok_); } }
 
     /* FRONT-END: show the title + main menu on interactive boot (gated on MENU.REQ so
      * plain headless scene captures still render the game). "Journey Onward" returns
@@ -18778,7 +18787,7 @@ int main(int argc, char **argv)
             se_scene_start(f,f==1?F1:0,N[f-1],0); } }
     {   int32_t fl_=0; if(g_gd==&gamedef_se && TEST_REQ("SESFX.REQ",&fl_) && fl_>0){   /* test: song 0, then every effect a second and a half apart */
             music_play_song("SE00"); dbg_num("SESFX live=", g_sefx_live);           /* (rules/se_sound_effects.md; to record the PSG or MIDI OUT) */
-            for(int id_=0;id_<SESFX_N;id_++){ se_sfx(id_); uint32_t t_=plat_ticks_200hz(); while(plat_ticks_200hz()-t_<300){ se_shadow_pump(); } }
+            for(int id_=0;id_<SESFX_N;id_++){ se_sfx(id_); uint32_t t_=plat_ticks_200hz(); while(plat_ticks_200hz()-t_<300){ plat_dma_music_pump(); se_shadow_pump(); } }
             dbg_num("SESFX done=", 1); } }
     {   int32_t tl_=0; if(g_gd==&gamedef_se && TEST_REQ("TREMOR.REQ",&tl_) && tl_>0){   /* test: the tremor's frames and bursts, and its roll at the trap door */
             music_play_song("SE00"); g_tremor_dbg=1; compose_map(&w); present_map(); se_tremor(1,4); g_tremor_dbg=0;

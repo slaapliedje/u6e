@@ -77,9 +77,11 @@ DOS's effects go to whichever one driver CONFIG.SE names (rules/se_sound_effects
 | Ours | Where | Why |
 |---|---|---|
 | With MIDI OUT in General MIDI mode, the effects play on the YM2149 with the speaker's recipes | se_sound_effects.md §7 | A GM synth has no SE timbres to upload; the speaker's is the only other DOS sound for them |
-| With DMA music, the effects play on the YM2149 with the speaker's recipes, not the AdLib's FM | same | The DMA plays one pre-rendered stream; the AdLib effects would need mixing into it |
+| With DMA music, the AdLib's effects are pre-rendered, each alone, and mixed on top of the song: the music part DOS would give up to the effect keeps playing | se_sound_effects.md §7a | A pre-rendered song cannot drop one part |
+| With DMA music, an effect's level against the song is DOS's balance, but at most twice the effects' median level, and a stopped effect fades over ~80 ms instead of its own release | same | Against the quietest songs DOS's balance would clip in 8 bits; the release depends on when the stop comes |
+| With DMA music on a machine without ~0.4 MB to spare, the effects play on the YM2149 with the speaker's recipes | same | The bank of rendered effects needs the RAM |
 | With PSG music, the song folds to two voices while an effect sounds; the effect has the third | same | DOS's speaker plays no music, so it never shares |
-| The fireworks of the opening (program 127) sound only on the MT-32 | se_origin_fx.md §9 | The speaker has no record for 127, as in DOS; on DMA the AdLib's would need the mixing above |
+| The fireworks of the opening (program 127) sound on the MT-32 and with DMA music (the AdLib's, mono), not on the YM2149 | se_origin_fx.md §9 | The speaker has no record for 127, as in DOS |
 | The tremor is rolled once per turn the party spends, and each of its frames is held 20 ms | se_sound_effects.md §5a | DOS rolls at each refresh of the view (about 50 call sites, no match in our engine) and shows the frames as fast as the view copies, about a frame on a period PC |
 
 ## Waiting on other items

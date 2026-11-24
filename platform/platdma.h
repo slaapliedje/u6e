@@ -40,4 +40,18 @@ uint32_t plat_dma_music_cache_size(void);          /* arena bytes (0 = streaming
 uint32_t plat_dma_music_cache_used(void);          /* bytes occupied by cached songs     */
 int      plat_dma_music_cached(void);              /* 1 = the current song plays from RAM */
 
+/* SOUND EFFECTS MIXED INTO THE MUSIC (docs/rules/se_sound_effects.md §7a): a bank of host-rendered effects (U6FX
+ * format, tools/se2pcm) is loaded once, taken from the song arena's end when there is one (else a block of its own
+ * if RAM allows), and an effect is ADDED into the ring just ahead of the play position, a few milliseconds at a time,
+ * by plat_dma_fx_isr (call it from a steady interrupt, in supervisor mode, some hundreds of times a second). The ring
+ * is filled seconds ahead, so the effect lands on the music already there; a stop fades the voice out over ~20 ms.
+ * Effects sound only while the DMA plays (a song, or an ended song's looped silence). */
+int  plat_dma_fx_load(const char *path);          /* 1 = the bank is in memory (already, or now)        */
+int  plat_dma_fx_count(void);                     /* effects in the bank (0 = none loaded)              */
+void plat_dma_fx_play(int n, int handle);         /* start effect n; a voice with the same handle is cut */
+void plat_dma_fx_stop(int handle);                /* fade out the voice of handle (-1 = every voice)    */
+void plat_dma_fx_song(int n);                     /* the effects' balance against song n's (-1: as rendered) */
+void plat_dma_fx_isr(void);                       /* mix ahead: supervisor mode (an interrupt handler)  */
+int  plat_dma_fx_sounding(void);
+
 #endif /* U6E_PLATDMA_H */

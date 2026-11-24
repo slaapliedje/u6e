@@ -300,7 +300,29 @@ are installed but no descriptor uses them (guessed: none found in SAVAGE.EXE). N
 - YM2149: the speaker's tone becomes voice C (period 125000 / f, volume 13; off while the gate is off or f is the
   silent 32767). While an effect sounds, PSG music folds to voices A and B. Checked in Hatari (TT and Falcon,
   SESFX.REQ): all 34 effects go to voice C over song 0.
-- General MIDI and DMA music send the effects to the YM2149 too (our choices, rules/se_deviations.md).
+- General MIDI music sends the effects to the YM2149 too (our choice, rules/se_deviations.md).
+- DMA music (2026-11-24): the AdLib's own effects, **mixed into the stream**.
+  - *Rendered on the host:* tools/se2pcm (`make se-pcm`) plays each effect alone through engine/sesfx.c into the
+    same AdLib model as the songs (§4.2, formats/se_adlib.md), until it ends and its release dies away. The release
+    is cut at 1 s after the end, fading over its last 0.2 s. The ten effects GAME.EXE never plays (9, 17, 19-26) are
+    left empty. All are scaled by one gain, the median of the songs' (each song is scaled to its own peak).
+  - *The bank:* build/music/SEFX.PCM, format U6FX: "U6FX", rate, effect count, song count, then per effect (offset,
+    length), then per song the effects' scale while that song plays, then the data. The words are big-endian 32-bit,
+    the scales big-endian 16-bit 8.8, the samples signed 8-bit at the songs' rate. The 34 game effects come first,
+    then the spark. A song's scale is its gain over the effects' gain, capped at 2 (so a loud effect over a quiet song
+    does not clip much in 8 bits). About 366 KB at 12517 Hz.
+  - *Loading:* at the end of boot, taken from the song arena's end when there is one, else as a block of its own if
+    half a megabyte stays free. Without the bank, or without the RAM, the effects go to the YM2149 as before.
+  - *Mixing:* the 240 Hz interrupt adds each playing effect into the DMA ring up to ~25 ms past the play position,
+    through a 256-entry table at the song's scale. There are 8 voices; a new effect cuts the voice with its handle,
+    else takes a free voice, else the oldest. A stop (stop one, stop-all) fades the voice over ~80 ms, standing in
+    for the AdLib's release. The sparks are mono (no pan).
+  - *Checked in Hatari* (Falcon, SESFX.REQ, the AVI's sound against SE00.PCM and SEFX.PCM): all 24 played effects are
+    in the stream, each about 18 ms after its call, at the expected scale. 22 match their renderings sample for
+    sample (r 0.82-1.00); 10 and 30 match by loudness envelope. In the opening, sparks are found in the stream over
+    song 19. The music stays in step with the song file throughout. A first build skipped one ring of music
+    (2.6 s): the interrupt's read of the DMA frame counter could land between the main program's three byte reads,
+    so those reads now run with interrupts masked.
 - tools/sesfxtest.c (`make sesfxtest`) checks the channel rules on a recorded stream and writes each effect through
   the speaker model as a WAV (build/sfx/). The traces there match §5's descriptions (e.g. id 16 rises from 300 Hz by
   75 Hz a step; id 0 sinks from about 450 Hz).
@@ -321,8 +343,7 @@ are installed but no descriptor uses them (guessed: none found in SAVAGE.EXE). N
   rate (steps under ~1 ms collapse into noise: the YM noise generator with its period from f is the natural stand-in
   for records with large W or D), or pre-render each of the 23 records on the host into short PCM/YM register
   streams. Which voice the effect takes from the music's three is our choice (DOS steals the quietest part, §3.3).
-- **DMA (OPL2 pre-render):** an effect could be pre-rendered per id through tools/se2pcm.c's AdLib model and mixed,
-  but that needs a second DMA stream or mixing; deferred.
+- **DMA (OPL2 pre-render):** built, see §7a.
 
 ## 8. Open questions
 
@@ -360,5 +381,5 @@ with a DOSBox speaker capture.
 
 ## Status
 
-BUILT (2026-11-23; the tremor 2026-11-24); read from the code; not yet compared with DOS by ear. TREMOR.REQ checks the
+BUILT (2026-11-23; the tremor and the AdLib effects on DMA 2026-11-24); read from the code; not yet compared with DOS by ear. TREMOR.REQ checks the
 tremor in Hatari (frames, bursts sounding, the roll's chance).
