@@ -35,10 +35,15 @@ int plat_timer_start(void (*cb)(void), int hz)
 {
     if (hz < 48)  hz = 48;
     if (hz > 250) hz = 250;
+    g_timer_cb = cb;
+    if (hz >= 200) {                 /* control 4 (/50): 49152 Hz / data, finer steps (240 -> 205 = 239.77 Hz, /4 = 59.94 Hz as below) */
+        int data = (49152 + hz / 2) / hz;
+        Xbtimer(0, 4, data, tima_isr);   /* XBIOS 31: Timer A, control 4 (/50), our ISR */
+        return 1;
+    }
     int data = (12288 + hz / 2) / hz;                     /* 12288 Hz / hz, rounded */
     if (data < 1)   data = 1;
     if (data > 255) data = 255;
-    g_timer_cb = cb;
     Xbtimer(0, 7, data, tima_isr);   /* XBIOS 31: Timer A, control 7 (/200), our ISR */
     return 1;
 }

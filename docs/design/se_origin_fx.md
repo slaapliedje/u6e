@@ -383,6 +383,7 @@ reimplementation should:
   is the sequencer's last FE type-3 number. "Music synced" = a song we can follow is playing (MIDI or the PSG).
 - Pace: a step every 73 ms, not a retrace (slip 30 in rules/se_deviations.md); steps we fall behind on are not drawn.
 - The scaled draw is nearest-pixel with the hot spot scaled.
-- The conductor's tap is sent only on MIDI (MT-32 channel 10, note 37); the fireworks' sound effects are not played
-  (their descriptor is not read).
+- The conductor's tap is sent only on MIDI (MT-32 channel 10, note 37). The fireworks' sounds play through the effect
+  engine (rules/se_sound_effects.md §6): descriptor DS:0x200e, a handle per spark, priority 1, panned by x; heard on the
+  MT-32 only (no speaker record for program 127, as in DOS).
 - A key ends the opening (the end sequence runs) and the film follows, as in DOS (the film first empties the keys).

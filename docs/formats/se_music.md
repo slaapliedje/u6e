@@ -392,7 +392,7 @@ by a table (0x60d).
 
 ### 7.4 PC speaker (STRAX.DRV item 2, SAVAGE.TIM item 2)
 SAVAGE.TIM item 2 is a count byte (28) and 28 records of 32 bytes for speaker sound effects; this driver
-runs the PIT at 7680 Hz and GAME.EXE plays no music with it. Not decoded.
+runs the PIT at 7680 Hz and GAME.EXE plays no music with it. Decoded in rules/se_sound_effects.md §4.3 (2026-11-23).
 
 ## 8. Feeding u6e's three backends (suggestion, not decided)
 What u6e has today (music.md, music_areas.md, milestone.md M10): an OPL `.M` sequencer whose events go
@@ -420,7 +420,8 @@ U6 song choice is a group model in gamedemo.
   and two passes, looping on the second; a song that ends gets its release and 0.5 s of silence the DMA loops. 18 MB
   for all 20. In the game the sequencer runs silently beside the PCM (music_play_se_dma), ticked from the frames the
   DMA has played (plat_dma_music_elapsed), so cues, ends and the queue's exit points behave as on MIDI and the PSG.
-  Not yet: SE's sound effects on DMA. The original suggestion follows.
+  The sound effects (rules/se_sound_effects.md, built 2026-11-23) are not in the PCM: beside DMA music they play on
+  the YM2149 with the PC speaker's recipes. The original suggestion follows.
 - **OPL2 → DMA** (suggestion as first written): render with engine/oplsynth on the host, driving it as the AdLib driver does: the
   SAVAGE.TIM item-1 bank read from the user's files at convert time (never shipped), program lookup
   with record-0 fallback, layering, bend range, velocity rules, the drum remap of §7.3, 9 melodic
@@ -448,7 +449,7 @@ same song, and check the §5 situations in DOSBox (dosbox-u6-rig).
 - [ ] FM record bytes 0x0F-0x23 (vibrato / pitch envelope) and the timer routine (+8) that runs them.
 - [ ] DS:0x27f2 = 0x10 skipping the death music; DS:0x2810 vs DS:0xd4 in every path.
 - [ ] AdLib channel volume curve (DS:0x1a2[ch] from controller 7) in detail.
-- [ ] PC speaker driver and SAVAGE.TIM item 2 (sound effects, not music).
+- [x] PC speaker driver and SAVAGE.TIM item 2 (sound effects, not music): rules/se_sound_effects.md §4.3.
 
 ## 10. Status
 IN PROGRESS — format, player rules and song choice written from GAME.EXE and checked against all 20

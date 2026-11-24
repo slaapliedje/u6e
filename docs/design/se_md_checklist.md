@@ -248,3 +248,9 @@ list once SE's seams exist.
   (tools/se2pcm.c) renders all 20, and the game plays them with the sequencer running silently beside the DMA for cues, ends
   and the queue. Recorded in Hatari (TT) through the intro: sound throughout (waveform checked, not yet listened to). Left in item 9: the opening's sound effects (and SE's sound effects
   generally on DMA).
+- 2026-11-23: item 9: SE's sound effects (rules/se_sound_effects.md): read in full from GAME.EXE (one play call, 34 effects
+  as notes borrowed from the music's channels 2-9, the PC speaker's recipes in SAVAGE.TIM item 2) and built: engine/sesfx.c,
+  the MT-32 upload, the speaker on the YM2149's voice C (also beside DMA and General MIDI music, our choices in
+  se_deviations.md), the opening's fireworks on the MT-32, every GAME.EXE call site but the tremor (its routine is not
+  built). Checked in Hatari: the MIDI stream (TT) and the PSG writes (TT, Falcon); not yet heard by ear. Item 9 is done
+  but for the tremor's sound and the AdLib effects beside DMA music (a mixing question).

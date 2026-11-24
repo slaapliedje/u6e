@@ -70,6 +70,16 @@ void plat_psg_voice(int v, int midinote, int vol){
     psg_mixer();
 }
 
+/* voice v at a raw tone period (1-4095; 2 MHz / 16 / period Hz), or off for period 0 (interrupt level) */
+void plat_psg_tone(int v, int period, int vol){
+    if(v<0 || v>2) return;
+    if(period<=0){ plat_psg_voice_off(v); return; }
+    if(period>4095) period=4095;
+    psg_write(v*2, period & 0xFF); psg_write(v*2+1, (period>>8) & 0x0F);
+    psg_write(8+v, vol<0?0:vol>15?15:vol);
+    if(g_tone_off & (1<<v)){ g_tone_off &= ~(1<<v); psg_mixer(); }
+}
+
 void plat_psg_voice_off(int v){
     if(v<0 || v>2) return;
     psg_write(8+v, 0);                       /* volume 0                            */

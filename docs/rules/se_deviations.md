@@ -71,8 +71,17 @@ The user's rule for the rows that were engine choices: build DOS's behaviour. Ea
 |---|---|---|
 | Eight save slots; Create always allowed | design/se_front_end.md | One saved game (`savegame\\`); Create refuses while one is in progress |
 
+## Ours where DOS has nothing to copy (2026-11-23, the sound effects; the user's call)
+DOS's effects go to whichever one driver CONFIG.SE names (rules/se_sound_effects.md); the Atari's outputs differ, so:
+
+| Ours | Where | Why |
+|---|---|---|
+| With MIDI OUT in General MIDI mode, the effects play on the YM2149 with the speaker's recipes | se_sound_effects.md §7 | A GM synth has no SE timbres to upload; the speaker's is the only other DOS sound for them |
+| With DMA music, the effects play on the YM2149 with the speaker's recipes, not the AdLib's FM | same | The DMA plays one pre-rendered stream; the AdLib effects would need mixing into it |
+| With PSG music, the song folds to two voices while an effect sounds; the effect has the third | same | DOS's speaker plays no music, so it never shares |
+| The fireworks of the opening (program 127) sound only on the MT-32 | se_origin_fx.md §9 | The speaker has no record for 127, as in DOS; on DMA the AdLib's would need the mixing above |
+
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the
 ceiling, the trap doors, the drum's scene), combat (item 6: the totems, the bell, fire's harm, a
-SE's creature table for the turtle's other numbers), SE's sounds (item 9: the fireworks' sound effects in the Origin FX opening
-are not played, design/se_front_end.md "The intro").
+SE's creature table for the turtle's other numbers), SE's sounds (item 9: the tremor's sound, id 1, waits on its routine, se_levels.md).

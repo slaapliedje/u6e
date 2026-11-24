@@ -1750,7 +1750,7 @@ static long convert_midgame(const char *dir, uint8_t marker, FILE *out)
  * INTRO, CREATE and ENDGAME.LZC as stored (each a shape library, shapes.md; the engine decodes a picture when it shows it).
  * "CSFE" [3 x 768 palette][u8 ngroups][64 x (u8 file 0-4, u8 item, u32 len), the first ngroups used] then the items'
  * bytes in order. File 4 item 0 is SAVAGE.FNT unpacked (the WOU font); file 5 item 0 the words read from SAVAGE.EXE;
- * file 6 items 0-19 MUSIC.LZC's songs unpacked.
+ * file 6 items 0-19 MUSIC.LZC's songs unpacked; file 7 the ST's 16 colours per screen; file 8 items 0 and 2 SAVAGE.TIM's.
  * Written in the library tail just before the scenes' block, with a trailer [u32 block length]["CFEE"]. */
 static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
 {
@@ -1781,6 +1781,12 @@ static long convert_sefe(const char *dir, uint8_t marker, FILE *out)
             for(int it=0;it<ni && it<20 && ng<64;it++){ int32_t n=u6lzc_read(&lc,it,item,(int32_t)sizeof item);
                 if(n>0){ fwrite(item,1,(size_t)n,out); gf[ng]=6; gi[ng]=(uint8_t)it; gl[ng]=n; ng++; } } }
         else printf("MUSIC.LZC: missing\n");
+        free(b); }
+    {   long fl; uint8_t *b=slurp(dir,"SAVAGE.TIM",&fl); u6lzc_t lc;       /* the sound effects' data (rules/se_sound_effects.md): groups (8, 0) the MT-32 */
+        if(b && u6lzc_open(&lc,b,(int32_t)fl,marker)){                      /* timbres and patches, (8, 2) the PC speaker's records, as stored */
+            for(int it=0;it<=2 && ng<64;it+=2){ int32_t n=u6lzc_read(&lc,it,item,(int32_t)sizeof item);
+                if(n>0){ fwrite(item,1,(size_t)n,out); gf[ng]=8; gi[ng]=(uint8_t)it; gl[ng]=n; ng++; } } }
+        else printf("SAVAGE.TIM: missing\n");
         free(b); }
     {   long fl; uint8_t *x=slurp(dir,"SAVAGE.EXE",&fl);              /* the front end's words from the user's SAVAGE.EXE: group (5, 0) */
         long img=0, dg=-1;                                                  /* (se_front_end.md "Strings"): [u8 n][n NUL-ended strings] */

@@ -21,6 +21,7 @@
 #include "u6lzw.h"
 #include "u6shape.h"
 #include "smf.h"
+#include "sesfx.h"          /* SE's sound effects (rules/se_sound_effects.md) */
 #include "u6obj.h"             /* save-load: decode the save's object super-chunks (objblk.md) */
 #include "fepack.h"           /* U6FE.PAK section ids + header layout (front-end streaming) */
 #include "objects.h"
@@ -3756,6 +3757,9 @@ static const world_t *g_wp;                                 /* the live world, f
 
 /* ---- sound effects as DOS plays them (docs/rules/sound_effects.md): a tone on voice C, stepped by the 200 Hz clock ---- */
 static int g_sfx_on=1, g_sound_off;
+static int g_sefx_live;            /* SE: the effect engine is fed by the timer (an SE song or its DMA shadow is set up) */
+static void se_sfx(int id);         /* SE's sound effects (rules/se_sound_effects.md), defined with the music */
+static void se_sfx_stop_all(void);
 /* the PSG's registers answer in supervisor mode only: XBIOS 38 Supexec, a call at a time */
 static int g_sfx_rr,g_sfx_rv;
 static long sfx_w_do(void){ plat_psg_write(g_sfx_rr,g_sfx_rv); return 0; }
@@ -3777,7 +3781,7 @@ static int g_instr;                                     /* U)se on an instrument
 static int instrument_effect(int on){ return on==157?2:on==156?3:on==158?18:on==153?19:on==296?20:0; }
 static void sfx_play(int id,int arg)
 {
-    if(!g_sfx_on||g_sound_off||g_bot) return;
+    if(!g_sfx_on||g_sound_off||g_bot||g_gd==&gamedef_se) return;   /* (SE's effects are se_sfx: no speaker beeps in its DOS) */
     g_sfx_r4=(uint8_t)sfx_read(4); g_sfx_r5=(uint8_t)sfx_read(5); g_sfx_r10=(uint8_t)sfx_read(10); g_sfx_r7=(uint8_t)sfx_begin();
     switch(id){
     case 1: sfx_tone(arg); sfx_wait(); sfx_wait(); break;
@@ -7311,7 +7315,8 @@ static int se_part_of(int on){ return on==284||on==285||on==289||on==290||(on>=2
 static void se_crush(world_t*w,int id,int cx,int cy,int a){
     if(a!=1) for(int ix=0;ix<3;ix++) for(int iy=0;iy<3;iy++){ int tx=cx+ix-1, ty=cy+iy-1;
         if(ix==1&&iy==1) continue;
-        if(world_is_passable(w,tx,ty)&&!obj_blocks_at(tx,ty)&&actor_on(w,tx,ty)<0){ se_actor_put(id,tx,ty); actor_wound(-1,id,1+(int)rng_range(&g_crng,30),0); return; } }
+        if(world_is_passable(w,tx,ty)&&!obj_blocks_at(tx,ty)&&actor_on(w,tx,ty)<0){ se_actor_put(id,tx,ty); se_sfx(31); actor_wound(-1,id,1+(int)rng_range(&g_crng,30),0); return; } }
+    if(a!=1) se_sfx(31);                                          /* 0x19201: 31 when thrust aside or crushed for want of room, not when crushed outright */
     actor_wound(-1,id,g_ahp[id]?g_ahp[id]:1,0); }
 /* what is under the 2x2 ending at (x,y) as the boulder comes (0x19201): other boulders are pushed on; actors are
  * crushed (a = 1) or thrust to a free tile around and hurt 1-30, crushed if there is none; things go, except those
@@ -7337,16 +7342,18 @@ static int se_boulder_step(int b,int x,int y,int a,int f,int g,int depth){
     o->x=(uint16_t)x; o->y=(uint16_t)y; if(!o->dirty) o->dirty=WOBJ_DIRTY_STATE; build_blocked();
     { int wf=obj_idx_at(x,y+2,150);
       if(wf>=0){ static const int16_t GO[5][3]={{150,0,2},{151,2,3},{195,1,3},{195,0,3},{152,2,4}};   /* it dams the waterfall */
-          o->quality=1;
+          o->quality=1; se_sfx(31);                                 /* 0x194b1 */
           for(int k=0;k<5;k++){ int i=obj_idx_at(x+GO[k][1],y+GO[k][2],GO[k][0]); if(i>=0) obj_destroy(i); }
           if(g>=0&&g_wobj[g].alive) obj_destroy(g); build_blocked(); } }
-    for(int di=0;di<2;di++) for(int si=0;si<2;si++){ int t=se_mt(x+1-di,y+si-1); if(t==0xc||t==0xf){ o->quality=1; break; } }   /* in the water it stays */
+    { int wet=0; for(int di=0;di<2;di++) for(int si=0;si<2;si++){ int t=se_mt(x+1-di,y+si-1); if(t==0xc||t==0xf){ o->quality=1; wet=1; break; } }   /* in the water it stays */
+      if(wet) se_sfx(31); }                                       /* 0x194b1 */
     return 1; }
 /* the blast at (bx,by) meets the boulder b (0x1810:0x14ea) */
 static int se_boulder(int b,int bx,int by,int depth)
 {
     wobj_t*o=&g_wobj[b]; int g=obj_idx_at(o->x,o->y,230), di=o->x, si=o->y, dx=bx-di, dy=by-si, fl=0, e=0, nf=0, wf=0, roll=0, r=0;
-    if(o->quality==1||depth>8) return 0;
+    if(o->quality==1){ se_sfx(28); return 0; }                    /* 0x195ea: it can move no more */
+    if(depth>8) return 0;
     if(dx==1||(dx==0&&(dy==0||dy==-1))){ di--; fl|=0x10; }
     else if(dx==-2||(dx==-1&&(dy==0||dy==-1))){ if(!on_list(SE_NOEAST,24,se_mt(di+1,si))){ di++; fl|=0x40; } }
     if(dy==1||(dy==0&&(dx==0||dx==-1))){ si--; fl|=0x80; }
@@ -7376,6 +7383,7 @@ static void se_blast(int x,int y,int dev,int depth)
     world_t*w=(world_t*)g_wp; int ex[9],ey[9],ids[16],n; if(!w) return;
     int span=(w->level==0)?U6_SURFACE_TILES:256;
     for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
+    if(dev){ se_sfx(18); se_sfx(29); } else se_sfx(6);              /* 0x19ac1 / 0x19a41: before the burst */
     n=rays_from(w,x,y,9,ex,ey,dev?0x109:0x105,0,ids,16);
     for(int k=0;k<n;k++){ int on=actor_objn(ids[k]); if(is_stackable(on)) continue;
         if(dev && on!=323 && on!=328) continue;                  /* the device hurts only Myrmidex drones and the queen */
@@ -7542,8 +7550,8 @@ static int se_exting_on(int idx,int row,int n)
     int a=g_se_on_actor, hx, hy; se_actor_xy(a,&hx,&hy);
     if(idx>=0){ int on=g_wobj[idx].obj_n, dx=g_wobj[idx].x-hx, dy=g_wobj[idx].y-hy;
         if(dx<-1||dx>1||dy<-1||dy>1){ msgcat(n,"Out of range!"); return 0; }
-        if(on==242||on==254){ msgcat(n,"\nYou put the fire out."); obj_destroy(idx); build_blocked(); return 1; }
-        if(on==207 && se_frame(idx)==2){ msgcat(n,"\nYou put the fire out."); g_wobj[idx].tile=(uint16_t)basetile(207); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; return 1; }
+        if(on==242||on==254){ se_sfx(29); msgcat(n,"\nYou put the fire out."); obj_destroy(idx); build_blocked(); return 1; }   /* 0x243e9: before the words */
+        if(on==207 && se_frame(idx)==2){ se_sfx(29); msgcat(n,"\nYou put the fire out."); g_wobj[idx].tile=(uint16_t)basetile(207); if(!g_wobj[idx].dirty) g_wobj[idx].dirty=WOBJ_DIRTY_STATE; return 1; }
         msgcat(n,"\nNo effect."); return 0; }
     if(row>=0){ msgcat(n,"\nNo effect."); return 0; }
     return 0; }
@@ -7556,7 +7564,7 @@ static int se_exting_tile(int tx,int ty,int n)
     if(t>=15&&t<=27) f=t-15; else if(t==170) f=13; else if(t==171) f=14;
     if(f<0){ msgcat(n,"nothing!"); return 0; }
     if(g_cur_level==3){ msgcat(n,"\nThe lava is too far below you."); return 0; }
-    msgcat(n,"Lava\nYou harden some of the lava.");
+    se_sfx(29); msgcat(n,"Lava\nYou harden some of the lava.");   /* 0x243e9 */
     persist_obj_new(57,f,tx,ty,0); build_blocked(); return 1; }
 /* SE's maximum HP (0x1810:0x62a): strength x 2 + level x 4, 1 to 255 */
 static int se_max_hp(int a){ int m=se_eff_str(a)*2+(g_alevel[a]>0?g_alevel[a]:0)*4; return m<1?1:m>255?255:m; }   /* GAME.EXE 0x1872a: 2 x strength + 4 x level, 1-255 */
@@ -8008,7 +8016,7 @@ static int se_machine(int idx){
     int lead=g_nparty?g_party[0].actor:1, k;
     for(k=0;k<g_ow.ninv;k++){ int on=g_ow.inv[k].obj_n; if((g_ow.inv[k].owner?g_ow.inv[k].owner:1)==lead && !g_ow.inv[k].in && (on==72||on==73||on==74)) break; }
     if(k>=g_ow.ninv){ msgcat(0,"\nYou don't have any gems."); return 1; }
-    pack_row_take(k,1); msgcat(0,"\nYou put a gem in the machine.");
+    pack_row_take(k,1); se_sfx(32); msgcat(0,"\nYou put a gem in the machine.");   /* 0x25b44: before the words */
     persist_obj_new(197,0,g_wobj[idx].x,g_wobj[idx].y,0); build_blocked(); return 1; }
 /* the wire screen (0x23b10, se_use.md §5r): ten sulfur from the first sulfur deposit (231) around its holder */
 static int se_sift(int a){
@@ -8182,32 +8190,33 @@ static void se_sense(void)
         else cnt[dx>0?(dy>0?3:1):(dy>0?5:7)]++; }
     for(k=0;k<8;k++) if(cnt[k]) nd++;
     m=msgcat(msg_tail(),"\nTriolo senses ");
-    if(!nd){ msgcat(m,"no danger.\n"); return; }
-    if(nd==8){ msgcat(m,"danger all around!\n"); return; }
+    if(!nd){ msgcat(m,"no danger.\n"); se_sfx(33); return; }      /* 0x127ab: the sound after the words */
+    if(nd==8){ msgcat(m,"danger all around!\n"); se_sfx(16); return; }
     m=msgcat(m,"danger to the ");
     for(int left=nd;left>0;left--){ for(k=0;k<8&&!cnt[k];k++); m=msgcat(m,D[k]); cnt[k]=0;
         if(left>2) m=msgcat(m,", "); else if(left==2) m=msgcat(m," and "); }
-    msgcat(m,".\n"); }
+    msgcat(m,".\n"); se_sfx(16); }
 /* Motazz and chocolatl: a beast comes to fight beside the party, on the surface, one at a time (0x1259e) */
 static void se_helper(world_t*w)
 {   int on=(g_veh_kind?300:331), s, M=U6_SURFACE_TILES-1;          /* a plesiosaur for one on the water, else a sabretooth tiger */
+    se_sfx(10);                                                   /* 0x1259e: Summon, before the search */
     if(!g_se_helper && (s=se_hatch_creature(w,(int)w->px,(int)w->py,on))>=0){
         for(int t=0;t<8;t++){ int x=((int)w->px+se_rand(0,10)-5)&M, y=((int)w->py+se_rand(0,10)-5)&M, ok;
             g_mover=s; ok=mover_can_enter(w,x,y)&&!npc_occupied(s,x,y)&&!(x==(int)w->px&&y==(int)w->py); g_mover=-1;
             if(!ok) continue;
             g_actx[s]=(uint16_t)x; g_acty[s]=(uint16_t)y; g_temp[s]=0;
             g_agood[s]=1; g_achaos[s]=0; g_align_hostile[s]=0; g_alert[s]=0; g_ally[s]=1; hatched_worktype(s,8);
-            g_se_helper=s; build_blocked(); msgcat(msg_tail(),"Success!\n"); return; }
+            g_se_helper=s; build_blocked(); msgcat(msg_tail(),"Success!\n"); se_sfx(27); return; }
         g_atile[s]=0xffff; g_temp[s]=0; }
-    msgcat(msg_tail(),"Failed.\n"); }
+    msgcat(msg_tail(),"Failed.\n"); se_sfx(33); }
 /* the invocation, its offering made (0x12d86 and 0x129f8) */
 static void se_invoke_do(world_t*w,int k)
 {   int l[64], near[128], nn=se_invoke_near(near,128), n=0;
     switch(k){
-    case 0x00: g_peer_on=1; msgcat(msg_tail(),"\nTriolo leaves his body and looks down at the party!\n"); return;
-    case 0x01: g_spell_light_turns=200; g_spell_light_rad=4; msgcat(msg_tail(),"\nTriolo creates light.\n"); return;
+    case 0x00: g_peer_on=1; se_sfx(16); msgcat(msg_tail(),"\nTriolo leaves his body and looks down at the party!\n"); return;
+    case 0x01: g_spell_light_turns=200; g_spell_light_rad=4; se_sfx(16); msgcat(msg_tail(),"\nTriolo creates light.\n"); return;
     case 0x02: se_sense(); return;
-    case 0x21: if(w->level){ msgcat(msg_tail(),"\nNo help available.\n"); return; } se_helper(w); return; }
+    case 0x21: if(w->level){ msgcat(msg_tail(),"\nNo help available.\n"); se_sfx(33); return; } se_helper(w); return; }
     for(int j=0;j<nn&&n<64;j++){ int a=near[j], in=member(a);
         switch(k){
         case 0x10: if(in && g_ahp[a] && (g_ahp[a]<se_max_hp(a)||g_poison[a])){ int h=g_ahp[a]+se_rand(1,10), mx=se_max_hp(a); g_ahp[a]=(uint8_t)(h>mx?mx:h); g_poison[a]=0; l[n++]=a; } break;
@@ -8216,7 +8225,9 @@ static void se_invoke_do(world_t*w,int k)
         case 0x12: if(in && !g_se_prot[a]){ g_se_prot[a]=1; l[n++]=a; } break;
         case 0x20: if((align_of(a)&0x20) && !g_curse[a] && !se_resists(a)){ g_curse[a]=255; l[n++]=a; } break;
         case 0x22: if(in && !g_se_wild[a]){ g_se_wild[a]=1; if(a!=1) l[n++]=a; } break; } }
-    if(k==0x12){ msgcat(msg_tail(),"\nAphazz protects the party.\n"); return; }
+    if(k==0x12){ se_sfx(14); msgcat(msg_tail(),"\nAphazz protects the party.\n"); return; }
+    se_sfx(k==0x10?13:k==0x11?11:k==0x20?12:15);                  /* 0x129f8: the effect's sound, then 33 if nobody (below) */
+    if(!n) se_sfx(33);
     se_invoke_list(l,n,k==0x10?"healed.":k==0x11?"charmed.":k==0x20?"cursed!":"wild!");
     sync_party_hp(); }
 /* the offering answered (0x12ef7): chocolatl, pinde or yopo, within a tile of the leader */
@@ -8241,7 +8252,7 @@ static int se_totem(int on,int has_acting)
     n=msgcat(msg_tail(),"\nInvoke: ");
     if(on==86){ msgcat(n,"Heluzz!\n"); g_se_offer=0; }
     else if(on==88){ msgcat(n,"Aphazz!\n"); g_se_offer=0x10; }
-    else if(!g_combat_mode){ msgcat(n,"Motazz aids only those who are in mortal combat.\n"); return 0; }
+    else if(!g_combat_mode){ se_sfx(33); msgcat(n,"Motazz aids only those who are in mortal combat.\n"); return 0; }
     else { msgcat(n,"Motazz!\n"); g_se_offer=0x20; }
     g_se_on=SEON_OFFER; g_next_verb='X'; return 0; }
 /* SE's wear-offs as time passes (0x359:0x11b6): protection, curses and charms 1 in 25, the frenzy and Motazz's beast with combat */
@@ -10224,6 +10235,20 @@ static void hit_msg(int id);
 static int kill_exp(int v);
 static void grant_exp(int a,int exp);
 static int iabs_gl(int v){ return v<0?-v:v; }
+/* SE: a missile's sound by its weapon (0x19b5a's table), before the flight; a weapon not listed flies in silence */
+static void se_sfx_flight(int wobj)
+{   if(g_gd!=&gamedef_se) return;
+    switch(wobj){
+    case 1: case 26: case 27: case 31: case 37: case 44: case 240: case 241: se_sfx(2); break;
+    case 32: se_sfx(5); break;
+    case 39: se_sfx(3); break;
+    case 40: case 50: se_sfx(4); break;
+    case 137: case 138: se_sfx(30); break;
+    case 21: se_sfx(18); se_sfx(30); break; } }
+/* SE: a blow swung, not shot, by one within 6 tiles of the party (0x1b47d, after the hit roll, hit or miss) */
+static void se_sfx_melee(int att)
+{   int x,y; if(g_gd!=&gamedef_se || !g_wp || !actor_where(att,&x,&y)) return;
+    if(iabs_gl(x-(int)g_wp->px)<6 && iabs_gl(y-(int)g_wp->py)<6) se_sfx(31); }
 static void fx_show(const world_t*w,int x,int y,int tile,int vbls);
 static void fx_clear(const world_t*w);
 static int msg_name(int n,int id){ char nm[24]; actor_name(id,nm,sizeof nm); if(nm[0]>='a'&&nm[0]<='z') nm[0]=(char)(nm[0]-32); return msgcat(n,nm); }
@@ -10231,7 +10256,8 @@ static int msg_name(int n,int id){ char nm[24]; actor_name(id,nm,sizeof nm); if(
 static void hit_flash(int a)
 {   int x,y; if(!g_wp||!actor_where(a,&x,&y)) return;
     { int vx=iabs_gl(x-(int)g_wp->px), vy=iabs_gl(y-(int)g_wp->py); if(vx>5||vy>5) return; }
-    fx_show(g_wp,x,y,0x101,1); fx_clear(g_wp); }
+    fx_show(g_wp,x,y,0x101,1); fx_clear(g_wp);
+    if(g_gd==&gamedef_se) se_sfx((a==1||is_party_member(a))?8:7); }   /* SE 0x1a181: after the flash, 8 for one of the party */
 /* a blow wakes the struck, but not a deep sleeper (se_combat.md §3c) */
 static void wake_struck(int a){ if(!(g_on.deep_sleeper && actor_objn(a)==g_on.deep_sleeper)) g_asleep[a]=0; }
 /* the wound, whatever gave it (combat.md §3): at 0 "killed!", the experience, the remains; else what the blow does besides and how bad it looks */
@@ -10812,7 +10838,7 @@ static int do_attack(world_t*w,int dx,int dy)
         if(!hit && id>=0 && !g_gl->no_scatter){ tx=(tx+(int)rng_range(&g_crng,3)-1)&M; ty=(ty+(int)rng_range(&g_crng,3)-1)&M; }   /* a miss lands beside */
         int aimx=tx, aimy=ty, lx, ly, fanx[3], fany[3], flx[3], fly[3];
         if(bolts>1){ fanx[0]=aimx; fany[0]=aimy; for(int b=1;b<bolts;b++) fan_tile(sx,sy,aimx,aimy,b,&fanx[b],&fany[b]); missile_fan(w,sx,sy,bolts,fanx,fany,mis,flx,fly); lx=flx[0]; ly=fly[0]; }
-        else missile_fly(w,sx,sy,aimx,aimy,mis,&lx,&ly);
+        else { se_sfx_flight(wobj); missile_fly(w,sx,sy,aimx,aimy,mis,&lx,&ly); }
         if(mis) fx_clear(w);
         tx=lx; ty=ly;
         id=npc_at(w,tx,ty); oi=(id<0)?objworld_at(&g_ow,tx,ty):-1;
@@ -10825,6 +10851,7 @@ static int do_attack(world_t*w,int dx,int dy)
         if(wobj==g_on.boomerang && wobj){ int a,b; missile_fly(w,tx,ty,sx,sy,mis,&a,&b); fx_clear(w); }   /* the boomerang comes back */
         return 1;
     }
+    se_sfx_melee(1);
     avatar_blow(id,oi,wobj,ship,hit,w,tx,ty);
     return 1;
 }
@@ -10862,7 +10889,8 @@ static void npc_attack(const world_t*w,int att,int wobj,int x,int y,int tx,int t
     for(int b=0;b<bolts;b++){ int bx=aimx, by=aimy, lx=bx, ly=by;
         if(b) fan_tile(x,y,aimx,aimy,b,&bx,&by);
         if(ranged&&bolts>1){ lx=flx[b]; ly=fly[b]; }
-        else if(ranged){ missile_fly(w,x,y,bx,by,mis,&lx,&ly); if(mis) fx_clear(w); }
+        else if(ranged){ se_sfx_flight(wobj); missile_fly(w,x,y,bx,by,mis,&lx,&ly); if(mis) fx_clear(w); }
+        else if(!b) se_sfx_melee(att);
         int d=actor_on(w,lx,ly);
         if(ranged && !b) shot_spend(w,att,wobj,x,y,lx,ly,d);
         if(d<0 || d==att || (wobj==g_on.sleep_wand&&wobj)) continue;
@@ -14452,6 +14480,7 @@ static int se_level_go(world_t*w,int x,int y,int z)
         w->level=(uint8_t)lv0; w->px=px0; w->py=py0; (void)level_decode(g_savetmpl, g_savetmpl_len, lv0, 0);
         msgcat(0,"Not enough memory to change level."); return 1; }
     g_cur_level=w->level; build_blocked(); teleport_party(w, w->px, w->py);
+    se_sfx_stop_all();                                                   /* 0x9505: the effects stop with the level */
     g_show_inv=0; (void)g_tmpdm_invalidate(); music_resume_area(w->level);
     return 1; }
 /* the change for object idx (0x9505): 1 = it happened */
@@ -15026,12 +15055,15 @@ static int g_music_be_kind;   /* which sequencer backend is live: 0 none, 1 MIDI
  * Timer ISR, writing the PSG registers directly (ISR-safe). */
 static struct { int ch, note; } g_psgv[3];
 static int g_psg_rr;
+static volatile int g_psg_fx;   /* SE's sound effects have voice C (the speaker's, se_fx_out): the music folds to A and B */
 static int psg_find(int ch){ for(int v=0;v<3;v++) if(g_psgv[v].ch==ch) return v; return -1; }
 static void psg_be_program(int ch,int prog){ (void)ch;(void)prog; }
 static void psg_be_note_on(int ch,int note,int vel){
     int v=psg_find(ch);
-    if(v<0){ for(int i=0;i<3;i++) if(g_psgv[i].ch<0){ v=i; break; } }
-    if(v<0){ v=g_psg_rr; g_psg_rr=(g_psg_rr+1)%3; }
+    int nv=g_psg_fx?2:3;
+    if(v>=nv) v=-1;
+    if(v<0){ for(int i=0;i<nv;i++) if(g_psgv[i].ch<0){ v=i; break; } }
+    if(v<0){ v=g_psg_rr%nv; g_psg_rr=(g_psg_rr+1)%3; }
     g_psgv[v].ch=ch; g_psgv[v].note=note;
     int vol=vel>>3; if(vol<1) vol=1;
     plat_psg_voice(v, note, vol);
@@ -15150,6 +15182,7 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
 static void music_stop_all(void){
     plat_timer_stop();
     g_music_on = 0; g_smf_on = 0; g_se_shadow = 0;
+    if(g_sefx_live){ g_sefx_live=0; sesfx_forget(); sespk_be.reset(); if(g_psg_fx){ g_psg_fx=0; plat_psg_silence(); } }
     if(g_st_on){ g_st_on = 0; plat_psg_silence(); }
     if(g_music_be_kind == 1){          /* MIDI OUT was live */
         for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
@@ -15177,15 +15210,62 @@ static void psg_se_on(int ch,int n,int v){ if(ch!=9) psg_be_note_on(ch,n,v); }
 static void psg_se_off(int ch,int n){ if(ch!=9) psg_be_note_off(ch,n); }
 static const music_backend_t g_psg_se_be = { psg_be_program, psg_se_on, psg_se_off, psg_be_reset, 0, 0 };
 static int sefe_read_into(int f,int it,uint8_t *buf,int32_t cap);
+/* ---- SE's sound effects (rules/se_sound_effects.md): engine/sesfx.c sits between the song and its output; the timer runs
+ * at 240 Hz, the speaker model and MIDI OUT every tick (32 of its 1/7680 s), the song and the effects every 4th (59.94 Hz) ---- */
+static int g_spk_have = -1;      /* SAVAGE.TIM item 2 read (-1 not tried) */
+static int g_mt32_up;            /* SAVAGE.TIM item 0 sent to the MT-32 */
+static uint8_t g_se_isr_n;
+static void se_fx_out(void)
+{   int f=sespk_freq();
+    if(f || sesfx_sounding()){ if(!g_psg_fx){ g_psg_fx=1; if(g_psgv[2].ch>=0){ plat_psg_voice_off(2); g_psgv[2].ch=-1; g_psgv[2].note=-1; } }
+        plat_psg_tone(2, f?(int)(125000L/f):0, 13); }   /* (2 MHz / 16 / f) */
+    else if(g_psg_fx){ plat_psg_tone(2,0,0); g_psg_fx=0; } }
+static void se_isr_tick(void)
+{   sespk_run(32); se_fx_out();
+    if(++g_se_isr_n>=4){ g_se_isr_n=0;
+        if(g_smf_on && !g_se_shadow) smf_tick(&g_smf);
+        sesfx_tick(); }
+    if(g_music_be_kind==3) plat_midi_drain(12); }   /* (12 bytes a tick, ~3.8 ms at 31250 baud: inside the 4.2 ms period, 92% of the line) */
+static void se_spk_load(void)
+{   static uint8_t it2[1024]; if(g_spk_have>=0) return;
+    int32_t l=sefe_read_into(8,2,it2,(int32_t)sizeof it2); g_spk_have=l>0 && sespk_load(it2,l); }
+/* the MT-32's effect sounds (se_music.md §7.2, se_sound_effects.md §4.1): each SAVAGE.TIM item-0 record's timbre into
+ * timbre memory k (DT1 08 2k 00), then patch p-1 (05 ...) to memory timbre k, no key shift or fine tune, bend range 24.
+ * Sent once, before the song starts (the timer is off), blocking, with a pause after each message for the MT-32 */
+static void mt32_dt1(uint8_t a0,uint8_t a1,uint8_t a2,const uint8_t *d,int n)
+{   static uint8_t m[8+256+2]; int k=0, sum=a0+a1+a2;
+    m[k++]=0xF0; m[k++]=0x41; m[k++]=0x10; m[k++]=0x16; m[k++]=0x12; m[k++]=a0; m[k++]=a1; m[k++]=a2;
+    for(int i=0;i<n && i<256;i++){ m[k++]=(uint8_t)(d[i]&127); sum+=d[i]&127; }
+    m[k++]=(uint8_t)((128-(sum&127))&127); m[k++]=0xF7;
+    plat_midi_write(m,k);
+    uint32_t t=plat_ticks_200hz(); while(plat_ticks_200hz()-t<6){ } }   /* 30 ms */
+static void se_mt32_upload(void)
+{   if(g_mt32_up) return;
+    g_mt32_up=1;
+    int32_t l=sefe_read_into(8,0,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<1) return;
+    int n=g_smf_buf[0];
+    for(int k=0;k<n && k<64 && 1+247L*(k+1)<=l;k++){ const uint8_t *r=g_smf_buf+1+247*k;
+        mt32_dt1(0x08,(uint8_t)(k*2),0x00,r,246);
+        int p=r[246]-1; if(p<0) continue;
+        uint8_t pt[8]={2,(uint8_t)k,24,50,24,0,0,0};
+        mt32_dt1(0x05,(uint8_t)((p*8)>>7),(uint8_t)((p*8)&127),pt,8); } }
+/* the play call (0x2701:0x648): effect id, nothing with sound off, one at a time (handle 0) */
+static void se_sfx(int id)
+{   if(!g_sfx_on || g_sound_off || g_bot || !g_sefx_live || id<0 || id>=SESFX_N) return;
+    sesfx_play(&SESFX_GAME[id],127,63,0,2); }
+static void se_sfx_stop_all(void){ if(g_sefx_live) sesfx_stop_all(); }
 /* SE's song n (MUSIC.LZC item n, carried in the pack's CSFE block as group (6, n)) through MIDI or the PSG */
 static int music_play_se(int n,int use)
 {   int32_t l=sefe_read_into(6,n,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<=0) return 0;
     const music_backend_t *be=use==1?&g_midi_be:&g_psg_se_be;
+    se_spk_load();
     if(use==1){ plat_midi_init(); if(g_music_gm){ static const uint8_t GMRESET[6]={0xF0,0x7E,0x7F,0x09,0x01,0xF7}; plat_midi_write(GMRESET,6); }
+        else if(!g_mt32_up){ se_mt32_upload(); l=sefe_read_into(6,n,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<=0) return 0; }
         for(int c=1;c<=9;c++){ uint8_t x[3]={(uint8_t)(0xB0|c),121,0}; plat_midi_queue(x,3); } }   /* controller 121 on channels 2-10 at the start */
-    if(!smf_start(&g_smf,g_smf_buf,l,be)) return 0;
+    sesfx_init(be, use==1 && !g_music_gm ? &g_midi_be : &sespk_be);   /* (General MIDI has no SE timbres: the effects take the speaker's way, our choice) */
+    if(!smf_start(&g_smf,g_smf_buf,l,&sesfx_gate)) return 0;
     g_smf_on=1; g_music_be_kind=use==1?3:2; g_music_active=use==1?1:3;
-    plat_timer_start(music_isr_tick, 60); return 1; }
+    g_se_isr_n=0; g_sefx_live=1; plat_timer_start(se_isr_tick, 240); return 1; }
 /* SE's songs on DMA sound (tools/se2pcm.c renders them, the AdLib sound): the sequencer runs silently beside the
  * PCM, ticked from the frames the DMA has played, so the song's cues, its end and the queue's exit points
  * (se_song_queue) work as on MIDI and the PSG, tick for tick with what is heard */
@@ -15197,7 +15277,9 @@ static int music_play_se_dma(int n)
     int32_t l=sefe_read_into(6,n,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<=0) return 0;
     if(!plat_dma_music_start(nm)) return 0;
     if(!smf_start(&g_smf,g_smf_buf,l,&g_null_be)){ plat_dma_music_stop(); return 0; }
-    g_smf_on=1; g_se_shadow=1; g_se_shadow_ticks=0; g_music_be_kind=0; g_music_active=2; return 1; }
+    g_smf_on=1; g_se_shadow=1; g_se_shadow_ticks=0; g_music_be_kind=0; g_music_active=2;
+    se_spk_load(); sesfx_init(&g_null_be,&sespk_be);          /* the effects on the PSG, its sound the speaker's (the DMA plays the AdLib song) */
+    g_se_isr_n=0; g_sefx_live=1; plat_timer_start(se_isr_tick, 240); return 1; }
 static void se_shadow_pump(void)
 {   if(!g_se_shadow || !g_smf_on) return;
     int32_t r=plat_dma_music_rate(); if(r<=0) return;
@@ -15390,7 +15472,7 @@ static void music_stones(void){ if(!g_music_forced) music_play_song("STONES"); }
 /* Ctrl-Z: sound off and on */
 static void music_sound_toggle(int level){
     g_sound_off=!g_sound_off;
-    if(g_sound_off) music_stop_all();
+    if(g_sound_off){ music_stop_all(); se_sfx_stop_all(); }       /* SE 0x570e: the effects stop too */
     else if(g_music_forced){ char b[16]; int i=0; while(g_music_cur[i]){ b[i]=g_music_cur[i]; i++; } b[i]=0; music_play_song(b); }
     else music_resume_area(level);
     msgcat(0,g_sound_off?"Sound off":"Sound on");
@@ -15916,7 +15998,7 @@ static int se_atk_check(const world_t*w,int att,int*wobj,int tx,int ty,int dist,
         return -1; }
     { int id=actor_on(w,tx,ty), k=id>=0?actor_objn(id):-1, oi=id<0?objworld_at(&g_ow,tx,ty):-1, on=id>=0?k:oi>=0?g_wobj[oi].obj_n:-1;
       g_se_charged=(*wobj==21 && (k==323||k==328));
-      if(dist>(g_se_charged?7:weapon_range(*wobj))){ if(player) msgcat(msg_tail(),"Out of range!"); return 0; }
+      if(dist>(g_se_charged?7:weapon_range(*wobj))){ if(player){ msgcat(msg_tail(),"Out of range!"); se_sfx(28); } return 0; }   /* 0x1b9e7: 28 */
       if((on==17 && *wobj!=209 && *wobj!=137 && *wobj!=138) || (on==263 && *wobj!=137 && *wobj!=138 && *wobj!=118)){
           if(player) msgcat(msg_tail(),"Not possible."); return 0; } }
     if(*wobj==50 && !g_se_flint[att]) return se_flint_load(att);
@@ -15973,6 +16055,7 @@ static int se_dying(int id,int temp)
     int on=actor_objn(id), f=monster_type_flags(on), x=g_actx[id], y=g_acty[id];
     int body=(id==11||id==31||id==47||id==55||(f&0x1800))?0:monster_remains(on,&fr);
     int big=(on==284||on==289||on==294||on==297||on==303||on==305);
+    if(body && big) se_sfx(31);                                     /* 0x18764: a big creature laid down as its remains */
     switch(body?on:0){
     case 284: case 289: case 305: se_piece(body,fr+1,x+1,y,id,temp); for(int i=0;i<3;i++) se_blood(x+1-i,y,1); break;
     case 303: se_piece(body,fr+1,x,y+1,id,temp); for(int j=0;j<3;j++) se_blood(x,y+1-j,1); break;
@@ -15988,6 +16071,7 @@ static void se_fell(world_t*w,int oi)
     int x=g_wobj[oi].x, y=g_wobj[oi].y, M=((w->level==0)?U6_SURFACE_TILES:256)-1;
     obj_destroy(oi);
     for(int k=0;k<3;k++){ int j=obj_idx_at((x+PART[k][1])&M,(y+PART[k][2])&M,PART[k][0]); if(j>=0&&g_wobj[j].alive) obj_destroy(j); }
+    se_sfx(31);                                                   /* 0x1a99b: the parts gone, before the fallen pieces */
     for(int k=0;k<5;k++) (void)persist_obj_new(FALL[k][0],FALL[k][1],(x+FALL[k][2])&M,(y+FALL[k][3])&M,0);
     build_blocked();
     for(int i=0;i<2;i++) for(int j=0;j<5;j++){ int cx=(x+i)&M, cy=(y-6+j)&M, a, moved=0;
@@ -16235,6 +16319,7 @@ static void se_lie(int i)
     if((b=obj_idx_at(x,y,246))>=0) se_obj_put(b,-1,-1,lie?1:0);
     if(se_big_base(on)!=on){ g_se_lying[i]=(uint8_t)lie; return; }
     if(lie){ int fr=0, body=monster_remains(on,&fr);
+        se_sfx(31);                                               /* 0x18764: a big creature laid down */
         se_big_drop(i); g_se_lying[i]=1;
         if(on==294) se_piece(body,17,x,y+2,i,1); else if(on==303) se_piece(body,fr+1,x,y+1,i,1); else se_piece(body,fr+1,x+1,y,i,1);
         build_blocked(); return; }
@@ -16422,6 +16507,7 @@ static void se_panel_scene(world_t*w)
 static void se_panel_break(world_t*w,int oi)
 {   int x=g_wobj[oi].x, y=g_wobj[oi].y, ex[9], ey[9], ids[16], n;
     for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
+    se_sfx(0);                                                    /* 0x1a99b: before the burst */
     n=rays_from(w,x,y,9,ex,ey,0x106,0,ids,16);
     for(int k=0;k<n;k++) if(!is_stackable(actor_objn(ids[k]))) actor_wound(-1,ids[k],se_rand(1,30),0);
     obj_destroy(oi);
@@ -16434,7 +16520,7 @@ static void se_moonstone_break(world_t*w,int oi)
 {   static const int16_t T[3]={0x104,0x106,0x102};
     int x=g_wobj[oi].x, y=g_wobj[oi].y, ex[9], ey[9], ids[16];
     for(int k=0;k<9;k++){ ex[k]=x+(k%3)-1; ey[k]=y+(k/3)-1; }
-    for(int r=0;r<3;r++) for(int t=0;t<2;t++) (void)rays_from(w,x,y,9,ex,ey,T[r],0,ids,16);
+    for(int r=0;r<3;r++){ se_sfx(0); for(int t=0;t<2;t++) (void)rays_from(w,x,y,9,ex,ey,T[r],0,ids,16); }   /* 0x1a99b: a sound each round */
     obj_destroy(oi); build_blocked();
     g_msg[0]=0; g_game_over=1;
     se_scene_start(5,0,3,0); }                           /* MIDGAME5 (0x1e34e); the ending waits for it */
@@ -16457,6 +16543,7 @@ static void se_avatar_death(world_t*w)
     g_combat_mode=0; g_pending_verb=0; g_show_inv=0; if(g_talking) end_talk();
     memset(g_dragged,0,sizeof g_dragged);
     { int n=msg_tail(); msgcat(n,"\n....You awaken in Intanya's hut, feeling restored."); }
+    se_sfx(13);                                                   /* 0x9923 (8cb:0xc73), after the words */
     sync_party_hp(); build_blocked(); se_song_then(11,se_place_song(w->level,1)); g_music_group=w->level==3?3:w->level>0?2:100; }
 /* what a shot uses up or leaves where it ended (0x19b5a) */
 static void se_shot_spend(const world_t*w,int att,int wobj,int sx,int sy,int lx,int ly,int id)
@@ -16992,7 +17079,10 @@ static void ofx_tap(int on){ if(g_music_be_kind==3){ uint8_t m[3]={0x99,37,(uint
 static int g_ofx_slot[30][4];                                                /* sparks: frame (-1 free), x, y, type */
 static int ofx_sparks(int n)                                                 /* 0x71e6: the free ones */
 {   int fr=0; for(int s=n-1;s>=0;s--){ int *k=g_ofx_slot[s]; if(k[0]<0){ fr++; continue; }
-        ofx_zoom(11,k[3]*8+k[0],k[1],k[2],256); k[0]=k[0]==7?-1:k[0]+1; } return fr; }
+        ofx_zoom(11,k[3]*8+k[0],k[1],k[2],256);
+        if(g_sefx_live && g_sfx_on && !g_sound_off){                         /* its sound (se_sound_effects.md §6): from the first frame, panned by x */
+            if(k[0]==0) sesfx_play(&SESFX_SPARK,127,127-127*k[1]/319,s,1); else if(k[0]==7) sesfx_stop_handle(s); }
+        k[0]=k[0]==7?-1:k[0]+1; } return fr; }
 static void ofx_spawn(int s){ int *k=g_ofx_slot[s]; k[0]=0; k[1]=(int)rng_range(&g_crng,320); k[2]=(int)rng_range(&g_crng,128); k[3]=(int)rng_range(&g_crng,3); }
 static void se_origin_fx(void)
 {   plat_mark mk=plat_chip_mark(); uint8_t pal[768]; int ok=1;
@@ -18658,6 +18748,10 @@ int main(int argc, char **argv)
     {   int32_t sl_=0; const uint8_t*sq_=(const uint8_t*)TEST_REQ("SCENE.REQ",&sl_);   /* test: play MIDGAME1-5 at boot (rules/se_scenes.md) */
         if(g_gd==&gamedef_se && sq_ && sl_>0 && sq_[0]>='1' && sq_[0]<='5'){ static const uint8_t N[5]={3,3,4,3,3}, F1[3]={2,0,0}; int f=sq_[0]-'0';
             se_scene_start(f,f==1?F1:0,N[f-1],0); } }
+    {   int32_t fl_=0; if(g_gd==&gamedef_se && TEST_REQ("SESFX.REQ",&fl_) && fl_>0){   /* test: song 0, then every effect a second and a half apart */
+            music_play_song("SE00"); dbg_num("SESFX live=", g_sefx_live);           /* (rules/se_sound_effects.md; to record the PSG or MIDI OUT) */
+            for(int id_=0;id_<SESFX_N;id_++){ se_sfx(id_); uint32_t t_=plat_ticks_200hz(); while(plat_ticks_200hz()-t_<300){ se_shadow_pump(); } }
+            dbg_num("SESFX done=", 1); } }
     {   int32_t dl_=0; if(g_gd==&gamedef_se && TEST_REQ("SEDREAM.REQ",&dl_) && dl_>0){ g_alevel[1]=1; if(g_aexp[1]<100) g_aexp[1]=100; (void)se_dream(1); } }
     /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
     {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)TEST_REQ("REST.REQ",&rl2_);
