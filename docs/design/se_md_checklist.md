@@ -254,3 +254,7 @@ list once SE's seams exist.
   se_deviations.md), the opening's fireworks on the MT-32, every GAME.EXE call site but the tremor (its routine is not
   built). Checked in Hatari: the MIDI stream (TT) and the PSG writes (TT, Falcon); not yet heard by ear. Item 9 is done
   but for the tremor's sound and the AdLib effects beside DMA music (a mixing question).
+- 2026-11-24: item 9: the tremor built (rules/se_sound_effects.md §5a, GAME.EXE 0x4264 / 0x28cf7): on level 3 once the
+  control panel is broken, 1 chance in d/4+2 near the trap door (157,137), 4 frames of the view shaken a pixel with
+  effect 1 sounding in each; tremors can follow on. Rolled once per turn spent (DOS: each view refresh). Checked in
+  Hatari (TREMOR.REQ). Item 9 is done but for the AdLib effects beside DMA music.

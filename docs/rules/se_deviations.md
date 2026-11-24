@@ -80,8 +80,9 @@ DOS's effects go to whichever one driver CONFIG.SE names (rules/se_sound_effects
 | With DMA music, the effects play on the YM2149 with the speaker's recipes, not the AdLib's FM | same | The DMA plays one pre-rendered stream; the AdLib effects would need mixing into it |
 | With PSG music, the song folds to two voices while an effect sounds; the effect has the third | same | DOS's speaker plays no music, so it never shares |
 | The fireworks of the opening (program 127) sound only on the MT-32 | se_origin_fx.md §9 | The speaker has no record for 127, as in DOS; on DMA the AdLib's would need the mixing above |
+| The tremor is rolled once per turn the party spends, and each of its frames is held 20 ms | se_sound_effects.md §5a | DOS rolls at each refresh of the view (about 50 call sites, no match in our engine) and shows the frames as fast as the view copies, about a frame on a period PC |
 
 ## Waiting on other items
 Read in DOS, not yet built, listed in the rule specs: SE's levels (item 11: the rope, the hole in the
 ceiling, the trap doors, the drum's scene), combat (item 6: the totems, the bell, fire's harm, a
-SE's creature table for the turtle's other numbers), SE's sounds (item 9: the tremor's sound, id 1, waits on its routine, se_levels.md).
+SE's creature table for the turtle's other numbers).

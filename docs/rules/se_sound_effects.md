@@ -46,7 +46,7 @@ driver the effects also go through), design/se_origin_fx.md §9 (the fireworks, 
 
 That is all; the caller never stops an effect itself. Effects stop by running out (§3.4), by a newer effect (same
 handle), or by **stop-all** (§3.6), which GAME.EXE calls at: sound turned off (the toggle at 0x570e, with the 1 s music
-fade); a level change (0x8cb:0x855, image 0x9505, se_levels.md); and after each frame of the tremor (§5, id 1).
+fade); a level change (0x8cb:0x855, image 0x9505, se_levels.md); and after each frame of the tremor (§5a, id 1).
 
 A debug command (`SFX number: `, two digits, only when sound is on) plays any id 0-99 (ids >= 34 do nothing).
 
@@ -213,7 +213,7 @@ record program. Names are the 10-character timbre names in the user's SAVAGE.TIM
 | id | prog | key | dur | MT-32 timbre | Speaker (record: what it sounds like, length) | Trigger in the game |
 |---|---|---|---|---|---|---|
 | 0 | 3 | 60 | 60 | Explosion | noise ~450 Hz +-200, sinking, 0.33 s | the control panel breaks; the dark moonstone breaks (one per round, 3 rounds) (se_combat §3g) - probable |
-| 1 | 4 | 48 | 60 | Savage | noise ~225 Hz +-100 (an octave down), 1 s | the **tremor**: 4 frames of map-view shake, each frame starts id 1 and stop-all follows the frame at once, so 4 short bursts (0x28cf7). Rolled in the routine at 0x4264 (probably once per world turn: guessed) on level 3 while actor 1's talk-flag byte has 0x04: chance 1 in (d/4 + 2), d = the larger of the party's distances in x and y from (157,137), the trap door of se_levels.md - probable (story meaning of the flag guessed) |
+| 1 | 4 | 48 | 60 | Savage | noise ~225 Hz +-100 (an octave down), 1 s | the **tremor** (§5a): 4 frames of map-view shake, each starting id 1 with a stop-all after it, so 4 short bursts; rolled at each view refresh on level 3 once the control panel is broken - probable |
 | 2 | 5 | 60 | 10 | Missleweap | crackling noise sweeps ~5 kHz down, 52 ms | a missile's flight (se_combat §3b): the spear of shamap (1), spear (26), throwing axe (27), bow (31), atl atl (37), knife (44), the devices (240, 241) - probable |
 | 3 | 6 | 60 | 10 | Boomarang | as id 2 | the boomerang's flight (39) - probable |
 | 4 | 7 | 60 | 10 | Explosion | 200 Hz crackle with octave drops, 80% density, 30 ms | the rifle's and the flintlock's shot (40, 50) - probable |
@@ -247,6 +247,33 @@ flies in silence. The patches named
 "Tarpit" (19-24), "WaterBells" and "Crash!!!!", and 17's "Savage", are installed but never played by GAME.EXE.
 
 Nothing in the choice of an effect is random; only the speaker synthesis is.
+
+## 5a. The tremor (id 1) - probable
+
+Read from GAME.EXE 2026-11-24.
+
+**The roll** (0x4264). This is the routine that puts the map view on screen (it redraws it first if a flag says
+it changed). About 50 places call it, after any action that changes the view, so the roll comes at each such
+refresh. It rolls only while all of these hold:
+- the party is on level 3;
+- talk flag 1 has bit 0x04, the mark that the control panel's scene has happened. The same bit seals the stairs
+  behind the party (se_levels.md §2), so in the story the city's machinery is failing.
+
+The chance is 1 in d/4 + 2, where d is the larger of the party's distances in x and in y from the trap door at
+(157,137): random(0, d/4 + 1) = 0. Next to the trap door that is 1 in 2; 100 tiles away, 1 in 27. On a hit it
+calls the shake with magnitude 1 and 4 frames.
+
+**The shake** (0x28cf7, far pascal: magnitude m, frames n). The pointer is hidden first. Then, for each frame:
+1. play effect 1 (§2);
+2. x := random(8 - m, 8 + m) and y := random(16 - m, 16 + m), in that order;
+3. copy the view's back-buffer picture to the screen with its corner at (x, y) instead of the usual (8, 16), so the
+   view jumps by up to m pixels each way;
+4. stop-all (§3.6).
+
+The frames follow each other with no wait. On a period PC, copying the 160x144 view to VGA took about one display
+frame, so a frame shows for roughly that long and the effect sounds for about as long before stop-all cuts it: n
+short bursts of the rumble. After the last frame the routine calls 0x4264 again, which puts the view back and
+**rolls again**, so tremors can follow one another (near the trap door, 1 in 2 each time).
 
 ## 6. SAVAGE.EXE: the fireworks (design/se_origin_fx.md §9)
 
@@ -301,15 +328,17 @@ are installed but no descriptor uses them (guessed: none found in SAVAGE.EXE). N
 
 - [ ] Listen in DOSBox (MT-32 emulation and the speaker) to every id: the names "Tree" for the blow/boulder/tree
       sound and "Lever" for the machine are as read, not heard.
-- [ ] The tremor: is each burst audible (start then stop-all within one frame)? Measure in DOSBox. Meaning of actor
-      1's talk-flag bit 0x04 that enables it.
+- [ ] The tremor: how long each burst lasts on a period PC (it depends on the view copy's speed). Measure in DOSBox.
 - [ ] Id 18 before 30/29: inaudible or a click on the MT-32?
 - [ ] MT-32 pan direction for the sparks (and whether SAVAGE.EXE also sends effects on the PC speaker driver).
 - [ ] Hear how the borrowed music part comes back on the MT-32 (the re-claim re-sends the music's program because the
       effect's was the last one sent there).
 
 Placement in the engine (2026-11-23), where our code differs from DOS's shape:
-- [ ] The tremor (id 1, 0x4264 / 0x28cf7) is not built in the engine, so id 1 is never played.
+- [ ] The tremor is rolled once after each turn the party spends (`turn_spend`, `vehicle_turns`, then run from the
+      main loop once the view is shown), not at each refresh of the view as DOS does: our refreshes do not match
+      DOS's 50 call sites, so DOS's rate is approximated. Each frame is held 20 ms (DOS: as long as the copy takes).
+      The view is shifted inside the chunky back buffer (SE has no planar map on the ST yet).
 - [ ] Ids 7/8 sit in the shared `hit_flash` (SE only), so they sound wherever our engine flashes a struck actor; DOS's
       0x1a181 also needs DS:0xde0 set (not identified) and a struck actor within 5 tiles, as `hit_flash` does.
 - [ ] The melee 31 and the flight sounds go in the shared attack paths (`do_attack`, `npc_attack`) just before the
@@ -331,4 +360,5 @@ with a DOSBox speaker capture.
 
 ## Status
 
-BUILT (2026-11-23) but for the tremor (id 1, its routine not built); read from the code; not yet compared with DOS by ear.
+BUILT (2026-11-23; the tremor 2026-11-24); read from the code; not yet compared with DOS by ear. TREMOR.REQ checks the
+tremor in Hatari (frames, bursts sounding, the roll's chance).

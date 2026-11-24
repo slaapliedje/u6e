@@ -8863,8 +8863,9 @@ static int vehicle_try_move(world_t*w,int dx,int dy)
     build_blocked();                               /* objects moved -> rebuild buckets/blocking */
     return cost; }
 /* the Avatar spends pts (movement_turns.md §3b): a rider half, at least 1; the clock moves on and everyone else gets a share */
+static int g_se_quake_roll;
 static void turn_spend(world_t*w,int pts)
-{   pay(1,pts); sched_run(w); }
+{   pay(1,pts); sched_run(w); g_se_quake_roll=1; }
 /* a command's cost, paid when it is over (Get 3, Drop 3, Move 5, Use 5, a spell 10 + 3 per circle) */
 static void verb_spend(world_t*w)
 {   int p=g_verb_pts; g_verb_pts=0; g_msg_append=1; turn_spend(w,p); g_msg_append=0; }
@@ -8874,7 +8875,7 @@ static int game_move_cost(const world_t*w,int dx,int dy)
     return g_walk_cost=c+diag; }
 static const RuleSet g_game_rules={game_move_cost};
 static void vehicle_turns(world_t*w,int cost)
-{   pay(1,cost); sched_run(w); }
+{   pay(1,cost); sched_run(w); g_se_quake_roll=1; }
 
 /* is someone in the Avatar's way on (x,y)? Only party members give way, and the small creatures anyone
  * may share a tile with (movement_turns.md §2, DOS seen 2026-11-07) */
@@ -15254,6 +15255,33 @@ static void se_sfx(int id)
 {   if(!g_sfx_on || g_sound_off || g_bot || !g_sefx_live || id<0 || id>=SESFX_N) return;
     sesfx_play(&SESFX_GAME[id],127,63,0,2); }
 static void se_sfx_stop_all(void){ if(g_sefx_live) sesfx_stop_all(); }
+/* the tremor (rules/se_sound_effects.md §5a, GAME.EXE 0x28cf7): n frames of the map view shaken by up to m pixels,
+ * each frame with effect 1 sounding and a stop-all after it, so n short bursts; then the view is put back. DOS shows
+ * the frames back to back (a period VGA copy of the view took about a display frame); each is held 20 ms here. */
+static int g_tremor_dbg;
+static uint8_t g_quake_sv[(SE_MAPY1-SE_MAPY0+3)*(SE_MAPX1-SE_MAPX0+3)];
+static void se_tremor(int m,int n)
+{   enum{ X0=SE_MAPX0-1, Y0=SE_MAPY0-1, W=SE_MAPX1-SE_MAPX0+3, H=SE_MAPY1-SE_MAPY0+3 };
+    for(int y=0;y<H;y++) memcpy(g_quake_sv+y*W,ROW(Y0+y)+X0,(size_t)W);
+    for(int f=0;f<n;f++){
+        se_sfx(1);
+        int rx=se_rand(8-m,8+m)-8, ry=se_rand(16-m,16+m)-16;
+        for(int y=1;y<H-1;y++) memcpy(ROW(Y0+y)+X0+1,g_quake_sv+(y+ry)*W+1+rx,(size_t)(W-2));
+        present_map();
+        { uint32_t t0=plat_ticks_200hz(); do vsync_pump(); while(plat_ticks_200hz()-t0<4); }
+        if(g_tremor_dbg){ dbg_num("TREMOR dx=",rx); dbg_num("TREMOR dy=",ry); dbg_num("TREMOR sounding=",sesfx_sounding()); }
+        se_sfx_stop_all(); }
+    for(int y=0;y<H;y++) memcpy(ROW(Y0+y)+X0,g_quake_sv+y*W,(size_t)W);
+    present_map(); }
+static int g_tremors;                 /* (counted for the test hook) */
+/* the roll (§5a, GAME.EXE 0x4264, run at each refresh of the view; here once after each turn the party spends): on
+ * level 3 once the control panel is broken (talk flag 1 bit 0x04), 1 chance in d/4+2, d = the party's larger distance
+ * in x or y from the trap door (157,137). The view refresh after a tremor rolls again, so tremors can follow on. */
+static void se_tremor_roll(const world_t*w)
+{   while(g_gd==&gamedef_se && w->level==3 && (g_cg.talk_flags[1]&0x04)){
+        int dx=(int)w->px-157, dy=137-(int)w->py; if(dx<0) dx=-dx; if(dy<0) dy=-dy; int d=dx>dy?dx:dy;
+        if(se_rand(0,d/4+1)!=0) return;
+        g_tremors++; se_tremor(1,4); } }
 /* SE's song n (MUSIC.LZC item n, carried in the pack's CSFE block as group (6, n)) through MIDI or the PSG */
 static int music_play_se(int n,int use)
 {   int32_t l=sefe_read_into(6,n,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<=0) return 0;
@@ -18752,6 +18780,15 @@ int main(int argc, char **argv)
             music_play_song("SE00"); dbg_num("SESFX live=", g_sefx_live);           /* (rules/se_sound_effects.md; to record the PSG or MIDI OUT) */
             for(int id_=0;id_<SESFX_N;id_++){ se_sfx(id_); uint32_t t_=plat_ticks_200hz(); while(plat_ticks_200hz()-t_<300){ se_shadow_pump(); } }
             dbg_num("SESFX done=", 1); } }
+    {   int32_t tl_=0; if(g_gd==&gamedef_se && TEST_REQ("TREMOR.REQ",&tl_) && tl_>0){   /* test: the tremor's frames and bursts, and its roll at the trap door */
+            music_play_song("SE00"); g_tremor_dbg=1; compose_map(&w); present_map(); se_tremor(1,4); g_tremor_dbg=0;
+            int32_t lv_=w.level; uint16_t px_=w.px, py_=w.py; w.level=3; w.px=157; w.py=137; g_cg.talk_flags[1]|=0x04; int n_=0;
+            for(int k_=0;k_<200;k_++){ int b_=g_tremors; se_tremor_roll(&w); n_+=g_tremors!=b_; }
+            dbg_num("TREMOR rolls with one at d=0 (of 200, ~100)=",n_); w.px=(uint16_t)(px_+40); w.py=py_; n_=0;
+            dbg_num("TREMOR (a long way off) d=",w.px>157?w.px-157:157-w.px);
+            for(int k_=0;k_<200;k_++){ int b_=g_tremors; se_tremor_roll(&w); n_+=g_tremors!=b_; }
+            dbg_num("TREMOR rolls with one there (of 200)=",n_);
+            w.level=lv_; w.px=px_; w.py=py_; g_cg.talk_flags[1]&=(uint8_t)~0x04; } }
     {   int32_t dl_=0; if(g_gd==&gamedef_se && TEST_REQ("SEDREAM.REQ",&dl_) && dl_>0){ g_alevel[1]=1; if(g_aexp[1]<100) g_aexp[1]=100; (void)se_dream(1); } }
     /* headless R)est checks (docs/rules/rest.md §6): REST.REQ byte = mode */
     {   int32_t rl2_=0; const uint8_t*rr=(const uint8_t*)TEST_REQ("REST.REQ",&rl2_);
@@ -22676,6 +22713,7 @@ int main(int argc, char **argv)
         else { if (moved||anim_redraw) present_map();           /* map window (walk / tile anim) */
                else if (mouse_moved) present_cursor();         /* bare mouse move: cheap cursor-only */
                Vsync(); }
+        if (g_se_quake_roll){ g_se_quake_roll=0; if(!g_talking && !g_scene) se_tremor_roll(&w); }   /* SE's tremor, after the view is shown */
 #ifdef KEYPROF
         { uint32_t d=plat_ticks_200hz()-kp_it; if(d>=10){ char b[400]; int n=0;
             const char*lab[18]={"KP ms=", " key=", " foe=", " comp=", " full=", " map=", " bb=", " act=", " minute=", " pass=", " pick=", " walk=", " light=", " static=", " status=", " conv=", " bar=", " border="};
