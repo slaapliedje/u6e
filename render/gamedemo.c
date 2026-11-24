@@ -986,7 +986,8 @@ static void intro_caption_page(int gp);           /* fwd: parchment + page gp (d
  * must go through this so the ring keeps advancing. Real-Falcon bug 2026-08-15: the title music
  * played only its first 2.6 s over and over — the front-end waited on a bare vsync_pump() and never
  * pumped, so the hardware just re-looped the primed ring. XBIOS Vsync (#37). */
-static void vsync_pump(void){ Vsync(); plat_dma_music_pump(); }
+static void se_shadow_pump(void);   /* fwd: SE's sequencer kept beside DMA sound (music_play_se) */
+static void vsync_pump(void){ Vsync(); plat_dma_music_pump(); se_shadow_pump(); }
 static void music_cycle_pref(void);        /* fwd: F1 music-source cycle (music manager) */
 static void music_stones(void); static void music_resume_area(int level); static void music_update_area(int level);   /* fwd: R)est and the midnight gate (st_music.md §5) */
 static const char *music_pref_label(void); /* fwd: its label */
@@ -15051,7 +15052,7 @@ static const music_backend_t g_psg_be = { psg_be_program, psg_be_note_on, psg_be
 static st_player_t g_st;        /* the ST release's tracker (docs/formats/st_music.md) */
 static int g_st_on, g_st_hz;
 static const uint8_t *g_st_song;   /* 0 = no U.PRG to take it from */
-static smf_seq_t g_smf; static int g_smf_on;     /* SE's songs (formats/se_music.md): the MIDI-file sequencer */
+static smf_seq_t g_smf; static int g_smf_on; static int g_se_shadow; static uint32_t g_se_shadow_ticks;   /* (g_se_shadow: g_smf runs silently beside DMA sound, se_shadow_pump) */     /* SE's songs (formats/se_music.md): the MIDI-file sequencer */
 static uint8_t g_smf_buf[32768];                   /* the largest of SE's 20 songs is 32080 bytes */
 static void music_isr_tick(void){
     if(g_st_on) st_tick(&g_st);
@@ -15148,7 +15149,7 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
  * holds its last note until reset. */
 static void music_stop_all(void){
     plat_timer_stop();
-    g_music_on = 0; g_smf_on = 0;
+    g_music_on = 0; g_smf_on = 0; g_se_shadow = 0;
     if(g_st_on){ g_st_on = 0; plat_psg_silence(); }
     if(g_music_be_kind == 1){          /* MIDI OUT was live */
         for(int i=0;i<9;i++) if(g_music.note[i]>=0){ mus_note_off(g_music.mch[i], g_music.note[i]); g_music.note[i]=-1; }
@@ -15185,6 +15186,24 @@ static int music_play_se(int n,int use)
     if(!smf_start(&g_smf,g_smf_buf,l,be)) return 0;
     g_smf_on=1; g_music_be_kind=use==1?3:2; g_music_active=use==1?1:3;
     plat_timer_start(music_isr_tick, 60); return 1; }
+/* SE's songs on DMA sound (tools/se2pcm.c renders them, the AdLib sound): the sequencer runs silently beside the
+ * PCM, ticked from the frames the DMA has played, so the song's cues, its end and the queue's exit points
+ * (se_song_queue) work as on MIDI and the PSG, tick for tick with what is heard */
+static void nb_prog(int c,int p){ (void)c; (void)p; } static void nb_on(int c,int n,int v){ (void)c; (void)n; (void)v; }
+static void nb_off(int c,int n){ (void)c; (void)n; } static void nb_reset(void){ }
+static const music_backend_t g_null_be = { nb_prog, nb_on, nb_off, nb_reset, 0, 0 };
+static int music_play_se_dma(int n)
+{   char nm[16]; char b[5]={'S','E',(char)('0'+n/10),(char)('0'+n%10),0}; music_name(nm,b,".PCM");
+    int32_t l=sefe_read_into(6,n,g_smf_buf,(int32_t)sizeof g_smf_buf); if(l<=0) return 0;
+    if(!plat_dma_music_start(nm)) return 0;
+    if(!smf_start(&g_smf,g_smf_buf,l,&g_null_be)){ plat_dma_music_stop(); return 0; }
+    g_smf_on=1; g_se_shadow=1; g_se_shadow_ticks=0; g_music_be_kind=0; g_music_active=2; return 1; }
+static void se_shadow_pump(void)
+{   if(!g_se_shadow || !g_smf_on) return;
+    int32_t r=plat_dma_music_rate(); if(r<=0) return;
+    uint32_t f=plat_dma_music_elapsed(), due=(uint32_t)(((uint64_t)f*60u)/(uint32_t)r);
+    while(g_se_shadow_ticks<due && g_smf.playing){ smf_tick(&g_smf); g_se_shadow_ticks++; }
+    }
 /* play song `base` (e.g. "BRIT") through the runtime-selected backend */
 static void music_play_song(const char *base){
     music_stop_all();
@@ -15198,6 +15217,9 @@ static void music_play_song(const char *base){
               (g_music_pref==5) ? 5 :               /* ST tunes */
                                   (g_music_dma_ok?2:5);   /* DMA-pref or auto: DMA if present, else the ST tunes */
     char nm[20];
+    if(use==2 && g_music_cur[0]=='S'&&g_music_cur[1]=='E'&&g_music_cur[2]>='0'&&g_music_cur[2]<='9'){   /* SE: SEnn.PCM + its sequencer */
+        if(music_play_se_dma((g_music_cur[2]-'0')*10+(g_music_cur[3]?g_music_cur[3]-'0':0))) return;
+        use = 5; }
     if(use==2){                                     /* DMA: needs a host-pre-rendered BASE.PCM */
         music_name(nm, g_music_cur, ".PCM");
         if(plat_dma_music_start(nm)){ g_music_active=2; return; }
@@ -16861,7 +16883,8 @@ static void se_cc_apply(void)
 /* ---- SE's intro (SAVAGE.EXE 0x4140-0x41d8; se_front_end.md "The intro") ---- */
 /* the song's cue (formats/se_music.md §5.4: the 0xFE type-3 number DS:0x20ce), or -1 when no song is playing that we can follow */
 static int se_song_cue(void){ return g_smf_on ? g_smf.now : -1; }   /* (after the song's end its last cue stays, as DS:0x20ce does) */
-static int fi_abort(void){ int k=plat_input_raw(); if(k) return 1; return fe_click_edge(); }
+static int fi_abort(void){ plat_dma_music_pump(); se_shadow_pump();      /* (every step pumps: a machine behind the pace never waits in fi_until) */
+    int k=plat_input_raw(); if(k) return 1; return fe_click_edge(); }
 /* wait until the song reaches cue n; without a song DOS waits ms instead (0x42f6, 0x4360); 0 = a key (skip) */
 static int fi_wait_cue(int n,int ms)
 {   uint32_t t0=plat_ticks_200hz();
@@ -22513,6 +22536,7 @@ int main(int argc, char **argv)
          * a main-loop pump for its disk refill (can't do GEMDOS I/O from an ISR; the 2.6 s ring
          * gives ample slack). */
         plat_dma_music_pump();  /* M10: refill the DMA-sound ring from the streaming PCM file */
+        se_shadow_pump();
         music_update_area(w.level);    /* M10: start/switch the area's song (overworld/battle/dungeon) on change */
         if(g_songlist_n>1 && plat_ticks_200hz()-g_songlist_t0 >= (uint32_t)SONGLIST_SECS*200u){   /* SONG.REQ playlist step */
             g_songlist_cur=(g_songlist_cur+1)%g_songlist_n; g_songlist_t0=plat_ticks_200hz();

@@ -330,3 +330,40 @@ int32_t opl_wrap_sample(int n){         /* 1-based; -1 if that wrap hasn't happe
     return g_wrap_spos[n-1];
 }
 int32_t opl_loop_point_sample(void){ return g_loop_spos; }
+
+/* --- register level (the host's SE renderer, tools/se2pcm.c) ---------------------------------------
+ * The OPL2's own registers, as a driver writes them to port 0x388/0x389: 0x20-0x35 AM/VIB/EG/KSR/MULT,
+ * 0x40-0x55 KSL/TL, 0x60-0x75 AR/DR, 0x80-0x95 SL/RR, 0xE0-0xF5 waveform (operator slots), 0xA0-0xA8
+ * F-number low, 0xB0-0xB8 key-on/block/F-number high, 0xC0-0xC8 feedback/connection (channels).
+ * AM and VIB (tremolo, vibrato) and rhythm mode are not modelled. */
+static const int8_t SLOT_CH[22]={0,1,2,0,1,2,-1,-1,3,4,5,3,4,5,-1,-1,6,7,8,6,7,8};
+static const int8_t SLOT_OP[22]={0,0,0,1,1,1,-1,-1,0,0,0,1,1,1,-1,-1,0,0,0,1,1,1};
+static uint8_t g_raw_b0[NCH];
+void opl_raw_begin(int32_t rate, int oversample){
+    opl_start(0,0,rate,oversample);
+    for(int i=0;i<NCH;i++) g_raw_b0[i]=0;
+}
+void opl_raw_write(int reg, int val){
+    reg&=0xFF; val&=0xFF;
+    int grp=reg&0xE0, lo=reg&0x1F;
+    if(grp>=0x20 && grp<=0x80 && grp!=0xA0 && lo<22 && SLOT_CH[lo]>=0){
+        Chan *c=&g_chip[(int)SLOT_CH[lo]]; Op *o=&c->op[(int)SLOT_OP[lo]];
+        switch(grp){
+          case 0x20: o->egt=(val>>5)&1; o->ksr=(val>>4)&1; o->mult=val&0xF; recalc_pinc(c); break;
+          case 0x40: o->ksl=(val>>6)&3; o->tl=val&0x3F; break;
+          case 0x60: o->ar=(val>>4)&0xF; o->dr=val&0xF; break;
+          case 0x80: o->sl=(val>>4)&0xF; o->rr=val&0xF; break; }
+        return; }
+    if(grp==0xE0 && lo<22 && SLOT_CH[lo]>=0){ g_chip[(int)SLOT_CH[lo]].op[(int)SLOT_OP[lo]].ws=val&3; return; }
+    if(reg>=0xA0 && reg<=0xA8){ Chan *c=&g_chip[reg-0xA0]; c->fnum=(c->fnum&0x300)|val; recalc_pinc(c); return; }
+    if(reg>=0xB0 && reg<=0xB8){ int ch=reg-0xB0; Chan *c=&g_chip[ch]; int was=g_raw_b0[ch]&0x20;
+        g_raw_b0[ch]=(uint8_t)val;
+        int fnum=(c->fnum&0xFF)|((val&3)<<8), block=(val>>2)&7;
+        if((val&0x20) && !was) key_on(c,fnum,block);
+        else { c->fnum=fnum; c->block=block; recalc_pinc(c); if(!(val&0x20) && was) key_off(c); }
+        return; }
+    if(reg>=0xC0 && reg<=0xC8){ Chan *c=&g_chip[reg-0xC0]; c->fb=(val>>1)&7; c->cnt=val&1; return; }
+}
+void opl_raw_render(int16_t *buf, int n){
+    for(int i=0;i<n;i++){ buf[i]=render_sample(); g_spos++; }
+}

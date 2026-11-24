@@ -338,6 +338,16 @@ m2pcm: $(BUILD)/m2pcm
 	@mkdir -p $(BUILD)/music
 	@for f in $(REFDATA)/*.M; do b=$$(basename "$$f" .M); $(BUILD)/m2pcm "$$f" "$(BUILD)/music/$$b.PCM" $(PCM_SECS) $(PCM_RATE); done
 
+# SE's songs for DMA sound (the AdLib sound, docs/formats/se_adlib.md): host-rendered from the user's MUSIC.LZC and
+# SAVAGE.TIM into build/music/SE00-19.PCM (U6PC format, gitignored); copy them beside the SE pack.
+$(BUILD)/se2pcm: tools/se2pcm.c engine/smf.c engine/oplsynth.c dataformats/u6lzc.c dataformats/u6lzw.c
+	@mkdir -p $(BUILD)
+	$(HOSTCC) $(HOSTCFLAGS) -Iengine -o $@ $^
+.PHONY: se-pcm
+se-pcm: $(BUILD)/se2pcm
+	@mkdir -p $(BUILD)/music
+	$(BUILD)/se2pcm $(SE_REFDATA) $(BUILD)/music $(PCM_RATE)
+
 # M10 music ON-TARGET: both targets drive the SAME runtime backend selector (SONG.REQ = a song base
 # name; MIDI.CFG byte '1'/'0' sets the toggle) — the game then picks MIDI vs DMA itself.
 #

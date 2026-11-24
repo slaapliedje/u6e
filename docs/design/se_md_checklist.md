@@ -244,3 +244,7 @@ list once SE's seams exist.
   (CSFE group 7), the fades and dissolves in 16 colours, flip-buffered intro; menu, About, story, creation and the ending
   checked on a 4 MB plain ST. The sequencer's last cue now stays after a song ends (the ST reached the fireworks after
   song 19 ended and waited forever). Left in item 9: the opening's sound effects, the AdLib render for DMA sound.
+- 2026-11-23: item 9: SE's songs on DMA sound (the AdLib sound): the driver read in full (formats/se_adlib.md), `make se-pcm`
+  (tools/se2pcm.c) renders all 20, and the game plays them with the sequencer running silently beside the DMA for cues, ends
+  and the queue. Recorded in Hatari (TT) through the intro: sound throughout (waveform checked, not yet listened to). Left in item 9: the opening's sound effects (and SE's sound effects
+  generally on DMA).

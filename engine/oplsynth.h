@@ -50,4 +50,9 @@ int32_t opl_wrap_count(void);
 int32_t opl_wrap_sample(int n);
 int32_t opl_loop_point_sample(void);
 
+/* --- register level: a driver's writes to the chip, rendered without the .M walker (tools/se2pcm.c) */
+void opl_raw_begin(int32_t rate, int oversample);
+void opl_raw_write(int reg, int val);
+void opl_raw_render(int16_t *buf, int n);
+
 #endif /* U6E_OPLSYNTH_H */

@@ -25,6 +25,8 @@ int  plat_dma_music_start(const char *path);
 void plat_dma_music_pump(void);                    /* call from EVERY wait loop: refill */
 void plat_dma_music_stop(void);
 int  plat_dma_music_playing(void);
+uint32_t plat_dma_music_elapsed(void);            /* frames played since the start, loops included */
+int32_t  plat_dma_music_rate(void);               /* the playing song's rate (frames a second)      */
 
 /* RESIDENT SONG CACHE (docs/design/memory_streaming.md "DMA music"): on a machine with RAM to
  * spare, hand the backend an arena (Fast RAM preferred — the DMA still plays from the ST-RAM

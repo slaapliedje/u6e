@@ -19,6 +19,7 @@ typedef struct {
     uint32_t scale, acc;          /* 60 Hz interrupts per MIDI tick (16.16); the accumulator */
     int ending;                   /* the game asked for the song to end at its next exit point */
     int now;                      /* the last 0xFE type-3 number (the "now playing" cue) */
+    int jumped;                   /* set when a loop jump (0xFE type 0) is taken; the caller clears it (host renderer) */
     int playing;
 } smf_seq_t;
 

@@ -74,6 +74,9 @@ static int32_t   g_last_off;       /* last observed play offset into the ring   
 static int32_t   g_cur_off;        /* filled by dma_hw_pos() (Supexec)                */
 static int       g_playing;
 static int       g_fresh;          /* first pump after start (distrust a stale counter) */
+static int32_t   g_hw_prev;        /* last ring offset plat_dma_music_elapsed saw            */
+static uint32_t  g_elapsed;        /* frames played since the start (loops included)         */
+static int32_t   g_play_rate;      /* the song's rate (frames a second)                      */
 
 /* ---- resident song cache (platdma.h) ------------------------------------------------------
  * One arena, songs placed by a ring allocator (head advances; wrapping evicts whatever the new
@@ -235,7 +238,7 @@ int plat_dma_music_start(const char *path){
         else g_ent = cache_alloc(path, (uint32_t)g_nframes);
         if(g_ent){ g_ent->rate = rate; g_ent->loop_start = g_loop_start; }
     }
-    g_rate_bits = rate_to_bits(rate);
+    g_rate_bits = rate_to_bits(rate); g_play_rate = rate;
 
     /* prime the whole ring, then start the DMA loop */
     g_frame_pos = 0;
@@ -261,7 +264,7 @@ int plat_dma_music_start(const char *path){
         (void)Supexec(dma_hw_start);                          /* STE/TT: raw frame registers       */
     }
     (void)Vsync();                                            /* BUG84: counter valid after a DMA cycle */
-    g_playing = 1; g_fresh = 1;
+    g_playing = 1; g_fresh = 1; g_hw_prev = 0; g_elapsed = 0;
     return 1;
 }
 
@@ -291,6 +294,16 @@ void plat_dma_music_pump(void){
     stream_into(g_last_off, n);             /* refill (part of) the region the DMA just played */
     g_last_off += n; if(g_last_off >= (int32_t)g_ring_size) g_last_off -= (int32_t)g_ring_size;
 }
+
+/* frames played since plat_dma_music_start, loops included, from the hardware's frame counter (call more often than
+ * once a ring, 2.6 s; the gameplay and wait loops do). A stale first reading (BUG84) more than half a ring on is not counted. */
+uint32_t plat_dma_music_elapsed(void){
+    if(!g_playing) return g_elapsed;
+    (void)Supexec(dma_hw_pos);
+    int32_t d = g_cur_off - g_hw_prev; if(d < 0) d += (int32_t)g_ring_size;
+    if(!(g_elapsed == 0 && d > (int32_t)(g_ring_size/2))){ g_elapsed += (uint32_t)d; g_hw_prev = g_cur_off; }
+    return g_elapsed; }
+int32_t plat_dma_music_rate(void){ return g_play_rate; }
 
 void plat_dma_music_stop(void){
     if(g_playing){

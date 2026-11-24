@@ -335,6 +335,8 @@ channel), and two more.
 - Notes, controllers, programs and bend go out unchanged.
 
 ### 7.3 AdLib (STRAX.DRV item 1, SAVAGE.TIM item 1)
+The whole driver (voices, TL, pitch, the timer's envelope and vibrato, controllers) is in **se_adlib.md**,
+which also corrects a few points below (its §12).
 **Drum remap (in GAME.EXE, for driver type 2 only, 0x2c2fc / 0x2c367):** a channel-10 note with key k is
 sent instead as note `DS:0x2e6e[k]` on virtual channel `DS:0x2e21[k]` (keys outside the table, or with
 channel 0 there, go nowhere). At init (0x2cc23) the player gives each virtual drum channel its own
@@ -411,7 +413,15 @@ U6 song choice is a group model in gamedemo.
   set; 0, 25, 48, 58, 65, 72-75, 83, 84, 92, 93, 97, 104, 107, 112, 117-124 need checking/adding);
   channel 10 can go as is (MT-32 rhythm keys 35-75 are close to the GM drum map). Channel layout is
   already GM-safe (drums on 10).
-- **OPL2 → DMA**: render with engine/oplsynth on the host, driving it as the AdLib driver does: the
+- **OPL2 → DMA (built 2026-11-23)**: `make se-pcm` runs tools/se2pcm.c, which plays each song through engine/smf.c
+  into a model of the AdLib driver written from se_adlib.md (the user's SAVAGE.TIM bank, the drum remap, 9 voices),
+  its OPL2 writes rendered by engine/oplsynth.c (register level, 4x oversampled), into build/music/SE00-19.PCM (U6PC,
+  12517 Hz). A song that loops to its start keeps one warmed pass looped whole (songs 0-4, 8); song 18 keeps its intro
+  and two passes, looping on the second; a song that ends gets its release and 0.5 s of silence the DMA loops. 18 MB
+  for all 20. In the game the sequencer runs silently beside the PCM (music_play_se_dma), ticked from the frames the
+  DMA has played (plat_dma_music_elapsed), so cues, ends and the queue's exit points behave as on MIDI and the PSG.
+  Not yet: SE's sound effects on DMA. The original suggestion follows.
+- **OPL2 → DMA** (suggestion as first written): render with engine/oplsynth on the host, driving it as the AdLib driver does: the
   SAVAGE.TIM item-1 bank read from the user's files at convert time (never shipped), program lookup
   with record-0 fallback, layering, bend range, velocity rules, the drum remap of §7.3, 9 melodic
   voices. To keep loops and exit points in a pre-rendered file, render each song as intro + loop body
