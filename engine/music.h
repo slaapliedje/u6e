@@ -33,6 +33,7 @@ typedef struct {
     music_map_t map[16]; int nmap;
     int8_t  note[9];                               /* current MIDI note per OPL channel (-1 = none) */
     uint8_t mch[9], inst[9], vel[9];               /* routed MIDI channel / instrument idx / velocity */
+    uint8_t patch[16][11];                         /* the song's 0x83 instruments (OPL bytes, music.md): for a synth backend */
     int32_t loop_pos;
     struct { int32_t ret, start; int reps; } stk[8]; int sp;
     int32_t delay;                                 /* 60 Hz ticks until the next command */

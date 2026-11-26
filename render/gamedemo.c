@@ -15088,31 +15088,85 @@ static music_seq_t g_music; static int g_music_on;
 static int g_music_be_kind;   /* which sequencer backend is live: 0 none, 1 MIDI, 2 PSG, 3 SE's songs on MIDI */
 
 /* PSG backend (plain ST): fold U6's 9 OPL channels into the YM2149's 3 square voices.
- * Voice allocation = reuse the channel's voice if it has one, else a free voice, else
- * steal round-robin. No timbres (square only); velocity -> 4-bit volume. Called from the
- * Timer ISR, writing the PSG registers directly (ISR-safe). */
-static struct { int ch, note; } g_psgv[3];
+ * Voice allocation = reuse the channel's voice if it has one, else a free voice (the channel's own
+ * last one first), else steal the quietest. No timbres (square only); velocity -> 4-bit volume.
+ * Called from the Timer ISR, writing the PSG registers directly (ISR-safe).
+ *
+ * Envelopes (2026-11-26, notes heard hanging in the intro on real machines): U6's songs mostly
+ * retrigger a channel without a note-off and leave the fade to the FM instrument; INTRO's
+ * instrument 0, on five of its channels, is a decaying one. A flat square held at full volume until
+ * its voice was next needed, so a note from a channel that rarely plays droned on. Each voice now
+ * follows its instrument's carrier envelope (docs/formats/music.md, "The PSG's envelopes"):
+ * attack, decay to the sustain level, then held (sustaining instruments) or fading on at the
+ * release rate (decaying ones), and the release rate after a note-off. Attenuation is kept in
+ * 1/256 dB; a YM2149 volume step is taken as 3 dB. SE's songs have no OPL instruments and hold. */
+static struct { int ch, note; int last; int base; int32_t att; int32_t step; uint8_t ph, ar, dr, sl, rr, pct; } g_psgv[3];
+enum { PE_OFF, PE_ATK, PE_DEC, PE_SUS, PE_REL };
 static int g_psg_rr;
+static int g_psg_env;           /* the live song is U6's (.M with OPL instruments): voices follow them */
 static volatile int g_psg_fx;   /* SE's sound effects have voice C (the speaker's, se_fx_out): the music folds to A and B */
+#define PE_SILENT (48*256)      /* 48 dB down = volume 0 from 15 */
+/* OPL2 decay/release: 96 dB in 39.28 s at rate 1, halving per rate step; per 60 Hz tick in 1/256 dB */
+static int32_t pe_rate(int r){ if(r<=0) return 0; if(r>=15) return PE_SILENT; return (int32_t)10 << (r-1); }   /* (96*256*16.67/39280 = 10.4) */
+/* OPL2 attack: 0 to full in 2.83 s at rate 1, halving per rate step; in 60 Hz ticks (0 = at once) */
+static int pe_atk_ticks(int r){ if(r<=0) return -1; return 170>>(r-1); }
+static int psg_vol_of(int v){
+    int32_t q = g_psgv[v].att / (3*256);
+    int vol = g_psgv[v].base - (int)q; return vol<0?0:vol;
+}
 static int psg_find(int ch){ for(int v=0;v<3;v++) if(g_psgv[v].ch==ch) return v; return -1; }
 static void psg_be_program(int ch,int prog){ (void)ch;(void)prog; }
 static void psg_be_note_on(int ch,int note,int vel){
     int v=psg_find(ch);
     int nv=g_psg_fx?2:3;
     if(v>=nv) v=-1;
-    if(v<0){ for(int i=0;i<nv;i++) if(g_psgv[i].ch<0){ v=i; break; } }
+    if(v<0){ for(int i=0;i<nv;i++) if(g_psgv[i].ch<0 && g_psgv[i].last==ch){ v=i; break; } }
+    if(v<0){ for(int i=0;i<nv;i++) if(g_psgv[i].ch<0 && g_psgv[i].ph==PE_OFF){ v=i; break; } }
+    if(v<0){ int32_t best=-1; for(int i=0;i<nv;i++) if(g_psgv[i].ch<0 && g_psgv[i].att>best){ best=g_psgv[i].att; v=i; } }
+    if(v<0 && g_psg_env){ int qv=99; for(int i=0;i<nv;i++){ int q=psg_vol_of(i); if(q<qv){ qv=q; v=i; } } }
     if(v<0){ v=g_psg_rr%nv; g_psg_rr=(g_psg_rr+1)%3; }
-    g_psgv[v].ch=ch; g_psgv[v].note=note;
+    g_psgv[v].ch=ch; g_psgv[v].last=ch; g_psgv[v].note=note;
     int vol=vel>>3; if(vol<1) vol=1;
-    plat_psg_voice(v, note, vol);
+    g_psgv[v].base=vol;
+    const uint8_t *pt = (g_psg_env && ch>=0 && ch<9) ? g_music.patch[g_music.inst[ch]&15] : 0;
+    if(pt && (pt[7]|pt[8])){                 /* carrier: 0x60 attack/decay, 0x80 sustain/release, 0x20 bit 5 = sustaining */
+        g_psgv[v].ar=pt[7]>>4; g_psgv[v].dr=pt[7]&15; g_psgv[v].sl=pt[8]>>4; g_psgv[v].rr=pt[8]&15;
+        g_psgv[v].pct=!(pt[5]&0x20);
+        int at=pe_atk_ticks(g_psgv[v].ar);
+        if(at<0){ g_psgv[v].ph=PE_OFF; g_psgv[v].att=PE_SILENT; plat_psg_voice(v, note, 0); return; }
+        if(at>0){ g_psgv[v].ph=PE_ATK; g_psgv[v].att=PE_SILENT; g_psgv[v].step=PE_SILENT/at; }
+        else    { g_psgv[v].ph=PE_DEC; g_psgv[v].att=0; }
+    } else { g_psgv[v].ph=PE_SUS; g_psgv[v].att=0; g_psgv[v].rr=15; g_psgv[v].pct=0; }
+    plat_psg_voice(v, note, psg_vol_of(v));
 }
 static void psg_be_note_off(int ch,int note){ (void)note;
     int v=psg_find(ch);
-    if(v>=0){ plat_psg_voice_off(v); g_psgv[v].ch=-1; g_psgv[v].note=-1; }
+    if(v<0) return;
+    g_psgv[v].ch=-1; g_psgv[v].note=-1;
+    if(g_psg_env && g_psgv[v].rr>0 && g_psgv[v].rr<15 && g_psgv[v].ph!=PE_OFF){ g_psgv[v].ph=PE_REL; return; }
+    g_psgv[v].ph=PE_OFF; g_psgv[v].att=PE_SILENT; plat_psg_voice_off(v);
+}
+/* one 60 Hz step of every voice's envelope (the music tick, interrupt level) */
+static void psg_env_tick(void){
+    int nv=g_psg_fx?2:3;
+    for(int v=0;v<nv;v++){
+        int ph=g_psgv[v].ph; if(ph==PE_OFF || ph==PE_SUS) continue;
+        int before=psg_vol_of(v);
+        if(ph==PE_ATK){ g_psgv[v].att-=g_psgv[v].step; if(g_psgv[v].att<=0){ g_psgv[v].att=0; g_psgv[v].ph=PE_DEC; } }
+        else if(ph==PE_DEC){ int32_t slq=(int32_t)g_psgv[v].sl*3*256;
+            g_psgv[v].att+=pe_rate(g_psgv[v].dr);
+            if(g_psgv[v].att>=slq){ g_psgv[v].att=slq; g_psgv[v].ph = g_psgv[v].pct? PE_REL : PE_SUS; } }
+        else { g_psgv[v].att+=pe_rate(g_psgv[v].rr); }
+        if(g_psgv[v].att>=PE_SILENT){ g_psgv[v].att=PE_SILENT; g_psgv[v].ph=PE_OFF;
+            if(g_psgv[v].ch>=0){ g_psgv[v].ch=-1; g_psgv[v].note=-1; }
+            plat_psg_voice_off(v); continue; }
+        int now=psg_vol_of(v); if(now!=before) plat_psg_volume(v, now);
+    }
 }
 /* reset() may be called from the sequencer tick (ISR) if a song ends, so silence via the
  * direct per-voice writes (ISR-safe), NOT plat_psg_silence (which uses Supexec/XBIOS). */
-static void psg_be_reset(void){ for(int v=0;v<3;v++){ plat_psg_voice_off(v); g_psgv[v].ch=-1; g_psgv[v].note=-1; } }
+static void psg_voices_clear(void){ for(int v=0;v<3;v++){ g_psgv[v].ch=-1; g_psgv[v].note=-1; g_psgv[v].last=-1; g_psgv[v].ph=PE_OFF; g_psgv[v].att=PE_SILENT; } }
+static void psg_be_reset(void){ for(int v=0;v<3;v++){ plat_psg_voice_off(v); g_psgv[v].ch=-1; g_psgv[v].note=-1; g_psgv[v].last=-1; g_psgv[v].ph=PE_OFF; g_psgv[v].att=PE_SILENT; } }
 static const music_backend_t g_psg_be = { psg_be_program, psg_be_note_on, psg_be_note_off, psg_be_reset };
 
 /* Timer-A ISR callback (~60 Hz, steady, frame-rate independent): advance the .M sequencer
@@ -15128,6 +15182,7 @@ static void music_isr_tick(void){
     if(g_st_on) st_tick(&g_st);
     if(g_smf_on) smf_tick(&g_smf);
     if(g_music_on) music_seq_tick(&g_music, 1);
+    if(g_psg_env && g_music_be_kind == 2) psg_env_tick();
     if(g_music_be_kind == 1 || g_music_be_kind == 3) plat_midi_drain(52);   /* (3: SE's songs on MIDI OUT) */
 }
 
@@ -15205,8 +15260,9 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
     if(kind==1){ plat_midi_init();
         if(g_music_gm){ static const uint8_t GMRESET[6]={0xF0,0x7E,0x7F,0x09,0x01,0xF7};   /* GM System On */
             plat_midi_write(GMRESET,6); } }                       /* (an MT-32 ignores it)          */
+    if(kind==2) psg_voices_clear();          /* (state only: user mode here, and music_stop_all has silenced the chip) */
     music_seq_start(&g_music, song, got, map, nmap, be);
-    g_music_on=1; g_music_be_kind=kind;
+    g_psg_env=(kind==2); g_music_on=1; g_music_be_kind=kind;
     plat_timer_start(music_isr_tick, 60);
 }
 
@@ -15219,7 +15275,7 @@ static void music_play_seq(const char *mfile, const music_backend_t *be, int kin
  * holds its last note until reset. */
 static void music_stop_all(void){
     plat_timer_stop();
-    g_music_on = 0; g_smf_on = 0; g_se_shadow = 0;
+    g_music_on = 0; g_smf_on = 0; g_se_shadow = 0; g_psg_env = 0;
     g_se_dmafx=0;
     if(g_sefx_live){ g_sefx_live=0; sesfx_forget(); sespk_be.reset(); if(g_psg_fx){ g_psg_fx=0; plat_psg_silence(); } }
     if(g_st_on){ g_st_on = 0; plat_psg_silence(); }

@@ -32,6 +32,7 @@ void music_seq_start(music_seq_t *m, const uint8_t *opl, int32_t len,
     m->playing = (opl && len > 0);
     for(int i = 0; i < m->nmap; i++) m->map[i] = map[i];
     for(int i = 0; i < 9; i++){ m->note[i] = -1; m->mch[i] = (uint8_t)i; m->inst[i] = 0; m->vel[i] = 90; }
+    for(int i = 0; i < 16; i++) for(int k = 0; k < 11; k++) m->patch[i][k] = 0;
     if(be) for(int i = 0; i < m->nmap; i++) be->program(m->map[i].ch, m->map[i].prog);
 }
 
@@ -89,7 +90,9 @@ void music_seq_tick(music_seq_t *m, int nticks){
                 if(m->sp < 8){ m->stk[m->sp].ret = m->pos; m->stk[m->sp].start = off; m->stk[m->sp].reps = reps; m->sp++; }
                 m->pos = off;
             }
-            else if(b == 0x83){ m->pos += 12; }                        /* define instrument (OPL patch): MIDI ignores */
+            else if(b == 0x83){ uint8_t *pt = m->patch[m->d[m->pos] & 15];  /* define instrument (OPL patch): MIDI ignores, */
+                                for(int k = 0; k < 11; k++) pt[k] = m->d[m->pos + 1 + k];   /* the PSG takes its envelope */
+                                m->pos += 12; }
             else if(b == 0x85 || b == 0x86){ m->pos++; }               /* fade in/out: v1 ignore */
             break;
           case 0xE: m->loop_pos = m->pos; break;                        /* set loop point */

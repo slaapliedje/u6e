@@ -16,6 +16,7 @@
 void plat_psg_init(void);                          /* silence + set the mixer (noise off) */
 void plat_psg_voice(int v, int midinote, int vol); /* voice 0..2 -> midinote, vol 0..15    */
 void plat_psg_voice_off(int v);
+void plat_psg_volume(int v, int vol);   /* volume only (interrupt level) */
 void plat_psg_tone(int v, int period, int vol);   /* raw tone period (sound effects), 0 = off */                    /* silence voice v                      */
 void plat_psg_silence(void);                       /* all three voices off                 */
 void plat_psg_write(int reg, int val);             /* raw register write (interrupt level) */

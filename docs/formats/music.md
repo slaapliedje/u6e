@@ -216,6 +216,27 @@ then the Hurrian Hymn on a GM harp (the author's Royal Game of Ur title melody),
 MIDI IN (instrument OUT → Atari IN: your playing prints as Note On/Off lines; T = thru). Uses
 Midiws #12 / Bconstat(3) #1 / Bconin(3) #2. Hatari `--trace midi_raw` confirmed the byte stream.
 
+## The PSG's envelopes (our re-voice, 2026-11-26)
+The YM2149 backend folds the nine FM channels onto three square voices; DOS has no PSG music, so
+this is ours. **A song rarely ends a note itself**: most notes are `0x1n` retriggers, and the fade
+between them is the FM instrument's own envelope. INTRO's instrument 0 (on five of its eight
+channels) is a decaying one. Played as flat squares held until the voice was next needed, notes
+droned ("hanging notes", a tester's STacy video: the onsets sit exactly on the song's 250 ms grid,
+the notes are flat bars of constant loudness). Each PSG voice therefore follows the CARRIER
+operator of its channel's `0x83` instrument (bytes 5, 7 and 8 of the layout above):
+- **Attack** (byte 7 bits 7-4): a ramp from silent to full over 2.83 s / 2^(rate-1) (0 at rate 9
+  and up). Rate 0 never sounds.
+- **Decay** (byte 7 bits 3-0) toward the **sustain level** (byte 8 bits 7-4, 3 dB per step),
+  96 dB in 39.28 s / 2^(rate-1), so 10.4/256 dB × 2^(rate-1) per 60 Hz tick.
+- Then **held** if byte 5 bit 5 (EG type) is set, else fading on at the **release** rate
+  (byte 8 bits 3-0, same timing). A note-off releases at that rate too; rate 0 or 15 cuts at once.
+- A YM2149 volume step is taken as 3 dB; the note's level (`0x3n`, as velocity) is the start.
+- Voice allocation reuses the channel's own voice (a retrigger stays on one voice), then a free
+  or releasing voice, then steals the quietest.
+Key scaling, the modulator and AM connection are not modelled. SE's songs (MIDI files, no OPL
+instruments) still hold their notes. Rendering the register log of the intro before and after
+shows the flat blocks replaced by fading steps (Hatari `--trace psg_write`).
+
 ## The `.DRV` device drivers (context, not decoded)
 `U6ADLIB.DRV` (OPL2/AdLib), `U6ROLAND.DRV` (Roland MT-32), `U6TANDY/U6CMS/U6COVOX/U6INNOVA`,
 `U6TMUS`, plus `U6CGA/EGA/MCGA.DRV` (video). These are Origin/Miles AIL device drivers — the

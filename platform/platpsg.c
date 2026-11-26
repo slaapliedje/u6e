@@ -138,6 +138,12 @@ void plat_psg_tone(int v, int period, int vol){
     if(g_tone_off & (1<<v)){ g_tone_off &= ~(1<<v); psg_mixer(); }
 }
 
+/* voice v's volume only (0-15), pitch and mixer untouched (interrupt level: the music's envelopes) */
+void plat_psg_volume(int v, int vol){
+    if(v<0 || v>2) return;
+    psg_write(8+v, vol<0?0:vol>15?15:vol);
+}
+
 void plat_psg_voice_off(int v){
     if(v<0 || v>2) return;
     psg_write(8+v, 0);                       /* volume 0                            */
