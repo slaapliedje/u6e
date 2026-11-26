@@ -306,3 +306,38 @@ speed. Detection: `platform_caps.has_blitter` (STE/Mega/TT/Falcon by `_MCH`; a B
 Bench: `make bench-ste` (or `make bench-st BLIT=1` for a Mega-ST Blitter on 8 MHz); `BLITTER.REQ 0` forces
 CPU compose for A/B. **Future** — Blitter for the compose DIM is impossible (LUT); actors as standalone
 planar sprites; a Blitter `rdr_pframe_begin` memcpy is marginal (~2 ms).
+
+## 9. Savage Empire's layout (2026-11-25)
+SE's map window is not U6's: the composite shows 1:1 (no 8-px inset), x 8..167, y 16..159, inside SCREEN.LZC's
+frame (rules/se_screen.md §2). The engine hands the renderer that geometry (`rdr_planar_geom(ox, x0, x1, y0, y1)`,
+gamedemo's `g_mo`, `g_mx0..g_my1`, set once the game is known); U6's is the default (8, 0..160, 0..160), so U6 runs
+exactly as before. What follows from it:
+- **Present.** With ox 0 the planar composite is group-aligned with the screen: each row is a straight long-word copy
+  of its whole groups (1..9), the edge groups (0 and 10) merged through a mask (`ppresent_aligned`). No shift, no
+  Blitter needed. A shifted version (`rdr_ppresent_offset(dx, dy)`, plain C, any layout) shows the tremor's shaken
+  view (rules/se_sound_effects.md §5a).
+- **The LUT check and the diff present** take the map's rows from the geometry (16..159 for SE), and the pointer goes
+  into the planar map group for group (`pcur_ptmp_aligned`).
+- **No fray.** U6's frayed ring over the map is not drawn for SE (its frame is in g_back, outside the shown part).
+- **SE's top strip** (sky, sun or moon, the eyes; rows 0..15 over the map's top cells) lives in g_back. A map present
+  c2p's it only when it changed since the last present (a copy of the strip is compared; a c2p of it costs ~40 ms).
+- **SE's own windows.** The talk, the dream and the scenes are drawn in g_back's map window; while one is up the
+  planar path is off (`se_window_taken`) and the presents are chunky, as before.
+
+Measured, SE's first village (Kurak, Triolo's hut), 20 steps of a walk, plain 8 MHz ST (Hatari, TOS 1.04, 4 MB),
+`AUTOWALK.REQ` (a step count and a way; it turns at walls so every step scrolls):
+
+| | compose | present | NPC turns | **step** |
+|---|---:|---:|---:|---:|
+| chunky (before) | 421 ms | 354 ms | 489 ms | **1276 ms** |
+| planar + the turn picker's fixes | 251 ms | 48 ms | 356 ms | **666 ms** |
+
+The map, frame, panel and command bar are pixel-identical between the two (rows below the hook's debug text: 0 of
+195,520 pixels differ). The NPC turns are the same on both paths; their cost was the turn picker (`sched_pick`)
+scanning all 256 actor slots at each of ~33 picks a step. Two exact changes: each actor's schedule entry is cached
+until the hour changes (`sched_si`), and the picker's tests that have no side effects run first in one tight loop
+(points, an empty slot, another level). What is left (~210 ms a step) is the scan itself; cutting it needs a list of
+the actors that can act, kept up to date wherever an actor appears or changes level, which is a larger change.
+U6 shares the picker: its ST walk (the throne room, 8 steps) went 1188 -> 811 ms a step, and its bot smoke run's
+transcripts are byte-identical to the commit before. Checks: `TREMOR.REQ` "h11"/"h22" holds the view unshifted or
+moved by (1,1); the two captures match at a 1-pixel shift with 0 pixels differing.

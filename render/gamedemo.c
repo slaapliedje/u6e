@@ -3496,11 +3496,18 @@ static int npc_live_worktype(int i)
     int wt=npc_worktype(i); return wt<0?0:wt;
 }
 
+/* actor i's schedule entry for this hour (u6sched_active), kept per actor until the hour changes: the schedules
+ * are loaded once at boot and the entry depends on nothing else. The turn picker asks for it for every actor at
+ * every pick (wt_now); decoding them all each time cost ~340 ms a step in SE's first village on an 8 MHz ST. */
+static int8_t  g_sac_h[U6_MAX_ACTORS];          /* the hour cached + 1 (0 = none) */
+static int16_t g_sac_si[U6_MAX_ACTORS], g_sac_wt[U6_MAX_ACTORS];   /* the entry, and its worktype (-1: none) */
+static int sched_si(int i){ if(g_sac_h[i]!=g_hour+1){ int si=u6sched_active(&g_actors[i],g_hour); g_sac_h[i]=(int8_t)(g_hour+1); g_sac_si[i]=(int16_t)si;
+        g_sac_wt[i]=-1; if(si>=0){ u6sched_entry_t e; u6sched_decode(g_actors[i].sched+si*5,&e); g_sac_wt[i]=e.worktype; } } return g_sac_si[i]; }
 /* scheduled surface destination for actor i at the current hour; 1 if it has one */
 static int npc_dest(int i,int*dx,int*dy)
 {
     if(g_actors[i].nsched<=0){ if(g_wt_force[i]){ *dx=g_wt_fx[i]; *dy=g_wt_fy[i]; return 1; } return 0; }
-    int si=u6sched_active(&g_actors[i],g_hour); if(si<0) return 0;
+    int si=sched_si(i); if(si<0) return 0;
     u6sched_entry_t e; u6sched_decode(g_actors[i].sched+si*5,&e);
     if(e.z!=0) return 0;
     *dx=(int)e.x; *dy=(int)e.y; return 1;
@@ -3510,7 +3517,7 @@ static int npc_dest(int i,int*dx,int*dy)
 static int sched_dest(int i,int*dx,int*dy,int*dz)
 {
     if(g_actors[i].nsched<=0) return 0;
-    int si=u6sched_active(&g_actors[i],g_hour); if(si<0) return 0;
+    int si=sched_si(i); if(si<0) return 0;
     u6sched_entry_t e; u6sched_decode(g_actors[i].sched+si*5,&e);
     *dx=(int)e.x; *dy=(int)e.y; *dz=(int)e.z; return 1;
 }
@@ -3530,9 +3537,8 @@ static int npc_worktype(int i)
 {
     if(g_wt_force[i]) return g_wt_force[i];                       /* a conversation's WORKTYPE (usecode_vm.md §6b) */
     if(g_actors[i].nsched<=0) return -1;
-    int si=u6sched_active(&g_actors[i],g_hour); if(si<0) return -1;
-    u6sched_entry_t e; u6sched_decode(g_actors[i].sched+si*5,&e);
-    return e.worktype;
+    if(sched_si(i)<0) return -1;
+    return g_sac_wt[i];
 }
 
 /* ---- hatched creatures' worktypes (eggs.md §3b) ------------------------------------------------ */
@@ -3816,6 +3822,7 @@ static uint32_t g_kp[18];   /* 0 step_npcs, 1 compose, 2 full present, 3 map pre
 #define KP_FN(i) static __attribute__((unused)) void kp_end##i(uint32_t*t0){ g_kp[i]+=plat_ticks_200hz()-*t0; }
 KP_FN(0) KP_FN(1) KP_FN(2) KP_FN(3) KP_FN(4) KP_FN(5) KP_FN(6) KP_FN(7) KP_FN(8) KP_FN(9) KP_FN(10) KP_FN(11) KP_FN(12) KP_FN(13) KP_FN(14) KP_FN(15) KP_FN(16) KP_FN(17)
 static int g_kp_bbn;   /* build_blocked calls this pass */
+static uint32_t g_kpc[4];   /* sched_pick: actors past the points test, past the cheap tests */
 static int g_kpn; static uint16_t g_kpa[48], g_kpw[48], g_kpd[48];   /* the slow actor turns of this pass: actor, worktype, ticks */
 #define KP(i) uint32_t kp_t0_ __attribute__((cleanup(kp_end##i)))=plat_ticks_200hz()
 #else
@@ -4367,6 +4374,7 @@ static inline int smooth_lp(int X,int Y,const uint8_t*light){
  * planar static must be fully rebuilt before shifting). All under HAVE_RDR_ST (ST backend linked). */
 #ifdef HAVE_RDR_ST
 static int g_planar_allow = 1;          /* master enable (the bench clears it for the chunky baseline) */
+static int se_window_taken(void){ return g_gd==&gamedef_se && (g_talking||g_se_dream_a>0||g_scene); }   /* SE's talk, dream or scene holds the map window (rules/se_screen.md §5) */
 static int g_native_planar = 0;         /* planar compose active THIS frame (recomputed in compose_map) */
 static int g_planar_static = 0;         /* Phase 4c: STATIC compose targets g_pdimmed (planar-dimmed-direct) */
 static int g_pd_valid = 0;              /* g_pdimmed is built (else force a full rebuild) */
@@ -5384,7 +5392,7 @@ static void compose_map(const world_t*w)
      * (a band raster gives each row its own LUT, which pre-converted planar tiles can't honour). On the
      * off->on edge or after a palette (LUT) change, force a planar-static rebuild. */
     { int elig = g_planar_allow && predim && !g_dim_smooth && rdr_active_backend()==0 && rdr_native_planar_ok()
-               && g_gd!=&gamedef_se;   /* SMOOTH-PREDIM is per-pixel -> chunky only; SE's 16-px grid from 0,0 is not the planar path's 8-px inset (chunky until it is) */
+               && !se_window_taken();   /* SMOOTH-PREDIM is per-pixel -> chunky only; SE's talk, dream and scenes are drawn in g_back's map window */
       if(elig){ if(!g_native_planar){ g_pd_valid=0; rdr_pcursor_invalidate(); } /* enabled -> rebuild + drop stale cursor save-under */
                 if(rdr_planar_take_dirty()) g_pd_valid=0;   /* LUT changed (new scene) -> rebuild       */
                 g_native_planar=1; }
@@ -5577,7 +5585,7 @@ static void compose_map(const world_t*w)
      * 16c-8..16c+7: half of a ring tile shows, over the map's edge. The planar map covers that half each frame
      * (3207605, July), so on the ST the fray goes into it; deb0de1 put it at 16c, 8 px in, which hid the right and
      * bottom ones (px 160+) and shifted the top and left. Gated by the cells its shown part covers. */
-    if(g_native_planar){ rdr_pframe_end();
+    if(g_native_planar && g_gd!=&gamedef_se){ rdr_pframe_end();   /* (SE: SCREEN.LZC's frame, drawn in g_back, rules/se_screen.md §2) */
       for(int sy=0;sy<VT;sy++) for(int sx=0;sx<VT;sx++){
         int top_=sy==0, bot=sy==VT-1, lft=sx==0, rgt=sx==VT-1, t;
         if(!(top_||bot||lft||rgt)) continue;
@@ -9935,15 +9943,27 @@ static void cursor_pos(int lx,int ly,int*ox,int*oy)
   if(x+g_cw>LW)x=LW-g_cw; if(y+g_ch>LH)y=LH-g_ch; *ox=x; *oy=y; }
 #endif
 
+#ifdef HAVE_RDR_ST
+/* SE's top strip (sky, sun or moon, the eyes: draw_border_tiles) is in g_back over the map's top row of cells, which
+ * the planar map does not show: a map present shows it only when it changed (a c2p of it costs ~40 ms on an 8 MHz ST) */
+static uint8_t g_se_strip[16*MAPSZ];
+static void se_strip_take(void){ for(int y=0;y<16;y++) memcpy(g_se_strip+y*MAPSZ,ROW(MAPY+y)+MAPX,MAPSZ); }
+static void se_strip_present(void)
+{   for(int y=0;y<16;y++) if(memcmp(g_se_strip+y*MAPSZ,ROW(MAPY+y)+MAPX,MAPSZ)){
+        rdr_present_rect_doubled(MAPX,MAPY,MAPSZ,16,LH); se_strip_take(); return; } }
+#define PLANAR_LIVE (g_native_planar && !se_window_taken())   /* SE's talk, dream and scenes are drawn in g_back's map window */
+#endif
+
 static void present_frame(void)
 {
     KP(2);
 #ifdef HAVE_RDR_ST
-  if(g_native_planar && !g_peer_on){                      /* panel from g_back, inner map from planar (the gem's view is drawn into g_back) */
+  if(PLANAR_LIVE && !g_peer_on){                          /* panel from g_back, inner map from planar (the gem's view is drawn into g_back) */
       rdr_present_diff_pmap();                             /* c2p of what changed in g_back since the last present, not under the planar map, no Vsync
                                                               (the pointer comes off only where a write lands under it: rdr_st pcur_guard) */
       rdr_ppresent();                                      /* overlay the planar map over the stale g_back map */
-      rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
+      if(g_gd==&gamedef_se) se_strip_take();               /* (the diff showed SE's strip) */
+      else rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       vsync_pump(); return; }
@@ -9961,9 +9981,10 @@ static void present_map(void)
 {
     KP(3);
 #ifdef HAVE_RDR_ST
-  if(g_native_planar){                                    /* shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
+  if(PLANAR_LIVE){                                        /* shifted planar copy of g_ptmp == c2p(map), 5.5x faster */
       rdr_ppresent();                                     /* redraw the map (the pointer comes off if it is over it) */
-      rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
+      if(g_gd==&gamedef_se) se_strip_present();
+      else rdr_present_rect_doubled(MAPX,MAPY+MAPSZ-10,MAPSZ,2,LH);   /* the planar map ends 2 rows into the date line */
       if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy);
                 g_cur_onx=ox; g_cur_ony=oy; }
       return; }
@@ -9992,7 +10013,7 @@ static void present_cursor(void)
 {
     if(!g_cw) return;
 #ifdef HAVE_RDR_ST
-    if(g_native_planar){                                             /* bare move: map unchanged, just move the cursor */
+    if(PLANAR_LIVE){                                                 /* bare move: map unchanged, just move the cursor */
         int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy);
         g_cur_onx=ox; g_cur_ony=oy; return; }
 #endif
@@ -11263,7 +11284,7 @@ static void hour_tick(void)
         if(g_wt_force[i]==0x9b){ g_wt_force[i]=0; }
         if(g_actors[i].nsched<=0) continue;
         { int f=g_wt_force[i]; if(f&&f<0x80&&f!=7) continue;
-          int si=u6sched_active(&g_actors[i],g_hour);
+          int si=sched_si(i);
           if(si!=(int)g_sched_si[i]){ g_sched_si[i]=(int8_t)si; g_wt_force[i]=0; g_sched_st[i]=1; g_sched_pending=1; g_asleep[i]=0; sched_left(i); } } } }
 /* those about to set out far from the leader are there already; three a pass */
 static void sched_pass(const world_t*w)
@@ -11321,8 +11342,17 @@ static int able(int i){ return g_ahp[i]>0&&!g_asleep[i]&&!g_paralyze[i]&&!g_drag
 static int sched_pick(const world_t*w)
 {
     KP(8);   int best=-1, bp=0, bd=1, mask=g_cur_level?0xff:0x3ff, bx=((int)w->px-16)&0x3f8, by=((int)w->py-16)&0x3f8;
-    for(int i=1;i<U6_MAX_ACTORS;i++){ int wt,dx,dy,p,d; if(g_atile[i]==0xffff||(i!=1&&(int)g_actz[i]!=g_cur_level)) continue;
-        if(g_ahp[i]==0||g_paralyze[i]||g_asleep[i]||g_pts[i]<=0) continue;
+    const uint8_t lvl=(uint8_t)g_cur_level;
+    for(int i=0;;){ int wt,dx,dy,p,d;
+        /* the tests before the window's have no effects, so they run first and tight: most actors (empty slots, those
+         * elsewhere, those spent at the first pick) stop in this loop (~270 ms a step in SE's village on an 8 MHz ST) */
+        do { int16_t k=(int16_t)i; const int8_t *pp=g_pts+k; const uint16_t *tp=g_atile+k; const uint8_t *zp=g_actz+k;   /* the commonest three (spent; an empty slot; elsewhere) */
+             do { ++pp; ++tp; ++zp; if(++k>=U6_MAX_ACTORS) return best; } while(*pp<=0||*tp==0xffff||(*zp!=lvl&&k!=1));
+             i=k; }
+        while(g_ahp[i]==0||g_paralyze[i]||g_asleep[i]);
+#ifdef KEYPROF
+        g_kpc[1]++;
+#endif
         if(i!=1&&g_resting&&member(i)&&wt_now(i)!=0xc) continue;
         wt=wt_now(i); if(!wt) continue;
         dx=((i==1?(int)w->px:g_actx[i])-bx)&mask; dy=((i==1?(int)w->py:g_acty[i])-by)&mask;
@@ -11330,8 +11360,8 @@ static int sched_pick(const world_t*w)
         if(wt==1) continue;
         p=g_pts[i]; d=g_adex[i]?g_adex[i]:1;
         if(p>=d){ return i; }
-        { long c=(long)p*bd-(long)d*bp; if(c>0||(c==0&&d>bd)){ best=i; bp=p; bd=d; } } }
-    return best; }
+        { long c=(long)(int16_t)p*(int16_t)bd-(long)(int16_t)d*(int16_t)bp;   /* (points and dexterity fit 16 bits: muls, not a library call) */
+          if(c>0||(c==0&&d>bd)){ best=i; bp=p; bd=d; } } } }
 OPT_HOT_END
 static void minute_end(world_t*w)
 {
@@ -11370,7 +11400,11 @@ static void step_npcs(const world_t*w)
     minute_effects(w);
     sched_pass(w);
     { int16_t guard=0; int keep=g_pts[1]; g_pts[1]=0;
-      for(;guard<2000;guard++){ int i=sched_pick(w); if(i<0) break; if(dragged_turn(i)){ g_pts[i]=0; continue; }
+      for(;guard<2000;guard++){ int i=sched_pick(w); if(i<0) break;
+#ifdef KEYPROF
+          g_kp[16]++; if(g_kpn<48){ g_kpa[g_kpn]=(uint16_t)i; g_kpw[g_kpn]=(uint16_t)wt_now(i); g_kpd[g_kpn]=(uint16_t)g_pts[i]; g_kpn++; }
+#endif
+          if(dragged_turn(i)){ g_pts[i]=0; continue; }
           if(wt_now(i)==2){ g_pts[i]=0; continue; } wt_act(w,i); if(g_game_over) break; }
       if(!g_resting) followers_walk(w);
       g_pts[1]=(int8_t)keep; }
@@ -15266,16 +15300,27 @@ static int g_tremor_dbg;
 static uint8_t g_quake_sv[(SE_MAPY1-SE_MAPY0+3)*(SE_MAPX1-SE_MAPX0+3)];
 static void se_tremor(int m,int n)
 {   enum{ X0=SE_MAPX0-1, Y0=SE_MAPY0-1, W=SE_MAPX1-SE_MAPX0+3, H=SE_MAPY1-SE_MAPY0+3 };
-    for(int y=0;y<H;y++) memcpy(g_quake_sv+y*W,ROW(Y0+y)+X0,(size_t)W);
+#ifdef HAVE_RDR_ST
+    int pl=PLANAR_LIVE;                              /* the ST's planar map: shown moved, from the composite (its pixel
+                                                      * past the window's edge is the map's, not the frame's, as here) */
+#else
+    enum{ pl=0 };
+#endif
+    if(g_tremor_dbg) dbg_num("TREMOR planar=",pl);
+    if(!pl) for(int y=0;y<H;y++) memcpy(g_quake_sv+y*W,ROW(Y0+y)+X0,(size_t)W);
     for(int f=0;f<n;f++){
         se_sfx(1);
         int rx=se_rand(8-m,8+m)-8, ry=se_rand(16-m,16+m)-16;
-        for(int y=1;y<H-1;y++) memcpy(ROW(Y0+y)+X0+1,g_quake_sv+(y+ry)*W+1+rx,(size_t)(W-2));
-        present_map();
+#ifdef HAVE_RDR_ST
+        if(pl){ rdr_ppresent_offset(rx,ry); if(g_cw){ int ox,oy; cursor_pos(g_mx,g_my,&ox,&oy); rdr_pcursor_place(g_curpix,g_cw,g_ch,ox,oy); g_cur_onx=ox; g_cur_ony=oy; } }
+        else
+#endif
+        { for(int y=1;y<H-1;y++) memcpy(ROW(Y0+y)+X0+1,g_quake_sv+(y+ry)*W+1+rx,(size_t)(W-2));
+          present_map(); }
         { uint32_t t0=plat_ticks_200hz(); do vsync_pump(); while(plat_ticks_200hz()-t0<4); }
         if(g_tremor_dbg){ dbg_num("TREMOR dx=",rx); dbg_num("TREMOR dy=",ry); dbg_num("TREMOR sounding=",sesfx_sounding()); }
         se_sfx_stop_all(); }
-    for(int y=0;y<H;y++) memcpy(ROW(Y0+y)+X0,g_quake_sv+y*W,(size_t)W);
+    if(!pl) for(int y=0;y<H;y++) memcpy(ROW(Y0+y)+X0,g_quake_sv+y*W,(size_t)W);
     present_map(); }
 static int g_tremors;                 /* (counted for the test hook) */
 /* the roll (§5a, GAME.EXE 0x4264, run at each refresh of the view; here once after each turn the party spends): on
@@ -17607,6 +17652,9 @@ int main(int argc, char **argv)
     g_wko = g_gd->wko;                                   /* per-game well-known obj_n (avatar/key/...) */
     g_gl = g_gd==&gamedef_se ? &gl_se : g_gd==&gamedef_md ? &gl_md : &gl_u6;   /* the game layer (game_layer.md) */
     if(g_gd==&gamedef_se){ g_mo=0; g_mx0=SE_MAPX0; g_mx1=SE_MAPX1+1; g_my0=SE_MAPY0; g_my1=SE_MAPY1+1; }   /* SE's map window (rules/se_screen.md §2) */
+#ifdef HAVE_RDR_ST
+    rdr_planar_geom(g_mo,g_mx0,g_mx1,g_my0,g_my1);       /* the ST's planar map shows there too (native-planar-st.md §9) */
+#endif
     rules_select(g_gd==&gamedef_se ? RULES_SE : RULES_U6);                    /* whose weapon, armour and creature tables (se_combat.md) */
     g_on = *g_gl->on;
     const uint8_t *gettable;
@@ -17647,6 +17695,7 @@ int main(int argc, char **argv)
         if(g_nsparty>MAXPARTY) g_nsparty=MAXPARTY;
         for(int i=0;i<g_nsparty;i++) g_sparty[i]=spl[i];
         if(sched_len>0) u6actor_load_schedule(g_actors,sched,sched_len);
+        memset(g_sac_h,0,sizeof g_sac_h);                /* (sched_si's cache) */
         g_savestate=(nact>1 && g_actz[1]!=0xff);   /* live avatar position => save state */
         after_actors=sched+sched_len; }
 
@@ -18790,6 +18839,13 @@ int main(int argc, char **argv)
             for(int id_=0;id_<SESFX_N;id_++){ se_sfx(id_); uint32_t t_=plat_ticks_200hz(); while(plat_ticks_200hz()-t_<300){ plat_dma_music_pump(); se_shadow_pump(); } }
             dbg_num("SESFX done=", 1); } }
     {   int32_t tl_=0; if(g_gd==&gamedef_se && TEST_REQ("TREMOR.REQ",&tl_) && tl_>0){   /* test: the tremor's frames and bursts, and its roll at the trap door */
+#ifdef HAVE_RDR_ST
+            if(rdr_active_backend()==0){ g_light_style=LSTY_PREDIM; g_tmp_valid=0; }   /* (the ST's style, chosen later at boot: the planar map) */
+#endif
+#ifdef HAVE_RDR_ST
+            if(tl_>=3 && ((char*)TEST_REQ("TREMOR.REQ",&tl_))[0]=='h'){ char*q_=(char*)TEST_REQ("TREMOR.REQ",&tl_);   /* "h" dx dy (bytes, '0'+1+d): the view shown moved, held */
+                compose_map(&w); present_map(); dbg_num("TREMOR hold planar=",PLANAR_LIVE); if(PLANAR_LIVE) rdr_ppresent_offset(q_[1]-'1',q_[2]-'1'); for(;;) vsync_pump(); }
+#endif
             music_play_song("SE00"); g_tremor_dbg=1; compose_map(&w); present_map(); se_tremor(1,4); g_tremor_dbg=0;
             int32_t lv_=w.level; uint16_t px_=w.px, py_=w.py; w.level=3; w.px=157; w.py=137; g_cg.talk_flags[1]|=0x04; int n_=0;
             for(int k_=0;k_<200;k_++){ int b_=g_tremors; se_tremor_roll(&w); n_+=g_tremors!=b_; }
@@ -22333,9 +22389,32 @@ int main(int argc, char **argv)
     { int32_t al=0; uint8_t*aw=(uint8_t*)TEST_REQ("AUTOWALK.REQ",&al);
       if(aw && al>0){ int n=aw[0]; if(n<1)n=1; if(n>32)n=32; g_mx=100; g_my=50; /* cursor left ON, over the map */
           present_frame();                              /* establish border + panel + map + cursor in g_screen */
-          for(int s=0;s<n;s++){ if(world_try_move(&w,1,0)) step_npcs(&w);
-              compose_map(&w); present_map(); vsync_pump(); }
+          char aw_w=al>1?(char)aw[1]:0; int aw_dx=aw_w=='w'?-1:1, aw_dy=aw_w=='s'?1:aw_w=='n'?-1:0; if(aw_dy) aw_dx=0;   /* (a second byte e/w/n/s: the way) */
+#ifdef KEYPROF
+          memset(g_kp,0,sizeof g_kp); memset(g_kpc,0,sizeof g_kpc); g_kpn=0;
+          long aw_nfd=TEST_FSIZE("PROFNF.REQ")>0 ? bot_nf_id("NF_DEBUGGER") : 0;   /* Hatari --natfeats on: its debugger at the walk's start and end (profile on / dump) */
+          if(aw_nfd) bot_nf_call(aw_nfd,"");
+#endif
+          uint32_t aw_t0=plat_ticks_200hz(), aw_tc=0, aw_tn=0, aw_tp=0, aw_tm=0;
+          int aw_moved=0;
+          for(int s=0;s<n;s++){ int ok_=0; uint32_t t_=plat_ticks_200hz();   /* blocked: turn right until a way is free (every step scrolls) */
+              for(int r_=0;r_<4&&!ok_;r_++){ if(world_try_move(&w,aw_dx,aw_dy)) ok_=1; else { int k_=aw_dx; aw_dx=-aw_dy; aw_dy=k_; } }
+              uint32_t tm_=plat_ticks_200hz(); aw_tm+=tm_-t_;
+              if(ok_){ step_npcs(&w); aw_moved++; }
+              uint32_t t1_=plat_ticks_200hz(); aw_tn+=t1_-t_; compose_map(&w); uint32_t t2_=plat_ticks_200hz(); aw_tc+=t2_-t1_;
+              present_map(); aw_tp+=plat_ticks_200hz()-t2_; vsync_pump(); }
+          uint32_t aw_t1=plat_ticks_200hz();
+#ifdef KEYPROF
+          if(aw_nfd) bot_nf_call(aw_nfd,"");
+          { static const char*const L_[18]={"KP npcs=","KP comp=","KP full=","KP map=","KP bb=","KP act=","KP minute=","KP pass=","KP pick=","KP walk=","KP light=","KP static=","KP status=","KP conv=","KP bar=","KP border=","KP 16=","KP 17="};
+            for(int q=0;q<16;q++) dbg_num(L_[q],(int)(g_kp[q]*5/(uint32_t)n));   /* ms a step, by phase */
+            dbg_num("KP picks/step=",(int)(g_kp[16]/(uint32_t)n)); dbg_num("KP pick pts>0/step=",(int)(g_kpc[0]/(uint32_t)n)); dbg_num("KP pick able/step=",(int)(g_kpc[1]/(uint32_t)n));
+            for(int q=0;q<g_kpn&&q<48;q++){ dbg_num("KP turn a=",g_kpa[q]); dbg_num("   wt=",g_kpw[q]); dbg_num("   pts=",(int16_t)g_kpd[q]); } }
+#endif
           present_frame();                              /* exercise the planar-only present_frame hybrid too */
+          dbg_num("AUTOWALK moved=",aw_moved); dbg_num("AUTOWALK x=",(int)w.px); dbg_num("AUTOWALK y=",(int)w.py);
+          dbg_num("AUTOWALK ms/step=", (int)((aw_t1-aw_t0)*5/(uint32_t)n)); dbg_num("AUTOWALK compose ms/step=", (int)(aw_tc*5/(uint32_t)n));
+          dbg_num("AUTOWALK move+npcs ms/step=", (int)(aw_tn*5/(uint32_t)n)); dbg_num("AUTOWALK present ms/step=", (int)(aw_tp*5/(uint32_t)n)); dbg_num("AUTOWALK move ms/step=", (int)(aw_tm*5/(uint32_t)n));
           dbg_num("AUTOWALK steps=", n); dbg_num("AUTOWALK native_planar=", g_native_planar);
           for(;;) vsync_pump(); } }   /* HOLD the walked frame (no anim advance) so planar vs chunky A/B is deterministic */
 #endif

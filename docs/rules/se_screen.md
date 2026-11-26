@@ -151,8 +151,9 @@ no highlight on them (Look from the keyboard leaves the bar untouched).
   SE changes: the main 16 (rows 0-181) also weigh SCREEN.LZC's frame (x4 per pixel; U6's border is tiles
   and already counted), and the command-bar band (rows 182-199) is quantised from the frame's own rows there
   (SE's icons are part of it) plus the black of the message box's last text row, not U6's icon tiles.
-- The map is composed on the chunky path: the native-planar map (native-planar-st.md) assumes U6's 8-px
-  inset, SE's grid starts at 0,0. Open: a planar path for SE's grid if the ST needs the speed.
+- The map is composed on the native-planar path (native-planar-st.md §9, 2026-11-25): SE's layout shows the
+  composite 1:1, so its present is a group-aligned copy; the strip over the map's top row is shown from g_back when
+  it changes; the talk, the dream and the scenes (drawn in the map window) turn the planar path off while up.
 - Checked in Hatari (ST, TOS 1.04, 4 MB): the start screen, the status and inventory displays, a talk with
   Triolo (portrait palette), the bot's smoke and talk segments (0 issues).
 
@@ -170,4 +171,4 @@ section holds BKGRND's 13 pictures) built; U6's status line, command bar tiles a
 2026-11-22. The `name>` prompt built (message_scroll.md). The party list's length
 and figures built 2026-11-17. The ST path built 2026-11-17 (§7). The dream's screen built 2026-11-22 (se_rest.md
 §6a). Open: the Avatar's chosen name
-(item 9's creation); a planar map for SE on the ST.
+(item 9's creation). The planar map for SE on the ST built 2026-11-25.

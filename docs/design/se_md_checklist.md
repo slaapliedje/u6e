@@ -261,3 +261,8 @@ list once SE's seams exist.
 - 2026-11-24: item 9 DONE: the AdLib's effects with DMA music (rules/se_sound_effects.md §7a): host-rendered into
   SEFX.PCM by se2pcm, mixed into the DMA ring by the 240 Hz interrupt at each song's balance. Checked in Hatari
   (Falcon) by matching the recorded sound against the renderings. Not yet heard by ear.
+- 2026-11-25: item 8 DONE: the planar map for SE on the ST (design/native-planar-st.md §9): SE's 1:1 layout presented
+  as a group-aligned copy, the top strip from g_back when it changes, the planar path off under SE's talk, dream and
+  scenes, the tremor shown moved from the planar composite. Plain 8 MHz ST, a walk in Kurak: a step 1276 -> 666 ms
+  (compose 421 -> 251, present 354 -> 48, NPC turns 489 -> 356 through two exact fixes to the turn picker, which U6
+  shares); the map pixel-identical to the chunky path's.

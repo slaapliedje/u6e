@@ -609,17 +609,17 @@ static void rdr_present_i(void)
 }
 
 void rdr_present_rect(int x, int y, int w, int h);   /* (defined below) */
-#define PMAP_TOP_ROW 8                                   /* == PMAP_TOP below (the map window's first screen row) */
 /* c2p only what changed since the last present (see g_shadow). No Vsync. Falls back to a full present
  * when there is no valid copy or the screens are flipping. */
 /* hole: skip groups h0..h1-1 on rows y0..y1-1 (what the planar map overlay covers anyway) */
+static int g_pm_ox, g_pm_y0, g_pm_y1;                     /* (below) the planar map's rows: rdr_planar_geom */
 static int g_hole_stale;    /* a present left the backbuffer's map area unshown (the planar map covered it) */
 static void present_diff_hole(int y0, int y1, int h0, int h1)
 {
     if (y1 > y0) g_hole_stale = 1;
     else if (g_hole_stale && g_shadow_ok && !g_flip) {      /* a whole-screen diff after the planar map: the screen there is */
         g_hole_stale = 0;                                    /* the planar map, not what the copy says, so show it all */
-        rdr_present_rect(16, PMAP_TOP_ROW, 144, 160);
+        rdr_present_rect(16, g_pm_ox + g_pm_y0, 144, g_pm_y1 - g_pm_y0);
     }
     if (!g_shadow || !g_shadow_ok || g_flip) {
         if (y1 > y0) {
@@ -649,7 +649,7 @@ static void present_diff_hole(int y0, int y1, int h0, int h1)
 static void rdr_present_diff_i(void) { present_diff_hole(0, 0, 0, 0); }
 /* The same, but not under the planar map (screen rows 8-167, groups 1-9, x 16-159): rdr_ppresent draws
  * over it at once. c2p'ing the backbuffer's map area there first showed as a slow wipe (a door, ST). */
-static void rdr_present_diff_pmap_i(void) { present_diff_hole(PMAP_TOP_ROW, PMAP_TOP_ROW + 160, 1, 10); }
+static void rdr_present_diff_pmap_i(void) { present_diff_hole(g_pm_ox + g_pm_y0, g_pm_ox + g_pm_y1, 1, 10); }
 
 /* c2p only the sub-rectangle [x,y,w,h). x,w must be multiples of 16. */
 static void rdr_present_rect_i(int x, int y, int w, int h)
@@ -938,11 +938,20 @@ int  rdr_planar_take_dirty(void){ int d = g_planar_dirty; g_planar_dirty = 0; re
  * present exactly — even under a band raster, where the map sits in band 0 (a single LUT) and the OTHER
  * bands only swap hardware palette REGISTERS per row (Timer-B), which is orthogonal to the framebuffer
  * indices the planar path writes. Native planar is OK iff the whole map region uses one LUT. */
-#define PMAP_TOP 8
+/* Where the planar map shows (rdr_planar_geom, the engine's g_mo / g_mx0.. g_my1): composite pixel (x,y) at
+ * screen (x+ox, y+ox), its part [x0,x1) x [y0,y1). U6: ox 8, the 160 x 160 from the corner (the +8 shifted
+ * present below). SE: ox 0, x 8..167, y 16..159 (rules/se_screen.md §2): group-aligned, a plain copy. */
+static int g_pm_ox = 8, g_pm_x0 = 0, g_pm_x1 = 160, g_pm_y0 = 0, g_pm_y1 = 160;
+#define PMAP_TOP (g_pm_ox + g_pm_y0)
 #define PLANAR_LUT (g_row_lut[PMAP_TOP])
+void rdr_planar_geom(int ox, int x0, int x1, int y0, int y1)
+{   if (ox != 0) ox = 8;                                   /* the two the present has: +8 shifted, or aligned */
+    if (ox == g_pm_ox && x0 == g_pm_x0 && x1 == g_pm_x1 && y0 == g_pm_y0 && y1 == g_pm_y1) return;
+    g_pm_ox = ox; g_pm_x0 = x0; g_pm_x1 = x1; g_pm_y0 = y0; g_pm_y1 = y1;
+    planar_mark_dirty(); }                                  /* the tiles take the LUT of the map's first row */
 int  rdr_native_planar_ok(void){
     const uint8_t *l = g_row_lut[PMAP_TOP];
-    for (int y = PMAP_TOP+1; y < PMAP_TOP+160; y++) if (g_row_lut[y] != l) return 0;  /* map must be one band */
+    for (int y = PMAP_TOP+1; y < g_pm_ox+g_pm_y1; y++) if (g_row_lut[y] != l) return 0;  /* map must be one band */
     return 1;
 }
 
@@ -1162,12 +1171,62 @@ extern void ppresent_st_asm(const uint16_t *src, uint8_t *dst, long src_stride_b
 /* present (render.h): NO c2p, NO Vsync (caller batches). Uses the Blitter when present + enabled, else the
  * hand-asm CPU present. */
 static int pcur_ptmp(int put);                  /* (below) the pointer into / out of the planar map */
+/* the shown part of the planar map, composite pixel (x+dx, y+dy) at screen (x+ox, y+ox) (rdr_planar_geom), on
+ * the CPU: SE's present (ox 0: group-aligned, so a plain word copy with the edge groups masked), and the
+ * tremor's shaken view (rdr_ppresent_offset) for either layout. Composite pixels outside 0..175 read as 0. */
+static void ppresent_generic(int dx, int dy)
+{
+    const int ox = g_pm_ox, sx0 = ox + g_pm_x0, sx1 = ox + g_pm_x1;
+    const int s0 = sx0 >> 4, s1 = (sx1 - 1) >> 4;
+    const uint16_t lm = (uint16_t)(0xFFFFu >> (sx0 & 15)), rm = (uint16_t)(0xFFFFu << (15 - ((sx1 - 1) & 15)));
+    for (int Y = ox + g_pm_y0; Y < ox + g_pm_y1; Y++) {
+        int r = Y - ox + dy; const uint16_t *srow = (r >= 0 && r < PMAP_ROWS) ? g_ptmp + (int32_t)r*PMAP_STRIDE_W : 0;
+        uint16_t *d = (uint16_t *)(g_screen + (int32_t)Y*ST_ROWBYTES) + s0*4;
+        for (int g = s0; g <= s1; g++, d += 4) {
+            int base = g*16 - ox + dx, gi = base >> 4, sh = base & 15;   /* >> of a negative: floor (gcc, 68000) */
+            uint16_t m = (uint16_t)((g == s0 ? lm : 0xFFFFu) & (g == s1 ? rm : 0xFFFFu));
+            for (int k = 0; k < 4; k++) {
+                uint16_t a = (srow && gi >= 0 && gi < PMAP_GROUPS) ? srow[gi*4 + k] : 0, v = a;
+                if (sh) { uint16_t b = (srow && gi+1 >= 0 && gi+1 < PMAP_GROUPS) ? srow[(gi+1)*4 + k] : 0;
+                          v = (uint16_t)((a << sh) | (b >> (16 - sh))); }
+                d[k] = (m == 0xFFFF) ? v : (uint16_t)((d[k] & ~m) | (v & m));
+            }
+        }
+    }
+}
+/* SE's layout unmoved (ox 0): each row a straight copy of its whole groups, the edge groups merged by mask */
+static void ppresent_aligned(void)
+{
+    const int sx0 = g_pm_x0, sx1 = g_pm_x1, s0 = sx0 >> 4, s1 = (sx1 - 1) >> 4;
+    const uint16_t lm = (uint16_t)(0xFFFFu >> (sx0 & 15)), rm = (uint16_t)(0xFFFFu << (15 - ((sx1 - 1) & 15)));
+    const int f0 = lm == 0xFFFF ? s0 : s0 + 1, f1 = rm == 0xFFFF ? s1 : s1 - 1;   /* the whole groups */
+    const int nl = (f1 - f0 + 1) * 2;                                            /* longs (2 a group) */
+    for (int Y = g_pm_y0; Y < g_pm_y1; Y++) {
+        const uint16_t *sr = g_ptmp + (int32_t)Y*PMAP_STRIDE_W;
+        uint16_t *dr = (uint16_t *)(g_screen + (int32_t)Y*ST_ROWBYTES);
+        if (f0 != s0) { const uint16_t *a = sr + s0*4; uint16_t *d = dr + s0*4; uint16_t n = (uint16_t)~lm;
+            d[0]=(uint16_t)((d[0]&n)|(a[0]&lm)); d[1]=(uint16_t)((d[1]&n)|(a[1]&lm)); d[2]=(uint16_t)((d[2]&n)|(a[2]&lm)); d[3]=(uint16_t)((d[3]&n)|(a[3]&lm)); }
+        { const uint32_t *a = (const uint32_t *)(sr + f0*4); uint32_t *d = (uint32_t *)(dr + f0*4);
+          for (int i = 0; i < nl; i++) d[i] = a[i]; }
+        if (f1 != s1) { const uint16_t *a = sr + s1*4; uint16_t *d = dr + s1*4; uint16_t n = (uint16_t)~rm;
+            d[0]=(uint16_t)((d[0]&n)|(a[0]&rm)); d[1]=(uint16_t)((d[1]&n)|(a[1]&rm)); d[2]=(uint16_t)((d[2]&n)|(a[2]&rm)); d[3]=(uint16_t)((d[3]&n)|(a[3]&rm)); }
+    }
+}
 static void rdr_ppresent_i(void)
 {
     blitter_flush();                            /* defensive: drain any pending dynamic blits into g_ptmp */
     int pc = pcur_ptmp(1);                      /* a pointer over the map goes out with it: no frame without it */
-    if (g_has_blitter && g_blit_present) { g_ppresent_dst = g_screen; (void)Supexec(ppresent_blitter_super); }
+    if (g_pm_ox == 0) ppresent_aligned();      /* SE's layout: no shift */
+    else if (g_has_blitter && g_blit_present) { g_ppresent_dst = g_screen; (void)Supexec(ppresent_blitter_super); }
     else ppresent_st_asm(g_ptmp, g_screen + 8*ST_ROWBYTES, PMAP_STRIDE_W*2, ST_ROWBYTES, 160);
+    if (pc) pcur_ptmp(0);
+}
+/* the planar map shown moved: screen pixel p shows composite pixel p + (dx, dy) (the tremor, se_sound_effects.md §5a) */
+static void rdr_ppresent_offset_i(int dx, int dy)
+{
+    blitter_flush();
+    int pc = pcur_ptmp(1);
+    ppresent_generic(dx, dy);
     if (pc) pcur_ptmp(0);
 }
 
@@ -1278,8 +1337,10 @@ static void pcur_vbl(void){
  * byte. Its save-under takes the new map's bits there. Returns whether it touched the map. !put: g_ptmp gets
  * its own words back. The map is presented with the pointer in it: a map tick never shows a frame without it. */
 static uint16_t g_pct[PCUR_MAX][PG][2][4];        /* g_ptmp's words under it during rdr_ppresent */
+static int pcur_ptmp_aligned(int put);
 static int pcur_ptmp(int put)
 {
+    if (g_pm_ox == 0) return pcur_ptmp_aligned(put);
     if (g_pcur_x < 0 || g_pcur_x >= 168 || g_pcur_x + g_pcur_w <= 8 || g_pcur_y >= 168 || g_pcur_y + g_pcur_h <= 8) return 0;
     pcur_rows_t *R = &g_pc[g_pci];
     int s0 = g_pcur_x >> 4;
@@ -1305,6 +1366,35 @@ static int pcur_ptmp(int put)
                     if (A && mA) A[k] = g_pct[r][g][0][k];
                     if (B && mB) B[k] = g_pct[r][g][1][k];
                 }
+            }
+        }
+    }
+    return 1;
+}
+/* the same for SE's layout (ox 0): g_ptmp's pixel (x,y) shows at screen (x,y), group for group */
+static int pcur_ptmp_aligned(int put)
+{
+    const int sx0 = g_pm_x0, sx1 = g_pm_x1, sy0 = g_pm_y0, sy1 = g_pm_y1;
+    if (g_pcur_x < 0 || g_pcur_x >= sx1 || g_pcur_x + g_pcur_w <= sx0 || g_pcur_y >= sy1 || g_pcur_y + g_pcur_h <= sy0) return 0;
+    const int e0 = sx0 >> 4, e1 = (sx1 - 1) >> 4;
+    const uint16_t lm = (uint16_t)(0xFFFFu >> (sx0 & 15)), rm = (uint16_t)(0xFFFFu << (15 - ((sx1 - 1) & 15)));
+    pcur_rows_t *R = &g_pc[g_pci];
+    int s0 = g_pcur_x >> 4;
+    for (int r = 0; r < g_pcur_h; r++) {
+        int py = g_pcur_y + r; if (py < sy0 || py >= sy1) continue;
+        uint16_t *trow = g_ptmp + (int32_t)py*PMAP_STRIDE_W;
+        for (int g = 0; g < g_pcur_g; g++) {
+            int s = s0 + g; uint16_t m = R->m[r][g];
+            if (s < e0 || s > e1) continue;
+            if (s == e0) m &= lm;
+            if (s == e1) m &= rm;
+            if (!m) continue;
+            uint16_t *B = trow + s*4;
+            for (int k = 0; k < 4; k++) {
+                if (put) { uint16_t b = B[k]; g_pct[r][g][1][k] = b;
+                           R->sv[r][g][k] = (uint16_t)((R->sv[r][g][k] & ~m) | (b & m));
+                           B[k] = (uint16_t)((b & ~m) | (R->pl[r][g][k] & m)); }
+                else B[k] = g_pct[r][g][1][k];
             }
         }
     }
@@ -1723,6 +1813,7 @@ void rdr_present_rect(int x, int y, int w, int h) { SCR_IN; rdr_present_rect_i(x
 void rdr_present_doubled(int lh) { SCR_IN; rdr_present_doubled_i(lh); SCR_OUT; }
 void rdr_present_rect_doubled(int x, int y, int w, int h, int lh) { SCR_IN; rdr_present_rect_doubled_i(x, y, w, h, lh); SCR_OUT; }
 void rdr_ppresent(void) { SCR_IN; rdr_ppresent_i(); SCR_OUT; }
+void rdr_ppresent_offset(int dx, int dy) { SCR_IN; rdr_ppresent_offset_i(dx, dy); SCR_OUT; }
 int rdr_pdissolve_begin(void) { SCR_IN; int r = rdr_pdissolve_begin_i(); SCR_OUT; return r; }
 void rdr_pdissolve_end(int to_black) { SCR_IN; rdr_pdissolve_end_i(to_black); SCR_OUT; }
 void rdr_pcursor_hide(void) { SCR_IN; rdr_pcursor_hide_i(); SCR_OUT; }

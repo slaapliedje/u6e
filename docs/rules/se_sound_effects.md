@@ -359,7 +359,8 @@ Placement in the engine (2026-11-23), where our code differs from DOS's shape:
 - [ ] The tremor is rolled once after each turn the party spends (`turn_spend`, `vehicle_turns`, then run from the
       main loop once the view is shown), not at each refresh of the view as DOS does: our refreshes do not match
       DOS's 50 call sites, so DOS's rate is approximated. Each frame is held 20 ms (DOS: as long as the copy takes).
-      The view is shifted inside the chunky back buffer (SE has no planar map on the ST yet).
+      The view is shifted inside the chunky back buffer; on the ST's planar map (native-planar-st.md §9) the
+      planar composite is shown moved, so the pixel past the window's edge is the map's, not the frame's.
 - [ ] Ids 7/8 sit in the shared `hit_flash` (SE only), so they sound wherever our engine flashes a struck actor; DOS's
       0x1a181 also needs DS:0xde0 set (not identified) and a struck actor within 5 tiles, as `hit_flash` does.
 - [ ] The melee 31 and the flight sounds go in the shared attack paths (`do_attack`, `npc_attack`) just before the

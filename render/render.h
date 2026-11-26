@@ -146,6 +146,8 @@ void     rdr_pstatic_blit(int32_t key, const uint8_t *dimmed_tile, int vx, int v
 int      rdr_pdissolve_begin(void);                                     /* the view changes pixel by pixel (moongates.md §6) */
 void     rdr_pdissolve_end(int to_black);
 void     rdr_ppresent(void);                                            /* shifted planar copy -> screen */
+void     rdr_ppresent_offset(int dx, int dy);                           /* the same, moved: screen p shows composite p+(dx,dy) (ST) */
+void     rdr_planar_geom(int ox, int x0, int x1, int y0, int y1);       /* where the planar map shows (ST; gamedemo g_mo, g_mx0..g_my1) */
 void     rdr_present_diff(void);                                        /* c2p only the groups changed since the last present (ST) */
 void     rdr_present_diff_pmap(void);                                   /* the same, leaving the planar map window alone (ST) */
 void     rdr_portrait_lines(int x, int y0, int w, int n, const uint8_t *lutp, const uint8_t *lv); /* ST: 4 colours per portrait row (palette_lowcolor.md) */
