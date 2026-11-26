@@ -40,18 +40,76 @@ static uint8_t g_tone_off = 0x07;   /* R7 tone-disable bits: 1 = voice muted    
 /* ST I/O ($FF8xxx) is SUPERVISOR-ONLY — a user-mode write bus-errors. plat_psg_voice /
  * plat_psg_voice_off are called only from the music Timer interrupt (already supervisor),
  * so they write the registers directly; plat_psg_init / plat_psg_silence run in main (user)
- * context and go through Supexec (XBIOS 38). */
-static void psg_write(int reg, int val){ *PSG_SEL = (uint8_t)reg; *PSG_WR = (uint8_t)val; }
+ * context and go through Supexec (XBIOS 38).
+ *
+ * Voice C shared with the sound effects (2026-11-25, notes heard hanging on real machines): U6's effects
+ * play from the main program on voice C (registers 4, 5, 10 and voice C's bits of 7) while the music's
+ * interrupt writes all three voices. Before, the effect read voice C, played over the music's writes and
+ * then put back what it had read, stale by then, so a note could stay at the effect's start pitch until
+ * the tune next set it; and an interrupt landing between an effect's select and write sent the effect's
+ * value to the music's register. Now: plat_psg_fx_begin() gives voice C to the effect; the music's
+ * writes to it go to a shadow only; plat_psg_fx_end() writes the shadow back. The effect's own writes
+ * run with interrupts masked (IPL 7), so a select and its write are never split. */
+static uint8_t g_shadow[16];            /* the music's last value of each register */
+static volatile uint8_t g_fx_lock;      /* voice C belongs to an effect            */
+static uint8_t g_fx_r7c = 0x24;         /* the effect's voice C bits of R7 (bit 2 tone off, bit 5 noise off) */
+static void psg_write(int reg, int val){
+    g_shadow[reg & 15] = (uint8_t)val;
+    if (g_fx_lock) {
+        if (reg == 4 || reg == 5 || reg == 10) return;
+        if (reg == 7) val = (val & ~0x24) | g_fx_r7c;
+    }
+    *PSG_SEL = (uint8_t)reg; *PSG_WR = (uint8_t)val;
+}
 void plat_psg_write(int reg, int val){ psg_write(reg, val); }
-int  plat_psg_read(int reg){ *PSG_SEL = (uint8_t)reg; return *PSG_SEL; }
+int  plat_psg_read(int reg){
+    if (g_fx_lock && (reg == 4 || reg == 5 || reg == 10 || reg == 7)) return g_shadow[reg];
+    *PSG_SEL = (uint8_t)reg; return *PSG_SEL;
+}
+static uint16_t ipl7(void){ uint16_t sr; __asm__ volatile("move.w %%sr,%0\n\tori.w #0x0700,%%sr" : "=d"(sr) :: "memory"); return sr; }
+static void ipl_back(uint16_t sr){ __asm__ volatile("move.w %0,%%sr" :: "d"(sr) : "memory"); }
+/* (supervisor) the effect's side: begin, write, end */
+void plat_psg_fx_begin(void){
+    uint16_t sr = ipl7();
+    if (!g_fx_lock) {
+        *PSG_SEL = 7; uint8_t r7 = *PSG_SEL;            /* what the chip has now (the music's or ours) */
+        g_shadow[7] = r7;
+        *PSG_SEL = 4; g_shadow[4] = *PSG_SEL; *PSG_SEL = 5; g_shadow[5] = *PSG_SEL; *PSG_SEL = 10; g_shadow[10] = *PSG_SEL;
+        g_fx_r7c = 0x20;                                /* voice C: tone on, noise off */
+        g_fx_lock = 1;
+        *PSG_SEL = 7; *PSG_WR = (uint8_t)((r7 & ~0x24) | g_fx_r7c);
+    }
+    ipl_back(sr);
+}
+void plat_psg_fx_write(int reg, int val){
+    uint16_t sr = ipl7();
+    if (reg == 7) { g_fx_r7c = (uint8_t)(val & 0x24); val = (g_shadow[7] & ~0x24) | g_fx_r7c; }
+    *PSG_SEL = (uint8_t)reg; *PSG_WR = (uint8_t)val;
+    ipl_back(sr);
+}
+int plat_psg_fx_read(int reg){
+    uint16_t sr = ipl7(); *PSG_SEL = (uint8_t)reg; int v = *PSG_SEL; ipl_back(sr); return v;
+}
+void plat_psg_fx_end(void){
+    uint16_t sr = ipl7();
+    if (g_fx_lock) {
+        g_fx_lock = 0;
+        *PSG_SEL = 4; *PSG_WR = g_shadow[4]; *PSG_SEL = 5; *PSG_WR = g_shadow[5];
+        *PSG_SEL = 10; *PSG_WR = g_shadow[10]; *PSG_SEL = 7; *PSG_WR = g_shadow[7];
+    }
+    ipl_back(sr);
+}
 
 /* R7 = port dir + noise off (bits3-5) + current tone-disable mask */
 static void psg_mixer(void){ psg_write(7, PORT_DIR | 0x38 | g_tone_off); }
 
-static long psg_do_init(void){
+static long psg_do_init(void){     /* (main program, under Supexec: masked so the music's interrupt can't split a write) */
+    uint16_t sr = ipl7();
+    g_fx_lock = 0;
     g_tone_off = 0x07;                       /* all voices muted                    */
     psg_write(8,0); psg_write(9,0); psg_write(10,0);   /* zero the three volumes    */
     psg_mixer();
+    ipl_back(sr);
     return 0;
 }
 void plat_psg_init(void){ (void)Supexec(psg_do_init); }
@@ -88,9 +146,12 @@ void plat_psg_voice_off(int v){
 }
 
 static long psg_do_silence(void){
+    uint16_t sr = ipl7();
+    g_fx_lock = 0;
     psg_write(8,0); psg_write(9,0); psg_write(10,0);
     g_tone_off = 0x07;
     psg_mixer();
+    ipl_back(sr);
     return 0;
 }
 void plat_psg_silence(void){ (void)Supexec(psg_do_silence); }

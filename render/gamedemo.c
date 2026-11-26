@@ -454,10 +454,12 @@ static objworld_t     g_ow;
 static const char    *g_looktbl[2048];     /* tile -> name (into the pack's blob)  */
 static const uint8_t *g_basetile;          /* 1024 x u16 LE: obj_n -> base tile    */
 /* tile animation (ANIMDATA, U6WD): animated tile slots are blank in the tileset;
- * each is filled from src..src+nframes-1, cycling on g_anim_ctr. (animdata.md) */
+ * each shows src + ((g_anim_ctr & mask) >> shift). (animdata.md) */
 static int16_t        g_anim_idx[2048];    /* tile -> anim entry index, or -1      */
 static uint16_t       g_anim_src[32];      /* per entry: source-frame base tile     */
-static uint8_t        g_anim_n[32];        /* per entry: number of frames           */
+static uint8_t        g_anim_n[32];        /* per entry: the AND mask on the counter (animdata.md §3) */
+static uint8_t        g_anim_sh[32];       /* per entry: the right shift after the mask             */
+#define ANIM_LAST(e) (g_anim_n[e]>>g_anim_sh[e])   /* the highest frame offset an entry shows */
 static int            g_nanim;
 static uint32_t       g_anim_ctr;          /* current animation step                */
 static int            g_view_has_anim;     /* 1 if an ANIMDATA tile is in the map view (perf gate) */
@@ -3769,10 +3771,10 @@ static int g_se_dmafx;                /* the effects are mixed into the DMA musi
 static void se_sfx_stop_all(void);
 /* the PSG's registers answer in supervisor mode only: XBIOS 38 Supexec, a call at a time */
 static int g_sfx_rr,g_sfx_rv;
-static long sfx_w_do(void){ plat_psg_write(g_sfx_rr,g_sfx_rv); return 0; }
-static long sfx_r_do(void){ return plat_psg_read(g_sfx_rr); }
+static long sfx_w_do(void){ plat_psg_fx_write(g_sfx_rr,g_sfx_rv); return 0; }   /* (voice C lent by plat_psg_fx_begin: the music's interrupt keeps off it) */
+static long sfx_lend_do(void){ plat_psg_fx_begin(); return 0; }
+static long sfx_back_do(void){ plat_psg_fx_end(); return 0; }
 static void SFX_REG(int r,int v){ g_sfx_rr=r; g_sfx_rv=v; (void)Supexec(sfx_w_do); }
-static int sfx_read(int r){ g_sfx_rr=r; return (int)Supexec(sfx_r_do); }
 static uint32_t g_sfx_rng=0x1234567;
 static int sfx_rand(int lo,int hi){ g_sfx_rng=g_sfx_rng*1103515245u+12345u; return hi<=lo?lo:lo+(int)((g_sfx_rng>>16)%(uint32_t)(hi-lo+1)); }
 static void sfx_tone(int f)
@@ -3782,14 +3784,14 @@ static void sfx_tone(int f)
 static void sfx_wait(void){ uint32_t t=plat_ticks_200hz(); while(plat_ticks_200hz()==t) { } }
 static void sfx_sweep(int a,int b,int ms)
 {   int n=ms/5; if(n<1)n=1; for(int i=0;i<n;i++){ sfx_tone(a+(b-a)*i/n); sfx_wait(); } }
-static long sfx_begin(void){ int r7=sfx_read(7); SFX_REG(7,(r7&~0x04)|0x20); return r7; }
-static uint8_t g_sfx_r4,g_sfx_r5,g_sfx_r7,g_sfx_r10;
+static void sfx_begin(void){ (void)Supexec(sfx_lend_do); }   /* voice C to the effect: tone on, noise off */
+static void sfx_end(void){ (void)Supexec(sfx_back_do); }      /* the music's latest voice C back */
 static int g_instr;                                     /* U)se on an instrument: keys 0-9 play it, another ends (sound_effects.md) */
 static int instrument_effect(int on){ return on==157?2:on==156?3:on==158?18:on==153?19:on==296?20:0; }
 static void sfx_play(int id,int arg)
 {
     if(!g_sfx_on||g_sound_off||g_bot||g_gd==&gamedef_se) return;   /* (SE's effects are se_sfx: no speaker beeps in its DOS) */
-    g_sfx_r4=(uint8_t)sfx_read(4); g_sfx_r5=(uint8_t)sfx_read(5); g_sfx_r10=(uint8_t)sfx_read(10); g_sfx_r7=(uint8_t)sfx_begin();
+    sfx_begin();
     switch(id){
     case 1: sfx_tone(arg); sfx_wait(); sfx_wait(); break;
     case 2: case 3: case 18: case 19: case 20:                 /* an instrument's note: plucked, it dies away */
@@ -3811,7 +3813,7 @@ static void sfx_play(int id,int arg)
     case 14: sfx_tone(2000); sfx_wait(); sfx_wait(); break;
     case 15: for(int f=2000;f<20000;f+=1000){ sfx_tone(sfx_rand(100,f)); sfx_wait(); } break;
     }
-    SFX_REG(4,g_sfx_r4); SFX_REG(5,g_sfx_r5); SFX_REG(10,g_sfx_r10); SFX_REG(7,g_sfx_r7);
+    sfx_end();
 }
 
 /* Solo and COMMAND (combat.md §8): whoever is played takes slot 1, which the whole engine reads as "the one at (px,py)"; the two swap back after */
@@ -3970,7 +3972,7 @@ static int tile_is_fg(int t){ return (t>=0 && t<2048) && ((g_tflags[t]>>4)&1); }
 static int tile_family_fg(int t){                         /* t OR any of its ANIMDATA frames is fg */
     if(tile_is_fg(t)) return 1;
     if(t>=0 && t<2048){ int e=g_anim_idx[t];
-        if(e>=0 && g_anim_n[e]>0) for(int f=0;f<g_anim_n[e];f++) if(tile_is_fg((int)g_anim_src[e]+f)) return 1; }
+        if(e>=0 && g_anim_n[e]>0) for(int f=0;f<=ANIM_LAST(e);f++) if(tile_is_fg((int)g_anim_src[e]+f)) return 1; }
     return 0;
 }
 static int anchor_family_fg(int R){                       /* anchor R + its multi-tile decrements (as draw_multi) */
@@ -4004,7 +4006,7 @@ static int tile_is_ls(int t){ return (t>=0&&t<2048) && (light_of(t)>0 || blocks_
 static int tile_family_ls(int t){                         /* t OR any of its ANIMDATA frames emits/blocks */
     if(tile_is_ls(t)) return 1;
     if(t>=0 && t<2048){ int e=g_anim_idx[t];
-        if(e>=0 && g_anim_n[e]>0) for(int f=0;f<g_anim_n[e];f++) if(tile_is_ls((int)g_anim_src[e]+f)) return 1; }
+        if(e>=0 && g_anim_n[e]>0) for(int f=0;f<=ANIM_LAST(e);f++) if(tile_is_ls((int)g_anim_src[e]+f)) return 1; }
     return 0;
 }
 static int obj_is_lightsight(const wobj_t*o){
@@ -4310,7 +4312,7 @@ static int build_blocked_incr(void)
 }
 
 /* substitute an animated tile slot for its current frame (animdata.md). The slot
- * itself is blank in the tileset; we draw src + (counter % nframes) instead — which
+ * itself is blank in the tileset; we draw src + ((counter & mask) >> shift) instead — which
  * both animates it and FILLS it (un-animated, these tiles render as holes). */
 static int basetile(int obj_n);
 static int g_bell_ph;                                       /* a bell being rung: its frame + 1 (usecode_use.md) */
@@ -4319,7 +4321,7 @@ static int anim_tile(int t)
     if(t>=0 && t<2048){ int e=g_anim_idx[t];
         if(g_bell_ph && e>=0 && t==basetile(236)) return (int)g_anim_src[e]+g_bell_ph-1;
         if(e>=0 && g_anim_n[e]>0){ g_view_has_anim=1;       /* an ANIMDATA tile is in view */
-            return (int)g_anim_src[e] + (g_time_stop?0:(int)(g_anim_ctr % g_anim_n[e])); }
+            return (int)g_anim_src[e] + (g_time_stop?0:(int)((g_anim_ctr & g_anim_n[e]) >> g_anim_sh[e])); }
     }
     return t;
 }
@@ -10531,7 +10533,7 @@ static void cast_effect(const world_t*w,int c)
     enum{ S_=160, E_=8 };
     if(c<1||c>8||g_bot||g_look_test) return;
     int snd=g_sfx_on&&!g_sound_off;
-    if(snd){ g_sfx_r4=(uint8_t)sfx_read(4); g_sfx_r5=(uint8_t)sfx_read(5); g_sfx_r10=(uint8_t)sfx_read(10); g_sfx_r7=(uint8_t)sfx_begin(); }
+    if(snd) sfx_begin();
     for(int i=0;i<10+2*c;i++){ int f=sfx_rand(100,700); if(snd) sfx_tone(f); for(int k=0;k<12;k++) sfx_wait(); }   /* 60 ms each */
     compose_map(w);
     for(int y=0;y<S_;y++){ uint8_t*r=ROW(MAPY+E_+y)+MAPX+E_; for(int x=0;x<S_;x++) r[x]^=0x0d; }
@@ -10542,7 +10544,7 @@ static void cast_effect(const world_t*w,int c)
             long th=sw?HI_[c]+(long)(LO_[c]-HI_[c])*t/n:LO_[c]+(long)(HI_[c]-LO_[c])*t/n;   /* the threshold the phase must pass */
             int hi=(int)((65536L-th)>>8), v=(int)(13L*4*hi*(256-hi)/65536L);               /* the high part 0..256; loudest at half */
             if(snd) SFX_REG(10,v); sfx_wait(); } }
-    if(snd){ SFX_REG(4,g_sfx_r4); SFX_REG(5,g_sfx_r5); SFX_REG(10,g_sfx_r10); SFX_REG(7,g_sfx_r7); }
+    if(snd) sfx_end();
     compose_map(w); draw_border_tiles(); present_map(); }
 /* a missile-boundary tile (tileflags2 bit5) under or on (x,y) — our own vessel's parts excepted */
 static int missile_boundary_at(const world_t*w,int x,int y){
@@ -14339,7 +14341,7 @@ static void u6_avatar_death(world_t*w)
 {
     music_stop_all();
     msgcat(0,"An unending darkness engulfs thee..."); draw_status(w,C_BLACK); present_frame();
-    if(!g_bot&&!g_look_test){ static const int16_t F_[8]={300,281,300,250,281,222,250,250}; for(int k=0;k<8;k++){ sfx_tone(g_sfx_on&&!g_sound_off?F_[k]:0); for(int t=0;t<40;t++) sfx_wait(); } sfx_tone(0); }
+    if(!g_bot&&!g_look_test){ static const int16_t F_[8]={300,281,300,250,281,222,250,250}; sfx_begin(); for(int k=0;k<8;k++){ sfx_tone(g_sfx_on&&!g_sound_off?F_[k]:0); for(int t=0;t<40;t++) sfx_wait(); } sfx_tone(0); sfx_end(); }
     view_dissolve(w,1);
     if(!g_bot&&!g_look_test){ uint32_t t0=plat_ticks_200hz(); while(plat_ticks_200hz()-t0<330u) vsync_pump(); }   /* 30 ticks of the old clock */
     { int n=msg_tail(); msgcat(n,"A voice in the darkness intones, \"KAL LOR!\""); }
@@ -17741,13 +17743,13 @@ int main(int argc, char **argv)
         g_basetile=cur+4+(int32_t)cw*ch; }
 
     /* ANIMDATA tile-animation table (U6WD): [u16 nanim] then nanim x
-     * {u16 dest, u16 src, u8 nframes, u8 speed}. Build tile->entry lookup. */
+     * {u16 dest, u16 src, u8 mask, u8 shift}. Build tile->entry lookup. */
     {   for(int i=0;i<2048;i++) g_anim_idx[i]=-1;
         const uint8_t *ap=g_basetile+2048;
         g_nanim=(ap[0]<<8)|ap[1]; ap+=2; if(g_nanim>32) g_nanim=32;
         for(int i=0;i<g_nanim;i++){
             int dest=(ap[0]<<8)|ap[1]; int src=(ap[2]<<8)|ap[3];
-            g_anim_src[i]=(uint16_t)src; g_anim_n[i]=ap[4]; /* ap[5]=speed (unused yet) */
+            g_anim_src[i]=(uint16_t)src; g_anim_n[i]=ap[4]; g_anim_sh[i]=(uint8_t)(ap[5]&7);   /* mask, shift (animdata.md §3) */
             if(dest>=0 && dest<2048) g_anim_idx[dest]=(int16_t)i;
             ap+=6;
         }

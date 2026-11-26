@@ -17,6 +17,13 @@ Each effect is a tone on one voice, its frequency stepped through time; DOS hold
 
 (The timing of DOS's helper loops is CPU-calibrated; a step here is 5 ms, the 200 Hz clock.)
 
+On the Atari the effect plays on the YM2149's voice C, which the music also uses (ours, not DOS's: DOS's speaker plays no
+music). While an effect sounds, voice C is the effect's: the music's writes to it (registers 4, 5, 10 and its bits of 7) are
+held, and when the effect ends the music's latest values go back, so the tune carries on where it is. Each of the effect's
+register writes runs with interrupts masked, so the music's interrupt can't come between a register's select and its write.
+(Until 2026-11-25 the effect read voice C at its start and wrote those values back at its end, stale by then: a note could
+hang at an old pitch until the tune next set it. A tester heard it "every few notes"; a walk into walls bumps often.)
+
 Instruments: U)se on a harp (157), harpsichord (156), lute (158), panpipes (153) or xylophone (296), then keys 0-9 play it and
 any other key ends. The notes: 7851, 3116, 3497, 3926, 4159, 4668, 5240, 5882, 6231, 6995 (phase steps of DOS's 20 kHz speaker
 synth, so x 5/16 is Hz; the panpipes play at a quarter of the number, for 200 ms), dying away over about 150 ms.

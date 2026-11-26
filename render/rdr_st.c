@@ -297,7 +297,7 @@ static inline void load_regs(const uint16_t *p)
  * held up by more than a row shifts the rest of the portrait down a row until the next frame.
  * With the game's palette below the portrait (g_pl_tailreg), the last row's interrupt goes on: it loads
  * the 16 words into d0-d7, waits for the end of the portrait's last row (Timer-B pending, IPRA bit 0;
- * at most ~64 polls) and writes all 16 registers in that row's blank (movem, ~76 cycles of the ~190 the
+ * at most 512 polls: the loop leaves at the row's end; 64 was under a row on a fast 68030, 2026-11-25) and writes all 16 registers in that row's blank (movem, ~76 cycles of the ~190 the
  * blank leaves), clears the pending bit and lets pl_tail_next arm the next band. It holds the CPU about
  * one row a frame; the map has no quiet row there, so the switch cannot wait for the next interrupt. */
 uint16_t          g_pl_reg[PL_MAXROWS][4];           /* each row's 4 colour words (read by the handler) */
@@ -324,7 +324,7 @@ __asm__(
 "2:	movem.l	%d0-%d7/%a1,-(%sp)\n"
 "	move.l	_g_pl_tailreg,%a0\n"
 "	movem.l	(%a0),%d0-%d7\n"
-"	move.w	#64,%a0\n"
+"	move.w	#512,%a0\n"                /* a bound only: on an 8 MHz 68000 ~7 us a pass, on a fast 68030 under 1 us (the MFP read) */
 "3:	btst	#0,0xfffffa0b\n"
 "	bne.s	4f\n"
 "	subq.l	#1,%a0\n"
@@ -395,7 +395,7 @@ __asm__(
 "	bra.s	5f\n"
 "1:	move.l	_g_tb_regs,%a0\n"
 "	movem.l	(%a0),%d0-%d7\n"
-"	move.w	#64,%a0\n"
+"	move.w	#512,%a0\n"                /* a bound only: on an 8 MHz 68000 ~7 us a pass, on a fast 68030 under 1 us (the MFP read) */
 "2:	btst	#0,0xfffffa0b\n"
 "	bne.s	3f\n"
 "	subq.l	#1,%a0\n"

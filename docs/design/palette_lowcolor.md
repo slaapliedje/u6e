@@ -266,13 +266,24 @@ so it does not matter where along the row the reload lands.
   in the rest of each row. The cost: an interrupt held up by more than a whole row (a long keyboard
   or mouse handler, a Blitter burst) is lost, and the rest of the portrait shows its colours one row
   down until the next frame. One held up by less is served late within its row.
+- **The music's interrupt (2026-11-25).** A tester's video from a 68030 STacy and a Mega STe showed the
+  colours under a conversation portrait jumping about: from the portrait's lower rows down, a band of
+  the map and panel in the wrong colours, its depth changing from frame to frame. Hatari's plain 8 MHz ST
+  showed the same (40% of the frames of a held conversation). The cause was the music: its Timer-A
+  handler (MFP priority 13, above Timer-B's 8) ran the whole sequencer tick at IPL 6 with Timer A in
+  service, several rows' worth of an 8 MHz 68000, and every Timer-B row interrupt that fell inside it was
+  lost. The handler (platform/plattime.c) now clears its in-service bit and drops to IPL 5 before the
+  tick, so Timer-B and the keyboard cut in; a tick that would overrun the next is skipped, never nested.
+  Same run: 0 wrong frames (and the same 0 with the music timer off altogether). The polls for the end of
+  a row were also bounded at 64, under a row on a fast 68030 (each pass is little more than the MFP read);
+  now 512, which the loop leaves at the row's end on any machine.
 - **The game's colours below the face (2026-11-20).** The 12 are a compromise and flatten the map
   (the castle's brick floor, the carpet's stripes) and the command bar's icons; an outside tester on a
   Mega STe took it for a glitch. So the portrait's 16 hold only down to its last row. From the next
   row the game's own bands come back: band 0 is the portrait's 16, band 1 the game band found at that
   row, then the game's later bands (the command bar). The map runs through that row, so there is no
   quiet row to switch on: the interrupt that loads the last portrait row's colours goes on. It loads
-  the game's 16 words into eight registers, polls Timer-B's pending bit (IPRA bit 0, at most 64
+  the game's 16 words into eight registers, polls Timer-B's pending bit (IPRA bit 0, at most 512
   polls) until the last portrait row ends, and writes all 16 in that row's blank with one movem
   (about 76 cycles of the roughly 190 the blank leaves). It then clears the pending bit and arms the
   next band (the command bar) with the ordinary band handler. That holds the CPU for about one row a

@@ -22,14 +22,32 @@ static long read_vbclock(void){ return (long)*(volatile unsigned long *)0x462L; 
  * 12288 Hz), then the data register divides again: rate = 12288 / data. Timer A is
  * MFP interrupt channel 13 => in-service register ISRA ($FFFFFA0F) bit 5. The MFP
  * runs in software-EOI mode, so the handler clears that bit before returning. */
-static void (* volatile g_timer_cb)(void);
-
-static void __attribute__((interrupt_handler)) tima_isr(void)
-{
-    void (*cb)(void) = g_timer_cb;
-    if (cb) cb();
-    *(volatile uint8_t *)0xFFFFFA0FUL = (uint8_t)~0x20;   /* clear Timer A in-service (ISRA bit 5) */
-}
+void (* volatile g_timer_cb)(void);
+/* The handler, by hand (2026-11-25, Darklord's STacy and Mega STe video): it clears its in-service bit and drops the
+ * CPU to IPL 5 BEFORE the callback runs. The callback (a music tick, ~1000-5000 cycles on an 8 MHz 68000) used to
+ * run at IPL 6 with Timer A in service, which holds off every other MFP interrupt: Timer B's per-row palette
+ * writes under a conversation portrait were lost for several rows, so the colours below the portrait jumped
+ * about from frame to frame. Now Timer B (and the keyboard ACIA) cut in. A tick that overruns the next one is
+ * skipped (g_timer_busy), never nested. The callback is C: d0-d1/a0-a1 are its scratch registers. */
+volatile char g_timer_busy;
+extern void tima_isr(void);
+__asm__(
+"	.text\n"
+"	.globl	_tima_isr\n"
+"_tima_isr:\n"
+"	move.b	#0xdf,0xfffffa0f\n"          /* clear Timer A in-service (ISRA bit 5; software EOI) */
+"	tst.b	_g_timer_busy\n"            /* (no TAS: its locked cycle is unsafe on some Atari buses; IPL 6 here keeps this atomic) */
+"	bne.s	9f\n"
+"	st	_g_timer_busy\n"
+"	movem.l	%d0-%d1/%a0-%a1,-(%sp)\n"
+"	move.w	#0x2500,%sr\n"               /* supervisor, IPL 5: the MFP (level 6) may interrupt the tick */
+"	move.l	_g_timer_cb,%a0\n"
+"	cmpa.w	#0,%a0\n"
+"	beq.s	1f\n"
+"	jsr	(%a0)\n"
+"1:	movem.l	(%sp)+,%d0-%d1/%a0-%a1\n"
+"	clr.b	_g_timer_busy\n"
+"9:	rte\n");
 
 int plat_timer_start(void (*cb)(void), int hz)
 {

@@ -20,5 +20,11 @@ void plat_psg_tone(int v, int period, int vol);   /* raw tone period (sound effe
 void plat_psg_silence(void);                       /* all three voices off                 */
 void plat_psg_write(int reg, int val);             /* raw register write (interrupt level) */
 int  plat_psg_read(int reg);                       /* raw register read (interrupt level)  */
+/* Voice C lent to a sound effect played from the main program (supervisor: call under Supexec). Between
+ * begin and end the music's writes to voice C are held; end puts the music's latest values back. */
+void plat_psg_fx_begin(void);
+void plat_psg_fx_write(int reg, int val);          /* interrupts masked around select + write */
+int  plat_psg_fx_read(int reg);
+void plat_psg_fx_end(void);
 
 #endif /* U6E_PLATPSG_H */

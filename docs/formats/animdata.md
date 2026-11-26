@@ -15,11 +15,11 @@ Tracked in: /docs/INDEX.md  ·  Milestone: M6
 > - Tools        : tools/animprobe (decode), tools/tilestrip (render frames),
 >                  tools/animobserve (ScummVM ground-truth frame diffs).
 > - Validated by  : the B[] source tiles render as coherent animation sequences —
->                  14 frames of water shimmer (448..461), a fountain, a sparkling
+>                  8 frames of water shimmer per slot (448..455 for slot 8), a fountain, a sparkling
 >                  wand, pulsing gems, rotating shields; ScummVM cycles the matching
 >                  on-screen tiles (braziers/fire diff every frame).
-> - Confidence   : confirmed (container + dest/src/frame-count); probable (D = speed)
-> - Last updated : 2026-06-25
+> - Confidence   : confirmed (container, dest/src, and the mask + shift rule of §3)
+> - Last updated : 2026-11-25
 
 ## 1. What it is
 ANIMDATA lists the tiles that ANIMATE and where each one's frames come from. The
@@ -37,28 +37,38 @@ Fixed 32-entry parallel arrays; `count` says how many are active.
 | 0x000  | u16       | **count** = number of active animated tiles (U6 = 29)      |
 | 0x002  | 32 × u16  | **tile[]**  — the animated tile slot (blank in the tileset)|
 | 0x042  | 32 × u16  | **src[]**   — base SOURCE tile of this slot's frame run     |
-| 0x082  | 32 × u8   | **frames[]** — number of frames (source tiles src..src+f-1)|
-| 0x0A2  | 32 × u8   | **speed[]**  — frame-advance rate / phase (probable)        |
+| 0x082  | 32 × u8   | **mask[]**  — ANDed with the animation counter             |
+| 0x0A2  | 32 × u8   | **shift[]** — right shift applied after the mask           |
 
 Entries `count..31` are stale padding (ignore).
 
 ## 3. Animation rule
 For active entry i, the on-map slot `tile[i]` displays, at animation step `k`:
 ```
-shown_tile = src[i] + (k % frames[i])
+shown_tile = src[i] + ((k AND mask[i]) >> shift[i])
 ```
-i.e. the engine substitutes `tile[i]` → `src[i] + (k % frames[i])` wherever that
-tile is drawn (terrain, object, anything). `k` advances on the game's animation
-timer (a few fps). `speed[]` (D) most likely scales the per-tile advance / sets a
-phase; we currently advance all entries uniformly and treat it as a refinement.
+i.e. the engine substitutes `tile[i]` with that tile wherever it is drawn (terrain, object, anything).
+`k` advances on the game's animation timer (a few fps).
+
+**Corrected 2026-11-25.** Until then this spec (and the engine) read the two byte arrays as a frame
+count and a speed, `src + (k mod frames)`. That runs past each slot's own frames: the water slots
+(mask 14) showed 14 tiles from their base where they own 8, so the last water slot (tile 15, base
+504) showed tiles 512..517 (helmets, rings, swords: object art) every so often. A tester's video of
+Lord British's castle showed it in the pool south of the throne room (tile 15 at 304,372). The mask
+and shift reading is the one the data itself bears out: every entry's frames are then a run of
+consecutive tiles that never overlaps another entry's (272..279, 280..283, 284..287, 288..291, ...,
+448..511), and the clock's pendulum (slot 699, mask 8, shift 3) shows exactly its two frames 298/299
+(§3b), where the old rule showed eight. The rate of the animation counter itself is ours (about
+6 steps a second); it is not yet read from DOS. With a shift, a slot changes frame only every
+2^shift steps (water every 2nd, the pendulum every 8th).
 
 ### Examples (U6, from our decode + render)
 | slot tile[] | src[] | frames | what it is                 |
 |-------------|-------|--------|----------------------------|
-| 8..15       | 448 (+8/slot) | 14 | water shimmer (8 map water slots) |
-| 1016..1019  | 336/338/340/342 | 2 each | a multi-tile object (2-frame each) |
-| 1020        | 310   | 4      | (4-frame)                  |
-| 1008..1011  | 272.. | 6/6/3/6| pulsing gems / rotating discs |
+| 8..15       | 448 (+8/slot) | mask 14, shift 1: 8 frames | water shimmer (8 map water slots) |
+| 1016..1019  | 336/338/340/342 | mask 2, shift 1: 2 each | a multi-tile object (2-frame each) |
+| 1020        | 310   | mask 4, shift 2: 2 frames | (2-frame)            |
+| 1008..1011  | 284/272/276/280 | masks 6/6/3/6, shifts 1/1/0/1: 4 frames each | pulsing gems / rotating discs |
 
 So a multi-tile object animates as several adjacent slots, each with its own
 2-frame (etc.) source run — not one shared cycle.
@@ -94,15 +104,15 @@ ScummVM cycles the matching on-screen tiles. On-target: mkworld ships the table,
 the engine fills the slots (missing tiles return) and cycles them.
 
 ## 6. Open questions
-- D (speed[]) exact semantics: ticks-per-frame vs starting phase vs per-tile rate.
+- [x] The fifth and sixth arrays: mask and shift (§3, resolved 2026-11-25).
 - Whether animation advances on the world clock vs a fixed wall-clock fps in U6.
 - Relationship to color-cycling (water also color-cycles in some U6 builds?) —
-  here water is FRAME-animated (14 source tiles), so frame animation may subsume it.
+  here water is FRAME-animated (8 source tiles per slot), so frame animation may subsume it.
 
 ## 7. Status
-VERIFIED (container + dest/src/frame-count + the rule); D (speed) probable.
+VERIFIED (container, dest/src, and the mask + shift rule).
 On-target: mkworld ships the table (U6WD pack tail); the engine substitutes
-`tile[i] -> src[i] + (ctr % frames[i])` at every blit site and advances `ctr` on a
+`tile[i] -> src[i] + ((ctr & mask[i]) >> shift[i])` at every blit site and advances `ctr` on a
 ~6fps timer. Demonstrated on the TT in open water (`make m6-anim`): two frames
 differ by ~75k pixels across the ocean (build/anim_engine.png), and the previously
 BLANK water slots now render filled — fixing the "missing chunks". NOTE: this is the

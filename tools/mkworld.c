@@ -2388,10 +2388,10 @@ int main(int argc, char **argv)
     free(bt);
 
     /* ANIMDATA tile-animation table (U6WD): [u16 nanim] then nanim x
-     * {u16 dest_tile, u16 src_base, u8 nframes, u8 speed}. The engine fills the
-     * (blank) dest slot from src..src+nframes-1, cycling on its anim timer.
-     * Source is little-endian: count u16, then tile[32] u16, src[32] u16, frames[32]
-     * u8, speed[32] u8. (docs/formats/animdata.md) */
+     * {u16 dest_tile, u16 src_base, u8 mask, u8 shift}. The engine fills the
+     * (blank) dest slot with src + ((counter & mask) >> shift) on its anim timer.
+     * Source is little-endian: count u16, then tile[32] u16, src[32] u16, mask[32]
+     * u8, shift[32] u8. (docs/formats/animdata.md) */
     int nanim=0;
     if (adat && adn>=194){
         nanim=adat[0]|(adat[1]<<8); if(nanim>32) nanim=32;
@@ -2400,7 +2400,7 @@ int main(int argc, char **argv)
         for (int i=0;i<nanim;i++){
             be16(f, at[i*2]|(at[i*2+1]<<8));        /* dest tile  */
             be16(f, as[i*2]|(as[i*2+1]<<8));        /* src base   */
-            fputc(af[i],f); fputc(asp[i],f);        /* nframes, speed */
+            fputc(af[i],f); fputc(asp[i],f);        /* mask, shift */
         }
     } else { be16(f,0); }
 
