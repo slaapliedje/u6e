@@ -17424,9 +17424,10 @@ static int se_run_menu(int from_intro)
     int n=last?4:3, sel=0, dirty=1, pressed=-1;
     { int gk,gd=0; while((gk=plat_input_raw())&&++gd<64){ (void)gk; } }
     rdr_set_palette(pal,256);
+    /* Song 18 goes on from a film that ran to its end. After a skip the menu would be silent: 0x4a82 starts song 0 only
+     * when DS:0x353e is 0xffff, which nothing sets (formats/se_music.md §5.4). Slip 31: song 0 starts then instead. */
+    if(!from_intro && !g_dos_slips) music_play_song("SE00");
     for(;;){
-        /* (no song of its own: song 18 goes on from the film; 0x4a82 starts song 0 only when DS:0x353e is 0xffff, which
-         * nothing sets, formats/se_music.md §5.4) */
         if(dirty){ if(dis && old) for(int y=0;y<LH;y++) memcpy(old+(int32_t)y*LW,ROW(y),LW);
             clear_bb(0); sefe_draw(lib,len,0,0,0,tmp,64000);
             for(int k=0;k<n;k++) sefe_draw(lib,len,k==sel?(pressed==k?(FR[k]-1)/2+11:FR[k]+1):FR[k],85,Y[k],tmp,64000);

@@ -78,7 +78,8 @@ in the order of a linear feedback shift register; at speed 0 it waits one retrac
    5/6/7 at 3si, 3si+320, 3si+640; credit item 2 shape |si|/35+1 at (0,0) when |si| mod 35 < 15 (shape 7 is empty).
    Then the last step again without a credit (and the title at 6si, far off screen).
 7. The menu dissolves in; song 18 goes on (the menu starts no song: 0x4a82 would play song 0 only when DS:0x353e is
-   0xffff, which nothing sets).
+   0xffff, which nothing sets). After a key has skipped the intro, DOS's menu is silent; u6e starts song 0 there
+   (rules/se_deviations.md slip 31).
 DOS draws a step per frame with a retrace's wait (slow machines skip every other: DS:0x2ba2), so its pace is the
 machine's; u6e takes a step every 73 ms (rules/se_deviations.md slip 30). About returns to the menu by the dissolve
 too (0x4cc9).

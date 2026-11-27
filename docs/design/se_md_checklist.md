@@ -234,6 +234,7 @@ list once SE's seams exist.
   and steps at a walk's price, SE's actors 0-15 pay 2 less out of combat, eggs use DOS's window, hatchlings DOS's
   free list, the dead lie in their slots as their remains, gold is carried; slip 29 (the boulder's flags) taken as
   the intent. What is left in the register: the user's slips (built as the intent, each restorable) and the slots.
+  2026-11-27: slip 31 (the user's choice): song 0 at a menu reached by skipping the intro (DOS leaves it silent).
   Found on the way: U6's save doesn't write the party list (0xfe0) (fixed 2026-11-27); SE's follower charge per step (0x14fb7) read 2026-11-27: two passes of 5 each, as the engine already charged.
 - 2026-11-23: item 9: the intro built (design/se_front_end.md "The intro", design/se_origin_fx.md): the Origin FX opening
   (the orchestra tuning, the conductor's taps, the zoom, the logo rising past the globe, the fireworks, on song 19's cues)

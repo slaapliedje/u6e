@@ -276,7 +276,7 @@ on/off).
 It contains the same player (the 0xFE dispatcher's bytes recur at savage image 0x9d25) and loads
 MUSIC.LZC items **18, 0 and 19** (0x3a84-0x3abe). It plays 18 at the introduction's film (0x429a; it goes on into the menu), passes 19 to the Origin FX
 opening (0x419e; design/se_origin_fx.md), and plays 0 at the ending (0x5ebf). The menu's call for song 0 (0x4a82)
-is reached only when DS:0x353e (music on, 0 or 1) is 0xffff, so it never plays (read 2026-11-23). DS:0x20ce holds the
+is reached only when DS:0x353e (music on, 0 or 1) is 0xffff, so it never plays (read 2026-11-23; u6e plays it at a menu reached by skipping the intro: rules/se_deviations.md slip 31). DS:0x20ce holds the
 last FE type-3 number passed (0 at a song's start), not a count. Songs 18 and 19 carry type-3 numbers 0-6 at the cue
 points the composer named in meta-6 texts (18: first title screen 0, second title screen 1, dinosaur
 screen 2, melody 3 ...; 19: start tuning 0 ... start fireworks 3 ...), which is how the front end keeps
