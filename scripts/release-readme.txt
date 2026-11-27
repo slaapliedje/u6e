@@ -76,7 +76,8 @@ MUSIC
 
 KNOWN LIMITS
   - Tested in the Hatari emulator on TOS 1.04, 3.06 and 4.04, and under
-    MiNT with XaAES and MagiC 6.2, and by a player on a Mega STe.
+    MiNT with XaAES and MagiC 6.2, and by a player on a Mega STe and
+    a STacy.
     Real-machine reports are very welcome.
   - On a plain ST or STE, combat pauses briefly after each blow while the
     map is redrawn.
