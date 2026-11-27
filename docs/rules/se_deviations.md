@@ -7,7 +7,7 @@ register is deviations.md.
 > Provenance
 > - Derived from: reading SE's GAME.EXE. The rule specs named in each row cite the routines read.
 > - Validated by: `make check-se-use` checks each fix below.
-> - Last updated: 2026-11-23 (slip 30, the intro's pace)
+> - Last updated: 2026-11-27 (slip 30 confirmed by the user)
 
 ## Fixed by the user's choice (2026-11-12; slips 22-28 2026-11-13): DOS's own slips we don't copy
 
@@ -47,7 +47,7 @@ setting (not yet offered to the player) puts DOS's way back at each slip's site.
 | 27 | A sleeping or dead actor below 16 is named by what it was | se_look.md §2, §7 | Actors 16 and up asleep or dead are named by their saved object; those below 16 (out of the party) by the tile they show, so a sleeper reads `a body`. The engine names them all by their saved object |
 | 28 | A lit torch picked up goes into the leader's free hand | se_look.md §5, §7 | Only when the leader is the member whose inventory is shown; otherwise it is marked readied in no hand. The engine always uses the leader's first free hand |
 | 29 | A boulder spares a thing by the flags of the thing's tile | se_use.md §5c | Reads tileflags3 by the thing's place in its object list, not its tile: which things are spared depends on where they sit in memory, which the engine can't reproduce (taken as a slip, 2026-11-22) |
-| 30 | The intro (Origin FX and the film) runs at a steady pace: a step every 73 ms | design/se_front_end.md "The intro" | Draws a step a frame with one retrace's wait, so its pace is the machine's: on a fast one the pan's credits show for 0.2 s each and the conductor's four taps take 0.3 s. At 73 ms the pan fills song 18's "Melody, horn, flute" (cue 3 to 4, 15.5 s) and the opening's finale ends at song 19's last cue, so this is taken as the pace it was made for (2026-11-23; the cue waits are kept as DOS) |
+| 30 | The intro (Origin FX and the film) runs at a steady pace: a step every 73 ms | design/se_front_end.md "The intro" | Draws a step a frame with one retrace's wait, so its pace is the machine's: on a fast one the pan's credits show for 0.2 s each and the conductor's four taps take 0.3 s. At 73 ms the pan fills song 18's "Melody, horn, flute" (cue 3 to 4, 15.5 s) and the opening's finale ends at song 19's last cue, so this is taken as the pace it was made for (2026-11-23; the cue waits are kept as DOS). The user agreed 2026-11-27: a pace that follows the CPU is a bug, not a feature |
 
 ## Built as DOS by the user's choice (2026-11-22)
 The user's rule for the rows that were engine choices: build DOS's behaviour. Each row says what the engine did before.

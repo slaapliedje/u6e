@@ -90,8 +90,12 @@ gains mana equal to its level up to its maximum. **Nobody regains health by walk
 **Savage Empire** (its spend routine 0x14ebc, read 2026-11-22): actors 0-15 pay 2 less while there is no combat
 (DS:0x2860, set by 0x1810:0x12a and cleared by 0x1810:0x23b), never below 1; a step is charged by 0x16856 (5 + the
 impedance where the walker now stands) and a diagonal 5 more, as U6's. Aboard the raft actor 0 walks this way
-(se_use.md §5w). Not yet read: how many times a follower pays its 5 per step (0x14fb7; the engine charges two
-passes, as U6).
+(se_use.md §5w). The followers (0x14fb7, read 2026-11-27) are U6's
+§3c: two passes after the leader's step, and in each pass every follower it considers pays a flat 5 through the
+spend routine (so 3 out of combat), whether it moved or stayed. It passes over, with no charge, the leader, anyone
+on another level, the dead (status 0x10), and those failing two more tests not yet named (a per-actor byte that
+must be 1, probably the following worktype, and bits 0x16 of another per-actor array, probably held or asleep); aboard the
+raft it returns at once. A follower keeps its facing. The engine does the same.
 
 ### 3c. Followers (DOS, read 2026-11-05)
 Out of combat the others take places behind the leader. Slot n (roster order, leader skipped) lies `back[n]` tiles behind it and

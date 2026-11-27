@@ -9,13 +9,17 @@
 > - Validated by  : the qualities of each pair of caves (163 on the surface, 227 on level 2) lead to each other;
 >                  `make check-se-use` (`SE level ...`); NOT YET compared with DOS on screen
 > - Confidence   : probable
-> - Last updated : 2026-11-22
+> - Last updated : 2026-11-27 (the gather and the arrival)
 
 Implemented by: render/gamedemo.c (se_level_change, se_level_go, step_triggers, se_use_object). SE only.
 
 ## 1. What changes the level
 - **Walking onto** a cave going down (163), a cave going up (227), the stairs (259) or the trap door (160), when
-  the leader steps there and the party is not in solo mode (0x1553a).
+  the leader steps there and the party is not in solo mode (0x1553a); in solo mode `You must be in party mode to enter.`
+  The same step onto a floor plate (68) runs another move (0x8cb:0xb8b, image 0x983b: to the plate of the same
+  quality, or a fixed list's place, gathering and arriving with mode 1); not yet built.
+- The cave behind the waterfall (293,67) is shut by the falls (a waterfall's edge and object 195 cover its tile,
+  both impassable) until a boulder dams them (se_use.md); the cave's own tile forces passage only over the ground.
 - **U)se** of a rope (20; in solo mode `Not in solo mode!`) or of the hole in the ceiling (22): frame 1 and not
   solo climbs; frame 0 `You need a rope dropped from above.`; else `Not in solo mode!`.
 - The jungle drum's scene (se_use.md §5r) moves the party to (243,204) on level 1.
@@ -46,14 +50,26 @@ city.` and the trap door at (192,460) is deleted.
 
 ## 3. Engine notes
 - No message for the move (U6 prints "You descend."; SE prints nothing).
-- DOS's effects around the move (0x9214 and 0x9404, called with 0 for the caves and 2 for the rest: probably the
-  walk in versus a fade) are not built: the view changes at once.
+- **The gather** before the move (0x8cb:0x564, image 0x9214), with a mode: 0 for the cave going up (227), 2 for the
+  rest. Mode 0: nothing is drawn. Otherwise up to 30 rounds; in each, every member (the sleepers woken first) on the
+  party's level, not held and not dead: on the leader's tile it vanishes (the leader at once, in the first round),
+  the view drawn just before; else it takes a step toward the leader's tile (0x130f:0x3ab8); failing that, within a
+  tile (the larger of |dx| and |dy| under 2) it is put on the tile, and further off it tries a step N, E, S or W
+  at random. The view is drawn after each round; the rounds stop after one in which nobody stepped. Then every
+  member not yet gone is moved to the leader's tile on level 6 (out of the world).
+- **The arrival** (0x8cb:0x754, image 0x9404): every member on the destination tile, the view drawn, then the
+  followers' routine (0x14fb7, movement_turns.md) five times with its flag set, so a follower beside the others
+  still moves in the second pass unless it stands on its own place; drawn after each unless the mode is 0 (both
+  caves 163 and 227), 2 for the rest. Mode 1 (an extra draw) is the floor plate's.
+- The engine: as DOS, a drawn step every 73 ms (DOS draws as fast as the machine allows; slip 30's pace). Checked on
+  screen 2026-11-27 (Falcon, Hatari): walking into the cave at (272,68) the Avatar vanishes, the party arrives on
+  level 2 together. `SE level party came along` checks the arrival.
 - DOS also lends tile 0x10b (the rope's way up) or 0x10c the picture of an object 21 the acting member carries; not
   built.
 - A cave's second half (quality 0) leads nowhere in the list; the engine does nothing there.
 
 ## Test hooks
-`make check-se-use`: `SE level cave down`, `SE level cave up`, `SE level drum`.
+`make check-se-use`: `SE level cave down`, `SE level cave up`, `SE level party came along`, `SE level drum`.
 
 ## Status
-IN PROGRESS: §1-§2 built 2026-11-22; §3's effects not built; not yet compared with DOS on screen.
+IN PROGRESS: §1-§2 built 2026-11-22; §3's gather and arrival 2026-11-27; left: the floor plates (68), the picture lent from object 21, a comparison with DOS on screen.

@@ -83,9 +83,12 @@ exactly those four actors (0 for everyone else). The 1-byte stat arrays (HP, str
 dex, int, status) are **endianness-agnostic** — identical on the ST and DOS saves;
 only the multi-byte arrays (position, appearance, experience) need byte-order care.
 
-A run `01 02 03 04` at 0xfe0 looks like a party-order list but its surrounding bytes
-are ambiguous; we currently derive party membership from the 0x800 flag instead
-(see Open questions).
+**The party list (U6 as SE, §4):** 0xf00 holds the members' names (14 bytes each, 16 rows),
+0xfe0 the members' actor numbers in party order (16 bytes) and 0xff0 their count; the bytes past
+the count are left over and mean nothing (the sample save: `01 02 03 04 04 05`, count 4). DOS keeps
+the party as this ordered list. The engine writes it on save and loads the party in its order; a
+member must also have status bit 0x80, and any actor with 0x80 that the list lacks follows in actor
+order (a save from an engine before 2026-11-27 left the template's list behind).
 
 ## 2. Position (3 bytes at 0x100 + slot*3)
 | Byte | Bits | Field                                                       |
@@ -142,7 +145,7 @@ nuvie_save.md "A new game from the original files".
 | 0xc00 | 0x200 | experience (u16 LE) |
 | 0xe00 | 0x100 | hit points |
 | 0xf00 | 0xe0 | the party's names, 14 bytes each |
-| 0xfe0 | 0x10 | the party's actors in order; 0xff0 their count (DOS takes the party from these; aboard the raft actor 0 follows the members, se_use.md §5w). The engine's SE save writes the list, the count and the names; U6's save does not yet |
+| 0xfe0 | 0x10 | the party's actors in order; 0xff0 their count (DOS takes the party from these; aboard the raft actor 0 follows the members, se_use.md §5w). The engine's save writes the list, the count and the names for U6 and SE alike, and its load takes the party in the list's order (then any other actor with 0x80 set, for saves from before 2026-11-27) |
 | 0xff1 | 0x100 | **level** (as U6) |
 | 0x10f1 | 0x100 | not yet known |
 | 0x11f1 | 0x100 | worktype (as U6) |
@@ -167,11 +170,7 @@ MD's layout is still to be read (checklist item 13). Checked by a save/load roun
 ## 6. Open questions / next
 - Inventory arrays, obj_flags (0x000), work/combat-mode flags, and the remaining
   1-byte arrays between the decoded ones are not yet mapped.
-- **Party order**: the 0x800 flag gives membership but not display order. A run
-  `01 02 03 04` at 0xfe0 is a likely party-order list, but the bytes immediately
-  after it (`04 05 ...`) don't yet parse cleanly, so order is currently taken in
-  ascending actor-number order (matches the sample save). Confirm the 0xfe0
-  structure (count? terminator?) before relying on it.
+- **Party order**: settled (2026-11-27): the list at 0xfe0 with its count at 0xff0 (§1).
 - **HP vs max-HP**: 0xe00 is *current* HP. U6 max-HP = 30 × level and level derives
   from experience (0xc00); we display current HP only. Map the level/max-HP path
   when the status screen needs it.

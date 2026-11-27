@@ -235,6 +235,11 @@ readied AC intact, 8343 surface objects; a rebuilt file (183 inventory records =
 records kept + the party's) loads in real ScummVM with the earlier dropped plate mail still
 on the carpet.
 
+2026-11-27: mode `'4'` also turns the party's order round (the Avatar stays first) before saving and checks
+`REBUILD party order=1` after each load: the order comes back from the list at 0xfe0 (formats/objlist.md §1),
+which the save now writes for U6 too. Passes both cycles on the stock 4 MB Falcon. (Its "spend 25 gold" takes from
+the Avatar's own pack, and in today's template Shamino carries the gold, so that step spends nothing.)
+
 ## Status
 VERIFIED (v1 scope above; §5 write-back added 2026-09-29; §6 rebuild 2026-09-30; new records / the dead
 flag / alcohol 2026-10-28 — PERSIST.REQ 1-5 on TT + 4 MB Falcon, ScummVM cross-loads of a save holding a

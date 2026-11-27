@@ -227,13 +227,14 @@ list once SE's seams exist.
 - 2026-11-22: item 11 built (rules/se_levels.md): the caves 163 and 227, the stairs 259 and the trap door 160 walked into,
   the rope and the hole in the ceiling used, the destinations from DOS's coordinate list by quality, the rope showing in
   the hole above, the sealing of the stairs after the panel's scene, the drum's scene and its move. Left: DOS's walk/fade
-  around the move, the picture lent from object 21, a check against DOS on screen.
+  around the move (built 2026-11-27: the gather and the arrival), the picture lent from object 21, a check against DOS
+  on screen; found 2026-11-27: the floor plates (68) move the party too.
 - 2026-11-22: item 12 done. The user chose DOS's behaviour for every engine choice and kept the eight save slots
   (rules/se_deviations.md): the boulder rolls with no limit, the turtle moves the view, the raft is saved as actor 0
   and steps at a walk's price, SE's actors 0-15 pay 2 less out of combat, eggs use DOS's window, hatchlings DOS's
   free list, the dead lie in their slots as their remains, gold is carried; slip 29 (the boulder's flags) taken as
   the intent. What is left in the register: the user's slips (built as the intent, each restorable) and the slots.
-  Found on the way: U6's save doesn't write the party list (0xfe0); SE's follower charge per step (0x14fb7) unread.
+  Found on the way: U6's save doesn't write the party list (0xfe0) (fixed 2026-11-27); SE's follower charge per step (0x14fb7) read 2026-11-27: two passes of 5 each, as the engine already charged.
 - 2026-11-23: item 9: the intro built (design/se_front_end.md "The intro", design/se_origin_fx.md): the Origin FX opening
   (the orchestra tuning, the conductor's taps, the zoom, the logo rising past the globe, the fireworks, on song 19's cues)
   and the film (Lord British presents, Worlds of Ultima, the title rising with its shine, the dissolve, the three-layer pan
