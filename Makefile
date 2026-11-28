@@ -1111,7 +1111,7 @@ check-se-use: world-se $(BUILD)/gamef.prg $(BUILD)/NEWDESK.INF
 	             'veh spots found=1' 'raft few people=1' 'raft no paddles=1' 'raft boarded=1' 'raft land refused=1' 'raft no diagonal=1' 'raft west=1' 'raft east=1' 'raft saved as actor 0=1' 'raft loaded aboard=1' 'spend out of combat=3' 'spend in combat=5' 'raft landed=1' \
 	             'turtle ridden=1' 'turtle view moves=1' 'turtle already=1' 'rider swims=1' 'rider back=1' 'rider landed=1' 'bait turtle=1' 'bait not near water=1' \
 	             'ready modern refused=1' 'ready modern avatar=1' 'ready shield after two-hander=1' 'ready necklace=1' \
-	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=0' 'load Triolo level=7' 'load Triolo range=1' 'load max hp rule=1' 'save round trip=1' 'save max hp=1' 'dead lies in its slot=1' 'dead slot held=1' 'dead looked at as itself=1' 'dead not taken=1' 'dead saved in its slot=1' 'gold: in the pack=40' 'scene block=1' 'scene first page=1' 'scene pages=6' 'level cave down=1' 'level cave up=1' 'level party came along=1' 'level drum=1'; do \
+	             'get: obj taken=1' 'get: inv fruit gained=3' 'gold: pool gained=0' 'load Triolo level=7' 'load Triolo range=1' 'load max hp rule=1' 'save round trip=1' 'save max hp=1' 'dead lies in its slot=1' 'dead slot held=1' 'dead looked at as itself=1' 'dead not taken=1' 'dead saved in its slot=1' 'gold: in the pack=40' 'scene block=1' 'scene first page=1' 'scene pages=6' 'level cave down=1' 'level cave up=1' 'level party came along=1' 'level plate=1' 'level plate back=1' 'level drum=1'; do \
 	    grep -aq "SE $$want" $(BUILD)/se-use/console.txt || { echo "FAIL: SE $$want"; exit 1; }; done
 	@echo "SE use: ALL PASS"
 

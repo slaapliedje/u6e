@@ -14523,9 +14523,9 @@ static void se_gather(world_t*w,int mode)
     if(mode>0) for(int r=0;r<30;r++){ int done=1;
         for(int p=0;p<g_nparty;p++){ int i=g_party[p].actor;
             g_asleep[i]=0;                                                   /* the sleepers wake */
-            if(i==1){ if(!g_avatar_hide){ se_lv_frame(w); g_avatar_hide=1; } continue; }
+            if(i==1){ if(!g_avatar_hide){ se_lv_frame(w); g_avatar_hide=1; if(mode==1) se_lv_frame(w); } continue; }
             if((int)g_actz[i]!=g_cur_level||g_paralyze[i]||g_ahp[i]==0) continue;
-            if(g_actx[i]==lx&&g_acty[i]==ly){ se_lv_frame(w); g_actz[i]=6; continue; }   /* there: gone (level 6) */
+            if(g_actx[i]==lx&&g_acty[i]==ly){ se_lv_frame(w); g_actz[i]=6; if(mode==1) se_lv_frame(w); continue; }   /* there: gone (level 6); mode 1 draws again */
             if(hatched_step_toward(w,i,lx,ly)){ done=0; continue; }
             { int dx=iabs_(g_actx[i]-lx), dy=iabs_(g_acty[i]-ly);
               if((dx>dy?dx:dy)<2){ g_actx[i]=(uint16_t)lx; g_acty[i]=(uint16_t)ly; continue; }   /* beside it: onto it */
@@ -14535,13 +14535,13 @@ static void se_gather(world_t*w,int mode)
         if(done) break; }
     g_avatar_hide=1;
     for(int p=0;p<g_nparty;p++){ int i=g_party[p].actor; if(i>1){ g_actx[i]=(uint16_t)lx; g_acty[i]=(uint16_t)ly; g_actz[i]=6; } } }
-/* the arrival (0x8cb:0x754): the whole party on the leader's tile, then five rounds of the followers taking their
- * places, exactly, drawn unless mode is 0 */
+/* the arrival (0x8cb:0x754): the whole party on the leader's tile (drawn in mode 1 only), then five rounds of the
+ * followers taking their places, exactly, drawn unless mode is 0 */
 static void se_arrive(world_t*w,int mode)
 {   g_avatar_hide=0;
     for(int p=0;p<g_nparty;p++){ int i=g_party[p].actor; if(i>1){ g_actx[i]=w->px; g_acty[i]=w->py; g_actz[i]=(uint8_t)w->level; } }
     g_tmp_valid=0; eggs_update(w,1);
-    if(mode>0) se_lv_frame(w);
+    if(mode==1) se_lv_frame(w);
     for(int k=0;k<5;k++){ followers_walk(w,1); if(mode>0) se_lv_frame(w); } }
 static int se_level_go(world_t*w,int x,int y,int z,int mode)   /* mode: DOS's for the gather and the arrival, -1 = neither */
 {   if(veh_aboard() || !g_savetmpl) return 0;
@@ -14582,6 +14582,23 @@ static int se_level_change(world_t*w,int idx)
         int n=msg_tail(); n=msgcat(n,"\nThe mechanism supporting the trap door fails just as you"); n=msgcat(n," and your companions leave the stairwell, sealing the entrance"); msgcat(n," to the underground city.\n");
         int t=obj_idx_at(192,460,160); if(t>=0){ obj_destroy(t); build_blocked(); } }
     return 1; }
+/* a floor plate (68) stepped on (0x8cb:0xb8b, image 0x983b; se_levels.md §1b): the party gathers and arrives in mode 1,
+ * on the surface at DOS's list for the plate's quality (DS:0x5c0), below at the other plate of the same quality on this
+ * level; with none the party gathers and arrives where it stands */
+static const int16_t SE_PLATE[15][2]={ {412,291},{206,619},{369,604},{689,775},{619,602},{103,615},{534,286},{376,173},
+    {182,456},{184,457},{186,457},{187,455},{182,454},{187,453},{183,452} };
+static int se_plate(world_t*w,int idx)
+{   if(veh_aboard()) return 0;
+    int q=g_wobj[idx].quality, x=w->px, y=w->py;
+    if(g_combat_mode) g_combat_mode=0;                                   /* (0x1810:0x23b: combat ends) */
+    se_gather(w,1);
+    if(w->level){ for(int i=0;i<(int)g_ow.nobjs;i++){ const wobj_t*o=&g_wobj[i];
+            if(i!=idx && o->alive && o->obj_n==68 && o->quality==q){ x=o->x; y=o->y; break; } } }
+    else if(q<15){ x=SE_PLATE[q][0]; y=SE_PLATE[q][1]; }                /* (only 1-14 are placed; past 14 DOS reads text) */
+    w->px=(uint16_t)x; w->py=(uint16_t)y; build_blocked();
+    se_arrive(w,1);
+    music_resume_area(w->level);                                        /* (0x2701:0x1f1) */
+    return 1; }
 static int step_triggers(world_t *w)
 {
     eggs_update(w,0);                                              /* a new 8x8 block? (eggs.md §2) */
@@ -14589,7 +14606,7 @@ static int step_triggers(world_t *w)
     int idx=objworld_at(&g_ow, w->px, w->py); if(idx<0) return 0;
     int on=g_wobj[idx].obj_n;
     if(on_in(g_on.moongate,2,on)) return enter_moongate(w,idx);   /* a moongate (moongates.md §2/§3) */
-    if(g_gd==&gamedef_se && (on==163||on==227||on==259||on==160)){ if(g_solo_on){ msgcat(msg_tail(),"\nYou must be in party mode to enter.\n"); return 0; } return se_level_change(w,idx); }   /* walked into (0x1553a); in solo its words (0x2f65:0x2eb) */
+    if(g_gd==&gamedef_se && (on==163||on==227||on==259||on==160||on==68)){ if(g_solo_on){ msgcat(msg_tail(),"\nYou must be in party mode to enter.\n"); return 0; } return on==68?se_plate(w,idx):se_level_change(w,idx); }   /* walked into (0x1553a); in solo its words (0x2f65:0x2eb) */
     if((on==g_on.cave||on==g_on.hole)&&on){ int r, q=g_wobj[idx].quality;
         shamino_names(w,q); g_msg_append=g_msg[0]!=0;
         r=do_transition(w, on==g_on.cave?WL_DOWN:WL_HOLE, q); g_msg_append=0; return r; }
@@ -21454,6 +21471,14 @@ int main(int argc, char **argv)
                     int r=dr>=0?se_use_object(dr):0, pg=0; while(g_scene && pg<20){ se_scene_key(); pg++; }
                     dbg_num("SE level drum=", r && w.level==1 && w.px==243 && w.py==204 && (g_cg.talk_flags[1]&8));
                     for(int k=0;k<11;k++) g_cg.talk_flags[TR[k]]=sv[k]; g_cg.talk_flags[1]=f1; }
+                  { int ok=0, back=0;                                                   /* a floor plate there and back (se_levels.md §1b) */
+                    if(w.level!=0) (void)se_level_go(&w,x0,y0,0,-1);
+                    teleport_party(&w,376,173); int pl=obj_idx_at(376,173,68);
+                    if(pl>=0 && se_plate(&w,pl)) ok=w.level==0 && w.px==183 && w.py==452;
+                    int pb=ok?obj_idx_at(183,452,68):-1; if(pb>=0 && se_plate(&w,pb)) back=w.px==376 && w.py==173;
+                    { int c=g_nparty>1 && !g_avatar_hide; for(int p=0;p<g_nparty&&c;p++){ int i=g_party[p].actor; if(i<=1) continue;
+                        c=g_actz[i]==0 && iabs_(g_actx[i]-376)<=3 && iabs_(g_acty[i]-173)<=3; } back=back&&c; }
+                    dbg_num("SE level plate=", ok); dbg_num("SE level plate back=", back); }
                   if(w.level!=lv0) (void)se_level_go(&w,x0,y0,lv0,-1); else teleport_party(&w,x0,y0); }
                 dbg_num("SE load Triolo level=", g_alevel[9]);                                       /* expect 7 (objlist 0xff1) */
                 dbg_num("SE load Triolo range=", g_cmode[9]==4);                                     /* GAME.EXE 0xdedd */
