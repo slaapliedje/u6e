@@ -227,13 +227,14 @@ list once SE's seams exist.
 - 2026-11-22: item 11 built (rules/se_levels.md): the caves 163 and 227, the stairs 259 and the trap door 160 walked into,
   the rope and the hole in the ceiling used, the destinations from DOS's coordinate list by quality, the rope showing in
   the hole above, the sealing of the stairs after the panel's scene, the drum's scene and its move. Left: DOS's walk/fade
-  around the move (built 2026-11-27: the gather and the arrival), the picture lent from object 21, a check against DOS
-  on screen; found 2026-11-27: the floor plates (68) move the party too.
+  around the move (built 2026-11-27: the gather and the arrival), the black staff's picture (built 2026-11-27), a check
+  against DOS on screen; the floor plates (68) found and built 2026-11-27.
 - 2026-11-22: item 12 done. The user chose DOS's behaviour for every engine choice and kept the eight save slots
   (rules/se_deviations.md): the boulder rolls with no limit, the turtle moves the view, the raft is saved as actor 0
   and steps at a walk's price, SE's actors 0-15 pay 2 less out of combat, eggs use DOS's window, hatchlings DOS's
   free list, the dead lie in their slots as their remains, gold is carried; slip 29 (the boulder's flags) taken as
   the intent. What is left in the register: the user's slips (built as the intent, each restorable) and the slots.
+  2026-11-27: the black staff's picture (rules/se_levels.md §2b): lit (tile 268) down a rope or by the drum, dark (267) up a hole; the old note had the copy backwards.
   2026-11-27: the floor plates (68, 0x983b; rules/se_levels.md §1b) built, and mode 1's extra draws; mode 2's arrival no longer draws the stacked party first.
   2026-11-27: slip 31 (the user's choice): song 0 at a menu reached by skipping the intro (DOS leaves it silent).
   Found on the way: U6's save doesn't write the party list (0xfe0) (fixed 2026-11-27); SE's follower charge per step (0x14fb7) read 2026-11-27: two passes of 5 each, as the engine already charged.

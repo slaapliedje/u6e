@@ -4316,8 +4316,12 @@ static int build_blocked_incr(void)
  * both animates it and FILLS it (un-animated, these tiles render as holes). */
 static int basetile(int obj_n);
 static int g_bell_ph;                                       /* a bell being rung: its frame + 1 (usecode_use.md) */
+/* SE's black staff (21) given the picture of tile 267 (dark) or 268 (its tip lit) by a climb (se_levels.md §2b); DOS
+ * copies that tile over the staff's, so it shows on the map and in the inventory until the tiles are loaded again */
+static int g_se_staff_pic, g_se_staff_t;
 static int anim_tile(int t)
 {
+    if(g_se_staff_pic && t==g_se_staff_t) return g_se_staff_pic;
     if(t>=0 && t<2048){ int e=g_anim_idx[t];
         if(g_bell_ph && e>=0 && t==basetile(236)) return (int)g_anim_src[e]+g_bell_ph-1;
         if(e>=0 && g_anim_n[e]>0){ g_view_has_anim=1;       /* an ANIMDATA tile is in view */
@@ -5764,6 +5768,7 @@ static int planar_static_inv(const world_t*w){
 /* blit a 16x16 tile to (sx,sy); transp skips index 255 (transparent) */
 static void blit_tile(int sx,int sy,int tile,int transp)
 {
+    if(g_se_staff_pic && tile==g_se_staff_t) tile=g_se_staff_pic;     /* (the black staff's lent picture, in the inventory) */
     const uint8_t*src=g_tileset+(int32_t)tile*256;
     if(sx>=0 && sx+16<=LW && sy>=0 && sy+16<=LH){      /* wholly on screen: row pointers */
         uint8_t*d=ROW(sy)+sx;
@@ -7899,10 +7904,10 @@ static void se_aiela_after(void)
     if(g_wp) se_eggs_update(g_wp,0);
     g_cg.talk_flags[1]|=1; build_blocked(); }
 /* after the drum's play (0x1e1ac): talk flag 1 gets 0x08, the party goes to (243,204) on level 1, the hole in the ceiling there
- * turns a frame on (not built: DOS also lends tile 268 the picture of an object 21 the acting member carries) */
-static int se_level_go(world_t*w,int x,int y,int z,int mode);
+ * turns a frame on, and a black staff the acting member carries lights (0x1e310: tile 268's picture) */
+static int se_level_go(world_t*w,int x,int y,int z,int mode); static void se_staff_lend(int t);
 static void se_drum_after(void)
-{   g_cg.talk_flags[1]|=8;
+{   g_cg.talk_flags[1]|=8; se_staff_lend(268);
     if(g_wp && se_level_go((world_t*)g_wp,243,204,1,-1)){ int h=obj_idx_at(243,204,22);
         if(h>=0){ g_wobj[h].tile=(uint16_t)(g_wobj[h].tile+1); if(!g_wobj[h].dirty) g_wobj[h].dirty=WOBJ_DIRTY_STATE; build_blocked(); } } }
 /* the first time (talk flag 1, bit 2): the clock runs on to noon, and a trap door opens at (192,460) */
@@ -14563,6 +14568,8 @@ static int se_level_go(world_t*w,int x,int y,int z,int mode)   /* mode: DOS's fo
     g_show_inv=0; (void)g_tmpdm_invalidate(); music_resume_area(w->level);
     return 1; }
 /* the change for object idx (0x9505): 1 = it happened */
+static int has_readied_any(int a,int on);
+static void se_staff_lend(int t){ if(has_readied_any(use_actor(),21)){ g_se_staff_t=basetile(21); g_se_staff_pic=t; g_tmp_valid=0; } }   /* (0xa5d:0xa45 finds it on the acting member) */
 static int se_level_change(world_t*w,int idx)
 {   int on=g_wobj[idx].obj_n, q=g_wobj[idx].quality, x=0, y=0, z=0, rope=0;
     if(on==20){ if(!se_link(0x4f8,q,&x,&y)) return 0; z=1; rope=1; }
@@ -14572,6 +14579,7 @@ static int se_level_change(world_t*w,int idx)
     else if(on==259){ x=192; y=460; z=0; }
     else if(on==160){ x=157; y=137; z=3; }
     else return 0;
+    if(on==20) se_staff_lend(268); else if(on==22) se_staff_lend(267);  /* down the rope the staff's tip lights, up the hole it goes dark (0x95d0, 0x9682) */
     if(!se_level_go(w,x,y,z,(on==227?0:2)|((on==227||on==163)?0:2)<<4)) return 0;   /* 0x9505: the caves' arrival undrawn, the cave up's gather too */
     if(rope){                                                            /* the hole above shows the rope: frame + 1, or one made (0x971f) */
         int h=obj_idx_at(x,y,22);
@@ -14626,6 +14634,7 @@ static int load_game(world_t *w)
     if(!d){ plat_chip_reset(mk); msgcat(0,plat_fsize_path(lp)>0?"Not enough memory to restore.":"No saved game."); return 0; }
     int32_t ol = sav_objlist_off(d, n), so = sav_surface_off(d, n), se = sav_surface_end(d, n);
     solo_end(w); if(ol>=0) actor_bytes_load(d+ol);
+    g_se_staff_pic=0;                                              /* (DOS reads the tiles again: the black staff its own picture) */
     int32_t ive = sav_inv_end(d, n);
     if(ol < 0 || so < 0 || se <= so || ive < 0){ plat_chip_reset(mk); msgcat(0,"Save file is damaged."); return 0; }
 
@@ -21468,8 +21477,14 @@ int main(int argc, char **argv)
                     for(int k=0;k<11;k++){ sv[k]=g_cg.talk_flags[TR[k]]; g_cg.talk_flags[TR[k]]|=0x80; }
                     int lead=g_nparty?g_party[0].actor:1, dr=persist_obj_new(148,0,(int)w.px+1,(int)w.py,0);
                     inv_add_objn(91,1); if(g_ow.ninv) g_ow.inv[g_ow.ninv-1].owner=(uint16_t)lead;
+                    inv_add_objn(21,1); if(g_ow.ninv) g_ow.inv[g_ow.ninv-1].owner=(uint16_t)lead;   /* a black staff: it lights (se_levels.md §2b) */
                     int r=dr>=0?se_use_object(dr):0, pg=0; while(g_scene && pg<20){ se_scene_key(); pg++; }
                     dbg_num("SE level drum=", r && w.level==1 && w.px==243 && w.py==204 && (g_cg.talk_flags[1]&8));
+                    dbg_num("SE level staff lit=", anim_tile(basetile(21))==268);
+                    { int h=obj_idx_at(243,204,22); g_wobj[h>=0?h:0].tile=(uint16_t)(basetile(22)+1);   /* and dark again up the hole */
+                      if(h>=0) g_wobj[h].quality=1;                                  /* (its own quality 0 leads nowhere: entry 0 of the list is unset) */
+                      int up=h>=0 && se_level_change(&w,h); dbg_num("SE level staff dark=", up && anim_tile(basetile(21))==267); }
+                    g_se_staff_pic=0;
                     for(int k=0;k<11;k++) g_cg.talk_flags[TR[k]]=sv[k]; g_cg.talk_flags[1]=f1; }
                   { int ok=0, back=0;                                                   /* a floor plate there and back (se_levels.md §1b) */
                     if(w.level!=0) (void)se_level_go(&w,x0,y0,0,-1);

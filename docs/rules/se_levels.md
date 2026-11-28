@@ -9,7 +9,7 @@
 > - Validated by  : the qualities of each pair of caves (163 on the surface, 227 on level 2) lead to each other;
 >                  `make check-se-use` (`SE level ...`); NOT YET compared with DOS on screen
 > - Confidence   : probable
-> - Last updated : 2026-11-27 (the gather and the arrival; the floor plates)
+> - Last updated : 2026-11-27 (the gather and the arrival; the floor plates; the black staff)
 
 Implemented by: render/gamedemo.c (se_level_change, se_level_go, step_triggers, se_use_object). SE only.
 
@@ -62,6 +62,17 @@ After the stairs, once the control panel's scene has happened (talk flag 1 bit 0
 the trap door fails just as you and your companions leave the stairwell, sealing the entrance to the underground
 city.` and the trap door at (192,460) is deleted.
 
+## 2b. The black staff lights below
+Map tiles 267 and 268 are two pictures of the black staff (21) among the terrain: 267 dark, 268 with its tip lit
+blue. After the gather, if the acting member (the solo member, else the leader) carries a black staff, DOS copies a
+tile's picture over the staff's own tile (its base tile + frame) through the graphics driver's tile copy, the one
+the tile animation uses (entry 0x4b, pushed as destination then source):
+- down a rope (20): tile 268 (0x95d0); the drum's move to level 1 too (0x1e310);
+- up a hole in the ceiling (22): tile 267 (0x9682).
+The staff's tile is not animated, so the picture stays, on the map and in the inventory, every black staff alike,
+until the next climb, or until the tiles are read again (a load; probable: DOS reads the tile files then). The engine
+draws the staff's tile as 267 or 268 instead, and forgets it on a load. The staff has one frame.
+
 ## 3. Engine notes
 - No message for the move (U6 prints "You descend."; SE prints nothing).
 - **The gather** before the move (0x8cb:0x564, image 0x9214), with a mode: 0 for the cave going up (227), 2 for the
@@ -79,16 +90,16 @@ city.` and the trap door at (192,460) is deleted.
 - The engine: as DOS, a drawn step every 73 ms (DOS draws as fast as the machine allows; slip 30's pace). Checked on
   screen 2026-11-27 (Falcon, Hatari): walking into the cave at (272,68) the Avatar vanishes, the party arrives on
   level 2 together. `SE level party came along` checks the arrival.
-- DOS also lends tile 0x10b (the rope's way up) or 0x10c the picture of an object 21 the acting member carries; not
-  built.
+- The black staff's picture changes with a climb: §2b.
 - A cave's second half (quality 0) leads nowhere in the list; the engine does nothing there.
 
 ## Test hooks
 `make check-se-use`: `SE level cave down`, `SE level cave up`, `SE level party came along`, `SE level plate` (the
 plate at (376,173), quality 14, to (183,452)), `SE level plate back` (quality 7 back, the party with the leader),
-`SE level drum`.
+`SE level drum`, `SE level staff lit` (a black staff on the leader after the drum draws as 268), `SE level staff
+dark` (up a hole it draws as 267).
 
 ## Status
 IN PROGRESS: §1-§2 built 2026-11-22; §3's gather and arrival 2026-11-27; §1b's floor plates 2026-11-27 (seen on
 screen in Hatari, Falcon: the step onto (376,173), the Avatar vanishing, the party arriving at (183,452)); left: the
-picture lent from object 21, a comparison with DOS on screen.
+a comparison with DOS on screen. §2b (the black staff) built 2026-11-27.

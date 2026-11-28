@@ -532,7 +532,8 @@ tile. None: `You don't have any gems.` DOS plays sound 0x20.
 0x80 is set in talk flags 16, 17, 19, 20, 27, 29, 32, 34, 40, 48 and 53 (the tribes), the scene
 (0x1e1ac): song 17, the message area cleared, the blue eyes, talk flag 1 gets 0x08, the party goes to
 (243,204) on level 1, the hole in the ceiling (22) there turns frame + 1, and if the acting member
-carries object 21 its picture is lent to tile 268; then the view and the place's song. Otherwise
+carries a black staff (21) it takes tile 268's picture, its tip lit (rules/se_levels.md §2b); then the view and the
+place's song. Otherwise
 nothing happens. Built 2026-11-22 with SE's level changes (rules/se_levels.md).
 
 **The loom (165)** asks `On ` for the leader (range from the leader): on flax (210), `You wove cloth from
